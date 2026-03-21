@@ -137,13 +137,15 @@ hook スクリプトが委任ルールを自動的に強制します:
 
 ```
 タスク受信
-├─ 1-2ファイル変更 + lint不要? → Agent Team（worktree isolation）
+├─ 2+ 独立タスク? → Agent Team（TeamCreate）
+├─ 1タスク + 長時間 + 自律的 + 大規模? → Codex CLI 経路C（1タスク限定）
 ├─ 読み込みファイル 3 未満? → Claude Code（自力実行）
-├─ テスト/ドキュメント作成? → Codex CLI 経路C
-├─ 予想 5 ターン超? → Codex CLI 経路C
-├─ 複数の独立タスク? → codex-orchestrate.sh（worktree 並列）
+├─ テスト/ドキュメント作成（単一タスク）? → Codex CLI 経路C
+├─ 予想 5 ターン超（単一タスク）? → Codex CLI 経路C
 └─ リアルタイム判断が必要? → Claude Code（メイン）
 ```
+
+**重要**: Codex CLI は**1タスク限定**。複数の独立タスクは Agent Team (TeamCreate) を使用し、Codex には委任しない。
 
 | hook | トリガー | アクション |
 |------|---------|----------|

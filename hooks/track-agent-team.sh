@@ -31,21 +31,21 @@ if [[ ! -f "$SIGNAL_FILE" ]]; then
 EOF
 else
   # Increment agent count and update timestamp
-  python3 -c "
-import json, sys
+  _SIGNAL_FILE="$SIGNAL_FILE" _NOW="$NOW" python3 -c "
+import json, os, sys
 
-with open('$SIGNAL_FILE') as f:
+with open(os.environ['_SIGNAL_FILE']) as f:
     data = json.load(f)
 
 count = data.get('agent_count', 0) + 1
 data['agent_count'] = count
-data['last_agent_at'] = '$NOW'
+data['last_agent_at'] = os.environ['_NOW']
 data['tasks'].append(f'agent-{count}')
 
 # Keep only last 10 task entries
 data['tasks'] = data['tasks'][-10:]
 
-with open('$SIGNAL_FILE', 'w') as f:
+with open(os.environ['_SIGNAL_FILE'], 'w') as f:
     json.dump(data, f, indent=2)
 " 2>/dev/null || true
 fi

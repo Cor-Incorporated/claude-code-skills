@@ -33,25 +33,26 @@ PR_NUMBER=$(gh pr list --head "$BRANCH" --json number -q '.[0].number' 2>/dev/nu
 if [ -n "$PR_NUMBER" ]; then
     # --- PESSIMISTIC LOCK: Mark PR as review_pending ---
     REVIEW_STATE="$_STATE_BASE/pr-review-lock.json"
+    NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     mkdir -p "$(dirname "$REVIEW_STATE")"
     [ ! -f "$REVIEW_STATE" ] && echo '{}' > "$REVIEW_STATE"
 
-    python3 -c "
-import json
-f = '$REVIEW_STATE'
-with open(f) as fh:
-    s = json.load(fh)
-s['$PR_NUMBER'] = {
-    'status': 'review_pending',
-    'branch': '$BRANCH',
-    'push_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
-    'blocking_count': -1,
-    'must_fix_count': -1,
-    'verified': False
-}
-with open(f, 'w') as fh:
-    json.dump(s, fh, indent=2)
-" 2>/dev/null
+    _REVIEW_STATE="$REVIEW_STATE" _PR="$PR_NUMBER" _BR="$BRANCH" _NOW="$NOW" python3 -c "
+    import json, os
+    f = os.environ['_REVIEW_STATE']
+    with open(f) as fh:
+        s = json.load(fh)
+    s[os.environ['_PR']] = {
+        'status': 'review_pending',
+        'branch': os.environ['_BR'],
+        'push_at': os.environ['_NOW'],
+        'blocking_count': -1,
+        'must_fix_count': -1,
+        'verified': False
+    }
+    with open(f, 'w') as fh:
+        json.dump(s, fh, indent=2)
+    " 2>/dev/null
 
     echo "" >&2
     echo "🔒 [Pessimistic Lock] PR #${PR_NUMBER} を review_pending に設定。" >&2
@@ -85,15 +86,15 @@ with open(f, 'w') as fh:
         echo "   または /review-loop ${PR_NUMBER} で自動検証" >&2
 
         # Write auto-review-needed flag to state
-        python3 -c "
-import json
-f = '$REVIEW_STATE'
-with open(f) as fh:
-    s = json.load(fh)
-s['$PR_NUMBER']['auto_review_needed'] = True
-with open(f, 'w') as fh:
-    json.dump(s, fh, indent=2)
-" 2>/dev/null
+        _REVIEW_STATE="$REVIEW_STATE" _PR="$PR_NUMBER" python3 -c "
+    import json, os
+    f = os.environ['_REVIEW_STATE']
+    with open(f) as fh:
+        s = json.load(fh)
+    s[os.environ['_PR']]['auto_review_needed'] = True
+    with open(f, 'w') as fh:
+        json.dump(s, fh, indent=2)
+    " 2>/dev/null
     fi
 fi
 

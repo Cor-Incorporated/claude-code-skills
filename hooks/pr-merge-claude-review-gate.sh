@@ -100,11 +100,11 @@ COMMENT_COUNT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq 'length
 
 if [[ "$COMMENT_COUNT" -eq 0 ]]; then
   # Check if a code-reviewer fallback was already done
-  FALLBACK_DONE=$(python3 -c "
-import json
-with open('$REVIEW_FILE') as f: s=json.load(f)
-print(s.get('$PR_NUMBER', {}).get('fallback_review_done', False))
-" 2>/dev/null || echo "False")
+  FALLBACK_DONE=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
+    import json, os
+    with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
+    print(s.get(os.environ['_PR'], {}).get('fallback_review_done', False))
+    " 2>/dev/null || echo "False")
 
   if [[ "$FALLBACK_DONE" != "True" ]]; then
     echo "" >&2
@@ -119,7 +119,7 @@ print(s.get('$PR_NUMBER', {}).get('fallback_review_done', False))
     echo "  B) code-reviewer エージェントで代替レビューを実行:" >&2
     echo "     Agent(subagent_type='code-reviewer', prompt='Review PR #${PR_NUMBER} ...')" >&2
     echo "     完了後に既読マーク:" >&2
-    echo "     python3 -c \"import json; p='$REVIEW_FILE'; s=json.load(open(p)); d=s.setdefault('$PR_NUMBER',{}); d['fallback_review_done']=True; d['review_read']=True; json.dump(s,open(p,'w'),indent=2)\"" >&2
+    echo "     _REVIEW_FILE='$REVIEW_FILE' _PR='$PR_NUMBER' python3 -c \"import json, os; p=os.environ['_REVIEW_FILE']; s=json.load(open(p)); d=s.setdefault(os.environ['_PR'],{}); d['fallback_review_done']=True; d['review_read']=True; json.dump(s,open(p,'w'),indent=2)\"" >&2
     echo "" >&2
     exit 2
   fi
@@ -129,10 +129,10 @@ fi
 # =========================================================================
 # GATE 3: Review must be marked as read
 # =========================================================================
-REVIEW_READ=$(python3 -c "
-import json
-with open('$REVIEW_FILE') as f: s=json.load(f)
-print(s.get('$PR_NUMBER', {}).get('review_read', False))
+REVIEW_READ=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
+import json, os
+with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
+print(s.get(os.environ['_PR'], {}).get('review_read', False))
 " 2>/dev/null || echo "False")
 
 if [[ "$REVIEW_READ" != "True" ]]; then
@@ -143,7 +143,7 @@ if [[ "$REVIEW_READ" != "True" ]]; then
   echo "  1. レビューを読む:" >&2
   echo "     gh api repos/${REPO}/issues/${PR_NUMBER}/comments --jq '.[].body'" >&2
   echo "  2. 既読マーク:" >&2
-  echo "     python3 -c \"import json; p='$REVIEW_FILE'; s=json.load(open(p)); s.setdefault('$PR_NUMBER',{})['review_read']=True; json.dump(s,open(p,'w'),indent=2)\"" >&2
+  echo "     _REVIEW_FILE='$REVIEW_FILE' _PR='$PR_NUMBER' python3 -c \"import json, os; p=os.environ['_REVIEW_FILE']; s=json.load(open(p)); s.setdefault(os.environ['_PR'],{})['review_read']=True; json.dump(s,open(p,'w'),indent=2)\"" >&2
   echo "" >&2
   exit 2
 fi
@@ -174,26 +174,26 @@ fi
 
 # Also check if fallback review flagged critical
 if [[ "$HAS_CRITICAL" == "NO" ]]; then
-  HAS_CRITICAL=$(python3 -c "
-import json
-with open('$REVIEW_FILE') as f: s=json.load(f)
-print('YES' if s.get('$PR_NUMBER', {}).get('has_critical', False) else 'NO')
-" 2>/dev/null || echo "NO")
+  HAS_CRITICAL=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
+    import json, os
+    with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
+    print('YES' if s.get(os.environ['_PR'], {}).get('has_critical', False) else 'NO')
+    " 2>/dev/null || echo "NO")
 fi
 
 if [[ "$HAS_CRITICAL" == "YES" ]]; then
-  CRITICAL_ACK=$(python3 -c "
-import json
-with open('$REVIEW_FILE') as f: s=json.load(f)
-print(s.get('$PR_NUMBER', {}).get('critical_acknowledged', False))
-" 2>/dev/null || echo "False")
+  CRITICAL_ACK=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
+    import json, os
+    with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
+    print(s.get(os.environ['_PR'], {}).get('critical_acknowledged', False))
+    " 2>/dev/null || echo "False")
 
   if [[ "$CRITICAL_ACK" != "True" ]]; then
     echo "" >&2
     echo "[BLOCKED] PR #${PR_NUMBER}: CRITICAL 指摘が未対応です。" >&2
     echo "" >&2
     echo "  修正 push → レビュー再読 → acknowledge:" >&2
-    echo "  python3 -c \"import json; p='$REVIEW_FILE'; s=json.load(open(p)); s.setdefault('$PR_NUMBER',{})['critical_acknowledged']=True; json.dump(s,open(p,'w'),indent=2)\"" >&2
+    echo "  _REVIEW_FILE='$REVIEW_FILE' _PR='$PR_NUMBER' python3 -c \"import json, os; p=os.environ['_REVIEW_FILE']; s=json.load(open(p)); s.setdefault(os.environ['_PR'],{})['critical_acknowledged']=True; json.dump(s,open(p,'w'),indent=2)\"" >&2
     echo "" >&2
     exit 2
   fi

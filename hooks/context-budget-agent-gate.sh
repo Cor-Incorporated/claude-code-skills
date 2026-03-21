@@ -48,9 +48,9 @@ EOF
 fi
 
 # --- Planning mode exemption ---
-MODE=$(python3 -c "
-import json
-with open('$STATE_FILE') as f:
+MODE=$(_STATE="$STATE_FILE" python3 -c "
+import json, os
+with open(os.environ['_STATE']) as f:
     print(json.load(f).get('mode', 'auto'))
 " 2>/dev/null || echo "auto")
 

@@ -15,9 +15,9 @@ bash_cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo
 if [[ "$tool_name" == "Bash" ]] && echo "$(echo "$bash_cmd" | head -1)" | grep -qE '(codex-parallel|codex exec)'; then
     BUDGET_FILE="${HOME}/.claude/state/context-budget.json"
     if [[ -f "$BUDGET_FILE" ]]; then
-        codex_count=$(python3 -c "
-import json
-with open('$BUDGET_FILE') as f:
+        codex_count=$(_BUDGET_FILE="$BUDGET_FILE" python3 -c "
+import json, os
+with open(os.environ['_BUDGET_FILE']) as f:
     print(json.load(f).get('codex_call_count', 0))
 " 2>/dev/null || echo "0")
         if [[ "$codex_count" -ge 1 ]]; then
@@ -30,9 +30,9 @@ with open('$BUDGET_FILE') as f:
             exit 2
         fi
         # Increment codex call count
-        python3 -c "
-import json
-f = '$BUDGET_FILE'
+        _BUDGET_FILE="$BUDGET_FILE" python3 -c "
+import json, os
+f = os.environ['_BUDGET_FILE']
 with open(f) as fh:
     s = json.load(fh)
 s['codex_call_count'] = s.get('codex_call_count', 0) + 1

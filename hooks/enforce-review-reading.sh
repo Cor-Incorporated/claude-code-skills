@@ -25,9 +25,9 @@ input=""
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 
 # Read pending state
-REVIEW_DATA=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f:
+REVIEW_DATA=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f:
     d = json.load(f)
 print(json.dumps(d))
 " 2>/dev/null || echo "{}")
@@ -53,20 +53,20 @@ fi
 # This outputs hookSpecificOutput so agent sees the pending reviews
 OUTPUT=$(echo "$REVIEW_DATA" | jq -r '.output // ""' 2>/dev/null || echo "")
 if [[ -n "$OUTPUT" ]] && [[ "$OUTPUT" != "null" ]]; then
-  python3 -c "
-import json
-output = '''$OUTPUT'''
-# Truncate for context efficiency
-if len(output) > 2000:
-    output = output[:2000] + '\n... (truncated, see full: gh api repos/.../pulls/${PR}/comments)'
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'additionalContext': output
+  _OUTPUT="$OUTPUT" _PR="$PR" python3 -c "
+    import json, os
+    output = os.environ['_OUTPUT']
+    # Truncate for context efficiency
+    if len(output) > 2000:
+        output = output[:2000] + '\n... (truncated, see full: gh api repos/.../pulls/' + os.environ['_PR'] + '/comments)'
+    result = {
+        'hookSpecificOutput': {
+            'hookEventName': 'PreToolUse',
+            'additionalContext': output
+        }
     }
-}
-print(json.dumps(result))
-" 2>/dev/null
+    print(json.dumps(result))
+    " 2>/dev/null
 fi
 
 exit 0
