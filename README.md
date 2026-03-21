@@ -96,6 +96,70 @@ Reflect (gstack)
 | `gws-workspace` | Google Workspace CLI operations | "Google Drive", "Sheets" |
 | `context7-skills` | Context7 CLI skill management | "search skills", "ctx7" |
 
+## Agent Architecture & Codex Delegation
+
+This system's core differentiator is its **multi-agent orchestration** with automatic delegation to Codex CLI.
+
+### Claude Code + Codex CLI Hybrid Model
+
+```
+Claude Code (60%) — Design, parallel implementation, coordination, user interaction
+  └─ Strengths: Agent teams, real-time judgment, context-shared collaboration
+
+Codex CLI (40%) — Sequential implementation, operations, quality audits
+  └─ Strengths: Worktree isolation, long-running autonomy, GitHub/Supabase integration
+```
+
+### Subagent & Agent Team System
+
+| Pattern | When to Use | Example |
+|---------|------------|---------|
+| **Single agent** | Isolated, known-scope task | "Fix this lint error" |
+| **Parallel agents (2-4)** | Independent tasks, no dependencies | Frontend + backend changes in parallel |
+| **Agent team (5-7)** | Complex multi-file features with cross-review | New feature with tests + docs + review |
+| **Codex delegation** | Long-running, mechanical, or >5-turn tasks | Bulk test creation, large refactors |
+
+The `agent-orchestrator` skill manages team composition, wave-based execution, and cross-review protocols.
+
+### Three Codex Delegation Pathways
+
+| Route | Purpose | Command |
+|-------|---------|---------|
+| **A: Review** | Code review, second opinion | `codex exec review --base <branch>` |
+| **B: Handover** | Large implementation (requires user judgment) | Create handover doc → user passes to Codex |
+| **C: Parallel** | Independent tasks in isolated worktrees | `codex-parallel.sh` or `codex-orchestrate.sh` |
+
+### Context Budget Gate (Automatic)
+
+Hook scripts automatically enforce delegation rules:
+
+```
+Task received
+├─ <3 files to read? → Claude Code (self-execute)
+├─ Test/doc creation? → Codex CLI Route C
+├─ >5 expected turns? → Codex CLI Route C
+├─ Multiple independent tasks? → codex-orchestrate.sh (parallel worktrees)
+└─ Needs real-time judgment? → Claude Code (main)
+```
+
+| Hook | Trigger | Action |
+|------|---------|--------|
+| `context-budget-read-gate.sh` | Read tool | Warn at 3+ files, strong warn at 6+ |
+| `context-budget-write-gate.sh` | Write tool | Detect test/doc creation → suggest Codex |
+| `context-budget-edit-write-gate.sh` | Edit/Write | Block when too many source files read |
+| `context-budget-agent-gate.sh` | Agent tool | Monitor subagent count |
+| `codex-task-gate.sh` | Edit/Write test files | Suggest Codex for test creation |
+
+### Utility Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `codex-parallel.sh` | Single-task Codex execution with auto sandbox selection |
+| `codex-orchestrate.sh` | Multi-task parallel execution via worktrees (JSON or CSV input) |
+| `check-pr-reviews.sh` | Verify PR review timestamps against latest push |
+| `verify-pr-review.sh` | Validate review coverage before merge |
+| `context-monitor.py` | Monitor context window usage and token consumption |
+
 ## Hook System (37 Scripts)
 
 ### Quality Gates (Pre-merge)

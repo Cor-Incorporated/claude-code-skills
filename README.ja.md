@@ -97,6 +97,70 @@ Reflect (gstack)
 | `gws-workspace` | Google Workspace CLI 操作 | "Google Drive", "Sheets" |
 | `context7-skills` | Context7 CLI スキル管理 | "search skills", "ctx7" |
 
+## エージェントアーキテクチャ & Codex 委任
+
+このシステムの最大の差別化要素は、**マルチエージェントオーケストレーション**と Codex CLI への自動委任です。
+
+### Claude Code + Codex CLI ハイブリッドモデル
+
+```
+Claude Code (60%) — 設計、並列実装、統括、ユーザー対話
+  └─ 強み: エージェントチーム、リアルタイム判断、コンテキスト共有型協調
+
+Codex CLI (40%) — 直列実装、運用、品質監査
+  └─ 強み: worktree 分離、長時間自律実行、GitHub/Supabase 統合
+```
+
+### サブエージェント & エージェントチームシステム
+
+| パターン | 使用場面 | 例 |
+|---------|---------|-----|
+| **単一エージェント** | スコープが明確な単独タスク | 「この lint エラーを修正して」 |
+| **並列エージェント (2-4)** | 依存関係のない独立タスク | フロントエンド + バックエンドの並列変更 |
+| **エージェントチーム (5-7)** | クロスレビュー付きの複雑なマルチファイル機能 | 新機能 + テスト + ドキュメント + レビュー |
+| **Codex 委任** | 長時間、機械的、5ターン超のタスク | 大量テスト作成、大規模リファクタ |
+
+`agent-orchestrator` スキルがチーム構成、ウェーブ実行、クロスレビューを管理します。
+
+### Codex 委任の 3 経路
+
+| 経路 | 用途 | コマンド |
+|------|------|---------|
+| **A: レビュー** | コードレビュー、セカンドオピニオン | `codex exec review --base <branch>` |
+| **B: ハンドオーバー** | 大規模実装（ユーザー判断が必要） | ハンドオーバードキュメント作成 → ユーザーが Codex に渡す |
+| **C: 並列実行** | 独立タスクを分離 worktree で実行 | `codex-parallel.sh` または `codex-orchestrate.sh` |
+
+### コンテキスト予算ゲート（自動強制）
+
+hook スクリプトが委任ルールを自動的に強制します:
+
+```
+タスク受信
+├─ 読み込みファイル 3 未満? → Claude Code（自力実行）
+├─ テスト/ドキュメント作成? → Codex CLI 経路C
+├─ 予想 5 ターン超? → Codex CLI 経路C
+├─ 複数の独立タスク? → codex-orchestrate.sh（worktree 並列）
+└─ リアルタイム判断が必要? → Claude Code（メイン）
+```
+
+| hook | トリガー | アクション |
+|------|---------|----------|
+| `context-budget-read-gate.sh` | Read ツール | 3+ ファイルで警告、6+ で強い警告 |
+| `context-budget-write-gate.sh` | Write ツール | テスト/ドキュメント作成検出 → Codex 提案 |
+| `context-budget-edit-write-gate.sh` | Edit/Write | 多数ソースファイル読み込み後の編集をブロック |
+| `context-budget-agent-gate.sh` | Agent ツール | サブエージェント数を監視 |
+| `codex-task-gate.sh` | テストファイル Edit/Write | テスト作成を Codex に委任提案 |
+
+### ユーティリティスクリプト
+
+| スクリプト | 用途 |
+|-----------|------|
+| `codex-parallel.sh` | 単一タスク Codex 実行（sandbox 自動選択） |
+| `codex-orchestrate.sh` | マルチタスク並列実行（JSON/CSV 入力、worktree 分離） |
+| `check-pr-reviews.sh` | PR レビュータイムスタンプと最新 push の照合 |
+| `verify-pr-review.sh` | マージ前のレビューカバレッジ検証 |
+| `context-monitor.py` | コンテキストウィンドウ使用量とトークン消費の監視 |
+
 ## Hook システム（37 スクリプト）
 
 ### 品質ゲート（マージ前）
