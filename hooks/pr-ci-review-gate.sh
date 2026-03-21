@@ -367,7 +367,12 @@ with open(f_path, 'r+') as f:
 " 2>/dev/null
 
   # Reset review status for this branch (push invalidates prior reviews)
-  _STATE="$REVIEW_STATE" _BR="$BRANCH" python3 -c "
+  # Dual-reset: clear from BOTH project-scoped AND global state
+  # to prevent stale code_review=true from satisfying gates (Codex P2 finding)
+  GLOBAL_REVIEW="$HOME/.claude/state/review-status.json"
+  for _target in "$REVIEW_STATE" "$GLOBAL_REVIEW"; do
+    [[ ! -f "$_target" ]] && continue
+    _STATE="$_target" _BR="$BRANCH" python3 -c "
 import json, os, fcntl
 f_path = os.environ['_STATE']
 with open(f_path, 'r+') as f:
@@ -378,6 +383,7 @@ with open(f_path, 'r+') as f:
     json.dump(s, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
+  done
 
   # Classify tier to show appropriate requirements
   TIER=$(classify_review_tier "$BRANCH")
