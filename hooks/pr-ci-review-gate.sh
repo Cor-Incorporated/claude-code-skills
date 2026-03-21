@@ -80,9 +80,8 @@ current_branch() {
 # Tier 3 (EXEMPT) : Branch-based exemption (docs/*, chore/*, ci/*)
 #
 # Low-risk file patterns (Tier 2):
-#   .github/workflows/*, *.yml, *.yaml (CI), Dockerfile, .dockerignore,
-#   .gitignore, *.md, CLAUDE.md, .claude/*, package.json (version only),
-#   tsconfig.json, .eslintrc*, .prettierrc*, renovate.json, dependabot.yml
+#   .github/*, Dockerfile, .dockerignore, .gitignore, *.md, CLAUDE.md,
+#   .claude/*, tsconfig.json, .eslintrc*, .prettierrc*, renovate.json
 # =========================================================================
 classify_review_tier() {
   local branch="$1"
@@ -115,8 +114,8 @@ classify_review_tier() {
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
     case "$file" in
-      # Low-risk: CI/CD workflows
-      .github/workflows/*|.github/actions/*|.github/dependabot.yml) ;;
+      # Low-risk: All .github config files
+      .github/*) ;;
       # Low-risk: Docker config
       Dockerfile|Dockerfile.*|.dockerignore|docker-compose*.yml|docker-compose*.yaml) ;;
       # Low-risk: Documentation
@@ -348,26 +347,36 @@ if [[ "$GATE_MODE" == "POST_PUSH" ]]; then
   PR_NUMBER=$(gh pr list --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || echo "")
   [ -z "$PR_NUMBER" ] && exit 0
 
-  # Set pessimistic lock
-  python3 -c "
-import json
-with open('$LOCK_STATE') as f: s=json.load(f)
-s['$PR_NUMBER']={
-  'status':'review_pending',
-  'branch':'$BRANCH',
-  'ci_green':False,
-  'review_lgtm':False,
-  'verified':False
-}
-with open('$LOCK_STATE','w') as f: json.dump(s,f,indent=2)
+  # Set pessimistic lock (safe: env vars, not string interpolation)
+  _LOCK="$LOCK_STATE" _PR="$PR_NUMBER" _BR="$BRANCH" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_LOCK']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    s[os.environ['_PR']] = {
+        'status': 'review_pending',
+        'branch': os.environ['_BR'],
+        'ci_green': False,
+        'review_lgtm': False,
+        'verified': False,
+    }
+    f.seek(0); f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
 
   # Reset review status for this branch (push invalidates prior reviews)
-  python3 -c "
-import json
-with open('$REVIEW_STATE') as f: s=json.load(f)
-s.pop('$BRANCH', None)
-with open('$REVIEW_STATE','w') as f: json.dump(s,f,indent=2)
+  _STATE="$REVIEW_STATE" _BR="$BRANCH" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_STATE']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    s.pop(os.environ['_BR'], None)
+    f.seek(0); f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
 
   # Classify tier to show appropriate requirements
@@ -391,41 +400,33 @@ if [[ "$GATE_MODE" == "STOP" ]]; then
   # Auto-cleanup: remove merged/closed PRs from lock state (housekeeping)
   REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
   if [[ -n "$REPO" ]]; then
-    python3 -c "
-import json, subprocess, sys
-with open('$LOCK_STATE') as f: s=json.load(f)
-cleaned = []
-for pr in list(s.keys()):
-    try:
-        result = subprocess.run(
-            ['gh', 'api', 'repos/$REPO/pulls/' + pr, '--jq', '.state'],
-            capture_output=True, text=True, timeout=10
-        )
-        state = result.stdout.strip()
-        if state in ('closed', 'merged'):
-            del s[pr]
-            cleaned.append(pr)
-    except Exception:
-        pass  # keep entry if API fails
-if cleaned:
-    with open('$LOCK_STATE', 'w') as f: json.dump(s, f, indent=2)
-    print('|'.join(cleaned))
-else:
-    print('')
+    _LOCK="$LOCK_STATE" _REPO="$REPO" python3 -c "
+import json, subprocess, os, fcntl
+lock_path = os.environ['_LOCK']
+repo = os.environ['_REPO']
+with open(lock_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    for pr in list(s.keys()):
+        try:
+            r = subprocess.run(['gh','api','repos/'+repo+'/pulls/'+pr,'--jq','.state'],
+                capture_output=True, text=True, timeout=10)
+            if r.stdout.strip() in ('closed','merged'):
+                del s[pr]
+        except Exception:
+            pass
+    f.seek(0); f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
   fi
 
-  UNVERIFIED=$(python3 -c "
-import json
-with open('$LOCK_STATE') as f: s=json.load(f)
-unverified=[]
-for pr, data in s.items():
-  if isinstance(data, dict) and not data.get('verified', False):
-    unverified.append(f'PR #{pr} ({data.get(\"branch\",\"?\")})')
-if unverified:
-  print('|'.join(unverified))
-else:
-  print('')
+  UNVERIFIED=$(_LOCK="$LOCK_STATE" python3 -c "
+import json, os
+with open(os.environ['_LOCK']) as f: s = json.load(f)
+unverified = [f'PR #{pr} ({d.get(\"branch\",\"?\")})' for pr, d in s.items()
+              if isinstance(d, dict) and not d.get('verified', False)]
+print('|'.join(unverified) if unverified else '')
 " 2>/dev/null || echo "")
 
   if [[ -n "$UNVERIFIED" ]]; then
@@ -463,10 +464,10 @@ if [[ "$GATE_MODE" == "VERIFY" ]] || [[ "${1:-}" == "VERIFY" ]]; then
     exit 1
   fi
 
-  BRANCH=$(python3 -c "
-import json
-with open('$LOCK_STATE') as f: s=json.load(f)
-print(s.get('$PR',{}).get('branch',''))
+  BRANCH=$(_LOCK="$LOCK_STATE" _PR="$PR" python3 -c "
+import json, os
+with open(os.environ['_LOCK']) as f: s = json.load(f)
+print(s.get(os.environ['_PR'], {}).get('branch', ''))
 " 2>/dev/null || echo "")
 
   CODE_REVIEW=$(read_review "$BRANCH" "code_review")
@@ -485,14 +486,20 @@ print(s.get('$PR',{}).get('branch',''))
   fi
 
   # All checks passed — mark as verified
-  python3 -c "
-import json
-with open('$LOCK_STATE') as f: s=json.load(f)
-if '$PR' in s:
-  s['$PR']['ci_green']=True
-  s['$PR']['review_lgtm']=True
-  s['$PR']['verified']=True
-with open('$LOCK_STATE','w') as f: json.dump(s,f,indent=2)
+  _LOCK="$LOCK_STATE" _PR="$PR" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_LOCK']
+pr = os.environ['_PR']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    if pr in s:
+        s[pr]['ci_green'] = True
+        s[pr]['review_lgtm'] = True
+        s[pr]['verified'] = True
+    f.seek(0); f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
 
   echo "✅ PR #${PR}: CI green + レビュー LGTM 確認完了。ロック解除。" >&2
@@ -514,43 +521,50 @@ if [[ "$GATE_MODE" == "CLEANUP" ]] || [[ "${1:-}" == "CLEANUP" ]]; then
     exit 1
   fi
 
-  CLEANED=$(python3 -c "
-import json, subprocess
+  CLEANED=$(_LOCK="$LOCK_STATE" _REVIEW="$REVIEW_STATE" _REPO="$REPO" python3 -c "
+import json, subprocess, os, fcntl
+
+lock_path = os.environ['_LOCK']
+review_path = os.environ['_REVIEW']
+repo = os.environ['_REPO']
 lock_cleaned = []
 review_cleaned = []
 
-# Clean lock state
-with open('$LOCK_STATE') as f: lock = json.load(f)
-for pr in list(lock.keys()):
-    try:
-        result = subprocess.run(
-            ['gh', 'api', 'repos/$REPO/pulls/' + pr, '--jq', '.state'],
-            capture_output=True, text=True, timeout=10
-        )
-        state = result.stdout.strip()
-        if state in ('closed', 'merged'):
-            branch = lock[pr].get('branch', '?')
-            del lock[pr]
-            lock_cleaned.append(f'PR #{pr} ({branch})')
-    except Exception:
-        pass
-with open('$LOCK_STATE', 'w') as f: json.dump(lock, f, indent=2)
+# Clean lock state (with file lock)
+with open(lock_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    lock = json.load(f)
+    for pr in list(lock.keys()):
+        try:
+            r = subprocess.run(['gh','api','repos/'+repo+'/pulls/'+pr,'--jq','.state'],
+                capture_output=True, text=True, timeout=10)
+            if r.stdout.strip() in ('closed','merged'):
+                branch = lock[pr].get('branch', '?')
+                del lock[pr]
+                lock_cleaned.append(f'PR #{pr} ({branch})')
+        except Exception:
+            pass
+    f.seek(0); f.truncate()
+    json.dump(lock, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 
-# Clean review state: remove branches whose PRs are merged/closed
-with open('$REVIEW_STATE') as f: review = json.load(f)
-for branch in list(review.keys()):
-    try:
-        result = subprocess.run(
-            ['gh', 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number'],
-            capture_output=True, text=True, timeout=10
-        )
-        if not result.stdout.strip():
-            # No open PR for this branch — safe to clean
-            del review[branch]
-            review_cleaned.append(branch)
-    except Exception:
-        pass
-with open('$REVIEW_STATE', 'w') as f: json.dump(review, f, indent=2)
+# Clean review state (with file lock)
+with open(review_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    review = json.load(f)
+    for branch in list(review.keys()):
+        try:
+            r = subprocess.run(['gh','pr','list','--head',branch,'--state','open',
+                '--json','number','-q','.[0].number'],
+                capture_output=True, text=True, timeout=10)
+            if not r.stdout.strip():
+                del review[branch]
+                review_cleaned.append(branch)
+        except Exception:
+            pass
+    f.seek(0); f.truncate()
+    json.dump(review, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 
 if lock_cleaned or review_cleaned:
     for item in lock_cleaned:

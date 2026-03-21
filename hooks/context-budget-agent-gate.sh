@@ -65,12 +65,14 @@ fi
 
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-python3 << PYEOF
-import json, sys
+# Pass all dynamic values via environment variables (not string interpolation)
+# to prevent shell injection via crafted JSON input
+_STATE_FILE="$STATE_FILE" _NOW="$NOW" _INPUT_JSON="$INPUT_JSON" python3 << 'PYEOF'
+import json, sys, os
 
-state_file = "$STATE_FILE"
-now = "$NOW"
-input_json = """$INPUT_JSON"""
+state_file = os.environ["_STATE_FILE"]
+now = os.environ["_NOW"]
+input_json = os.environ.get("_INPUT_JSON", "")
 
 RESEARCH_TYPES = {
     "Explore", "architect", "planner", "Plan",
@@ -103,7 +105,7 @@ except Exception:
 # --- Rule 1: BLOCK worktree isolation ---
 isolation = tool_input.get("isolation", "")
 if isolation == "worktree":
-    print("🚫 [Worktree Block] isolation: \"worktree\" は使用禁止です。")
+    print('🚫 [Worktree Block] isolation: "worktree" は使用禁止です。')
     print("")
     print("理由: stale develop base問題で3回連続失敗 (2026-03-18)。")
     print("代替: TeamCreate / isolation なし Agent / 手動ブランチ作成")
