@@ -17,7 +17,7 @@ input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 # Only trigger on git commit commands
-if ! echo "$cmd" | grep -qE 'git\s+commit'; then
+if ! echo "$(echo "$cmd" | head -1)" | grep -qE 'git\s+commit'; then
   exit 0
 fi
 

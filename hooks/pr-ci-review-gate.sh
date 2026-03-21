@@ -19,6 +19,10 @@ export GH_NO_UPDATE_NOTIFIER=1
 
 GATE_MODE="${GATE_MODE:-STOP}"
 
+# DIAGNOSTIC: Log every invocation regardless of mode
+_DIAG_DIR="/Users/teradakousuke/Developer/engineer-cafe-navigator2025/.claude/state"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) INVOKED gate_mode=$GATE_MODE agent_depth=${CLAUDE_AGENT_DEPTH:-0} agent_id=${CLAUDE_AGENT_ID:-none}" >> "$_DIAG_DIR/pr-gate-diagnostic.log" 2>/dev/null
+
 # =========================================================================
 # State directory — project-scoped
 # =========================================================================
@@ -47,10 +51,10 @@ if [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] || [[ -n "${CLAUDE_AGENT_ID:-}" ]]; th
   esac
 fi
 
-# Read stdin (tool input JSON) — robust against empty/missing input
+# Read stdin (tool input JSON) — macOS compatible (no timeout command)
 input=""
 if [[ ! -t 0 ]]; then
-  input=$(timeout 3 cat 2>/dev/null || echo "")
+  input=$(cat 2>/dev/null || echo "")
 fi
 
 # Helper: extract command from tool input JSON
@@ -67,41 +71,59 @@ current_branch() {
   git branch --show-current 2>/dev/null || echo ""
 }
 
-# Helper: read review status for a branch
+# Helper: read review status for a branch (jq-based, no python3 dependency)
 read_review() {
   local branch="$1"
   local field="$2"
-  python3 -c "
-import json, sys
-try:
-    with open('$REVIEW_STATE') as f: s=json.load(f)
-    print('yes' if s.get('$branch',{}).get('$field') else 'no')
-except:
-    print('no')
-" 2>/dev/null || echo "no"
+  if [[ ! -f "$REVIEW_STATE" ]]; then
+    echo "no"
+    return
+  fi
+  if command -v jq &>/dev/null; then
+    local val
+    val=$(jq -r --arg b "$branch" --arg f "$field" '.[$b][$f] // false' "$REVIEW_STATE" 2>/dev/null)
+    if [[ "$val" == "true" ]]; then
+      echo "yes"
+    else
+      echo "no"
+    fi
+  else
+    # Fallback: grep-based check (less precise but always available)
+    if grep -q "\"$branch\"" "$REVIEW_STATE" 2>/dev/null && \
+       grep -A5 "\"$branch\"" "$REVIEW_STATE" 2>/dev/null | grep -q "\"$field\".*true"; then
+      echo "yes"
+    else
+      echo "no"
+    fi
+  fi
 }
 
 # =========================================================================
 # MODE: PRE_CREATE — Block PR creation without review
 # =========================================================================
 if [[ "$GATE_MODE" == "PRE_CREATE" ]]; then
+  # Diagnostic log for debugging hook execution
+  LOG_FILE="${STATE_DIR}/pr-gate-diagnostic.log"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) PRE_CREATE invoked. CWD=$(pwd) STATE=$REVIEW_STATE" >> "$LOG_FILE" 2>/dev/null
+
   cmd=$(extract_cmd)
 
   # Verify this is a gh pr create command
-  if [[ -n "$cmd" ]] && ! echo "$cmd" | grep -qE 'gh\s+pr\s+create'; then
+  if [[ -n "$cmd" ]] && ! echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+create'; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) SKIP: cmd='$cmd' not gh pr create" >> "$LOG_FILE" 2>/dev/null
     exit 0
   fi
-  # If cmd is empty (stdin parsing failed), still enforce — assume it's PR create
-  # because the matcher already filtered for "gh pr create"
 
   BRANCH=$(current_branch)
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) BRANCH=$BRANCH" >> "$LOG_FILE" 2>/dev/null
   [[ -z "$BRANCH" ]] && { echo "[WARN] Cannot determine branch. Blocking PR creation." >&2; exit 2; }
 
   # Exempt doc/chore/ci branches
-  case "$BRANCH" in docs/*|chore/*|ci/*) exit 0 ;; esac
+  case "$BRANCH" in docs/*|chore/*|ci/*) echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) EXEMPT: $BRANCH" >> "$LOG_FILE" 2>/dev/null; exit 0 ;; esac
 
   CODE_REVIEW=$(read_review "$BRANCH" "code_review")
   CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) code_review=$CODE_REVIEW codex_review=$CODEX_REVIEW" >> "$LOG_FILE" 2>/dev/null
 
   MISSING=""
   [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
@@ -109,6 +131,7 @@ if [[ "$GATE_MODE" == "PRE_CREATE" ]]; then
 
   if [[ -n "$MISSING" ]]; then
     MISSING="${MISSING%, }"
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) BLOCKED: $MISSING" >> "$LOG_FILE" 2>/dev/null
     echo "" >&2
     echo "🚫 [BLOCKED] PR作成を拒否。レビューパイプライン未完了。" >&2
     echo "   ブランチ: $BRANCH" >&2
@@ -121,6 +144,7 @@ if [[ "$GATE_MODE" == "PRE_CREATE" ]]; then
     echo "" >&2
     exit 2
   fi
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ALLOWED: all reviews passed" >> "$LOG_FILE" 2>/dev/null
   exit 0
 fi
 
@@ -128,29 +152,44 @@ fi
 # MODE: PRE_MERGE — Block PR merge without CI green + review
 # =========================================================================
 if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
+  # DIAGNOSTIC: Log hook invocation
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) PRE_MERGE invoked. cmd=$(extract_cmd)" >> "${STATE_DIR}/pr-gate-diagnostic.log" 2>/dev/null
   cmd=$(extract_cmd)
 
   # Verify this is a gh pr merge command
-  if [[ -n "$cmd" ]] && ! echo "$cmd" | grep -qE 'gh\s+pr\s+merge'; then
+  if [[ -n "$cmd" ]] && ! echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
     exit 0
   fi
 
-  BRANCH=$(current_branch)
-  [[ -z "$BRANCH" ]] && { echo "[WARN] Cannot determine branch. Blocking PR merge." >&2; exit 2; }
-
-  # Extract PR number from command or look it up
+  # Extract PR number from command FIRST (before branch lookup)
   PR_NUMBER=""
   if [[ -n "$cmd" ]]; then
     PR_NUMBER=$(echo "$cmd" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' || echo "")
   fi
   if [[ -z "$PR_NUMBER" ]]; then
-    PR_NUMBER=$(gh pr list --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || echo "")
+    # Fallback: try current branch
+    local_branch=$(current_branch)
+    if [[ -n "$local_branch" ]]; then
+      PR_NUMBER=$(gh pr list --head "$local_branch" --json number -q '.[0].number' 2>/dev/null || echo "")
+    fi
   fi
 
   if [[ -z "$PR_NUMBER" ]]; then
     echo "🚫 [BLOCKED] PR番号を特定できません。明示的にPR番号を指定してください。" >&2
     exit 2
   fi
+
+  # BUG FIX: Get the PR's HEAD branch from GitHub API, NOT local current_branch()
+  # current_branch() returns 'develop' when merging from develop, but we need
+  # the PR's source branch to check review-status.json correctly.
+  REPO_FOR_BRANCH=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+  if [[ -n "$REPO_FOR_BRANCH" ]]; then
+    BRANCH=$(gh api "repos/${REPO_FOR_BRANCH}/pulls/${PR_NUMBER}" --jq '.head.ref' 2>/dev/null || echo "")
+  fi
+  if [[ -z "$BRANCH" ]]; then
+    BRANCH=$(current_branch)
+  fi
+  [[ -z "$BRANCH" ]] && { echo "[WARN] Cannot determine branch. Blocking PR merge." >&2; exit 2; }
 
   # Check CI status
   REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
@@ -203,7 +242,7 @@ fi
 # =========================================================================
 if [[ "$GATE_MODE" == "POST_PUSH" ]]; then
   cmd=$(extract_cmd)
-  if [[ -n "$cmd" ]] && ! echo "$cmd" | grep -qE 'git\s+push'; then
+  if [[ -n "$cmd" ]] && ! echo "$(echo "$cmd" | head -1)" | grep -qE 'git\s+push'; then
     exit 0
   fi
 

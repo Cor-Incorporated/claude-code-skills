@@ -8,7 +8,8 @@ input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 # Only check git push commands
-if ! echo "$cmd" | grep -qE 'git\s+push'; then
+cmd_first_line=$(echo "$cmd" | head -1)
+if ! echo "$cmd_first_line" | grep -qE 'git\s+push'; then
     exit 0
 fi
 

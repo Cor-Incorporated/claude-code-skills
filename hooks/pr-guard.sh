@@ -6,7 +6,8 @@ set -euo pipefail
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
-if ! echo "$cmd" | grep -q 'gh.*pr.*create'; then
+cmd_first_line=$(echo "$cmd" | head -1)
+if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*create'; then
     echo "$input"
     exit 0
 fi

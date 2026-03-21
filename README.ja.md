@@ -2,7 +2,7 @@
 
 [Claude Code](https://claude.com/claude-code)（Anthropic 公式 CLI）のためのスキル・ルール・フック集です。
 
-27 のカスタムスキル、37 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
+27 のカスタムスキル、40 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
 
 [English](README.md) | **日本語**
 
@@ -23,7 +23,7 @@ chmod +x setup.sh
 claude-code-skills/
 ├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 5 グローバルルール (コーディング規約, Git, 品質, テスト, 委任)
-├── hooks/            # 37 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
+├── hooks/            # 40 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
 ├── scripts/          # 5 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
@@ -47,7 +47,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (カスタムスキル + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 37 hook スクリプト
+  code-reviewer, review-loop, e2e, bugfix + 40 hook スクリプト
 
 Reflect (gstack)
   /retro
@@ -212,7 +212,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 | **マージ後** | `post-merge-close-issues.sh` | リンクされた Issue を自動クローズ |
 | **セッション終了** | `pr-ci-review-gate.sh` (STOP) | 未検証 PR について警告 |
 
-## Hook システム（37 スクリプト）
+## Hook システム（40 スクリプト）
 
 ### 品質ゲート（マージ前）
 - `block-merge-without-ci.sh` — CI 全チェックグリーンなしでマージをブロック
@@ -228,6 +228,8 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - `git-commit-guard.sh` — コミットメッセージとスコープ検証
 - `block-version-downgrade.sh` — 依存パッケージのダウングレード防止
 - `audit-docker-build-args.sh` — Docker build args の http:// チェック
+- `block-local-hooks-write.sh` — settings.local.json によるグローバル hook 上書きを防止
+- `validate-no-local-hooks.sh` — セッション開始時に hook 上書きが存在しないことを検証
 
 ### コンテキスト予算管理
 - `context-budget-read-gate.sh` — 3+ ソースファイル読み込みで警告/ブロック
@@ -248,6 +250,29 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - `enforce-review-reading.sh` — マージ前に全レビューコメント読了
 - `enforce-memory-update-on-commit.sh` — コミット後の MEMORY.md 更新チェック
 - `enforce-doc-update-scope.sh` — ドキュメント更新スコープの検証
+
+### アクション後 hook
+- `record-code-review.sh` — コードレビュー完了をマージゲートトラッキング用に記録
+- `mark-factcheck-done.sh` — リサーチ後にファクトチェック完了をマーク
+- `track-agent-team.sh` — エージェントチームの生成と完了を追跡
+- `post-merge-close-issues.sh` — マージ後にリンクされた Issue を自動クローズ
+- `post-deploy-verify.sh` — デプロイ後の検証チェック
+- `workflow-sync-guard.sh` — push 後のワークフロー状態同期
+
+## Hook Matcher 構文
+
+**重要**: Claude Code の `matcher` フィールドは**ツール名の正規表現**のみを受け付けます。式言語ではありません。コマンドレベルのフィルタリングは hook スクリプト内で `stdin` の JSON を解析して行います。
+
+```json
+// 正しい — ツール名を正規表現でマッチ
+{ "matcher": "Bash" }
+{ "matcher": "Edit|Write" }
+
+// 間違い — 発火しない（ツール名に対する正規表現として扱われる）
+{ "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"" }
+```
+
+hook スクリプトは `stdin` でツール呼び出しの JSON を受け取り、`tool_input.command` や `tool_input.file_path` を検査してフィルタリングします。詳細は[公式 hooks ドキュメント](https://docs.anthropic.com/en/docs/claude-code/hooks)を参照。
 
 ## ルール
 

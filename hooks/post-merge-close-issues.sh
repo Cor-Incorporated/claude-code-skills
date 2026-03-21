@@ -11,12 +11,13 @@ set -euo pipefail
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
-if ! echo "$cmd" | grep -q 'gh.*pr.*merge'; then
+cmd_first_line=$(echo "$cmd" | head -1)
+if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then
     echo "$input"
     exit 0
 fi
 
-PR_NUM=$(echo "$cmd" | grep -oE '[0-9]+' | head -1)
+PR_NUM=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
 [ -z "$PR_NUM" ] && { echo "$input"; exit 0; }
 
 REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")

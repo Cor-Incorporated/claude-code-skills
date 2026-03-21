@@ -36,14 +36,14 @@ input=""
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 
 # Only apply to gh pr merge
-if ! echo "$cmd" | grep -qE 'gh\s+pr\s+merge'; then
+if ! echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   exit 0
 fi
 
 # Extract PR number
-PR_NUMBER=$(echo "$cmd" | grep -oE 'merge\s+([0-9]+)' | awk '{print $2}')
+PR_NUMBER=$(echo "$(echo "$cmd" | head -1)" | grep -oE 'merge\s+([0-9]+)' | awk '{print $2}')
 if [[ -z "$PR_NUMBER" ]]; then
-  PR_NUMBER=$(echo "$cmd" | grep -oE '[0-9]+' | head -1)
+  PR_NUMBER=$(echo "$(echo "$cmd" | head -1)" | grep -oE '[0-9]+' | head -1)
 fi
 [[ -z "$PR_NUMBER" ]] && exit 0
 

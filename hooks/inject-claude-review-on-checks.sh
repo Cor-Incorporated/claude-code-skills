@@ -30,8 +30,8 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 # =========================================================================
 # MODE 1: gh pr checks → fetch reviews and save state
 # =========================================================================
-if echo "$cmd" | grep -qE 'gh\s+pr\s+checks'; then
-  PR_NUMBER=$(echo "$cmd" | grep -oE '[0-9]+' | head -1)
+if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+checks'; then
+  PR_NUMBER=$(echo "$(echo "$cmd" | head -1)" | grep -oE '[0-9]+' | head -1)
   [[ -z "$PR_NUMBER" ]] && exit 0
 
   REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
@@ -63,7 +63,7 @@ fi
 # =========================================================================
 # MODE 2: gh pr merge → hard block if unresolved
 # =========================================================================
-if echo "$cmd" | grep -qE 'gh\s+pr\s+merge'; then
+if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   if [[ -f "$PENDING_FILE" ]]; then
     CRITICAL=$(python3 -c "
 import json
@@ -97,7 +97,7 @@ fi
 # =========================================================================
 # Only remind occasionally (not on every single command)
 # Skip for: git, ls, cat, echo, python3, etc.
-if echo "$cmd" | grep -qE '^(git |ls |cat |echo |python3 |head |tail |grep |find |test |set )'; then
+if echo "$(echo "$cmd" | head -1)" | grep -qE '^(git |ls |cat |echo |python3 |head |tail |grep |find |test |set )'; then
   exit 0
 fi
 

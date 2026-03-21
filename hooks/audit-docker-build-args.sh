@@ -15,7 +15,8 @@ input=$(cat)
 command=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 # Only check docker build commands
-if ! echo "$command" | grep -q 'docker build'; then
+command_first_line=$(echo "$command" | head -1)
+if ! echo "$command_first_line" | grep -q 'docker build'; then
     exit 0
 fi
 

@@ -32,13 +32,13 @@ fi
 
 # Check if content contains factual claims without verification source
 if echo "$CONTENT" | grep -qE '(電話|phone|営業時間|hours|休[館日]|holiday|料金|price|住所|address)'; then
-  if ! echo "$CONTENT" | grep -qiE '(verified|検証済|参照元|source:|ref:|project-reference)'; then
+  if ! echo "$CONTENT" | grep -qiE '(verified|検証済|参照元|source:|ref:|engineer-cafe-reference)'; then
     cat <<'ERRMSG' >&2
 
 KNOWLEDGE DATA VERIFICATION REQUIRED
 
 This file contains factual claims (hours, phone, prices).
-Verify against: docs/reference/project-reference.md
+Verify against: docs/reference/engineer-cafe-reference.md
 
 Known errors (2026-02-14):
   Phone: 080-6742-7231 (NOT 092-986-8026)

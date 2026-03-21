@@ -7,13 +7,13 @@ input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 # Only trigger for merge commands
-if ! echo "$cmd" | grep -q 'gh.*pr.*merge'; then
+if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then
     echo "$input"
     exit 0
 fi
 
 # Extract PR number
-PR_NUM=$(echo "$cmd" | grep -oE '[0-9]+' | head -1)
+PR_NUM=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
 if [ -z "$PR_NUM" ]; then
     echo "[BLOCK] PR番号が特定できません。gh pr merge <number> の形式で指定してください。" >&2
     exit 2

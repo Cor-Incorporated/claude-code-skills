@@ -12,7 +12,7 @@ input=$(cat)
 tool_name=$(echo "$input" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 bash_cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 
-if [[ "$tool_name" == "Bash" ]] && echo "$bash_cmd" | grep -qE '(codex-parallel|codex exec)'; then
+if [[ "$tool_name" == "Bash" ]] && echo "$(echo "$bash_cmd" | head -1)" | grep -qE '(codex-parallel|codex exec)'; then
     BUDGET_FILE="${HOME}/.claude/state/context-budget.json"
     if [[ -f "$BUDGET_FILE" ]]; then
         codex_count=$(python3 -c "

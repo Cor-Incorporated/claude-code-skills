@@ -4,7 +4,7 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 27 custom skills, 37 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 27 custom skills, 40 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ Restart Claude Code after installation.
 claude-code-skills/
 ├── skills/           # 27 custom skill definitions (SKILL.md + scripts + references)
 ├── rules/            # 5 global rule files (coding-style, git-workflow, quality, testing, delegation)
-├── hooks/            # 37 hook scripts (quality gates, safety guards, workflow enforcement)
+├── hooks/            # 40 hook scripts (quality gates, safety guards, workflow enforcement)
 ├── scripts/          # 5 utility scripts (Codex orchestration, PR review, context monitoring)
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
@@ -46,7 +46,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (custom skills + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 37 hook scripts
+  code-reviewer, review-loop, e2e, bugfix + 40 hook scripts
 
 Reflect (gstack)
   /retro
@@ -210,7 +210,7 @@ This ensures every PR gets at least two independent reviews, even without human 
 | **Post Merge** | `post-merge-close-issues.sh` | Auto-close linked issues |
 | **Session Stop** | `pr-ci-review-gate.sh` (STOP) | Warn about unverified PRs |
 
-## Hook System (37 Scripts)
+## Hook System (40 Scripts)
 
 ### Quality Gates (Pre-merge)
 - `block-merge-without-ci.sh` — Block merge unless all CI checks green
@@ -226,6 +226,8 @@ This ensures every PR gets at least two independent reviews, even without human 
 - `git-commit-guard.sh` — Commit message and scope validation
 - `block-version-downgrade.sh` — Prevent dependency downgrades
 - `audit-docker-build-args.sh` — Check for http:// in Docker build args
+- `block-local-hooks-write.sh` — Prevent settings.local.json from overriding global hooks
+- `validate-no-local-hooks.sh` — Validate no hook overrides exist on session start
 
 ### Context Budget Management
 - `context-budget-read-gate.sh` — Warn/block after 3+ source file reads
@@ -246,6 +248,29 @@ This ensures every PR gets at least two independent reviews, even without human 
 - `enforce-review-reading.sh` — Read all review comments before merge
 - `enforce-memory-update-on-commit.sh` — Warn if MEMORY.md is stale after commit
 - `enforce-doc-update-scope.sh` — Validate documentation update scope
+
+### Post-Action Hooks
+- `record-code-review.sh` — Record code review completion for merge gate tracking
+- `mark-factcheck-done.sh` — Mark fact-check as completed after research
+- `track-agent-team.sh` — Track agent team spawning and completion
+- `post-merge-close-issues.sh` — Auto-close linked issues after merge
+- `post-deploy-verify.sh` — Post-deployment verification checks
+- `workflow-sync-guard.sh` — Sync workflow state after push
+
+## Hook Matcher Syntax
+
+**Important**: Claude Code's `matcher` field accepts only a **tool name regex**, not an expression language. Command-level filtering must be done inside the hook script by parsing `stdin` JSON.
+
+```json
+// CORRECT — matches tool name with regex
+{ "matcher": "Bash" }
+{ "matcher": "Edit|Write" }
+
+// WRONG — will never fire (treated as regex against tool name)
+{ "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"" }
+```
+
+Hook scripts receive the tool invocation as JSON on `stdin` and should filter by inspecting `tool_input.command` or `tool_input.file_path` internally. See the [official hooks documentation](https://docs.anthropic.com/en/docs/claude-code/hooks) for details.
 
 ## Rules
 

@@ -40,7 +40,7 @@ PR=$(echo "$REVIEW_DATA" | jq -r '.pr // ""' 2>/dev/null || echo "")
 [[ "$TOTAL" -eq 0 ]] && exit 0
 
 # HARD BLOCK: gh pr merge with unresolved findings
-if echo "$cmd" | grep -qE 'gh\s+pr\s+merge'; then
+if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
     echo "[BLOCKED] PR #${PR}: 未対応のCRITICAL/HIGH指摘があります（CRITICAL=${CRITICAL}, HIGH=${HIGH}）。" >&2
     echo "  レビューコメントを確認し、全て対応してからマージしてください。" >&2

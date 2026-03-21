@@ -67,13 +67,19 @@
             "command": "CLAUDE_HOOK_EVENT=SessionStart bash ~/.claude/hooks/enforce-git-freshness.sh",
             "timeout": 15,
             "statusMessage": "Checking git freshness..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/validate-no-local-hooks.sh",
+            "timeout": 5,
+            "statusMessage": "Validating settings.local.json has no hook overrides..."
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "tool == \"Read\"",
+        "matcher": "Read",
         "hooks": [
           {
             "type": "command",
@@ -82,7 +88,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Write\"",
+        "matcher": "Write",
         "hooks": [
           {
             "type": "command",
@@ -99,7 +105,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Agent\"",
+        "matcher": "Agent",
         "hooks": [
           {
             "type": "command",
@@ -108,7 +114,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Edit\"",
+        "matcher": "Edit",
         "hooks": [
           {
             "type": "command",
@@ -125,7 +131,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && (tool_input.command matches \"--delete-branch\" || tool_input.command matches \"branch -[dD]\" || tool_input.command matches \"push.*--delete\" || tool_input.command matches \"push\\s+\\S+\\s+:\")",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -134,7 +140,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -143,7 +149,7 @@
         ]
       },
       {
-        "matcher": "(tool == \"Edit\" || tool == \"Write\") && (tool_input.file_path matches \"_test\\\\.(go|py|ts|tsx)\" || tool_input.file_path matches \"\\\\.test\\\\.(ts|tsx)\" || tool_input.file_path matches \"test_\")",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
@@ -152,7 +158,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && (tool_input.command matches \"codex-parallel\" || tool_input.command matches \"codex exec\")",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -161,7 +167,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && (tool_input.command matches \"git cherry-pick\" || tool_input.command matches \"git merge\" || tool_input.command matches \"git rebase\")",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -170,7 +176,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && tool_input.command matches \"git commit\"",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -179,7 +185,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && tool_input.command matches \"gh pr merge\"",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -208,7 +214,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && tool_input.command matches \"docker build\"",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -217,7 +223,7 @@
         ]
       },
       {
-        "matcher": "(tool == \"Edit\" || tool == \"Write\") && tool_input.file_path matches \"/(domain|core)/\"",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
@@ -226,7 +232,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && tool_input.command matches \"gh issue close\"",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -235,7 +241,7 @@
         ]
       },
       {
-        "matcher": "(tool == \"Edit\" || tool == \"Write\") && (tool_input.file_path matches \"seed_knowledge\" || tool_input.file_path matches \"knowledge.*\\.ya?ml\" || tool_input.file_path matches \"knowledge.*\\.json\")",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
@@ -244,7 +250,7 @@
         ]
       },
       {
-        "matcher": "tool == \"AskUserQuestion\"",
+        "matcher": "AskUserQuestion",
         "hooks": [
           {
             "type": "command",
@@ -253,7 +259,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Edit\" || tool == \"Write\"",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
@@ -264,7 +270,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && tool_input.command matches \"gh pr create\"",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -281,7 +287,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && (tool_input.command matches \"gh pr checks\" || tool_input.command matches \"gh pr merge\")",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -290,11 +296,32 @@
             "statusMessage": "Fetching claude-review comments..."
           }
         ]
+      },
+      {
+        "matcher": "WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import json, sys, re; from datetime import datetime; input_data = json.load(sys.stdin); tool_input = input_data.get('tool_input', {}); query = tool_input.get('query', ''); current_year = str(datetime.now().year); has_year = re.search(r'\\\\b20\\\\d{2}\\\\b', query); has_temporal = any(word in query.lower() for word in ['latest', 'recent', 'current', 'new', 'now', 'today']); should_add_year = not has_year and not has_temporal; modified_query = f'{query} {current_year}' if should_add_year else query; output = {'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'modifiedToolInput': {'query': modified_query}}}; print(json.dumps(output)); sys.exit(0)\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-local-hooks-write.sh",
+            "timeout": 5,
+            "statusMessage": "Checking settings.local.json for hooks override..."
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "(tool == \"WebSearch\" || tool == \"WebFetch\")",
+        "matcher": "WebSearch|WebFetch",
         "hooks": [
           {
             "type": "command",
@@ -303,7 +330,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Read\"",
+        "matcher": "Read",
         "hooks": [
           {
             "type": "command",
@@ -312,16 +339,22 @@
         ]
       },
       {
-        "matcher": "tool == \"Agent\"",
+        "matcher": "Agent",
         "hooks": [
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/track-agent-team.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/record-code-review.sh",
+            "timeout": 10,
+            "statusMessage": "Recording code review completion..."
           }
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && tool_input.command matches \"git commit\"",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -330,7 +363,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && tool_input.command matches \"gh pr merge\"",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -339,7 +372,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && (tool_input.command matches \"gcloud run deploy\" || tool_input.command matches \"docker push\" || tool_input.command matches \"kubectl apply\")",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -348,7 +381,7 @@
         ]
       },
       {
-        "matcher": "(tool == \"Edit\" || tool == \"Write\") && (tool_input.file_path matches \"test_\" || tool_input.file_path matches \"\\\\.test\\\\.\" || tool_input.file_path matches \"\\\\.spec\\\\.\")",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
@@ -357,7 +390,7 @@
         ]
       },
       {
-        "matcher": "(tool == \"Edit\" || tool == \"Write\") && tool_input.file_path matches \"/(domain|core)/\"",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
@@ -366,7 +399,7 @@
         ]
       },
       {
-        "matcher": "(tool == \"Edit\" || tool == \"Write\") && (tool_input.file_path matches \"/api/.*/route\\.ts\" || tool_input.file_path matches \"main\\.py\")",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
@@ -375,7 +408,7 @@
         ]
       },
       {
-        "matcher": "(tool == \"Edit\" || tool == \"Write\") && (tool_input.file_path matches \"/docs/\" || tool_input.file_path matches \"Plans\\.md\" || tool_input.file_path matches \"CLAUDE\\.md\")",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
@@ -384,7 +417,7 @@
         ]
       },
       {
-        "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -422,7 +455,7 @@
     "claude-code-harness@claude-code-harness-marketplace": true,
     "gopls-lsp@claude-plugins-official": true
   },
-  "language": "\u30c4\u30f3\u30c7\u30ec\u5f8c\u8f29\u5973\u5b50",
+  "language": "ツンデレ後輩女子",
   "effortLevel": "high",
   "fastMode": true,
   "voiceEnabled": false
