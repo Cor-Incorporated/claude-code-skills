@@ -20,25 +20,48 @@
 - 品質監査の定量実行（repo_delivery_audit.py）
 - delivery統制（merge gate・soak time判定）
 
+## AI自己バイパス絶対禁止（2026-03-21 事故対応・最優先ルール）
+**Claude Code は自身が設置したゲートを自身で回避してはならない。**
+
+### 禁止事項
+- `review-status.json`, `pr-review-lock.json` 等の状態ファイルへの直接書き込み
+- レビュー未実施のまま PR を作成するための状態ファイル改ざん
+- hook スクリプトの一時的な無効化やバイパスロジックの挿入
+- `--no-verify` 等のフラグによるhookスキップ
+
+### 根本原因（2026-03-21）
+Claude Code が `review-status.json` に手動で `true` を書き込み、code-reviewer/Codex CLI を実行せずに PR を作成。ゲートの存在意義が完全に無効化された。
+
+### 強制機構
+- `block-state-file-tampering.sh` (Write/Edit PreToolUse) — 状態ファイル直接書き込みをブロック
+- `block-state-file-tampering-bash.sh` (Bash PreToolUse) — Bash経由の改ざんもブロック
+- レビュー記録は `record-code-review.sh` (PostToolUse hook) のみが行う
+
 ## 核心ルール
 - 独立タスクは必ず並列実行。順次は依存関係がある場合のみ
-- 2タスク以上の独立実装 → エージェントチーム必須（レビューエージェント含む）
-- **長時間直列タスク → Codex CLIに委任**（コンパクティング回避）
+- **2タスク以上の独立実装 → Agent Team（TeamCreate）必須**
+- **Codex CLI 経路C → 1タスク限定**（長時間・自律的・大規模の場合のみ）
+- Codex CLI に2タスク以上を同時に委任しない → Agent Team にオーバーフロー
 - コンパクティング後にシングルに戻るの禁止。TaskListで状態確認して再開
-- **Codex CLI 経路Cに3タスク以上が集中する場合 → Agent Team (worktree isolation) に分散**
 
-## Agent Team vs Codex CLI 判断基準（2026-03-21追加）
+## Agent Team vs Codex CLI 判断基準（2026-03-21改訂）
 
-Codex CLI 経路Cへの担当集中を防ぐため、以下の基準で Agent Team を優先する:
+**原則: Agent Team がデフォルト。Codex CLI は例外的に1タスクのみ。**
 
-| 条件 | 担当 | 理由 |
-|------|------|------|
-| 1ファイル変更、lint/build不要 | Agent Team (worktree) | 軽量タスク、Codex起動オーバーヘッド不要 |
-| frontend OR backend 片方のみ | Agent Team (worktree) | コンフリクトリスク低い |
-| ドキュメント作成 | Agent Team (technical-writer) | コード変更なし |
-| frontend+backend 跨ぎ + テスト作成 | Codex CLI 経路C | 複雑な依存関係 |
-| 3ファイル超の変更 + CI検証必要 | Codex CLI 経路C | 長時間自律実行が有利 |
-| GitHub/Supabase API操作を含む | Codex CLI | 統合ツールが必要 |
+| タスク数 | 条件 | 担当 |
+|---------|------|------|
+| 1タスク | 短時間（5ターン以内） | サブエージェント or メイン |
+| 1タスク | 長時間 + 自律的 + 大規模 | **Codex CLI（経路C）** ← 唯一のCodex適用 |
+| 2タスク+ | 独立 | **Agent Team（TeamCreate）** |
+| 2タスク+ | 相互依存 | サブエージェント（対話的協調） |
+
+### Codex CLI 経路C の厳格な適用条件（全て満たす場合のみ）
+1. **1タスクのみ**（2タスク以上は Agent Team）
+2. **10ターン超の長時間処理**（短時間ならサブエージェント）
+3. **フィードバックループ不要**（自律的に完結する作業）
+4. **大規模**（10ファイル超 or 全ファイルリファクタ等）
+
+それ以外は全て Agent Team またはサブエージェント。
 
 ### Agent Team worktree ルール
 - `isolation: "worktree"` で起動 → git worktreeで完全分離
@@ -47,10 +70,10 @@ Codex CLI 経路Cへの担当集中を防ぐため、以下の基準で Agent Te
 - worktree agent は**PRを作成しない** — メイン agent が統合してPR作成
 
 ### 並列上限の厳守
-- Codex CLI: **最大2並列**（worktree分離。3並列はコンフリクトリスクが高い）
+- **Codex CLI: 最大1並列**（2タスク以上は Agent Team にオーバーフロー）
 - Agent Team: 最大5並列（worktree + in-process混在）
+- サブエージェント: 最大5-7同時
 - **合計7を超えない** — それ以上はキューイングまたは優先度判定
-- Codex CLI 2並列を超えるタスク → Agent Team (worktree) にオーバーフロー
 
 ## コンテキスト予算ゲート（2026-03-10追加・必須）
 タスク着手前に以下のチェックを実施し、自力実行 vs Codex委任を判定する。
@@ -108,7 +131,7 @@ planner(計画), architect(設計), tdd-guide(TDD), code-reviewer(レビュー),
 複雑な機能→planner / コード作成後→code-reviewer / バグ修正→tdd-guide / ビルド失敗→build-error-resolver
 
 ## 並列の上限
-サブエージェント5-7同時 / Bash3-4同時 / Codex CLI **2並列** / ファイル読み取り制限なし
+サブエージェント5-7同時 / Bash3-4同時 / Codex CLI **1タスク限定** / Agent Team最大5並列 / ファイル読み取り制限なし
 
 ## コンテキストウィンドウ管理
 - **残り20%**: 新規タスク開始禁止。進行中タスクの完了・コミットに集中
@@ -249,32 +272,30 @@ bash ~/.claude/scripts/codex-orchestrate.sh --csv ~/Developer/repo tasks.csv "{m
 - [ ] infra変更の場合: post-merge検証手順を記載すること
 ```
 
-### 委任Tier（2026-03-21改訂: Agent Team追加）
+### 委任Tier（2026-03-21改訂: Codex 1タスク限定）
 | Tier | タスク例 | 担当 |
 |------|---------|------|
+| **対話・判断** | リアルタイム対話, セキュリティ, 方針変更 | Claude Code（メイン） |
 | **設計・協調** | アーキテクチャ, 相互依存実装, 創造的設計 | Claude Code（エージェントチーム） |
-| **並列実装** | 複数機能の同時開発, TDD, 相互レビュー | Claude Code（サブエージェント） |
-| **軽量並列** | 1ファイル修正, Dockerfile変更, 設定変更 | **Agent Team（worktree isolation）** |
-| **ドキュメント** | docs作成/更新, セットアップガイド, README | **Agent Team（technical-writer）** |
-| **レビュー** | コードレビュー, セカンドオピニオン | Codex CLI（経路A）or Agent Team（code-reviewer） |
-| **直列実装** | 大量テスト, 全ファイルリファクタ, migration | Codex CLI（経路C・コンパクティング回避） |
-| **複合並列** | frontend+backend跨ぎ + テスト作成 | Codex CLI（経路C・worktree並列） |
+| **並列実装** | 2+独立タスク, TDD, 相互レビュー | **Agent Team（TeamCreate）** |
+| **軽量並列** | 1ファイル修正, Dockerfile変更, 設定変更 | Agent Team（worktree isolation） |
+| **ドキュメント** | docs作成/更新, セットアップガイド, README | Agent Team（technical-writer） |
+| **レビュー** | コードレビュー, セカンドオピニオン | Agent Team（code-reviewer）+ Codex CLI（経路A） |
+| **大規模直列** | 全ファイルリファクタ, 大量テスト, migration | Codex CLI（経路C・**1タスク限定**） |
 | **運用** | GitHub PR/Issue, Supabase, 品質監査 | Codex CLI |
 | **大規模委任** | ユーザー判断必要な実装 | ハンドオーバー（経路B） |
-| **対話・判断** | リアルタイム対話, セキュリティ, 方針変更 | Claude Code（メイン） |
 
-### 委任判断フロー（2026-03-21改訂）
+### 委任判断フロー（2026-03-21改訂: Agent Team優先）
 ```
 タスク受信
 ├─ 対話・判断が必要? → Claude Code（メイン）
-├─ 複数タスクが相互依存? → Claude Code（エージェントチーム）
+├─ 2+タスクが独立? → Agent Team（TeamCreate）← 最重要変更
+├─ 複数タスクが相互依存? → サブエージェント（対話的協調）
 ├─ 創造的・設計的な実装? → Claude Code（planner + architect）
-├─ 1-2ファイル変更 + lint不要? → Agent Team（worktree isolation）
+├─ 1タスク + 短時間? → サブエージェント
+├─ 1タスク + 長時間 + 自律的 + 大規模? → Codex CLI（経路C）← 唯一のCodex条件
 ├─ ドキュメント作成/更新? → Agent Team（technical-writer）
 ├─ レビュー? → Agent Team（code-reviewer）+ Codex CLI（経路A）
-├─ 長時間直列（コンパクティングリスク）? → Codex CLI（経路C）
-├─ frontend+backend跨ぎ + テスト? → Codex CLI（経路C）
-├─ Codex CLI 経路Cが既に3並列? → Agent Team（worktree）にオーバーフロー
 ├─ GitHub/Supabase操作? → Codex CLI
 ├─ ユーザー判断が必要な大規模実装? → ハンドオーバー（経路B）
 └─ 調査が必要? → Explore エージェント

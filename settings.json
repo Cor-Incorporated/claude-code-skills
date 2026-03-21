@@ -95,6 +95,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/block-state-file-tampering.sh",
+            "timeout": 5,
+            "statusMessage": "Checking state file integrity..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/context-budget-edit-write-gate.sh"
           },
           {
@@ -121,6 +127,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/block-state-file-tampering.sh",
+            "timeout": 5,
+            "statusMessage": "Checking state file integrity..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/context-budget-edit-write-gate.sh"
           },
           {
@@ -130,6 +142,17 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/block-version-downgrade.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-state-file-tampering-bash.sh",
+            "timeout": 5,
+            "statusMessage": "Checking state file integrity..."
           }
         ]
       },
