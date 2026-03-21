@@ -1,25 +1,26 @@
 #!/bin/bash
 # pr-ci-review-gate.sh — ABSOLUTE ENFORCEMENT: CI green + review LGTM gate
-# Prevent gh CLI TTY hangs in non-interactive contexts
-export GH_FORCE_TTY=0
-export GH_NO_UPDATE_NOTIFIER=1
 # =========================================================================
-# This hook operates in THREE modes based on GATE_MODE env var:
+# NO ESCAPE: This hook blocks PR creation AND merge without review.
 #
-# 1. PRE_CREATE  — Blocks `gh pr create` unless review pipeline completed
-# 2. POST_PUSH   — Sets pessimistic lock after every `git push`
-# 3. STOP         — Blocks session stop if any PR has pending review/CI
+# Modes (GATE_MODE env var):
+#   PRE_CREATE  — Blocks `gh pr create` unless review pipeline completed
+#   PRE_MERGE   — Blocks `gh pr merge` unless CI green + reviews verified
+#   POST_PUSH   — Sets pessimistic lock after every `git push`
+#   STOP        — Blocks session stop if any PR has pending review/CI
+#   VERIFY      — Manual verification (called by agent after review)
 #
 # Exit 2 = HARD BLOCK. No skip. No override.
 # =========================================================================
-set -euo pipefail
+
+# Prevent gh CLI TTY hangs
+export GH_FORCE_TTY=0
+export GH_NO_UPDATE_NOTIFIER=1
 
 GATE_MODE="${GATE_MODE:-STOP}"
 
 # =========================================================================
-# Project-scoped state: use CLAUDE_PROJECT_DIR to isolate per-project.
-# Falls back to git root, then cwd, then global ~/.claude/state as last resort.
-# This prevents PR state from one project leaking into another.
+# State directory — project-scoped
 # =========================================================================
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
   STATE_DIR="${CLAUDE_PROJECT_DIR}/.claude/state"
@@ -34,43 +35,73 @@ mkdir -p "$STATE_DIR"
 [ ! -f "$REVIEW_STATE" ] && echo '{}' > "$REVIEW_STATE"
 [ ! -f "$LOCK_STATE" ] && echo '{}' > "$LOCK_STATE"
 
-# Subagent exemption (subagents can't create PRs or stop sessions)
+# =========================================================================
+# NO SUBAGENT EXEMPTION for PR create/merge.
+# Subagents MUST NOT create or merge PRs without review.
+# Only POST_PUSH and STOP modes are exempt for subagents.
+# =========================================================================
 if [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] || [[ -n "${CLAUDE_AGENT_ID:-}" ]]; then
-  exit 0
+  case "$GATE_MODE" in
+    POST_PUSH|STOP) exit 0 ;;
+    # PRE_CREATE and PRE_MERGE are NOT exempt — fall through to enforcement
+  esac
 fi
 
+# Read stdin (tool input JSON) — robust against empty/missing input
 input=""
-[[ ! -t 0 ]] && input=$(cat)
+if [[ ! -t 0 ]]; then
+  input=$(timeout 3 cat 2>/dev/null || echo "")
+fi
+
+# Helper: extract command from tool input JSON
+extract_cmd() {
+  if [[ -n "$input" ]] && command -v jq &>/dev/null; then
+    echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo ""
+  else
+    echo ""
+  fi
+}
+
+# Helper: get current branch
+current_branch() {
+  git branch --show-current 2>/dev/null || echo ""
+}
+
+# Helper: read review status for a branch
+read_review() {
+  local branch="$1"
+  local field="$2"
+  python3 -c "
+import json, sys
+try:
+    with open('$REVIEW_STATE') as f: s=json.load(f)
+    print('yes' if s.get('$branch',{}).get('$field') else 'no')
+except:
+    print('no')
+" 2>/dev/null || echo "no"
+}
 
 # =========================================================================
 # MODE: PRE_CREATE — Block PR creation without review
 # =========================================================================
 if [[ "$GATE_MODE" == "PRE_CREATE" ]]; then
-  cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
-  
-  # Only apply to gh pr create
-  if ! echo "$cmd" | grep -qE 'gh\s+pr\s+create'; then
+  cmd=$(extract_cmd)
+
+  # Verify this is a gh pr create command
+  if [[ -n "$cmd" ]] && ! echo "$cmd" | grep -qE 'gh\s+pr\s+create'; then
     exit 0
   fi
+  # If cmd is empty (stdin parsing failed), still enforce — assume it's PR create
+  # because the matcher already filtered for "gh pr create"
+
+  BRANCH=$(current_branch)
+  [[ -z "$BRANCH" ]] && { echo "[WARN] Cannot determine branch. Blocking PR creation." >&2; exit 2; }
 
   # Exempt doc/chore/ci branches
-  BRANCH=$(git branch --show-current 2>/dev/null || echo "")
   case "$BRANCH" in docs/*|chore/*|ci/*) exit 0 ;; esac
 
-  # Check review status
-  CODE_REVIEW=$(python3 -c "
-import json
-with open('$REVIEW_STATE') as f: s=json.load(f)
-b=s.get('$BRANCH',{})
-print('yes' if b.get('code_review') else 'no')
-" 2>/dev/null || echo "no")
-
-  CODEX_REVIEW=$(python3 -c "
-import json
-with open('$REVIEW_STATE') as f: s=json.load(f)
-b=s.get('$BRANCH',{})
-print('yes' if b.get('codex_review') else 'no')
-" 2>/dev/null || echo "no")
+  CODE_REVIEW=$(read_review "$BRANCH" "code_review")
+  CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
 
   MISSING=""
   [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
@@ -78,12 +109,92 @@ print('yes' if b.get('codex_review') else 'no')
 
   if [[ -n "$MISSING" ]]; then
     MISSING="${MISSING%, }"
-    echo "[BLOCKED] PR作成を拒否。レビューパイプライン未完了。" >&2
-    echo "  ブランチ: $BRANCH" >&2
-    echo "  未完了: $MISSING" >&2
-    echo "  レビュー実施後に再試行してください。" >&2
+    echo "" >&2
+    echo "🚫 [BLOCKED] PR作成を拒否。レビューパイプライン未完了。" >&2
+    echo "   ブランチ: $BRANCH" >&2
+    echo "   未完了: $MISSING" >&2
+    echo "" >&2
+    echo "   解決方法:" >&2
+    echo "   1. code-reviewer エージェントでレビュー実行" >&2
+    echo "   2. Codex CLI セカンドオピニオン実行" >&2
+    echo "   3. レビュー完了後に再試行" >&2
+    echo "" >&2
     exit 2
   fi
+  exit 0
+fi
+
+# =========================================================================
+# MODE: PRE_MERGE — Block PR merge without CI green + review
+# =========================================================================
+if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
+  cmd=$(extract_cmd)
+
+  # Verify this is a gh pr merge command
+  if [[ -n "$cmd" ]] && ! echo "$cmd" | grep -qE 'gh\s+pr\s+merge'; then
+    exit 0
+  fi
+
+  BRANCH=$(current_branch)
+  [[ -z "$BRANCH" ]] && { echo "[WARN] Cannot determine branch. Blocking PR merge." >&2; exit 2; }
+
+  # Extract PR number from command or look it up
+  PR_NUMBER=""
+  if [[ -n "$cmd" ]]; then
+    PR_NUMBER=$(echo "$cmd" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' || echo "")
+  fi
+  if [[ -z "$PR_NUMBER" ]]; then
+    PR_NUMBER=$(gh pr list --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || echo "")
+  fi
+
+  if [[ -z "$PR_NUMBER" ]]; then
+    echo "🚫 [BLOCKED] PR番号を特定できません。明示的にPR番号を指定してください。" >&2
+    exit 2
+  fi
+
+  # Check CI status
+  REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+  HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null || echo "")
+
+  if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
+    CI_FAILURES=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+      --jq '[.check_runs[] | select(.conclusion=="failure")] | length' 2>/dev/null || echo "0")
+    CI_PENDING=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+      --jq '[.check_runs[] | select(.status!="completed")] | length' 2>/dev/null || echo "0")
+
+    if [[ "$CI_FAILURES" -gt 0 ]]; then
+      echo "🚫 [BLOCKED] CI に失敗ジョブあり ($CI_FAILURES 件)。修正してからマージしてください。" >&2
+      exit 2
+    fi
+    if [[ "$CI_PENDING" -gt 0 ]]; then
+      echo "🚫 [BLOCKED] CI に実行中ジョブあり ($CI_PENDING 件)。完了を待ってください。" >&2
+      exit 2
+    fi
+  fi
+
+  # Check review status
+  CODE_REVIEW=$(read_review "$BRANCH" "code_review")
+  CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
+
+  MISSING=""
+  [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
+  [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
+
+  if [[ -n "$MISSING" ]]; then
+    MISSING="${MISSING%, }"
+    echo "" >&2
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER} のマージを拒否。" >&2
+    echo "   ブランチ: $BRANCH" >&2
+    echo "   未完了: $MISSING" >&2
+    echo "" >&2
+    echo "   解決方法:" >&2
+    echo "   1. レビュー実行後に再試行" >&2
+    echo "   2. bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER}" >&2
+    echo "" >&2
+    exit 2
+  fi
+
+  echo "✅ PR #${PR_NUMBER}: CI green + レビュー完了。マージ許可。" >&2
   exit 0
 fi
 
@@ -91,12 +202,12 @@ fi
 # MODE: POST_PUSH — Set pessimistic lock after push
 # =========================================================================
 if [[ "$GATE_MODE" == "POST_PUSH" ]]; then
-  cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
-  if ! echo "$cmd" | grep -qE 'git\s+push'; then
+  cmd=$(extract_cmd)
+  if [[ -n "$cmd" ]] && ! echo "$cmd" | grep -qE 'git\s+push'; then
     exit 0
   fi
 
-  BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+  BRANCH=$(current_branch)
   [ -z "$BRANCH" ] && exit 0
 
   PR_NUMBER=$(gh pr list --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || echo "")
@@ -125,7 +236,7 @@ with open('$REVIEW_STATE','w') as f: json.dump(s,f,indent=2)
 " 2>/dev/null
 
   echo "" >&2
-  echo "🔒 PR #${PR_NUMBER} をロック。以下が完了するまで「完了」報告禁止:" >&2
+  echo "🔒 PR #${PR_NUMBER} をロック。以下が完了するまでマージ禁止:" >&2
   echo "   1. gh pr checks ${PR_NUMBER} — 全グリーン" >&2
   echo "   2. code-reviewer エージェント — LGTM" >&2
   echo "   3. Codex CLI セカンドオピニオン — LGTM" >&2
@@ -161,24 +272,24 @@ fi
 # =========================================================================
 # MODE: VERIFY — Manual verification (called by agent after review)
 # =========================================================================
-if [[ "$GATE_MODE" == "VERIFY" ]] || [[ "$1" == "VERIFY" ]]; then
+if [[ "$GATE_MODE" == "VERIFY" ]] || [[ "${1:-}" == "VERIFY" ]]; then
   PR="${2:-${PR_NUMBER:-}}"
   [ -z "$PR" ] && { echo "Usage: $0 VERIFY <PR_NUMBER>" >&2; exit 1; }
 
-  # Check CI status via gh api (gh pr checks hangs in non-TTY contexts)
   REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
   HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha' 2>/dev/null || echo "")
   if [[ -z "$REPO" ]] || [[ -z "$HEAD_SHA" ]]; then
     echo "⚠️ PR #${PR}: リポジトリ/SHA取得失敗。手動確認してください。" >&2
     exit 1
   fi
-  CI_STATUS=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+
+  CI_FAILURES=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
     --jq '[.check_runs[] | select(.conclusion=="failure")] | length' 2>/dev/null || echo "0")
   CI_PENDING=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
     --jq '[.check_runs[] | select(.status!="completed")] | length' 2>/dev/null || echo "0")
 
-  if [[ "$CI_STATUS" -gt 0 ]]; then
-    echo "❌ PR #${PR}: CI に失敗ジョブあり ($CI_STATUS 件)。修正してください。" >&2
+  if [[ "$CI_FAILURES" -gt 0 ]]; then
+    echo "❌ PR #${PR}: CI に失敗ジョブあり ($CI_FAILURES 件)。修正してください。" >&2
     exit 1
   fi
   if [[ "$CI_PENDING" -gt 0 ]]; then
@@ -186,24 +297,14 @@ if [[ "$GATE_MODE" == "VERIFY" ]] || [[ "$1" == "VERIFY" ]]; then
     exit 1
   fi
 
-  # Check review status
   BRANCH=$(python3 -c "
 import json
 with open('$LOCK_STATE') as f: s=json.load(f)
 print(s.get('$PR',{}).get('branch',''))
 " 2>/dev/null || echo "")
 
-  CODE_REVIEW=$(python3 -c "
-import json
-with open('$REVIEW_STATE') as f: s=json.load(f)
-print('yes' if s.get('$BRANCH',{}).get('code_review') else 'no')
-" 2>/dev/null || echo "no")
-
-  CODEX_REVIEW=$(python3 -c "
-import json
-with open('$REVIEW_STATE') as f: s=json.load(f)
-print('yes' if s.get('$BRANCH',{}).get('codex_review') else 'no')
-" 2>/dev/null || echo "no")
+  CODE_REVIEW=$(read_review "$BRANCH" "code_review")
+  CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
 
   if [[ "$CODE_REVIEW" != "yes" ]] || [[ "$CODEX_REVIEW" != "yes" ]]; then
     MISSING=""

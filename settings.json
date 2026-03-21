@@ -11,6 +11,11 @@
       "Bash",
       "WebSearch",
       "WebFetch",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "mcp__brave-search__brave_web_search",
+      "mcp__brave-search__brave_local_search",
+      "mcp__codex__codex",
       "Bash(openssl rand:*)",
       "Bash(source:*)",
       "Bash(curl:*)",
@@ -22,6 +27,8 @@
       "Bash(python3:*)",
       "Bash(git:*)",
       "Bash(gh:*)",
+      "Bash(supabase:*)",
+      "Bash(vercel:*)",
       "Bash(ls:*)",
       "Bash(wc:*)",
       "Bash(lsof:*)",
@@ -29,22 +36,394 @@
       "Bash(set:*)",
       "Bash(dig:*)",
       "Bash(nslookup:*)",
-      "Bash(sudo dscacheutil:*)"
+      "Bash(sudo dscacheutil:*)",
+      "WebFetch(domain:docs.github.com)",
+      "WebFetch(domain:linear.app)",
+      "WebFetch(domain:developers.linear.app)",
+      "WebFetch(domain:studio.apollographql.com)",
+      "WebFetch(domain:docs.x.ai)"
     ],
     "defaultMode": "dontAsk"
   },
+  "model": "opus[1m]",
   "hooks": {
-    "_comment": "See hooks/ directory for all hook scripts. Configure paths in settings.json after installation.",
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "bash ~/.claude/hooks/auto-init-permissions.sh" },
-          { "type": "command", "command": "bash ~/.claude/hooks/context-budget-reset.sh" },
-          { "type": "command", "command": "bash ~/.claude/hooks/reset-factcheck.sh" },
-          { "type": "command", "command": "CLAUDE_HOOK_EVENT=SessionStart bash ~/.claude/hooks/enforce-git-freshness.sh", "timeout": 15, "statusMessage": "Checking git freshness..." }
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/auto-init-permissions.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/context-budget-reset.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/reset-factcheck.sh"
+          },
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_EVENT=SessionStart bash ~/.claude/hooks/enforce-git-freshness.sh",
+            "timeout": 15,
+            "statusMessage": "Checking git freshness..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "tool == \"Read\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/context-budget-read-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Write\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/context-budget-edit-write-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/context-budget-write-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-factcheck-before-edit.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Agent\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/context-budget-agent-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Edit\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/context-budget-edit-write-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-factcheck-before-edit.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-version-downgrade.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && (tool_input.command matches \"--delete-branch\" || tool_input.command matches \"branch -[dD]\" || tool_input.command matches \"push.*--delete\" || tool_input.command matches \"push\\s+\\S+\\s+:\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/protect-branches.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/git-push-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "(tool == \"Edit\" || tool == \"Write\") && (tool_input.file_path matches \"_test\\\\.(go|py|ts|tsx)\" || tool_input.file_path matches \"\\\\.test\\\\.(ts|tsx)\" || tool_input.file_path matches \"test_\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/codex-task-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && (tool_input.command matches \"codex-parallel\" || tool_input.command matches \"codex exec\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/codex-task-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && (tool_input.command matches \"git cherry-pick\" || tool_input.command matches \"git merge\" || tool_input.command matches \"git rebase\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-manual-merge-ops.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"git commit\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/git-commit-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"gh pr merge\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "GATE_MODE=PRE_MERGE bash ~/.claude/hooks/pr-ci-review-gate.sh",
+            "timeout": 30,
+            "statusMessage": "Enforcing CI green + review gate before merge..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-review-reading.sh",
+            "timeout": 10,
+            "statusMessage": "Checking unresolved review findings..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-merge-without-ci.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-merge-without-review.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/pr-merge-claude-review-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"docker build\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/audit-docker-build-args.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "(tool == \"Edit\" || tool == \"Write\") && tool_input.file_path matches \"/(domain|core)/\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-architecture-layers.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"gh issue close\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-issue-close-verification.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "(tool == \"Edit\" || tool == \"Write\") && (tool_input.file_path matches \"seed_knowledge\" || tool_input.file_path matches \"knowledge.*\\.ya?ml\" || tool_input.file_path matches \"knowledge.*\\.json\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-seed-data-verification.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"AskUserQuestion\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-factcheck-before-user-request.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Edit\" || tool == \"Write\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_EVENT=PreToolUse bash ~/.claude/hooks/enforce-git-freshness.sh",
+            "timeout": 15,
+            "statusMessage": "Checking git freshness..."
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"gh pr create\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "GATE_MODE=PRE_CREATE bash ~/.claude/hooks/pr-ci-review-gate.sh",
+            "timeout": 30,
+            "statusMessage": "Checking review pipeline (code-reviewer + Codex)..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/pr-guard.sh",
+            "timeout": 30,
+            "statusMessage": "Checking PR guard (base branch, issue ref, conflicts)..."
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && (tool_input.command matches \"gh pr checks\" || tool_input.command matches \"gh pr merge\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/inject-claude-review-on-checks.sh",
+            "timeout": 30,
+            "statusMessage": "Fetching claude-review comments..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "(tool == \"WebSearch\" || tool == \"WebFetch\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Read\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Agent\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/track-agent-team.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"git commit\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-memory-update-on-commit.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"gh pr merge\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/post-merge-close-issues.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && (tool_input.command matches \"gcloud run deploy\" || tool_input.command matches \"docker push\" || tool_input.command matches \"kubectl apply\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/post-deploy-verify.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "(tool == \"Edit\" || tool == \"Write\") && (tool_input.file_path matches \"test_\" || tool_input.file_path matches \"\\\\.test\\\\.\" || tool_input.file_path matches \"\\\\.spec\\\\.\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/verify-test-falsifiability.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "(tool == \"Edit\" || tool == \"Write\") && tool_input.file_path matches \"/(domain|core)/\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-domain-naming.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "(tool == \"Edit\" || tool == \"Write\") && (tool_input.file_path matches \"/api/.*/route\\.ts\" || tool_input.file_path matches \"main\\.py\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-endpoint-dataflow.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "(tool == \"Edit\" || tool == \"Write\") && (tool_input.file_path matches \"/docs/\" || tool_input.file_path matches \"Plans\\.md\" || tool_input.file_path matches \"CLAUDE\\.md\")",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-doc-update-scope.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "GATE_MODE=POST_PUSH bash ~/.claude/hooks/pr-ci-review-gate.sh",
+            "timeout": 15,
+            "statusMessage": "Setting review lock..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/workflow-sync-guard.sh",
+            "timeout": 10,
+            "statusMessage": "Checking workflow file sync..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "GATE_MODE=STOP bash ~/.claude/hooks/pr-ci-review-gate.sh",
+            "timeout": 30,
+            "statusMessage": "Checking unverified PRs..."
+          }
         ]
       }
     ]
   },
-  "_note": "This is a template. See the full settings.json in the repository for complete hook configuration."
+  "enabledPlugins": {
+    "code-review@claude-plugins-official": true,
+    "feature-dev@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "context7@claude-plugins-official": true,
+    "claude-code-harness@claude-code-harness-marketplace": true,
+    "gopls-lsp@claude-plugins-official": true
+  },
+  "language": "\u30c4\u30f3\u30c7\u30ec\u5f8c\u8f29\u5973\u5b50",
+  "effortLevel": "high",
+  "fastMode": true,
+  "voiceEnabled": false
 }
