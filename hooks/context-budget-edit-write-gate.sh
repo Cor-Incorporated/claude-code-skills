@@ -41,10 +41,10 @@ fi
 TRANSCRIPT_PATH=$(echo "$INPUT_JSON" | python3 -c "
 import json, sys
 try:
-data = json.load(sys.stdin)
-print(data.get('transcript_path', ''))
-except:
-print('')
+    data = json.load(sys.stdin)
+    print(data.get('transcript_path', ''))
+except Exception:
+    print('')
 " 2>/dev/null || echo "")
 
 if [[ -z "$TRANSCRIPT_PATH" ]] || [[ ! -f "$TRANSCRIPT_PATH" ]]; then
@@ -68,10 +68,10 @@ fi
 EDIT_FILE=$(echo "$INPUT_JSON" | python3 -c "
 import json, sys
 try:
-data = json.load(sys.stdin)
-print(data.get('tool_input', {}).get('file_path', ''))
-except:
-print('')
+    data = json.load(sys.stdin)
+    print(data.get('tool_input', {}).get('file_path', ''))
+except Exception:
+    print('')
 " 2>/dev/null || echo "")
 
 # Exempt: editing non-source files (config, docs, hooks, etc.)

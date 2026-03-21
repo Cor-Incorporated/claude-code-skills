@@ -165,9 +165,9 @@ r'(?i)\|\s*CRITICAL\s*\|',
 r'(?i)## critical',
 ]
 for pat in patterns:
-if re.search(pat, bodies):
-    print('YES')
-    sys.exit(0)
+    if re.search(pat, bodies):
+        print('YES')
+        sys.exit(0)
 print('NO')
 " 2>/dev/null || echo "NO")
 fi

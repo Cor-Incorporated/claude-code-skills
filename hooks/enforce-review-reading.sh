@@ -28,7 +28,7 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 REVIEW_DATA=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
 import json, os
 with open(os.environ['_PENDING_FILE']) as f:
-d = json.load(f)
+    d = json.load(f)
 print(json.dumps(d))
 " 2>/dev/null || echo "{}")
 
