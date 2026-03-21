@@ -101,10 +101,10 @@ COMMENT_COUNT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq 'length
 if [[ "$COMMENT_COUNT" -eq 0 ]]; then
   # Check if a code-reviewer fallback was already done
   FALLBACK_DONE=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
-	import json, os
-	with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
-	print(s.get(os.environ['_PR'], {}).get('fallback_review_done', False))
-	" 2>/dev/null || echo "False")
+    import json, os
+    with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
+    print(s.get(os.environ['_PR'], {}).get('fallback_review_done', False))
+    " 2>/dev/null || echo "False")
 
   if [[ "$FALLBACK_DONE" != "True" ]]; then
     echo "" >&2
@@ -175,18 +175,18 @@ fi
 # Also check if fallback review flagged critical
 if [[ "$HAS_CRITICAL" == "NO" ]]; then
   HAS_CRITICAL=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
-	import json, os
-	with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
-	print('YES' if s.get(os.environ['_PR'], {}).get('has_critical', False) else 'NO')
-	" 2>/dev/null || echo "NO")
+    import json, os
+    with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
+    print('YES' if s.get(os.environ['_PR'], {}).get('has_critical', False) else 'NO')
+    " 2>/dev/null || echo "NO")
 fi
 
 if [[ "$HAS_CRITICAL" == "YES" ]]; then
   CRITICAL_ACK=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
-	import json, os
-	with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
-	print(s.get(os.environ['_PR'], {}).get('critical_acknowledged', False))
-	" 2>/dev/null || echo "False")
+    import json, os
+    with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
+    print(s.get(os.environ['_PR'], {}).get('critical_acknowledged', False))
+    " 2>/dev/null || echo "False")
 
   if [[ "$CRITICAL_ACK" != "True" ]]; then
     echo "" >&2
