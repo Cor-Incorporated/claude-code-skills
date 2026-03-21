@@ -125,7 +125,7 @@ elif count >= 2:
     print("  → 例外事由がある場合: mode=planning に設定してください")
     print("    bash ~/.claude/hooks/context-budget-set-mode.sh planning")
     # 2件目以降はブロック（exit 1）
-    sys.exit(1)
+    sys.exit(2)
 
 PYEOF
 

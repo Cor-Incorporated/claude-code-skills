@@ -63,7 +63,7 @@ if [ "$factchecked" = "false" ] || [ "$expired" = "true" ]; then
         echo "  例: Vercel設定 → context7でVercel docs確認"
         echo "  例: GitHub Actions → context7でGitHub Actions docs確認"
         echo "  例: Cloud Run → WebSearchでCloud Run最新ドキュメント確認"
-        exit 1
+        exit 2
     fi
 
     # ソースコードの場合は警告（初回は通す、2回目以降はブロック）
@@ -71,7 +71,7 @@ if [ "$factchecked" = "false" ] || [ "$expired" = "true" ]; then
         echo "🚫 [BLOCK] 複数ファイルの修正前にファクトチェックが必要です。"
         echo "  context7、WebSearch、または関連ドキュメントのReadを実行してから修正してください。"
         echo "  ファクトチェック済みの場合: context7/WebSearch/WebFetch を1回使うとフラグが立ちます。"
-        exit 1
+        exit 2
     fi
 
     # edit_countを増加

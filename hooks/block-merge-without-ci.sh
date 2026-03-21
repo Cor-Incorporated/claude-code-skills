@@ -5,6 +5,7 @@ set -euo pipefail
 
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
+cmd_first_line=$(echo "$cmd" | head -1)
 
 # Only trigger for merge commands
 if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then

@@ -233,10 +233,14 @@ class Order {
     return updated
   }
 
-  pullDomainEvents(): DomainEvent[] {
+  pullDomainEvents(): { events: DomainEvent[]; cleared: this } {
     const events = [...this._domainEvents]
-    this._domainEvents = []
-    return events
+    // Immutable: return new state instead of mutating
+    const cleared = Object.create(
+      Object.getPrototypeOf(this),
+      Object.getOwnPropertyDescriptors({ ...this, _domainEvents: [] })
+    )
+    return { events, cleared }
   }
 }
 ```

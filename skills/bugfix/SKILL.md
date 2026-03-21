@@ -1,8 +1,8 @@
 ---
 name: bugfix
 description: "Investigate, fix, and regression-proof bugs across the codebase. Invoke with: /bugfix [bug description]. Performs root cause analysis with full codebase grep, applies fixes to ALL instances (not just the first match), adds regression tests, and generates a structured report. Uses web search for unknown error patterns and library-specific issues. Use when: user reports a bug, error log needs investigation, fixing a GitHub Issue labeled 'bug'. Do NOT use for: new feature implementation, refactoring without a bug, performance optimization, or UI styling changes."
-user_invocable: true
-arguments: required
+user-invocable: true
+argument-hint: "[bug description]"
 allowed-tools: [Read, Edit, Write, Bash, Grep, Glob, WebSearch, AskUserQuestion]
 ---
 

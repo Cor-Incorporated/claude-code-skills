@@ -8,8 +8,9 @@
 
 set -euo pipefail
 
-# Extract issue number from command
-COMMAND="${TOOL_INPUT_COMMAND:-}"
+# Extract command from stdin JSON
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 ISSUE_NUM=$(echo "$COMMAND" | grep -oE 'issue close [0-9]+' | grep -oE '[0-9]+' || true)
 
 if [ -z "$ISSUE_NUM" ]; then

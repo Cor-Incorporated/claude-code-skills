@@ -1,6 +1,7 @@
 ---
 name: ui-skills
 description: "Opinionated UI constraints for Tailwind CSS, accessibility, animation, and layout. Use when building, reviewing, or fixing UI components. Triggers: 'review this component', 'check UI quality', 'build a form/modal/dialog', 'fix animation jank', 'accessible button'. Do NOT use for backend logic, API design, or database work."
+allowed-tools: [Read, Grep]
 ---
 
 # UI Skills

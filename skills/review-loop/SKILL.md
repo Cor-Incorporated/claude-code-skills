@@ -1,8 +1,8 @@
 ---
 name: review-loop
 description: CI green + claude-review LGTM まで自動ループ。push → CI待ち → 全レビューソースチェック → 修正 → 再push を繰り返す
-user_invocable: true
-arguments: "[PR番号] [--all-prs]"
+user-invocable: true
+argument-hint: "[PR番号] [--all-prs]"
 allowed-tools: [Read, Edit, Write, Bash, Grep, Glob]
 ---
 

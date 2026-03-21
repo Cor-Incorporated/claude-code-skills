@@ -7,8 +7,9 @@
 
 set -euo pipefail
 
-# --- 入力: tool_input から file_path を取得 ---
-FILE_PATH="${TOOL_INPUT_FILE_PATH:-}"
+# --- 入力: stdin JSON から file_path を取得 ---
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""')
 
 if [[ -z "$FILE_PATH" ]]; then
   exit 0

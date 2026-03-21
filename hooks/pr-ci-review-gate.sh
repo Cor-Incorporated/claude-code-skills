@@ -20,8 +20,6 @@ export GH_NO_UPDATE_NOTIFIER=1
 GATE_MODE="${GATE_MODE:-STOP}"
 
 # DIAGNOSTIC: Log every invocation regardless of mode
-_DIAG_DIR="/Users/teradakousuke/Developer/engineer-cafe-navigator2025/.claude/state"
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) INVOKED gate_mode=$GATE_MODE agent_depth=${CLAUDE_AGENT_DEPTH:-0} agent_id=${CLAUDE_AGENT_ID:-none}" >> "$_DIAG_DIR/pr-gate-diagnostic.log" 2>/dev/null
 
 # =========================================================================
 # State directory — project-scoped
@@ -36,6 +34,9 @@ fi
 REVIEW_STATE="$STATE_DIR/review-status.json"
 LOCK_STATE="$STATE_DIR/pr-review-lock.json"
 mkdir -p "$STATE_DIR"
+
+# DIAGNOSTIC: Log every invocation
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) INVOKED gate_mode=$GATE_MODE agent_depth=${CLAUDE_AGENT_DEPTH:-0} agent_id=${CLAUDE_AGENT_ID:-none}" >> "$STATE_DIR/pr-gate-diagnostic.log" 2>/dev/null
 [ ! -f "$REVIEW_STATE" ] && echo '{}' > "$REVIEW_STATE"
 [ ! -f "$LOCK_STATE" ] && echo '{}' > "$LOCK_STATE"
 

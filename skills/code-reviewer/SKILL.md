@@ -17,10 +17,10 @@ Identify the scope: PR diff, staged changes, or specified files.
 
 ```bash
 # PR analysis
-python <skill-path>/scripts/pr_analyzer.py <project-path> [options]
+python ${CLAUDE_SKILL_DIR}/scripts/pr_analyzer.py <project-path> [options]
 
 # Code quality scan
-python <skill-path>/scripts/code_quality_checker.py <target-path> [--verbose]
+python ${CLAUDE_SKILL_DIR}/scripts/code_quality_checker.py <target-path> [--verbose]
 ```
 </important>
 
@@ -62,7 +62,7 @@ Review each changed file for:
 ### 3. Generate Report
 
 ```bash
-python <skill-path>/scripts/review_report_generator.py [arguments] [options]
+python ${CLAUDE_SKILL_DIR}/scripts/review_report_generator.py [arguments] [options]
 ```
 
 ### Report Format

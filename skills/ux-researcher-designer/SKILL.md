@@ -1,6 +1,7 @@
 ---
 name: ux-researcher-designer
 description: "UX research and design toolkit: data-driven persona generation, journey mapping, usability testing frameworks, and research synthesis. Use when creating personas, mapping user journeys, planning usability tests, or synthesizing research findings. Triggers: 'create persona', 'map user journey', 'plan usability test', 'synthesize research'. Do NOT use for UI implementation, visual design, or coding tasks."
+allowed-tools: [Bash, Read]
 ---
 
 # UX Researcher & Designer

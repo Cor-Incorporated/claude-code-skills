@@ -1,6 +1,7 @@
 ---
 name: ui-design-system
 description: "Design system toolkit: generate design tokens (colors, typography, spacing), document components, calculate responsive layouts, and produce developer handoff assets. Use when creating a design system, generating tokens from brand colors, ensuring visual consistency, or preparing dev handoff. Triggers: 'generate design tokens', 'create color palette', 'design system setup', 'typography scale'. Do NOT use for UX research, user testing, or backend architecture."
+allowed-tools: [Bash, Read]
 ---
 
 # UI Design System

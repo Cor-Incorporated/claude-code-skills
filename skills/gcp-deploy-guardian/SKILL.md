@@ -24,7 +24,7 @@ Activate when detecting:
 Verify `--platform linux/amd64` on every Docker build from Apple Silicon.
 
 ```bash
-bash <skill-path>/scripts/pre-deploy-check.sh "docker build ... -t image:tag context/"
+bash ${CLAUDE_SKILL_DIR}/scripts/pre-deploy-check.sh "docker build ... -t image:tag context/"
 ```
 
 After push, inspect the manifest:
@@ -42,7 +42,7 @@ docker manifest inspect <image:tag> | grep architecture
 Reject any `http://` URL in `--build-arg` or `cloudbuild.yaml`.
 
 ```bash
-bash <skill-path>/scripts/pre-deploy-check.sh "docker build --build-arg URL=..."
+bash ${CLAUDE_SKILL_DIR}/scripts/pre-deploy-check.sh "docker build --build-arg URL=..."
 ```
 
 **Failure mode**: `http://` baked into SPA bundle -> browser blocks as Mixed Content -> feature fully broken (Issue #40).

@@ -31,7 +31,7 @@ if [ ${#BLOCKERS[@]} -gt 0 ]; then
     done
     echo ""
     echo "対応: WebSearch/公式ドキュメントで事実確認 → 自動化検討 → 自動化不可能な場合のみ依頼"
-    exit 1
+    exit 2
 fi
 
 exit 0

@@ -1,6 +1,7 @@
 ---
 name: skill-creator
 description: Interactive guide for creating, reviewing, and optimizing Claude skills. Walks users through use case definition, frontmatter generation, instruction writing, validation, and packaging. Use when user says "create a skill", "build a skill", "make a new skill", "design a skill", "optimize my skill", "review this skill", or "improve this skill". Do NOT use for general coding tasks, writing documentation, or non-skill file creation.
+allowed-tools: [Read, Write, Bash, Grep, Glob]
 ---
 
 # Skill Creator
