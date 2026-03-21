@@ -89,4 +89,4 @@ if echo "$cmd" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
 fi
 
 # All checks passed - allow the command
-echo "$input"
+exit 0

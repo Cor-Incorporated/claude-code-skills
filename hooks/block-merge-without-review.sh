@@ -18,13 +18,11 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 cmd_first_line=$(echo "$cmd" | head -1)
 if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then
-    echo "$input"
     exit 0
 fi
 
 PR_NUM=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
 if [ -z "$PR_NUM" ]; then
-    echo "$input"
     exit 0
 fi
 
@@ -129,5 +127,4 @@ if [ "$HAS_CRITICAL" -gt 0 ] || [ "$HAS_HIGH" -gt 0 ]; then
 fi
 
 echo "[Review Guard] レビュー検証完了 ✓" >&2
-echo "$input"
 exit 0

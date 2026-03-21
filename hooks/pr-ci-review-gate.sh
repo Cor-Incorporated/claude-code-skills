@@ -72,6 +72,80 @@ current_branch() {
   git branch --show-current 2>/dev/null || echo ""
 }
 
+# =========================================================================
+# Review Tier Classification (content-based)
+# =========================================================================
+# Tier 1 (FULL)   : Source code changes → code-reviewer + Codex CLI
+# Tier 2 (LIGHT)  : CI/config/docs-only changes → code-reviewer only
+# Tier 3 (EXEMPT) : Branch-based exemption (docs/*, chore/*, ci/*)
+#
+# Low-risk file patterns (Tier 2):
+#   .github/workflows/*, *.yml, *.yaml (CI), Dockerfile, .dockerignore,
+#   .gitignore, *.md, CLAUDE.md, .claude/*, package.json (version only),
+#   tsconfig.json, .eslintrc*, .prettierrc*, renovate.json, dependabot.yml
+# =========================================================================
+classify_review_tier() {
+  local branch="$1"
+
+  # Tier 3: Branch-based exemption
+  case "$branch" in docs/*|chore/*|ci/*) echo "EXEMPT"; return ;; esac
+
+  # Determine base branch for diff
+  local base_branch="main"
+  if git rev-parse --verify develop &>/dev/null; then
+    base_branch="develop"
+  elif git rev-parse --verify main &>/dev/null; then
+    base_branch="main"
+  elif git rev-parse --verify master &>/dev/null; then
+    base_branch="master"
+  fi
+
+  # Get list of changed files vs base
+  local changed_files
+  changed_files=$(git diff --name-only "${base_branch}...HEAD" 2>/dev/null || git diff --name-only "${base_branch}" 2>/dev/null || echo "")
+
+  if [[ -z "$changed_files" ]]; then
+    # Cannot determine changes — default to FULL for safety
+    echo "FULL"
+    return
+  fi
+
+  # Check each changed file: if ANY file is NOT in the low-risk pattern, it's Tier 1
+  local has_source_changes="false"
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    case "$file" in
+      # Low-risk: CI/CD workflows
+      .github/workflows/*|.github/actions/*|.github/dependabot.yml) ;;
+      # Low-risk: Docker config
+      Dockerfile|Dockerfile.*|.dockerignore|docker-compose*.yml|docker-compose*.yaml) ;;
+      # Low-risk: Documentation
+      *.md|docs/*|LICENSE|CHANGELOG*|CONTRIBUTING*) ;;
+      # Low-risk: Claude/editor config
+      .claude/*|CLAUDE.md|.cursor/*|.vscode/*|.editorconfig) ;;
+      # Low-risk: Linter/formatter config
+      .eslintrc*|.prettierrc*|.stylelintrc*|biome.json|.biomeignore) ;;
+      # Low-risk: Git config
+      .gitignore|.gitattributes) ;;
+      # Low-risk: Renovate/Dependabot
+      renovate.json|.renovaterc*) ;;
+      # Low-risk: tsconfig (build config, not source)
+      tsconfig*.json) ;;
+      # Everything else is source code → Tier 1
+      *)
+        has_source_changes="true"
+        break
+        ;;
+    esac
+  done <<< "$changed_files"
+
+  if [[ "$has_source_changes" == "true" ]]; then
+    echo "FULL"
+  else
+    echo "LIGHT"
+  fi
+}
+
 # Helper: read review status for a branch (jq-based, no python3 dependency)
 read_review() {
   local branch="$1"
@@ -119,33 +193,48 @@ if [[ "$GATE_MODE" == "PRE_CREATE" ]]; then
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) BRANCH=$BRANCH" >> "$LOG_FILE" 2>/dev/null
   [[ -z "$BRANCH" ]] && { echo "[WARN] Cannot determine branch. Blocking PR creation." >&2; exit 2; }
 
-  # Exempt doc/chore/ci branches
-  case "$BRANCH" in docs/*|chore/*|ci/*) echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) EXEMPT: $BRANCH" >> "$LOG_FILE" 2>/dev/null; exit 0 ;; esac
+  # Classify review tier based on branch name + changed files
+  TIER=$(classify_review_tier "$BRANCH")
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) TIER=$TIER" >> "$LOG_FILE" 2>/dev/null
+
+  # Tier 3 (EXEMPT): no review required
+  if [[ "$TIER" == "EXEMPT" ]]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) EXEMPT: $BRANCH (branch pattern)" >> "$LOG_FILE" 2>/dev/null
+    exit 0
+  fi
 
   CODE_REVIEW=$(read_review "$BRANCH" "code_review")
   CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) code_review=$CODE_REVIEW codex_review=$CODEX_REVIEW" >> "$LOG_FILE" 2>/dev/null
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) code_review=$CODE_REVIEW codex_review=$CODEX_REVIEW tier=$TIER" >> "$LOG_FILE" 2>/dev/null
 
   MISSING=""
   [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
-  [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
+  # Tier 1 (FULL): require Codex CLI too. Tier 2 (LIGHT): code-reviewer only.
+  if [[ "$TIER" == "FULL" ]]; then
+    [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
+  fi
 
   if [[ -n "$MISSING" ]]; then
     MISSING="${MISSING%, }"
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) BLOCKED: $MISSING" >> "$LOG_FILE" 2>/dev/null
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) BLOCKED: $MISSING (tier=$TIER)" >> "$LOG_FILE" 2>/dev/null
     echo "" >&2
     echo "🚫 [BLOCKED] PR作成を拒否。レビューパイプライン未完了。" >&2
     echo "   ブランチ: $BRANCH" >&2
+    echo "   レビューTier: $TIER" >&2
     echo "   未完了: $MISSING" >&2
     echo "" >&2
     echo "   解決方法:" >&2
     echo "   1. code-reviewer エージェントでレビュー実行" >&2
-    echo "   2. Codex CLI セカンドオピニオン実行" >&2
-    echo "   3. レビュー完了後に再試行" >&2
+    if [[ "$TIER" == "FULL" ]]; then
+      echo "   2. Codex CLI セカンドオピニオン実行" >&2
+      echo "   3. レビュー完了後に再試行" >&2
+    else
+      echo "   2. レビュー完了後に再試行" >&2
+    fi
     echo "" >&2
     exit 2
   fi
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ALLOWED: all reviews passed" >> "$LOG_FILE" 2>/dev/null
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ALLOWED: reviews passed (tier=$TIER)" >> "$LOG_FILE" 2>/dev/null
   exit 0
 fi
 
@@ -212,19 +301,25 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
     fi
   fi
 
+  # Classify review tier for this branch
+  TIER=$(classify_review_tier "$BRANCH")
+
   # Check review status
   CODE_REVIEW=$(read_review "$BRANCH" "code_review")
   CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
 
   MISSING=""
   [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
-  [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
+  # Tier FULL requires Codex; Tier LIGHT/EXEMPT does not
+  if [[ "$TIER" == "FULL" ]]; then
+    [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
+  fi
 
   if [[ -n "$MISSING" ]]; then
     MISSING="${MISSING%, }"
     echo "" >&2
     echo "🚫 [BLOCKED] PR #${PR_NUMBER} のマージを拒否。" >&2
-    echo "   ブランチ: $BRANCH" >&2
+    echo "   ブランチ: $BRANCH (tier=$TIER)" >&2
     echo "   未完了: $MISSING" >&2
     echo "" >&2
     echo "   解決方法:" >&2
@@ -234,7 +329,7 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
     exit 2
   fi
 
-  echo "✅ PR #${PR_NUMBER}: CI green + レビュー完了。マージ許可。" >&2
+  echo "✅ PR #${PR_NUMBER}: CI green + レビュー完了 (tier=$TIER)。マージ許可。" >&2
   exit 0
 fi
 
@@ -275,11 +370,15 @@ s.pop('$BRANCH', None)
 with open('$REVIEW_STATE','w') as f: json.dump(s,f,indent=2)
 " 2>/dev/null
 
+  # Classify tier to show appropriate requirements
+  TIER=$(classify_review_tier "$BRANCH")
   echo "" >&2
-  echo "🔒 PR #${PR_NUMBER} をロック。以下が完了するまでマージ禁止:" >&2
+  echo "🔒 PR #${PR_NUMBER} をロック (tier=$TIER)。以下が完了するまでマージ禁止:" >&2
   echo "   1. gh pr checks ${PR_NUMBER} — 全グリーン" >&2
   echo "   2. code-reviewer エージェント — LGTM" >&2
-  echo "   3. Codex CLI セカンドオピニオン — LGTM" >&2
+  if [[ "$TIER" == "FULL" ]]; then
+    echo "   3. Codex CLI セカンドオピニオン — LGTM" >&2
+  fi
   echo "   解除: bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER}" >&2
   echo "" >&2
   exit 0
@@ -289,6 +388,33 @@ fi
 # MODE: STOP — Block session stop if unverified PRs exist
 # =========================================================================
 if [[ "$GATE_MODE" == "STOP" ]]; then
+  # Auto-cleanup: remove merged/closed PRs from lock state (housekeeping)
+  REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+  if [[ -n "$REPO" ]]; then
+    python3 -c "
+import json, subprocess, sys
+with open('$LOCK_STATE') as f: s=json.load(f)
+cleaned = []
+for pr in list(s.keys()):
+    try:
+        result = subprocess.run(
+            ['gh', 'api', 'repos/$REPO/pulls/' + pr, '--jq', '.state'],
+            capture_output=True, text=True, timeout=10
+        )
+        state = result.stdout.strip()
+        if state in ('closed', 'merged'):
+            del s[pr]
+            cleaned.append(pr)
+    except Exception:
+        pass  # keep entry if API fails
+if cleaned:
+    with open('$LOCK_STATE', 'w') as f: json.dump(s, f, indent=2)
+    print('|'.join(cleaned))
+else:
+    print('')
+" 2>/dev/null
+  fi
+
   UNVERIFIED=$(python3 -c "
 import json
 with open('$LOCK_STATE') as f: s=json.load(f)
@@ -345,12 +471,16 @@ print(s.get('$PR',{}).get('branch',''))
 
   CODE_REVIEW=$(read_review "$BRANCH" "code_review")
   CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
+  TIER=$(classify_review_tier "$BRANCH")
 
-  if [[ "$CODE_REVIEW" != "yes" ]] || [[ "$CODEX_REVIEW" != "yes" ]]; then
-    MISSING=""
-    [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
+  MISSING=""
+  [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
+  if [[ "$TIER" == "FULL" ]]; then
     [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
-    echo "❌ PR #${PR}: レビュー未完了 (${MISSING%, })" >&2
+  fi
+
+  if [[ -n "$MISSING" ]]; then
+    echo "❌ PR #${PR}: レビュー未完了 (${MISSING%, }) [tier=$TIER]" >&2
     exit 1
   fi
 
@@ -366,6 +496,73 @@ with open('$LOCK_STATE','w') as f: json.dump(s,f,indent=2)
 " 2>/dev/null
 
   echo "✅ PR #${PR}: CI green + レビュー LGTM 確認完了。ロック解除。" >&2
+  exit 0
+fi
+
+# =========================================================================
+# MODE: CLEANUP — Remove merged/closed PRs from lock + review state
+# =========================================================================
+# Safe housekeeping: not a bypass. Only removes entries for PRs that
+# GitHub confirms are already merged or closed.
+# Usage: GATE_MODE=CLEANUP bash pr-ci-review-gate.sh
+#    or: bash pr-ci-review-gate.sh CLEANUP
+# =========================================================================
+if [[ "$GATE_MODE" == "CLEANUP" ]] || [[ "${1:-}" == "CLEANUP" ]]; then
+  REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+  if [[ -z "$REPO" ]]; then
+    echo "⚠️ リポジトリ情報取得失敗。git repoディレクトリで実行してください。" >&2
+    exit 1
+  fi
+
+  CLEANED=$(python3 -c "
+import json, subprocess
+lock_cleaned = []
+review_cleaned = []
+
+# Clean lock state
+with open('$LOCK_STATE') as f: lock = json.load(f)
+for pr in list(lock.keys()):
+    try:
+        result = subprocess.run(
+            ['gh', 'api', 'repos/$REPO/pulls/' + pr, '--jq', '.state'],
+            capture_output=True, text=True, timeout=10
+        )
+        state = result.stdout.strip()
+        if state in ('closed', 'merged'):
+            branch = lock[pr].get('branch', '?')
+            del lock[pr]
+            lock_cleaned.append(f'PR #{pr} ({branch})')
+    except Exception:
+        pass
+with open('$LOCK_STATE', 'w') as f: json.dump(lock, f, indent=2)
+
+# Clean review state: remove branches whose PRs are merged/closed
+with open('$REVIEW_STATE') as f: review = json.load(f)
+for branch in list(review.keys()):
+    try:
+        result = subprocess.run(
+            ['gh', 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number'],
+            capture_output=True, text=True, timeout=10
+        )
+        if not result.stdout.strip():
+            # No open PR for this branch — safe to clean
+            del review[branch]
+            review_cleaned.append(branch)
+    except Exception:
+        pass
+with open('$REVIEW_STATE', 'w') as f: json.dump(review, f, indent=2)
+
+if lock_cleaned or review_cleaned:
+    for item in lock_cleaned:
+        print(f'  lock: {item}')
+    for item in review_cleaned:
+        print(f'  review: {item}')
+else:
+    print('  (nothing to clean)')
+" 2>/dev/null || echo "  (cleanup failed)")
+
+  echo "🧹 Housekeeping完了:" >&2
+  echo "$CLEANED" >&2
   exit 0
 fi
 

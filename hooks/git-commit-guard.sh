@@ -7,7 +7,6 @@ input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 if ! echo "$cmd" | grep -qE 'git\s+commit\s+.*-m'; then
-    echo "$input"
     exit 0
 fi
 
@@ -40,7 +39,7 @@ else
     [ -z "$commit_msg" ] && commit_msg=$(echo "$cmd" | sed -n "s/.*-m[[:space:]]*'\\([^']*\\)'.*/\\1/p" | head -1)
 fi
 
-[ -z "$commit_msg" ] && { echo "$input"; exit 0; }
+[ -z "$commit_msg" ] && exit 0
 commit_msg=$(echo "$commit_msg" | sed 's/^[[:space:]]*//')
 
 # --- 1. Conventional Commit format ---
@@ -123,4 +122,4 @@ if [ -n "$project_root" ]; then
     fi
 fi
 
-echo "$input"
+exit 0

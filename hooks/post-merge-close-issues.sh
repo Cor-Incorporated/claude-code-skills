@@ -13,20 +13,18 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 cmd_first_line=$(echo "$cmd" | head -1)
 if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then
-    echo "$input"
     exit 0
 fi
 
 PR_NUM=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
-[ -z "$PR_NUM" ] && { echo "$input"; exit 0; }
+[ -z "$PR_NUM" ] && exit 0
 
 REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
-[ -z "$REPO" ] && { echo "$input"; exit 0; }
+[ -z "$REPO" ] && exit 0
 
 # Check if PR was actually merged
 PR_STATE=$(gh pr view "$PR_NUM" --json state -q '.state' 2>/dev/null || echo "")
 if [ "$PR_STATE" != "MERGED" ]; then
-    echo "$input"
     exit 0
 fi
 
@@ -38,7 +36,6 @@ if [ -z "$ISSUE_NUMS" ]; then
     echo "⚠️ [Post-Merge] PR #${PR_NUM} マージ済みだがクローズ対象のIssueが見つかりません。" >&2
     echo "   PRのbodyに 'Closes #XX' が含まれていない可能性があります。" >&2
     echo "   手動でIssueをクローズしてください。" >&2
-    echo "$input"
     exit 0
 fi
 
@@ -60,5 +57,4 @@ else
     echo "ℹ️ [Post-Merge] PR #${PR_NUM} の関連Issue(${ISSUE_NUMS})は既にクローズ済み" >&2
 fi
 
-echo "$input"
 exit 0
