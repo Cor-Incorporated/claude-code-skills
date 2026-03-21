@@ -117,6 +117,7 @@ Codex CLI (40%) — Sequential implementation, operations, quality audits
 | **Single agent** | Isolated, known-scope task | "Fix this lint error" |
 | **Parallel agents (2-4)** | Independent tasks, no dependencies | Frontend + backend changes in parallel |
 | **Agent team (5-7)** | Complex multi-file features with cross-review | New feature with tests + docs + review |
+| **Agent Team (worktree)** | Lightweight 1-2 file changes, docs | Dockerfile fix, config change, doc creation |
 | **Codex delegation** | Long-running, mechanical, or >5-turn tasks | Bulk test creation, large refactors |
 
 The `agent-orchestrator` skill manages team composition, wave-based execution, and cross-review protocols.
@@ -204,6 +205,7 @@ This ensures every PR gets at least two independent reviews, even without human 
 | **PR Create** | `pr-guard.sh` | Validate base branch, issue reference, conflict check |
 | **PR Create** | `pr-ci-review-gate.sh` (PRE_CREATE) | Check review pipeline readiness |
 | **Post Push** | `pr-ci-review-gate.sh` (POST_PUSH) | Set review lock (new push invalidates old reviews) |
+| **Pre Merge** | `pr-ci-review-gate.sh` (PRE_MERGE) | Block merge without CI green + review LGTM |
 | **Pre Merge** | All 5 gates above | Block merge unless all pass |
 | **Post Merge** | `post-merge-close-issues.sh` | Auto-close linked issues |
 | **Session Stop** | `pr-ci-review-gate.sh` (STOP) | Warn about unverified PRs |
@@ -213,7 +215,7 @@ This ensures every PR gets at least two independent reviews, even without human 
 ### Quality Gates (Pre-merge)
 - `block-merge-without-ci.sh` — Block merge unless all CI checks green
 - `block-merge-without-review.sh` — Block merge unless review is newer than latest push
-- `pr-ci-review-gate.sh` — 3-mode gate (PRE_CREATE / POST_PUSH / STOP)
+- `pr-ci-review-gate.sh` — 4-mode gate (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP)
 - `pr-merge-claude-review-gate.sh` — 5-sub-gate Claude review enforcement
 - `pr-guard.sh` — Base branch, issue ref, conflict checks
 

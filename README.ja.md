@@ -118,6 +118,7 @@ Codex CLI (40%) — 直列実装、運用、品質監査
 | **単一エージェント** | スコープが明確な単独タスク | 「この lint エラーを修正して」 |
 | **並列エージェント (2-4)** | 依存関係のない独立タスク | フロントエンド + バックエンドの並列変更 |
 | **エージェントチーム (5-7)** | クロスレビュー付きの複雑なマルチファイル機能 | 新機能 + テスト + ドキュメント + レビュー |
+| **Agent Team (worktree)** | 軽量な1-2ファイル変更、ドキュメント | Dockerfile修正、設定変更、docs作成 |
 | **Codex 委任** | 長時間、機械的、5ターン超のタスク | 大量テスト作成、大規模リファクタ |
 
 `agent-orchestrator` スキルがチーム構成、ウェーブ実行、クロスレビューを管理します。
@@ -136,6 +137,7 @@ hook スクリプトが委任ルールを自動的に強制します:
 
 ```
 タスク受信
+├─ 1-2ファイル変更 + lint不要? → Agent Team（worktree isolation）
 ├─ 読み込みファイル 3 未満? → Claude Code（自力実行）
 ├─ テスト/ドキュメント作成? → Codex CLI 経路C
 ├─ 予想 5 ターン超? → Codex CLI 経路C
@@ -205,6 +207,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 | **PR 作成** | `pr-guard.sh` | ベースブランチ、Issue 参照、コンフリクトチェック |
 | **PR 作成** | `pr-ci-review-gate.sh` (PRE_CREATE) | レビューパイプライン準備確認 |
 | **Push 後** | `pr-ci-review-gate.sh` (POST_PUSH) | レビューロック設定（新しい push で古いレビューを無効化） |
+| **マージ前** | `pr-ci-review-gate.sh` (PRE_MERGE) | CI green + レビュー LGTM なしでマージをブロック |
 | **マージ前** | 上記 5 ゲート全て | 全パスしなければマージをブロック |
 | **マージ後** | `post-merge-close-issues.sh` | リンクされた Issue を自動クローズ |
 | **セッション終了** | `pr-ci-review-gate.sh` (STOP) | 未検証 PR について警告 |
@@ -214,7 +217,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 ### 品質ゲート（マージ前）
 - `block-merge-without-ci.sh` — CI 全チェックグリーンなしでマージをブロック
 - `block-merge-without-review.sh` — 最新 push 後のレビューなしでマージをブロック
-- `pr-ci-review-gate.sh` — 3 モードゲート (PRE_CREATE / POST_PUSH / STOP)
+- `pr-ci-review-gate.sh` — 4 モードゲート (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP)
 - `pr-merge-claude-review-gate.sh` — 5 サブゲート Claude レビュー強制
 - `pr-guard.sh` — ベースブランチ、Issue 参照、コンフリクトチェック
 
