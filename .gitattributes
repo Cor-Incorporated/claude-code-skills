@@ -1,0 +1,9 @@
+# Ensure GitHub linguist correctly classifies file types
+*.md linguist-documentation=false
+*.md linguist-detectable=true
+*.sh linguist-detectable=true
+*.py linguist-detectable=true
+
+# Prevent misclassification of template files
+*.tmpl linguist-vendored=true
+*.tmpl linguist-generated=true
