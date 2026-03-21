@@ -161,13 +161,61 @@ hook スクリプトが委任ルールを自動的に強制します:
 | `verify-pr-review.sh` | マージ前のレビューカバレッジ検証 |
 | `context-monitor.py` | コンテキストウィンドウ使用量とトークン消費の監視 |
 
+## レビューパイプライン（PR マージゲート）
+
+全ての PR は**マルチゲートレビューパイプライン**を通過しなければマージできません。hook による自動強制のため、手動ステップは不要です。
+
+```
+PR マージ可能？
+│
+├─ Gate 1: CI 全グリーン？ ──────────────── block-merge-without-ci.sh
+│  └─ 全 GitHub Actions チェックが ✅（pending/failed は不可）
+│
+├─ Gate 2: 最新 push 後のレビュー？ ──────── block-merge-without-review.sh
+│  └─ review.submittedAt > 最終 push 時刻（古いレビューは拒否）
+│
+├─ Gate 3: Claude レビュー LGTM？ ─────────── pr-merge-claude-review-gate.sh
+│  ├─ Sub-gate 0: CI チェック完了（実行中でない）
+│  ├─ Sub-gate 1: claude-review ラベルまたはコメントが存在
+│  ├─ Sub-gate 2: 未解決の CRITICAL/HIGH 指摘なし
+│  ├─ Sub-gate 3: レビューが最新 push より新しい
+│  └─ Sub-gate 4: 全レビューコメントが読了済み
+│
+├─ Gate 4: 未解決コメント？ ──────────────── enforce-review-reading.sh
+│  └─ 全 CRITICAL/HIGH レビュー指摘が対処済み
+│
+└─ Gate 5: レビュー注入 ────────────────── inject-claude-review-on-checks.sh
+   └─ `gh pr checks` / `gh pr merge` 時にレビューコメントを自動取得
+```
+
+### 外部レビューがない場合
+
+PR に GitHub レビューがない場合（ソロ開発など）、**ローカルレビューパイプライン**にフォールバックします:
+
+1. **`code-reviewer` スキル** — OWASP セキュリティチェック付き自動 PR 分析
+2. **Codex CLI 経路A** — 独立したセカンドオピニオン: `codex exec review --base <branch>`
+3. **両方パス**しなければレビュー完了とみなさない
+
+これにより、人間のレビュアーがいなくても、全ての PR が最低2つの独立レビューを受けることが保証されます。
+
+### PR ライフサイクル hook
+
+| フェーズ | hook | アクション |
+|---------|------|----------|
+| **PR 作成** | `pr-guard.sh` | ベースブランチ、Issue 参照、コンフリクトチェック |
+| **PR 作成** | `pr-ci-review-gate.sh` (PRE_CREATE) | レビューパイプライン準備確認 |
+| **Push 後** | `pr-ci-review-gate.sh` (POST_PUSH) | レビューロック設定（新しい push で古いレビューを無効化） |
+| **マージ前** | 上記 5 ゲート全て | 全パスしなければマージをブロック |
+| **マージ後** | `post-merge-close-issues.sh` | リンクされた Issue を自動クローズ |
+| **セッション終了** | `pr-ci-review-gate.sh` (STOP) | 未検証 PR について警告 |
+
 ## Hook システム（37 スクリプト）
 
 ### 品質ゲート（マージ前）
-- `block-merge-without-ci.sh` — CI グリーンなしでマージをブロック
-- `block-merge-without-review.sh` — レビュー承認なしでマージをブロック
+- `block-merge-without-ci.sh` — CI 全チェックグリーンなしでマージをブロック
+- `block-merge-without-review.sh` — 最新 push 後のレビューなしでマージをブロック
 - `pr-ci-review-gate.sh` — 3 モードゲート (PRE_CREATE / POST_PUSH / STOP)
-- `pr-merge-claude-review-gate.sh` — Claude レビュー LGTM 必須
+- `pr-merge-claude-review-gate.sh` — 5 サブゲート Claude レビュー強制
 - `pr-guard.sh` — ベースブランチ、Issue 参照、コンフリクトチェック
 
 ### 安全ガード

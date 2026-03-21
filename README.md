@@ -160,13 +160,61 @@ Task received
 | `verify-pr-review.sh` | Validate review coverage before merge |
 | `context-monitor.py` | Monitor context window usage and token consumption |
 
+## Review Pipeline (PR Merge Gate)
+
+Every PR must pass a **multi-gate review pipeline** before merge is allowed. This is enforced automatically by hooks — no manual steps required.
+
+```
+PR Ready to Merge?
+│
+├─ Gate 1: CI All Green? ──────────────── block-merge-without-ci.sh
+│  └─ All GitHub Actions checks must be ✅ (not pending, not failed)
+│
+├─ Gate 2: Review After Latest Push? ──── block-merge-without-review.sh
+│  └─ review.submittedAt > last push timestamp (stale reviews rejected)
+│
+├─ Gate 3: Claude Review LGTM? ────────── pr-merge-claude-review-gate.sh
+│  ├─ Sub-gate 0: CI checks completed (not still running)
+│  ├─ Sub-gate 1: claude-review label or comment exists
+│  ├─ Sub-gate 2: No unresolved CRITICAL/HIGH findings
+│  ├─ Sub-gate 3: Review is newer than latest push
+│  └─ Sub-gate 4: All review comments have been read
+│
+├─ Gate 4: Unresolved Comments? ────────── enforce-review-reading.sh
+│  └─ All CRITICAL/HIGH review findings must be addressed
+│
+└─ Gate 5: Review Injection ────────────── inject-claude-review-on-checks.sh
+   └─ Auto-fetches review comments on `gh pr checks` / `gh pr merge`
+```
+
+### When No External Review Exists
+
+If a PR has no GitHub review (e.g., solo development), the system falls back to a **local review pipeline**:
+
+1. **`code-reviewer` skill** — Automated PR analysis with OWASP security checks, quality scoring
+2. **Codex CLI Route A** — Independent second opinion: `codex exec review --base <branch>`
+3. **Both must pass** before the PR is considered reviewed
+
+This ensures every PR gets at least two independent reviews, even without human reviewers.
+
+### PR Lifecycle Hooks
+
+| Phase | Hook | Action |
+|-------|------|--------|
+| **PR Create** | `pr-guard.sh` | Validate base branch, issue reference, conflict check |
+| **PR Create** | `pr-ci-review-gate.sh` (PRE_CREATE) | Check review pipeline readiness |
+| **Post Push** | `pr-ci-review-gate.sh` (POST_PUSH) | Set review lock (new push invalidates old reviews) |
+| **Pre Merge** | All 5 gates above | Block merge unless all pass |
+| **Post Merge** | `post-merge-close-issues.sh` | Auto-close linked issues |
+| **Session Stop** | `pr-ci-review-gate.sh` (STOP) | Warn about unverified PRs |
+
 ## Hook System (37 Scripts)
 
 ### Quality Gates (Pre-merge)
-- `block-merge-without-ci.sh` — Block merge without CI green
-- `block-merge-without-review.sh` — Block merge without review approval
+- `block-merge-without-ci.sh` — Block merge unless all CI checks green
+- `block-merge-without-review.sh` — Block merge unless review is newer than latest push
 - `pr-ci-review-gate.sh` — 3-mode gate (PRE_CREATE / POST_PUSH / STOP)
-- `pr-merge-claude-review-gate.sh` — Claude review LGTM required
+- `pr-merge-claude-review-gate.sh` — 5-sub-gate Claude review enforcement
 - `pr-guard.sh` — Base branch, issue ref, conflict checks
 
 ### Safety Guards
