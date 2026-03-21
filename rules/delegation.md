@@ -37,6 +37,12 @@ Claude Code が `review-status.json` に手動で `true` を書き込み、code-
 - `block-state-file-tampering-bash.sh` (Bash PreToolUse) — Bash経由の改ざんもブロック
 - レビュー記録は `record-code-review.sh` (PostToolUse hook) のみが行う
 
+## Codex MCP 使用禁止（2026-03-22追加）
+**Codex は CLI (`codex exec`, `codex-parallel.sh`, `codex-orchestrate.sh`) 経由でのみ使用する。**
+MCP (`mcp__codex__codex`) は正式な委任経路ではない。
+- サブエージェントが git commit 等の操作で Codex MCP にフォールバックすることを禁止
+- Ref: Issue #11 — subagent が MCP Codex を使用した事故 (2026-03-22)
+
 ## 核心ルール
 - 独立タスクは必ず並列実行。順次は依存関係がある場合のみ
 - **2タスク以上の独立実装 → Agent Team（TeamCreate）必須**
