@@ -25,6 +25,8 @@ cat > "$STATE_FILE" << EOF
   "agent_count": 0,
   "impl_agent_count": 0,
   "codex_call_count": 0,
+  "edit_count": 0,
+  "edited_files": [],
   "warnings_issued": [],
   "started_at": "$NOW"
 }
