@@ -41,10 +41,10 @@ fi
 TRANSCRIPT_PATH=$(echo "$INPUT_JSON" | python3 -c "
 import json, sys
 try:
-    data = json.load(sys.stdin)
-    print(data.get('transcript_path', ''))
+data = json.load(sys.stdin)
+print(data.get('transcript_path', ''))
 except:
-    print('')
+print('')
 " 2>/dev/null || echo "")
 
 if [[ -z "$TRANSCRIPT_PATH" ]] || [[ ! -f "$TRANSCRIPT_PATH" ]]; then
@@ -55,10 +55,10 @@ fi
 STATE_FILE="$HOME/.claude/state/context-budget.json"
 if [[ -f "$STATE_FILE" ]]; then
   MODE=$(_STATE="$STATE_FILE" python3 -c "
-    import json, os
-    with open(os.environ['_STATE']) as f:
-        print(json.load(f).get('mode', 'auto'))
-    " 2>/dev/null || echo "auto")
+import json, os
+with open(os.environ['_STATE']) as f:
+    print(json.load(f).get('mode', 'auto'))
+" 2>/dev/null || echo "auto")
   if [[ "$MODE" == "planning" ]] || [[ "$MODE" == "research" ]]; then
     exit 0
   fi
@@ -68,10 +68,10 @@ fi
 EDIT_FILE=$(echo "$INPUT_JSON" | python3 -c "
 import json, sys
 try:
-    data = json.load(sys.stdin)
-    print(data.get('tool_input', {}).get('file_path', ''))
+data = json.load(sys.stdin)
+print(data.get('tool_input', {}).get('file_path', ''))
 except:
-    print('')
+print('')
 " 2>/dev/null || echo "")
 
 # Exempt: editing non-source files (config, docs, hooks, etc.)
