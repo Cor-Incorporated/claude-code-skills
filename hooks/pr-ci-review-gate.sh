@@ -92,9 +92,10 @@ classify_review_tier() {
   # Meta-task exemption (Issue #7): if the repo IS the hook system itself
   # (claude-code-skills), treat all changes as LIGHT tier. Hook infrastructure
   # changes are config/tooling, not application source code.
-  local repo_name
-  repo_name=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "")
-  if [[ "$repo_name" == "claude-code-skills" ]]; then
+  # Defense in depth: check remote URL (not just directory name) to prevent spoofing.
+  local remote_url
+  remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+  if [[ "$remote_url" == *"/claude-code-skills"* ]] || [[ "$remote_url" == *"/claude-code-skills.git"* ]]; then
     echo "LIGHT"
     return
   fi
