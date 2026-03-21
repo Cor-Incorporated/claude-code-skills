@@ -71,13 +71,14 @@ if command -v jq &>/dev/null; then
     '.[$b] = ((.[$b] // {}) + {"code_review": true, "code_review_at": $t})' \
     "$REVIEW_STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$REVIEW_STATE"
 else
-  # Fallback: python3
-  python3 -c "
-import json
-with open('$REVIEW_STATE') as f: s=json.load(f)
-s.setdefault('$BRANCH', {})['code_review'] = True
-s['$BRANCH']['code_review_at'] = '$NOW'
-with open('$REVIEW_STATE', 'w') as f: json.dump(s, f, indent=2)
+  # Fallback: python3 (safe: env vars, not string interpolation)
+  _STATE="$REVIEW_STATE" _BR="$BRANCH" _NOW="$NOW" python3 -c "
+import json, os
+f_path = os.environ['_STATE']
+with open(f_path) as f: s = json.load(f)
+s.setdefault(os.environ['_BR'], {})['code_review'] = True
+s[os.environ['_BR']]['code_review_at'] = os.environ['_NOW']
+with open(f_path, 'w') as f: json.dump(s, f, indent=2)
 " 2>/dev/null || true
 fi
 
