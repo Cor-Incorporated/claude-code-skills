@@ -33,6 +33,15 @@ if echo "$CMD_FIRST" | grep -qE 'git\s+pull\b'; then
     exit 0
 fi
 
+# BLOCK: git branch -m/-M (rename) — prevents commit guard bypass
+# Ref: Issue #10 — AI self-bypass via branch rename (2026-03-22)
+if echo "$CMD_FIRST" | grep -qE 'git\s+branch\s+-[mM]\b'; then
+    echo "[BLOCK] ブランチ名の変更はコミットガードのバイパスにつながるため禁止。" >&2
+    echo "理由: feat/→update/ 等のリネームでコミット制限を回避できてしまう。" >&2
+    echo "正しい方法: subagent/TeamCreate でfeatureブランチにcommitしてください。" >&2
+    exit 2
+fi
+
 # BLOCK: git cherry-pick (still risky — conflict-prone)
 if echo "$CMD_FIRST" | grep -qE 'git\s+cherry-pick\b'; then
     echo "[BLOCK] cherry-pickは自力で実行しない。Codex CLI経路Cに委任してください。" >&2

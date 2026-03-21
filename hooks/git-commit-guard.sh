@@ -10,24 +10,32 @@ if ! echo "$cmd" | grep -qE 'git\s+commit\s+.*-m'; then
     exit 0
 fi
 
-# --- Rule 0: Block direct commits on feature branches from main session ---
-# TeamCreate workers and subagents are exempt (they SHOULD commit)
+# --- Rule 0: Block direct commits on non-base branches from main session ---
+# WHITELIST approach: only base branches (develop, main, master) allowed for main agent.
+# All other branches require delegation to subagent/TeamCreate.
+# This prevents bypass via creative branch naming (e.g., update/, hotfix/, etc.)
+# Ref: Issue #10 — AI self-bypass via branch rename (2026-03-22)
 if [[ "${CLAUDE_AGENT_DEPTH:-0}" -eq 0 ]] && [[ -z "${CLAUDE_AGENT_ID:-}" ]]; then
     current_branch=$(git branch --show-current 2>/dev/null || echo "")
-    if echo "$current_branch" | grep -qE '^(feat|fix|refactor|chore)/'; then
-        echo "🚫 [Delegation Required] メインエージェントはfeatureブランチに直接commitできません。" >&2
-        echo "" >&2
-        echo "ブランチ: $current_branch" >&2
-        echo "" >&2
-        echo "対応方法:" >&2
-        echo "  1. TeamCreate でワーカーに委任する" >&2
-        echo "  2. /review-loop で自動修正ループを起動する" >&2
-        echo "  3. Agent tool (team_name付き) でワーカーに作業させる" >&2
-        echo "" >&2
-        echo "理由: メインが直接featureブランチで作業すると、" >&2
-        echo "  未関係ファイルの混入、ruff format漏れ、コンテキスト消費が発生する。" >&2
-        exit 2
-    fi
+    # Whitelist: only base branches are allowed for main agent commits
+    case "$current_branch" in
+        develop|main|master|"") ;; # allowed (empty = detached HEAD, let other checks handle)
+        *)
+            echo "🚫 [Delegation Required] メインエージェントは非ベースブランチに直接commitできません。" >&2
+            echo "" >&2
+            echo "ブランチ: $current_branch" >&2
+            echo "" >&2
+            echo "対応方法:" >&2
+            echo "  1. Agent tool (subagent_type=general-purpose) でcommitを委任" >&2
+            echo "  2. TeamCreate でワーカーに委任する" >&2
+            echo "  3. /review-loop で自動修正ループを起動する" >&2
+            echo "" >&2
+            echo "理由: メインが直接featureブランチで作業すると、" >&2
+            echo "  未関係ファイルの混入やゲートバイパスが発生する。" >&2
+            echo "  ブランチ名変更によるバイパス防止のためホワイトリスト方式に変更済み。" >&2
+            exit 2
+            ;;
+    esac
 fi
 
 # --- Extract commit message ---
