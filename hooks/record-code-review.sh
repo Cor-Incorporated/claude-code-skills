@@ -95,9 +95,29 @@ if [[ -n "$PROJECT_STATE_DIR" ]] && [[ "$PROJECT_STATE_DIR" != "$GLOBAL_STATE_DI
   PROJECT_REVIEW="$PROJECT_STATE_DIR/review-status.json"
   if command -v jq &>/dev/null; then
     tmp=$(mktemp)
-    jq --arg b "$BRANCH" --arg t "$NOW" \
+    if jq --arg b "$BRANCH" --arg t "$NOW" \
       '.[$b] = ((.[$b] // {}) + {"code_review": true, "code_review_at": $t})' \
-      "$PROJECT_REVIEW" > "$tmp" 2>/dev/null && mv "$tmp" "$PROJECT_REVIEW"
+      "$PROJECT_REVIEW" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$PROJECT_REVIEW"
+    else
+      rm -f "$tmp"
+      # Reset corrupted file and retry once
+      echo '{}' > "$PROJECT_REVIEW"
+      tmp=$(mktemp)
+      jq --arg b "$BRANCH" --arg t "$NOW" \
+        '.[$b] = {"code_review": true, "code_review_at": $t}' \
+        "$PROJECT_REVIEW" > "$tmp" 2>/dev/null && mv "$tmp" "$PROJECT_REVIEW" || rm -f "$tmp"
+    fi
+  else
+    # Fallback: python3 (same as global write path)
+    _STATE="$PROJECT_REVIEW" _BR="$BRANCH" _NOW="$NOW" python3 -c "
+import json, os
+f_path = os.environ['_STATE']
+with open(f_path) as f: s = json.load(f)
+s.setdefault(os.environ['_BR'], {})['code_review'] = True
+s[os.environ['_BR']]['code_review_at'] = os.environ['_NOW']
+with open(f_path, 'w') as f: json.dump(s, f, indent=2)
+" 2>/dev/null || true
   fi
 fi
 

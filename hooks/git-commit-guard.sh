@@ -15,11 +15,28 @@ fi
 # All other branches require delegation to subagent/TeamCreate.
 # This prevents bypass via creative branch naming (e.g., update/, hotfix/, etc.)
 # Ref: Issue #10 — AI self-bypass via branch rename (2026-03-22)
-if [[ "${CLAUDE_AGENT_DEPTH:-0}" -eq 0 ]] && [[ -z "${CLAUDE_AGENT_ID:-}" ]]; then
+#
+# Subagent detection: check BOTH env var AND JSON input for agent context.
+# CLAUDE_AGENT_DEPTH may not propagate to hook processes, so also check
+# agent_id in the stdin JSON (official Claude Code hook spec).
+IS_SUBAGENT="false"
+if [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] || [[ -n "${CLAUDE_AGENT_ID:-}" ]]; then
+    IS_SUBAGENT="true"
+fi
+# Also check JSON input for agent_id (more reliable than env vars)
+if command -v jq &>/dev/null && [[ -n "$input" ]]; then
+    json_agent_id=$(echo "$input" | jq -r '.agent_id // ""' 2>/dev/null || echo "")
+    [[ -n "$json_agent_id" ]] && IS_SUBAGENT="true"
+fi
+if [[ "$IS_SUBAGENT" == "false" ]]; then
     current_branch=$(git branch --show-current 2>/dev/null || echo "")
     # Whitelist: only base branches are allowed for main agent commits
     case "$current_branch" in
-        develop|main|master|"") ;; # allowed (empty = detached HEAD, let other checks handle)
+        develop|main|master) ;; # allowed base branches
+        "")
+            echo "🚫 [Delegation Required] detached HEAD状態でのcommitはsubagentに委任してください。" >&2
+            exit 2
+            ;;
         *)
             echo "🚫 [Delegation Required] メインエージェントは非ベースブランチに直接commitできません。" >&2
             echo "" >&2
