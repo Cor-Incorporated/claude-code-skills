@@ -48,9 +48,9 @@ fi
 
 # --- Planning mode exemption ---
 # If mode is "planning" or "research", all reads are exempt.
-MODE=$(python3 -c "
-import json
-with open('$STATE_FILE') as f:
+MODE=$(_STATE="$STATE_FILE" python3 -c "
+import json, os
+with open(os.environ['_STATE']) as f:
     print(json.load(f).get('mode', 'auto'))
 " 2>/dev/null || echo "auto")
 
@@ -106,12 +106,12 @@ fi
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Update state and check thresholds — only for SOURCE CODE reads
-python3 << PYEOF
+_STATE="$STATE_FILE" _FILE="$FILE_PATH" _NOW="$NOW" python3 << PYEOF
 import json, sys, os, re
 
-state_file = "$STATE_FILE"
-file_path = """$FILE_PATH"""
-now = "$NOW"
+state_file = os.environ['_STATE']
+file_path = os.environ['_FILE']
+now = os.environ['_NOW']
 
 # Only track source code files
 source_exts = {'.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.swift', '.kt', '.java', '.rb', '.php', '.vue', '.svelte', '.css', '.scss', '.sql', '.prisma', '.graphql'}

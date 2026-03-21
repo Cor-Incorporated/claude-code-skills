@@ -42,12 +42,12 @@ if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+checks'; then
 
   # Read back the saved state and output as reminder
   if [[ -f "$PENDING_FILE" ]]; then
-    OUTPUT=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f:
-    d = json.load(f)
-print(d.get('output', ''))
-" 2>/dev/null || echo "")
+    OUTPUT=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+	import json, os
+	with open(os.environ['_PENDING_FILE']) as f:
+	    d = json.load(f)
+	print(d.get('output', ''))
+	" 2>/dev/null || echo "")
 
     if [[ -n "$OUTPUT" ]]; then
       echo "" >&2
@@ -65,21 +65,21 @@ fi
 # =========================================================================
 if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   if [[ -f "$PENDING_FILE" ]]; then
-    CRITICAL=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
-print(d.get('critical', 0))
-" 2>/dev/null || echo "0")
-    HIGH=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
-print(d.get('high', 0))
-" 2>/dev/null || echo "0")
-    PR=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
-print(d.get('pr', ''))
-" 2>/dev/null || echo "")
+    CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+	import json, os
+	with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+	print(d.get('critical', 0))
+	" 2>/dev/null || echo "0")
+    HIGH=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+	import json, os
+	with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+	print(d.get('high', 0))
+	" 2>/dev/null || echo "0")
+    PR=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+	import json, os
+	with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+	print(d.get('pr', ''))
+	" 2>/dev/null || echo "")
 
     if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
       echo "" >&2
@@ -102,23 +102,23 @@ if echo "$(echo "$cmd" | head -1)" | grep -qE '^(git |ls |cat |echo |python3 |he
 fi
 
 if [[ -f "$PENDING_FILE" ]]; then
-  TOTAL=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
-print(d.get('total', 0))
-" 2>/dev/null || echo "0")
-  CRITICAL=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
-print(d.get('critical', 0))
-" 2>/dev/null || echo "0")
+  TOTAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+	import json, os
+	with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+	print(d.get('total', 0))
+	" 2>/dev/null || echo "0")
+  CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+	import json, os
+	with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+	print(d.get('critical', 0))
+	" 2>/dev/null || echo "0")
 
   if [[ "$TOTAL" -gt 0 ]] && [[ "$CRITICAL" -gt 0 ]]; then
-    PR=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
-print(d.get('pr', ''))
-" 2>/dev/null || echo "")
+    PR=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+	import json, os
+	with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+	print(d.get('pr', ''))
+	" 2>/dev/null || echo "")
     echo "[REMINDER] PR #${PR}: ${TOTAL}件のレビューコメント（CRITICAL=${CRITICAL}）が未対応です。" >&2
   fi
 fi

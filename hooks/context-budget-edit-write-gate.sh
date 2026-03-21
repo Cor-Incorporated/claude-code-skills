@@ -54,11 +54,11 @@ fi
 # --- Planning mode exemption ---
 STATE_FILE="$HOME/.claude/state/context-budget.json"
 if [[ -f "$STATE_FILE" ]]; then
-  MODE=$(python3 -c "
-import json
-with open('$STATE_FILE') as f:
-    print(json.load(f).get('mode', 'auto'))
-" 2>/dev/null || echo "auto")
+  MODE=$(_STATE="$STATE_FILE" python3 -c "
+	import json, os
+	with open(os.environ['_STATE']) as f:
+	    print(json.load(f).get('mode', 'auto'))
+	" 2>/dev/null || echo "auto")
   if [[ "$MODE" == "planning" ]] || [[ "$MODE" == "research" ]]; then
     exit 0
   fi
