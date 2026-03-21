@@ -157,7 +157,19 @@ if [[ -z "$COUNT" ]] || ! [[ "$COUNT" =~ ^[0-9]+$ ]]; then
   COUNT=0
 fi
 
+# --- Track edit count (Issue #8: detect bulk mechanical edits) ---
+EDIT_COUNT=0
+if [[ -f "$STATE_FILE" ]]; then
+  EDIT_COUNT=$(_STATE="$STATE_FILE" python3 -c "
+import json, os
+with open(os.environ['_STATE']) as f:
+    print(json.load(f).get('edit_count', 0))
+" 2>/dev/null || echo "0")
+fi
+EDIT_COUNT=$((EDIT_COUNT + 1))
+
 # --- Enforce thresholds ---
+# Read-based threshold FIRST (before persisting edit count to avoid inflation)
 if [[ "$COUNT" -ge 4 ]]; then
   echo "🚫 [CONTEXT BUDGET BLOCK] ソースコード${COUNT}ファイル読み込み済み。Edit/Write を拒否します。" >&2
   echo "  Codex CLI 経路C に委任してください:" >&2
@@ -169,6 +181,37 @@ elif [[ "$COUNT" -ge 3 ]]; then
   echo "⚠️ [CONTEXT BUDGET WARNING] ソースコード${COUNT}ファイル読み込み済み。次のEditでブロックされます。" >&2
   echo "  Codex CLI 経路C への委任を検討してください。" >&2
   echo "  読み込み済みファイル: ${FILES//|/, }" >&2
+fi
+
+# Edit-based threshold (Issue #8: bulk mechanical edit detection)
+if [[ "$EDIT_COUNT" -ge 8 ]]; then
+  echo "🚫 [BULK EDIT BLOCK] ${EDIT_COUNT}回のEdit/Write実行済み。機械的な一括変更はCodexに委任してください。" >&2
+  echo "  → bash ~/.claude/scripts/codex-parallel.sh <repo> <branch> \"<prompt>\"" >&2
+  echo "  2+ 独立タスクの場合は Agent Team (TeamCreate) を使用。" >&2
+  exit 2
+elif [[ "$EDIT_COUNT" -ge 5 ]]; then
+  echo "⚠️ [BULK EDIT WARNING] ${EDIT_COUNT}回のEdit/Write実行済み。同じパターンの繰り返しならCodex委任を検討。" >&2
+  echo "  Codex CLI: 1タスク限定 / Agent Team: 2+独立タスク" >&2
+fi
+
+# Persist edit count AFTER threshold checks (avoid inflation on blocked edits)
+if [[ -f "$STATE_FILE" ]]; then
+  _STATE="$STATE_FILE" _COUNT="$EDIT_COUNT" _FILE="$EDIT_FILE" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_STATE']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    s['edit_count'] = int(os.environ['_COUNT'])
+    edited = s.get('edited_files', [])
+    ef = os.environ['_FILE']
+    if ef and ef not in edited:
+        edited.append(ef)
+    s['edited_files'] = edited
+    f.seek(0); f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
+" 2>/dev/null
 fi
 
 exit 0
