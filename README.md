@@ -136,12 +136,15 @@ Hook scripts automatically enforce delegation rules:
 
 ```
 Task received
+├─ 2+ independent tasks? → Agent Team (TeamCreate)
+├─ 1 task + long-running + autonomous + large? → Codex CLI Route C (single task only)
 ├─ <3 files to read? → Claude Code (self-execute)
-├─ Test/doc creation? → Codex CLI Route C
-├─ >5 expected turns? → Codex CLI Route C
-├─ Multiple independent tasks? → codex-orchestrate.sh (parallel worktrees)
+├─ Test/doc creation (single task)? → Codex CLI Route C
+├─ >5 expected turns (single task)? → Codex CLI Route C
 └─ Needs real-time judgment? → Claude Code (main)
 ```
+
+**Important**: Codex CLI is limited to **one task at a time**. Multiple independent tasks must use Agent Team (TeamCreate), not Codex orchestration.
 
 | Hook | Trigger | Action |
 |------|---------|--------|
