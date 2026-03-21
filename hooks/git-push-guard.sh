@@ -66,4 +66,4 @@ if [ -n "$project_root" ]; then
     fi
 fi
 
-echo "$input"
+exit 0

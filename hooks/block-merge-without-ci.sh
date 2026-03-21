@@ -9,7 +9,6 @@ cmd_first_line=$(echo "$cmd" | head -1)
 
 # Only trigger for merge commands
 if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then
-    echo "$input"
     exit 0
 fi
 
@@ -54,5 +53,4 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
 fi
 
 echo "[Merge Guard] CI/CD オールグリーン確認済み ✓" >&2
-echo "$input"
 exit 0

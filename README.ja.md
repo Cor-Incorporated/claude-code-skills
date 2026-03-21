@@ -190,15 +190,34 @@ PR マージ可能？
    └─ `gh pr checks` / `gh pr merge` 時にレビューコメントを自動取得
 ```
 
+### Tier 制レビューシステム
+
+レビュー要件は変更内容に応じて自動調整されます:
+
+| Tier | 対象 | 必要なレビュー | 判定基準 |
+|------|------|--------------|---------|
+| **FULL** | ソースコード変更 | code-reviewer + Codex CLI | `src/`, `lib/`, `app/`, `*.ts`, `*.py` 等の変更あり |
+| **LIGHT** | CI/設定/ドキュメントのみ | code-reviewer のみ | `.github/workflows/`, `*.md`, `Dockerfile`, `*.yml` 等のみ |
+| **EXEMPT** | ブランチ名で判定 | 不要 | `docs/*`, `chore/*`, `ci/*` ブランチ |
+
+CI ワークフローの変更に Codex CLI のセカンドオピニオンは不要です。
+
 ### 外部レビューがない場合
 
 PR に GitHub レビューがない場合（ソロ開発など）、**ローカルレビューパイプライン**にフォールバックします:
 
 1. **`code-reviewer` スキル** — OWASP セキュリティチェック付き自動 PR 分析
-2. **Codex CLI 経路A** — 独立したセカンドオピニオン: `codex exec review --base <branch>`
-3. **両方パス**しなければレビュー完了とみなさない
+2. **Codex CLI 経路A**（FULL tier のみ） — 独立したセカンドオピニオン: `codex exec review --base <branch>`
+3. **両方パス**（FULL tier）または手順1のみ（LIGHT tier）でレビュー完了
 
-これにより、人間のレビュアーがいなくても、全ての PR が最低2つの独立レビューを受けることが保証されます。
+変更のリスクレベルに応じた適切なレビュー深度が保証されます。
+
+### ハウスキーピング
+
+マージ済み/クローズ済みの PR はロック状態から自動クリーンアップされます:
+
+- **STOP hook**: GitHub API で state 確認し、merge/closed エントリを自動除去
+- **手動クリーンアップ**: `GATE_MODE=CLEANUP bash hooks/pr-ci-review-gate.sh`
 
 ### PR ライフサイクル hook
 
@@ -217,13 +236,13 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 ### 品質ゲート（マージ前）
 - `block-merge-without-ci.sh` — CI 全チェックグリーンなしでマージをブロック
 - `block-merge-without-review.sh` — 最新 push 後のレビューなしでマージをブロック
-- `pr-ci-review-gate.sh` — 4 モードゲート (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP)
+- `pr-ci-review-gate.sh` — 6 モードゲート (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) Tier 制レビュー対応
 - `pr-merge-claude-review-gate.sh` — 5 サブゲート Claude レビュー強制
 - `pr-guard.sh` — ベースブランチ、Issue 参照、コンフリクトチェック
 
 ### 安全ガード
 - `protect-branches.sh` — 保護ブランチの削除防止
-- `block-manual-merge-ops.sh` — cherry-pick/merge/rebase をブロック（Codex に委任）
+- `block-manual-merge-ops.sh` — cherry-pick/merge/rebase をブロック（main/master/develop からの同期は許可）
 - `git-push-guard.sh` — プッシュ安全チェック
 - `git-commit-guard.sh` — コミットメッセージとスコープ検証
 - `block-version-downgrade.sh` — 依存パッケージのダウングレード防止
@@ -240,7 +259,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 
 ### ワークフロー強制
 - `enforce-git-freshness.sh` — リモートより遅れている場合に編集をブロック
-- `enforce-factcheck-before-edit.sh` — インフラ変更前にファクトチェック必須
+- `enforce-factcheck-before-edit.sh` — インフラ変更前にファクトチェック必須（.yml/.md 等の非コードファイルは除外）
 - `enforce-factcheck-before-user-request.sh` — 手動操作依頼前にファクトチェック必須
 - `enforce-architecture-layers.sh` — domain/core レイヤー変更を検証
 - `enforce-domain-naming.sh` — DDD 命名規則の強制
@@ -253,6 +272,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 
 ### アクション後 hook
 - `record-code-review.sh` — コードレビュー完了をマージゲートトラッキング用に記録
+- `record-codex-review.sh` — Codex CLI レビュー完了を記録（codex-parallel.sh から呼び出し）
 - `mark-factcheck-done.sh` — リサーチ後にファクトチェック完了をマーク
 - `track-agent-team.sh` — エージェントチームの生成と完了を追跡
 - `post-merge-close-issues.sh` — マージ後にリンクされた Issue を自動クローズ
@@ -272,7 +292,19 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 { "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"" }
 ```
 
-hook スクリプトは `stdin` でツール呼び出しの JSON を受け取り、`tool_input.command` や `tool_input.file_path` を検査してフィルタリングします。詳細は[公式 hooks ドキュメント](https://docs.anthropic.com/en/docs/claude-code/hooks)を参照。
+hook スクリプトは `stdin` でツール呼び出しの JSON を受け取り、`tool_input.command` や `tool_input.file_path` を検査してフィルタリングします。
+
+### Exit Code 規約（公式仕様準拠）
+
+| Exit Code | 意味 | PreToolUse の動作 |
+|-----------|------|-----------------|
+| `0` | 許可 | ツール呼び出しを続行。JSON 出力があれば `hookSpecificOutput` を解析 |
+| `2` | ブロック | ツール呼び出しをブロック。`stderr` が Claude にエラーメッセージとして伝達 |
+| その他 | 非ブロッキングエラー | `stderr` は verbose モードでのみ表示。実行は続行 |
+
+**重要**: `exit 0` で許可する際、入力 JSON を stdout にエコーバックしないでください。公式パターンは単純に `exit 0` のみです。本リポジトリの全 hook はこの規約に準拠しています。
+
+詳細は[公式 hooks ドキュメント](https://docs.anthropic.com/en/docs/claude-code/hooks)を参照。
 
 ## ルール
 

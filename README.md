@@ -188,15 +188,34 @@ PR Ready to Merge?
    └─ Auto-fetches review comments on `gh pr checks` / `gh pr merge`
 ```
 
+### Tiered Review System
+
+Review requirements are automatically adjusted based on what changed:
+
+| Tier | Target | Required Reviews | Detection |
+|------|--------|-----------------|-----------|
+| **FULL** | Source code changes | code-reviewer + Codex CLI | Changes in `src/`, `lib/`, `app/`, `*.ts`, `*.py`, etc. |
+| **LIGHT** | CI/config/docs only | code-reviewer only | Only `.github/workflows/`, `*.md`, `Dockerfile`, `*.yml`, etc. |
+| **EXEMPT** | Branch-based | None | `docs/*`, `chore/*`, `ci/*` branches |
+
+This prevents over-engineering review requirements. A CI workflow change doesn't need a Codex CLI second opinion.
+
 ### When No External Review Exists
 
 If a PR has no GitHub review (e.g., solo development), the system falls back to a **local review pipeline**:
 
 1. **`code-reviewer` skill** — Automated PR analysis with OWASP security checks, quality scoring
-2. **Codex CLI Route A** — Independent second opinion: `codex exec review --base <branch>`
-3. **Both must pass** before the PR is considered reviewed
+2. **Codex CLI Route A** (FULL tier only) — Independent second opinion: `codex exec review --base <branch>`
+3. **Both must pass** (FULL tier) or just step 1 (LIGHT tier) before the PR is considered reviewed
 
-This ensures every PR gets at least two independent reviews, even without human reviewers.
+This ensures every PR gets appropriate review depth based on the risk level of changes.
+
+### Housekeeping
+
+Merged or closed PRs are automatically cleaned from the lock state:
+
+- **STOP hook**: Auto-removes merged/closed PR entries via GitHub API
+- **Manual cleanup**: `GATE_MODE=CLEANUP bash hooks/pr-ci-review-gate.sh`
 
 ### PR Lifecycle Hooks
 
@@ -215,13 +234,13 @@ This ensures every PR gets at least two independent reviews, even without human 
 ### Quality Gates (Pre-merge)
 - `block-merge-without-ci.sh` — Block merge unless all CI checks green
 - `block-merge-without-review.sh` — Block merge unless review is newer than latest push
-- `pr-ci-review-gate.sh` — 4-mode gate (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP)
+- `pr-ci-review-gate.sh` — 6-mode gate (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) with tiered review
 - `pr-merge-claude-review-gate.sh` — 5-sub-gate Claude review enforcement
 - `pr-guard.sh` — Base branch, issue ref, conflict checks
 
 ### Safety Guards
 - `protect-branches.sh` — Prevent deletion of protected branches
-- `block-manual-merge-ops.sh` — Block cherry-pick/merge/rebase (delegate to Codex)
+- `block-manual-merge-ops.sh` — Block cherry-pick/merge/rebase (sync from main/master/develop is allowed)
 - `git-push-guard.sh` — Push safety checks
 - `git-commit-guard.sh` — Commit message and scope validation
 - `block-version-downgrade.sh` — Prevent dependency downgrades
@@ -238,7 +257,7 @@ This ensures every PR gets at least two independent reviews, even without human 
 
 ### Workflow Enforcement
 - `enforce-git-freshness.sh` — Block edits if behind remote
-- `enforce-factcheck-before-edit.sh` — Require fact-check before modifying infra
+- `enforce-factcheck-before-edit.sh` — Require fact-check before modifying infra (non-code files like .yml/.md excluded)
 - `enforce-factcheck-before-user-request.sh` — Fact-check before asking user for manual ops
 - `enforce-architecture-layers.sh` — Validate domain/core layer modifications
 - `enforce-domain-naming.sh` — DDD naming convention enforcement
@@ -251,6 +270,7 @@ This ensures every PR gets at least two independent reviews, even without human 
 
 ### Post-Action Hooks
 - `record-code-review.sh` — Record code review completion for merge gate tracking
+- `record-codex-review.sh` — Record Codex CLI review completion (called by codex-parallel.sh)
 - `mark-factcheck-done.sh` — Mark fact-check as completed after research
 - `track-agent-team.sh` — Track agent team spawning and completion
 - `post-merge-close-issues.sh` — Auto-close linked issues after merge
@@ -270,7 +290,19 @@ This ensures every PR gets at least two independent reviews, even without human 
 { "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"" }
 ```
 
-Hook scripts receive the tool invocation as JSON on `stdin` and should filter by inspecting `tool_input.command` or `tool_input.file_path` internally. See the [official hooks documentation](https://docs.anthropic.com/en/docs/claude-code/hooks) for details.
+Hook scripts receive the tool invocation as JSON on `stdin` and should filter by inspecting `tool_input.command` or `tool_input.file_path` internally.
+
+### Exit Code Convention (Official Spec)
+
+| Exit Code | Meaning | PreToolUse Behavior |
+|-----------|---------|-------------------|
+| `0` | Allow | Tool call proceeds. JSON output (if any) is parsed for `hookSpecificOutput`. |
+| `2` | Block | Tool call is blocked. `stderr` is fed back to Claude as error message. |
+| Other | Non-blocking error | `stderr` shown in verbose mode only. Execution continues. |
+
+**Important**: Do NOT echo the input JSON back to stdout on `exit 0`. The official pattern is simply `exit 0` to allow a tool call. All hooks in this repository follow this convention.
+
+See the [official hooks documentation](https://docs.anthropic.com/en/docs/claude-code/hooks) for details.
 
 ## Rules
 

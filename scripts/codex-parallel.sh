@@ -76,6 +76,15 @@ if [[ "${1:-}" == "--review" ]]; then
 
     success "Review complete: ${OUTPUT_FILE}"
     cat "$OUTPUT_FILE"
+
+    # Record Codex review completion in review-status.json
+    CURRENT_BRANCH=$(cd "$REPO_PATH" && git branch --show-current 2>/dev/null || echo "")
+    if [[ -n "$CURRENT_BRANCH" ]]; then
+        RECORD_SCRIPT="$(dirname "$0")/../hooks/record-codex-review.sh"
+        if [[ -x "$RECORD_SCRIPT" ]]; then
+            bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH"
+        fi
+    fi
     exit 0
 fi
 

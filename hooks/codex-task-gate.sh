@@ -40,17 +40,15 @@ with open(f, 'w') as fh:
     json.dump(s, fh, indent=2)
 " 2>/dev/null
     fi
-    echo "$input"
     exit 0
 fi
 
 file_path=$(echo "$input" | jq -r '.tool_input.file_path // ""')
 
-[ -z "$file_path" ] && { echo "$input"; exit 0; }
+[ -z "$file_path" ] && exit 0
 
 # Skip .claude/ config files, CLAUDE.md, MEMORY.md
 if echo "$file_path" | grep -qE '(/\.claude/|CLAUDE\.md|MEMORY\.md|node_modules/|package-lock)'; then
-    echo "$input"
     exit 0
 fi
 
@@ -106,5 +104,4 @@ if [ "$is_doc" = true ]; then
     fi
 fi
 
-echo "$input"
 exit 0

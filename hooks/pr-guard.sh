@@ -8,7 +8,6 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 cmd_first_line=$(echo "$cmd" | head -1)
 if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*create'; then
-    echo "$input"
     exit 0
 fi
 
@@ -87,5 +86,4 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
     done
 fi
 
-echo "$input"
 exit 0
