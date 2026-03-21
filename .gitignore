@@ -24,3 +24,27 @@ projects/
 *.key
 *.pem
 service-account*.json
+
+# gstack-managed skill directories (installed by gstack setup)
+skills/browse/
+skills/careful/
+skills/codex/
+skills/design-consultation/
+skills/design-review/
+skills/document-release/
+skills/freeze/
+skills/gstack/
+skills/gstack-upgrade/
+skills/guard/
+skills/investigate/
+skills/office-hours/
+skills/plan-ceo-review/
+skills/plan-design-review/
+skills/plan-eng-review/
+skills/qa/
+skills/qa-only/
+skills/retro/
+skills/review/
+skills/setup-browser-cookies/
+skills/ship/
+skills/unfreeze/
