@@ -1,0 +1,26 @@
+# Third-party skills (install via setup.sh)
+skills/gstack/
+skills/ui-ux-pro-max/
+
+# Session state
+state/
+*.json.bak
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Memory (project-specific, contains sensitive info)
+memory/
+projects/
+
+# Environment / secrets
+.env
+.env.*
+*.key
+*.pem
+service-account*.json

@@ -1,0 +1,126 @@
+#!/bin/bash
+# inject-claude-review-on-checks.sh — PreToolUse hook (matcher: Bash)
+#
+# Multi-mode hook for review quality enforcement:
+# 1. On `gh pr checks` → fetch reviews, save to state, output summary
+# 2. On `gh pr merge` → hard block if unresolved CRITICAL/HIGH
+# 3. On any Bash → if pending reviews exist, remind via stderr
+#
+# Exit 0 = allow, Exit 2 = block
+set -uo pipefail
+export GH_NO_UPDATE_NOTIFIER=1
+unset GH_FORCE_TTY 2>/dev/null || true
+
+[[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] && exit 0
+[[ -n "${CLAUDE_AGENT_ID:-}" ]] && exit 0
+
+# Project-scoped state
+if git rev-parse --show-toplevel &>/dev/null 2>&1; then
+  STATE_DIR="$(git rev-parse --show-toplevel)/.claude/state"
+else
+  STATE_DIR="$HOME/.claude/state"
+fi
+mkdir -p "$STATE_DIR"
+PENDING_FILE="$STATE_DIR/pending-review-comments.json"
+
+input=""
+[[ ! -t 0 ]] && input=$(cat)
+cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
+
+# =========================================================================
+# MODE 1: gh pr checks → fetch reviews and save state
+# =========================================================================
+if echo "$cmd" | grep -qE 'gh\s+pr\s+checks'; then
+  PR_NUMBER=$(echo "$cmd" | grep -oE '[0-9]+' | head -1)
+  [[ -z "$PR_NUMBER" ]] && exit 0
+
+  REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+  [[ -z "$REPO" ]] && exit 0
+
+  # Fetch and save via Python helper (stdin=/dev/null to avoid pipe issues)
+  python3 ~/.claude/hooks/inject-claude-review-helper.py "$REPO" "$PR_NUMBER" </dev/null >/dev/null 2>&1
+
+  # Read back the saved state and output as reminder
+  if [[ -f "$PENDING_FILE" ]]; then
+    OUTPUT=$(python3 -c "
+import json
+with open('$PENDING_FILE') as f:
+    d = json.load(f)
+print(d.get('output', ''))
+" 2>/dev/null || echo "")
+
+    if [[ -n "$OUTPUT" ]]; then
+      echo "" >&2
+      echo "═══════════════════════════════════════════════════" >&2
+      echo "$OUTPUT" >&2
+      echo "═══════════════════════════════════════════════════" >&2
+      echo "" >&2
+    fi
+  fi
+  exit 0
+fi
+
+# =========================================================================
+# MODE 2: gh pr merge → hard block if unresolved
+# =========================================================================
+if echo "$cmd" | grep -qE 'gh\s+pr\s+merge'; then
+  if [[ -f "$PENDING_FILE" ]]; then
+    CRITICAL=$(python3 -c "
+import json
+with open('$PENDING_FILE') as f: d = json.load(f)
+print(d.get('critical', 0))
+" 2>/dev/null || echo "0")
+    HIGH=$(python3 -c "
+import json
+with open('$PENDING_FILE') as f: d = json.load(f)
+print(d.get('high', 0))
+" 2>/dev/null || echo "0")
+    PR=$(python3 -c "
+import json
+with open('$PENDING_FILE') as f: d = json.load(f)
+print(d.get('pr', ''))
+" 2>/dev/null || echo "")
+
+    if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
+      echo "" >&2
+      echo "[BLOCKED] PR #${PR}: 未対応 CRITICAL=${CRITICAL} HIGH=${HIGH}" >&2
+      echo "  レビューコメントを全て対応してからマージしてください。" >&2
+      echo "" >&2
+      exit 2
+    fi
+  fi
+  exit 0
+fi
+
+# =========================================================================
+# MODE 3: Any other Bash → soft reminder if pending reviews exist
+# =========================================================================
+# Only remind occasionally (not on every single command)
+# Skip for: git, ls, cat, echo, python3, etc.
+if echo "$cmd" | grep -qE '^(git |ls |cat |echo |python3 |head |tail |grep |find |test |set )'; then
+  exit 0
+fi
+
+if [[ -f "$PENDING_FILE" ]]; then
+  TOTAL=$(python3 -c "
+import json
+with open('$PENDING_FILE') as f: d = json.load(f)
+print(d.get('total', 0))
+" 2>/dev/null || echo "0")
+  CRITICAL=$(python3 -c "
+import json
+with open('$PENDING_FILE') as f: d = json.load(f)
+print(d.get('critical', 0))
+" 2>/dev/null || echo "0")
+
+  if [[ "$TOTAL" -gt 0 ]] && [[ "$CRITICAL" -gt 0 ]]; then
+    PR=$(python3 -c "
+import json
+with open('$PENDING_FILE') as f: d = json.load(f)
+print(d.get('pr', ''))
+" 2>/dev/null || echo "")
+    echo "[REMINDER] PR #${PR}: ${TOTAL}件のレビューコメント（CRITICAL=${CRITICAL}）が未対応です。" >&2
+  fi
+fi
+
+exit 0

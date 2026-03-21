@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001"
+  },
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write",
+      "Bash",
+      "WebSearch",
+      "WebFetch",
+      "Bash(openssl rand:*)",
+      "Bash(source:*)",
+      "Bash(curl:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
+      "Bash(npm:*)",
+      "Bash(pnpm:*)",
+      "Bash(pip3 install:*)",
+      "Bash(python3:*)",
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(lsof:*)",
+      "Bash(test:*)",
+      "Bash(set:*)",
+      "Bash(dig:*)",
+      "Bash(nslookup:*)",
+      "Bash(sudo dscacheutil:*)"
+    ],
+    "defaultMode": "dontAsk"
+  },
+  "hooks": {
+    "_comment": "See hooks/ directory for all hook scripts. Configure paths in settings.json after installation.",
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude/hooks/auto-init-permissions.sh" },
+          { "type": "command", "command": "bash ~/.claude/hooks/context-budget-reset.sh" },
+          { "type": "command", "command": "bash ~/.claude/hooks/reset-factcheck.sh" },
+          { "type": "command", "command": "CLAUDE_HOOK_EVENT=SessionStart bash ~/.claude/hooks/enforce-git-freshness.sh", "timeout": 15, "statusMessage": "Checking git freshness..." }
+        ]
+      }
+    ]
+  },
+  "_note": "This is a template. See the full settings.json in the repository for complete hook configuration."
+}
