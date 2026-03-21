@@ -37,24 +37,24 @@ fi
 REVIEW_LOCK="$_STATE_BASE/pr-review-lock.json"
 if [ -f "$REVIEW_LOCK" ]; then
     LOCK_STATUS=$(_REVIEW_LOCK="$REVIEW_LOCK" _PR="$PR_NUM" python3 -c "
-    import json, os
-    with open(os.environ['_REVIEW_LOCK']) as f:
-        s = json.load(f)
-    pr = s.get(os.environ['_PR'], {})
-    if not pr.get('verified', False):
-        print('LOCKED')
-    else:
-        print('OK')
-    " 2>/dev/null || echo "OK")
+import json, os
+with open(os.environ['_REVIEW_LOCK']) as f:
+    s = json.load(f)
+pr = s.get(os.environ['_PR'], {})
+if not pr.get('verified', False):
+    print('LOCKED')
+else:
+    print('OK')
+" 2>/dev/null || echo "OK")
 
     if [ "$LOCK_STATUS" = "LOCKED" ]; then
         # Check if auto-review is needed (no claude-review workflow)
         AUTO_REVIEW=$(_REVIEW_LOCK="$REVIEW_LOCK" _PR="$PR_NUM" python3 -c "
-    import json, os
-    with open(os.environ['_REVIEW_LOCK']) as f:
-        s = json.load(f)
-    print('yes' if s.get(os.environ['_PR'], {}).get('auto_review_needed', False) else 'no')
-    " 2>/dev/null || echo "no")
+import json, os
+with open(os.environ['_REVIEW_LOCK']) as f:
+    s = json.load(f)
+print('yes' if s.get(os.environ['_PR'], {}).get('auto_review_needed', False) else 'no')
+" 2>/dev/null || echo "no")
 
         echo "🔒 [Pessimistic Lock] PR #${PR_NUM} は review_pending 状態です。マージ不可。" >&2
         echo "" >&2

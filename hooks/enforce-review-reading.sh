@@ -54,19 +54,19 @@ fi
 OUTPUT=$(echo "$REVIEW_DATA" | jq -r '.output // ""' 2>/dev/null || echo "")
 if [[ -n "$OUTPUT" ]] && [[ "$OUTPUT" != "null" ]]; then
   _OUTPUT="$OUTPUT" _PR="$PR" python3 -c "
-    import json, os
-    output = os.environ['_OUTPUT']
-    # Truncate for context efficiency
-    if len(output) > 2000:
-        output = output[:2000] + '\n... (truncated, see full: gh api repos/.../pulls/' + os.environ['_PR'] + '/comments)'
-    result = {
-        'hookSpecificOutput': {
-            'hookEventName': 'PreToolUse',
-            'additionalContext': output
-        }
+import json, os
+output = os.environ['_OUTPUT']
+# Truncate for context efficiency
+if len(output) > 2000:
+    output = output[:2000] + '\n... (truncated, see full: gh api repos/.../pulls/' + os.environ['_PR'] + '/comments)'
+result = {
+    'hookSpecificOutput': {
+        'hookEventName': 'PreToolUse',
+        'additionalContext': output
     }
-    print(json.dumps(result))
-    " 2>/dev/null
+}
+print(json.dumps(result))
+" 2>/dev/null
 fi
 
 exit 0
