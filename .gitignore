@@ -4,6 +4,8 @@ skills/ui-ux-pro-max/
 
 # Session state
 state/
+.claude/sessions/
+.claude/logs/
 *.json.bak
 
 # Python cache
