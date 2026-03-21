@@ -1,5 +1,7 @@
 # Claude Code Skills
 
+**English** | [日本語](README.ja.md)
+
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
 This repository provides a production-ready Claude Code configuration with 27 custom skills, 37 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
