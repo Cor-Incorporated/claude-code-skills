@@ -409,4 +409,4 @@ Use `<important if="condition">` tags in SKILL.md body (NOT in frontmatter) to f
 
 ## License
 
-MIT
+[MIT](LICENSE)

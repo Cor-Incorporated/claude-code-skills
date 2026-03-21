@@ -411,4 +411,4 @@ SKILL.md 本文（フロントマターではない）で `<important if="条件
 
 ## ライセンス
 
-MIT
+[MIT](LICENSE)
