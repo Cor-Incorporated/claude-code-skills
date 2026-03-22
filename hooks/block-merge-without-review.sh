@@ -114,8 +114,10 @@ PR_COMMENTS=$(gh api "repos/${REPO}/pulls/${PR_NUM}/comments" 2>/dev/null || ech
 ISSUE_COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" 2>/dev/null || echo "[]")
 
 # Check for unresolved CRITICAL/HIGH in any source
-HAS_CRITICAL=$(echo "$PR_COMMENTS $ISSUE_COMMENTS" | grep -ci "CRITICAL\|critical" || true)
-HAS_HIGH=$(echo "$PR_COMMENTS $ISSUE_COMMENTS" | grep -ci "\bHIGH\b" || true)
+# Use severity-prefix patterns to avoid false positives from words like "high-level"
+# Matches: [CRITICAL], CRITICAL:, severity: CRITICAL, **CRITICAL**, > CRITICAL
+HAS_CRITICAL=$(echo "$PR_COMMENTS $ISSUE_COMMENTS" | grep -ciE '\[CRITICAL\]|severity:\s*CRITICAL|^\s*CRITICAL:|>\s*CRITICAL|\*\*CRITICAL\*\*' || true)
+HAS_HIGH=$(echo "$PR_COMMENTS $ISSUE_COMMENTS" | grep -ciE '\[HIGH\]|severity:\s*HIGH|^\s*HIGH:|>\s*HIGH|\*\*HIGH\*\*' || true)
 
 if [ "$HAS_CRITICAL" -gt 0 ] || [ "$HAS_HIGH" -gt 0 ]; then
     echo "[BLOCK] PR #${PR_NUM} にCRITICAL/HIGH指摘が残っている可能性があります。" >&2
