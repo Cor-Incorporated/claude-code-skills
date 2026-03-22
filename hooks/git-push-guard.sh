@@ -12,7 +12,7 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 if echo "$cmd" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b)' || \
    echo "$cmd" | grep -qE 'git\s+push\s+-[a-zA-Z]*f'; then
     for branch in develop main master; do
-        if echo "$cmd" | grep -qE "(^|[\s:+/])${branch}(\b|$)"; then
+        if echo "$cmd" | grep -qE "(^|[[:space:]:+/])${branch}(\b|$)"; then
             cat >&2 <<ERRMSG
 [BLOCK] 共有ブランチ '${branch}' への force push を検出
 
