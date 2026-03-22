@@ -7,7 +7,7 @@ input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 cmd_first_line=$(echo "$cmd" | head -1)
-if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*create'; then
+if ! echo "$cmd_first_line" | grep -qE 'gh\s+pr\s+create\b'; then
     exit 0
 fi
 
