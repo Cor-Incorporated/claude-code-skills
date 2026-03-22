@@ -8,7 +8,7 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 cmd_first_line=$(echo "$cmd" | head -1)
 
 # Only trigger for merge commands
-if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then
+if ! echo "$cmd_first_line" | grep -qE 'gh\s+pr\s+merge\b'; then
     exit 0
 fi
 
