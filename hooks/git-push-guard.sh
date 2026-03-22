@@ -12,7 +12,7 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 if echo "$cmd" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b)' || \
    echo "$cmd" | grep -qE 'git\s+push\s+-[a-zA-Z]*f'; then
     for branch in develop main master; do
-        if echo "$cmd" | grep -qE "\b${branch}\b"; then
+        if echo "$cmd" | grep -qE "(^|[\s:+/])${branch}(\b|$)"; then
             cat >&2 <<ERRMSG
 [BLOCK] 共有ブランチ '${branch}' への force push を検出
 
@@ -22,7 +22,7 @@ if echo "$cmd" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b)' ||
   - --force-with-lease も --force と同等に扱います
 
 対処法: ユーザーが手動で実行してください。
-  ! git push --force-with-lease origin ${branch}
+  (Claude Code プロンプトで) ! git push --force-with-lease origin ${branch}
 
 Ref: Issue #17 — AI からの force push はブロック、ユーザー手動実行に限定
 ERRMSG

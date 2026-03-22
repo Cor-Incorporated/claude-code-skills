@@ -67,16 +67,30 @@ fi
 
 # Allow: git rebase --continue (only if a permitted rebase session is active)
 # Ref: Issue #16 — rebase --continue was blocked after permitted sync rebase
-if echo "$CMD_FIRST" | grep -qE 'git\s+rebase\s+--continue'; then
+# Note: _clear_rebase_state is NOT called here to support multi-conflict rebases
+# where --continue needs to be called multiple times. Cleanup relies on 1-hour expiry and --abort.
+if echo "$cmd" | grep -qE 'git\s+rebase\s+--continue'; then
     if _check_rebase_state; then
         local_target=$(jq -r '.rebase_target // "unknown"' "$REBASE_STATE_FILE" 2>/dev/null || echo "unknown")
         echo "[ALLOW] rebase --continue: 許可済み同期rebase (target: ${local_target}) の完了。" >&2
-        _clear_rebase_state
         exit 0
     else
         echo "[BLOCK] rebase --continue: 許可済みrebaseセッションが見つかりません。" >&2
         echo "理由: --continue は直前に許可された同期rebase (origin/main|master|develop) の" >&2
         echo "      完了操作にのみ許可されます。任意ブランチのrebase完了はCodex CLIに委任。" >&2
+        exit 2
+    fi
+fi
+
+# Allow: git rebase --skip (only if a permitted rebase session is active)
+if echo "$cmd" | grep -qE 'git\s+rebase\s+--skip'; then
+    if _check_rebase_state; then
+        echo "[ALLOW] rebase --skip: 許可済み同期rebaseセッション中のスキップ。" >&2
+        exit 0
+    else
+        echo "[BLOCK] rebase --skip: 許可済みrebaseセッションが見つかりません。" >&2
+        echo "理由: --skip は直前に許可された同期rebase (origin/main|master|develop) の" >&2
+        echo "      セッション中にのみ許可されます。" >&2
         exit 2
     fi
 fi
