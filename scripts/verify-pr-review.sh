@@ -51,9 +51,10 @@ ISSUE_COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" 2>/dev/null ||
 
 # Count blocking indicators across ALL sources
 COMBINED="$REVIEWS $PR_COMMENTS $ISSUE_COMMENTS"
-BLOCKING=$(echo "$COMBINED" | grep -ci "blocking\|🔴" || true)
-MUST_FIX=$(echo "$COMBINED" | grep -ci "must.fix\|MUST FIX" || true)
-CRITICAL=$(echo "$COMBINED" | grep -ci "critical" || true)
+# Use severity-prefix patterns to avoid false positives (aligned with block-merge-without-review.sh)
+BLOCKING=$(echo "$COMBINED" | grep -ciE '\[BLOCKING\]|severity:\s*BLOCKING|^\s*BLOCKING[:\s-]|>\s*BLOCKING|\*\*BLOCKING\*\*|🔴' || true)
+MUST_FIX=$(echo "$COMBINED" | grep -ciE '\[MUST.FIX\]|severity:\s*MUST.FIX|^\s*MUST.FIX[:\s-]|>\s*MUST.FIX|\*\*MUST.FIX\*\*' || true)
+CRITICAL=$(echo "$COMBINED" | grep -ciE '\[CRITICAL\]|severity:\s*CRITICAL|^\s*CRITICAL[:\s-]|>\s*CRITICAL|\*\*CRITICAL\*\*' || true)
 
 # Get latest claude-review summary
 LATEST_SUMMARY=$(echo "$ISSUE_COMMENTS" | python3 -c "
