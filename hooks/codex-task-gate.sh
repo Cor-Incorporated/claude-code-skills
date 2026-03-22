@@ -12,7 +12,18 @@ input=$(cat)
 tool_name=$(echo "$input" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 bash_cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 
-if [[ "$tool_name" == "Bash" ]] && echo "$(echo "$bash_cmd" | head -1)" | grep -qE '(codex-parallel|codex exec)'; then
+# Only match actual EXECUTION of Codex commands, not mentions in cat/grep/echo/ls
+# - bash <path>codex-parallel.sh or codex-orchestrate.sh
+# - codex exec at command start position (with optional env var prefixes)
+first_line=$(echo "$bash_cmd" | head -1)
+is_codex_exec=false
+if echo "$first_line" | grep -qE '^\s*(\S+=\S+\s+)*bash\s+\S*codex-(parallel|orchestrate)'; then
+    is_codex_exec=true
+elif echo "$first_line" | grep -qE '^\s*(\S+=\S+\s+)*codex\s+exec\b'; then
+    is_codex_exec=true
+fi
+
+if [[ "$tool_name" == "Bash" ]] && [[ "$is_codex_exec" == "true" ]]; then
     BUDGET_FILE="${HOME}/.claude/state/context-budget.json"
     if [[ -f "$BUDGET_FILE" ]]; then
         codex_count=$(_BUDGET_FILE="$BUDGET_FILE" python3 -c "
