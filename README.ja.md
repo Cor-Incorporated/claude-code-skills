@@ -152,8 +152,9 @@ hook スクリプトが委任ルールを自動的に強制します:
 | `context-budget-read-gate.sh` | Read ツール | 3+ ファイルで警告、6+ で強い警告 |
 | `context-budget-write-gate.sh` | Write ツール | テスト/ドキュメント作成検出 → Codex 提案 |
 | `context-budget-edit-write-gate.sh` | Edit/Write | 多数ソースファイル読み込み後の編集をブロック |
-| `context-budget-agent-gate.sh` | Agent ツール | サブエージェント数を監視 |
-| `codex-task-gate.sh` | テストファイル Edit/Write | テスト作成を Codex に委任提案 |
+| `context-budget-agent-gate.sh` | Agent ツール | foreground実装Agent 2つ目をブロック、1つ目に警告、background/TeamCreate強制 |
+| `codex-task-gate.sh` | Bash (Codex実行) | 2回目以降の Codex CLI 呼び出しをブロック（同時1タスク制限） |
+| `codex-task-release.sh` | PostToolUse Bash | Codex タスク完了後にカウンターを解放（順次再利用を可能に） |
 
 ### ユーティリティスクリプト
 
@@ -256,8 +257,9 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - `context-budget-read-gate.sh` — 3+ ソースファイル読み込みで警告/ブロック
 - `context-budget-write-gate.sh` — テスト/ドキュメント作成を検出し Codex 委任提案
 - `context-budget-edit-write-gate.sh` — 多数ファイル読み込み後の編集をブロック
-- `context-budget-agent-gate.sh` — エージェント生成数を監視
-- `context-budget-reset.sh` — セッション開始時にカウンターリセット
+- `context-budget-agent-gate.sh` — foreground実装Agentの制限（2つ目ブロック）、background/TeamCreate強制
+- `context-budget-reset.sh` — セッション開始時にカウンターリセット（`fg_impl_agent_count` 含む）
+- `codex-task-release.sh` — Codex タスク完了後にカウンター解放（PostToolUse）
 
 ### ワークフロー強制
 - `enforce-git-freshness.sh` — リモートより遅れている場合に編集をブロック

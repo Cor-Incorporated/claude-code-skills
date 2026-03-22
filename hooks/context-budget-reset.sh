@@ -24,6 +24,7 @@ cat > "$STATE_FILE" << EOF
   "write_test_doc_count": 0,
   "agent_count": 0,
   "impl_agent_count": 0,
+  "fg_impl_agent_count": 0,
   "codex_call_count": 0,
   "edit_count": 0,
   "edited_files": [],

@@ -151,8 +151,9 @@ Task received
 | `context-budget-read-gate.sh` | Read tool | Warn at 3+ files, strong warn at 6+ |
 | `context-budget-write-gate.sh` | Write tool | Detect test/doc creation → suggest Codex |
 | `context-budget-edit-write-gate.sh` | Edit/Write | Block when too many source files read |
-| `context-budget-agent-gate.sh` | Agent tool | Monitor subagent count |
-| `codex-task-gate.sh` | Edit/Write test files | Suggest Codex for test creation |
+| `context-budget-agent-gate.sh` | Agent tool | Block 2+ foreground impl agents, warn on 1st, enforce background/TeamCreate |
+| `codex-task-gate.sh` | Bash (Codex exec) | Block 2nd+ Codex CLI call (1 concurrent limit) |
+| `codex-task-release.sh` | PostToolUse Bash | Release Codex counter after task completes (enables sequential reuse) |
 
 ### Utility Scripts
 
@@ -255,8 +256,9 @@ Merged or closed PRs are automatically cleaned from the lock state:
 - `context-budget-read-gate.sh` — Warn/block after 3+ source file reads
 - `context-budget-write-gate.sh` — Detect test/doc creation for Codex delegation
 - `context-budget-edit-write-gate.sh` — Block edits when too many files read
-- `context-budget-agent-gate.sh` — Monitor agent spawning count
-- `context-budget-reset.sh` — Reset counters on session start
+- `context-budget-agent-gate.sh` — Enforce foreground impl agent limits (Rule 2+4), background/TeamCreate governance
+- `context-budget-reset.sh` — Reset all counters on session start (incl. `fg_impl_agent_count`)
+- `codex-task-release.sh` — Release Codex call counter after task completion (PostToolUse)
 
 ### Workflow Enforcement
 - `enforce-git-freshness.sh` — Block edits if behind remote
