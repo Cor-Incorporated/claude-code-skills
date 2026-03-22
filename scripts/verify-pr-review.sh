@@ -18,7 +18,15 @@ if [ -z "$REPO" ]; then
     exit 1
 fi
 
-REVIEW_LOCK="$HOME/.claude/state/pr-review-lock.json"
+# Project-scoped state: match block-merge-without-review.sh resolution (Issue #19)
+if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
+  _STATE_BASE="${CLAUDE_PROJECT_DIR}/.claude/state"
+elif git rev-parse --show-toplevel &>/dev/null; then
+  _STATE_BASE="$(git rev-parse --show-toplevel)/.claude/state"
+else
+  _STATE_BASE="$HOME/.claude/state"
+fi
+REVIEW_LOCK="$_STATE_BASE/pr-review-lock.json"
 mkdir -p "$(dirname "$REVIEW_LOCK")"
 [ ! -f "$REVIEW_LOCK" ] && echo '{}' > "$REVIEW_LOCK"
 
