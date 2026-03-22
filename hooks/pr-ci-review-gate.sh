@@ -381,8 +381,18 @@ with open(f_path, 'r+') as f:
   # Dual-reset: clear from BOTH project-scoped AND global state
   # to prevent stale code_review=true from satisfying gates (Codex P2 finding)
   GLOBAL_REVIEW="$HOME/.claude/state/review-status.json"
+  review_was_set=false
   for _target in "$REVIEW_STATE" "$GLOBAL_REVIEW"; do
     [[ ! -f "$_target" ]] && continue
+    # Check if review was previously marked as complete before clearing
+    had_review=$(_STATE="$_target" _BR="$BRANCH" python3 -c "
+import json, os
+with open(os.environ['_STATE']) as f:
+    s = json.load(f)
+br = s.get(os.environ['_BR'], {})
+print('true' if br.get('code_review') or br.get('codex_review') else 'false')
+" 2>/dev/null || echo "false")
+    [[ "$had_review" == "true" ]] && review_was_set=true
     _STATE="$_target" _BR="$BRANCH" python3 -c "
 import json, os, fcntl
 f_path = os.environ['_STATE']
@@ -395,6 +405,15 @@ with open(f_path, 'r+') as f:
     fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
   done
+
+  # Issue #33: Warn when push invalidated a completed review
+  if [[ "$review_was_set" == "true" ]]; then
+    echo "" >&2
+    echo "⚠️ [Review Reset] Push でレビューステータスがリセットされました。" >&2
+    echo "  ブランチ: ${BRANCH} (PR #${PR_NUMBER})" >&2
+    echo "  push前のレビュー結果は無効化されました。" >&2
+    echo "  → PR作成/マージ前に code-reviewer + Codex CLI を再実行してください。" >&2
+  fi
 
   # Classify tier to show appropriate requirements
   TIER=$(classify_review_tier "$BRANCH")
