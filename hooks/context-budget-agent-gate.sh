@@ -3,10 +3,11 @@
 # ========================================================================
 # PreToolUse hook: Agent launch governance (main session only).
 #
-# Enforces 3 rules:
+# Enforces 4 rules:
 #   1. BLOCK isolation: "worktree" (stale develop base, 3/3 failed 2026-03-18)
 #   2. BLOCK 2+ implementation agents → force TeamCreate with integrity checker
 #   3. WARN at 3+ agents → suggest Codex orchestration for mechanical tasks
+#   4. BLOCK 2+ foreground impl agents / WARN on 1st (Issue #31)
 #
 # Exemptions:
 #   - Subagent context (CLAUDE_AGENT_DEPTH >= 1): not counted/blocked
@@ -40,6 +41,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
   "write_test_doc_count": 0,
   "agent_count": 0,
   "impl_agent_count": 0,
+  "fg_impl_agent_count": 0,
   "codex_call_count": 0,
   "warnings_issued": [],
   "started_at": ""
@@ -105,10 +107,10 @@ except Exception:
 # --- Rule 1: BLOCK worktree isolation ---
 isolation = tool_input.get("isolation", "")
 if isolation == "worktree":
-    print('🚫 [Worktree Block] isolation: "worktree" は使用禁止です。')
-    print("")
-    print("理由: stale develop base問題で3回連続失敗 (2026-03-18)。")
-    print("代替: TeamCreate / isolation なし Agent / 手動ブランチ作成")
+    print('🚫 [Worktree Block] isolation: "worktree" は使用禁止です。', file=sys.stderr)
+    print("", file=sys.stderr)
+    print("理由: stale develop base問題で3回連続失敗 (2026-03-18)。", file=sys.stderr)
+    print("代替: TeamCreate / isolation なし Agent / 手動ブランチ作成", file=sys.stderr)
     sys.exit(2)
 
 # --- Classify agent type ---
@@ -118,25 +120,38 @@ is_research = (
     subagent_type in RESEARCH_TYPES
     or any(kw in description for kw in RESEARCH_KEYWORDS)
 )
+is_background = bool(tool_input.get("run_in_background", False))
 
-# --- Rule 2: BLOCK 2+ standalone impl agents → TeamCreate ---
-# TeamCreate workers (team_name set) are EXEMPT — that's the correct pattern
+# --- Rule 2 + Rule 4 (combined): foreground impl agent governance ---
+# - Background agents: EXEMPT (parallel execution is the goal)
+# - TeamCreate workers (team_name set): EXEMPT
+# - Research/review agents: EXEMPT
+# - 1st foreground impl: WARN (suggest background/TeamCreate for next)
+# - 2nd+ foreground impl: BLOCK
 has_team = bool(tool_input.get("team_name", ""))
-if not is_research and not has_team:
+if not is_research and not has_team and not is_background:
     impl_count = state.get("impl_agent_count", 0)
     if impl_count >= 1:
-        print("🚫 [TeamCreate Required] 2つ目のスタンドアロン実装Agentをブロック。")
-        print("")
-        print("ルール: 並列実装 → TeamCreate (整合性チェックWorker含む)")
-        print("  → worktree問題なし（共有コンテキスト）")
-        print("  → ADR/プロダクト整合性を常時検証")
-        print("")
-        print("TeamCreate済みならteam_nameを指定してください。")
-        print("単一タスクなら isolation なし Agent を使用してください。")
+        print("🚫 [Foreground Impl Blocked] 2つ目のforeground実装Agentをブロック。", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("前回のforeground Agentでメインセッションがブロックされました。", file=sys.stderr)
+        print("独立タスクは並列実行が必須です。", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("修正方法:", file=sys.stderr)
+        print("  1. run_in_background: true を指定（推奨）", file=sys.stderr)
+        print("  2. TeamCreate で並列チームを構成", file=sys.stderr)
+        print("  3. Codex CLI 経路C で委任", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Ref: Issue #31 — foreground実装Agentの逐次実行を防止", file=sys.stderr)
         with open(state_file, "w") as f:
             json.dump(state, f, indent=2)
         sys.exit(2)
     state["impl_agent_count"] = impl_count + 1
+    state["fg_impl_agent_count"] = state.get("fg_impl_agent_count", 0) + 1
+    # WARN on 1st foreground impl
+    print("⚠️ [Foreground Impl] 実装Agentがforegroundで起動されます。", file=sys.stderr)
+    print("  → 2つ目以降はrun_in_background: trueまたはTeamCreateを使用してください。", file=sys.stderr)
+    print("  → foreground実行はメインセッションをブロックします。", file=sys.stderr)
 
 # --- Count total agents ---
 state["agent_count"] = state.get("agent_count", 0) + 1
@@ -147,14 +162,14 @@ with open(state_file, "w") as f:
 
 # --- Rule 3: WARN at 3+ total agents ---
 if count == 3:
-    print("⚠️ [Context Budget] 3エージェント起動。")
-    print("  → 機械的タスクは codex-orchestrate.sh / TeamCreate を検討")
+    print("⚠️ [Context Budget] 3エージェント起動。", file=sys.stderr)
+    print("  → 機械的タスクは codex-orchestrate.sh / TeamCreate を検討", file=sys.stderr)
 elif count == 5:
-    print("🚫 [Context Budget] 5エージェント。コンテキスト消費が深刻。")
-    print("  → Codex CLI 経路C への切り替えを強く推奨")
+    print("🚫 [Context Budget] 5エージェント。コンテキスト消費が深刻。", file=sys.stderr)
+    print("  → Codex CLI 経路C への切り替えを強く推奨", file=sys.stderr)
 elif count >= 7:
-    print("🚫🚫 [Context Budget] {}エージェント（危険水域）。".format(count))
-    print("  → 残タスクはCodexに委任してください")
+    print("🚫🚫 [Context Budget] {}エージェント（危険水域）。".format(count), file=sys.stderr)
+    print("  → 残タスクはCodexに委任してください", file=sys.stderr)
 
 PYEOF
 

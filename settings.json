@@ -393,6 +393,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/codex-task-release.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/post-merge-close-issues.sh"
           }
         ]
