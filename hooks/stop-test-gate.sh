@@ -109,11 +109,11 @@ fi
 TEST_OUTPUT=""
 TEST_EXIT=0
 if [ -n "$TIMEOUT_CMD" ]; then
-  TEST_OUTPUT=$($TIMEOUT_CMD bash -c "$TEST_CMD" 2>&1) || TEST_EXIT=$?
+  _TEST_CMD="$TEST_CMD" TEST_OUTPUT=$($TIMEOUT_CMD bash -c 'eval "$_TEST_CMD"' 2>&1) || TEST_EXIT=$?
 else
   # macOS fallback: background process with timer
   _tmp_out="/tmp/stop-test-output.$$"
-  bash -c "$TEST_CMD" > "$_tmp_out" 2>&1 &
+  _TEST_CMD="$TEST_CMD" bash -c 'eval "$_TEST_CMD"' > "$_tmp_out" 2>&1 &
   _test_pid=$!
   (sleep 60 && kill "$_test_pid" 2>/dev/null) &
   _timer_pid=$!
