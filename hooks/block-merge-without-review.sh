@@ -24,13 +24,11 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 cmd_first_line=$(echo "$cmd" | head -1)
 if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then
-    echo "$input"
     exit 0
 fi
 
 PR_NUM=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
 if [ -z "$PR_NUM" ]; then
-    echo "$input"
     exit 0
 fi
 
@@ -122,5 +120,4 @@ if [ -n "$BLOCKERS" ]; then
 fi
 
 echo "[Review Guard] PR #${PR_NUM} (tier=$TIER): CRITICAL/HIGH/BUG指摘なし ✓" >&2
-echo "$input"
 exit 0

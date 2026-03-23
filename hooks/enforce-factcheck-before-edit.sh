@@ -90,8 +90,8 @@ if [ "$factchecked" = "false" ] || [ "$expired" = "true" ]; then
     jq --argjson count "$((edit_count + 1))" '.edit_count_since_check = $count' "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
     if [ "$factchecked" = "false" ] && [ "$edit_count" -eq 0 ]; then
-        echo "⚠️ [WARN] ファクトチェックが未実施です。修正内容が最新ドキュメントに沿っているか確認してください。"
-        echo "  context7/WebSearch/WebFetch を使用するとこの警告は消えます。"
+        echo "⚠️ [WARN] ファクトチェックが未実施です。修正内容が最新ドキュメントに沿っているか確認してください。" >&2
+        echo "  context7/WebSearch/WebFetch を使用するとこの警告は消えます。" >&2
     fi
 else
     # ファクトチェック済み: edit_countを増加

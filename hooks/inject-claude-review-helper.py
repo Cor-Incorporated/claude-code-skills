@@ -66,11 +66,18 @@ def count_severity(text: str) -> tuple[int, int, int, int]:
     Detects both traditional keywords (CRITICAL, HIGH, etc.) and
     claude-review header format (### Bug:, ### Security:, etc.).
     Issue #57: claude-review uses header format that was previously undetected.
+    Issue #84: Strip HTML details/summary and bot metadata before counting
+    to prevent false positives from CodeRabbit template text.
     """
-    critical = len(re.findall(r"(?i)\bcritical\b", text))
-    high = len(re.findall(r"(?i)\b(?:P1|high)\b", text))
-    warning = len(re.findall(r"(?i)\bwarning\b", text))
-    suggestion = len(re.findall(r"(?i)\bsuggestion\b", text))
+    # Strip HTML blocks and comments to avoid false positives from bot metadata
+    cleaned = re.sub(r"<details>.*?</details>", "", text, flags=re.DOTALL)
+    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+
+    critical = len(re.findall(r"(?i)\bcritical\b", cleaned))
+    high = len(re.findall(r"(?i)\b(?:P1|high)\b", cleaned))
+    warning = len(re.findall(r"(?i)\bwarning\b", cleaned))
+    suggestion = len(re.findall(r"(?i)\bsuggestion\b", cleaned))
 
     # claude-review (Claude Sonnet 4.6) header format
     high += len(re.findall(r"###\s*Bug:", text))
@@ -113,8 +120,13 @@ def fetch_reviews(repo: str, pr: str) -> ReviewSummary:
     # 2. Issue comments (Claude Review workflow, bot comments)
     raw_issue = gh_api_list(f"repos/{repo}/issues/{pr}/comments")
     review_keywords = [
-        "claude-review", "critical", "warning", "suggestion",
-        "pr review", "code review", "lgtm",
+        "claude-review",
+        "critical",
+        "warning",
+        "suggestion",
+        "pr review",
+        "code review",
+        "lgtm",
     ]
     bot_comments: list[dict] = []
     human_review_comments: list[dict] = []
@@ -195,9 +207,7 @@ def format_output(repo: str, pr: str, summary: ReviewSummary) -> str:
         lines.append("")
 
     if not summary.has_claude_review:
-        lines.append(
-            "Claude Review (GitHub Actions bot) のコメントが見つかりません。"
-        )
+        lines.append("Claude Review (GitHub Actions bot) のコメントが見つかりません。")
         lines.append(
             "  手動レビューコメントのみ。claude-review workflowが未実行の可能性。"
         )
@@ -225,9 +235,7 @@ def format_output(repo: str, pr: str, summary: ReviewSummary) -> str:
         lines.append("次のアクション:")
         lines.append("  1. 上記CRITICAL/HIGH指摘を全て修正")
         lines.append("  2. 修正push後、再度 gh pr checks で確認")
-        lines.append(
-            f"  3. 全コメント再確認: gh api repos/{repo}/pulls/{pr}/comments"
-        )
+        lines.append(f"  3. 全コメント再確認: gh api repos/{repo}/pulls/{pr}/comments")
     else:
         lines.append("CRITICAL/HIGH指摘なし。MEDIUM以下はfollow-up可。")
 
@@ -247,7 +255,9 @@ def main() -> None:
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if r.returncode == 0:
             state_dir = r.stdout.strip() + "/.claude/state"
@@ -255,9 +265,11 @@ def main() -> None:
         pass
     if not state_dir:
         import os
+
         state_dir = os.path.expanduser("~/.claude/state")
 
     import os
+
     os.makedirs(state_dir, exist_ok=True)
     pending_file = os.path.join(state_dir, "pending-review-comments.json")
 

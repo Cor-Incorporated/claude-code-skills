@@ -25,7 +25,7 @@ case "$FILE_PATH" in
     ;;
 esac
 
-cat <<'MSG'
+cat >&2 <<'MSG'
 
 ENDPOINT DATA FLOW CHECK REQUIRED
 Before reporting this endpoint as "fixed":

@@ -557,8 +557,16 @@ print('|'.join(skipped) if skipped else '')
 " 2>/dev/null || echo "")
 
   if [[ -n "$UNVERIFIED" ]]; then
-    echo '{"decision":"block","reason":"[BLOCKED] 未検証PRが存在します。CI green + レビュー LGTM を確認してください。\n'"$(echo "$UNVERIFIED" | tr '|' '\n' | sed 's/^/  - /')"'\n\n解除方法:\n  1. gh pr checks <PR番号> で全グリーン確認\n  2. code-reviewer + Codex CLI レビュー実行\n  3. bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY <PR番号>"}'
-    exit 0
+    cat >&2 <<MSG
+[BLOCKED] 未検証PRが存在します。CI green + レビュー LGTM を確認してください。
+$(echo "$UNVERIFIED" | tr '|' '\n' | sed 's/^/  - /')
+
+解除方法:
+  1. gh pr checks <PR番号> で全グリーン確認
+  2. code-reviewer + Codex CLI レビュー実行
+  3. bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY <PR番号>
+MSG
+    exit 2
   fi
   if [[ -n "$SKIPPED_UNVERIFIED" ]]; then
     echo "[stop-gate] CI green 未達の未検証PRは停止ブロック対象外としてスキップしました:" >&2
