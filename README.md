@@ -4,7 +4,7 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 27 custom skills, 40 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 27 custom skills, 43 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ Restart Claude Code after installation.
 claude-code-skills/
 ├── skills/           # 27 custom skill definitions (SKILL.md + scripts + references)
 ├── rules/            # 5 global rule files (coding-style, git-workflow, quality, testing, delegation)
-├── hooks/            # 40 hook scripts (quality gates, safety guards, workflow enforcement)
+├── hooks/            # 43 hook scripts (quality gates, safety guards, workflow enforcement)
 ├── scripts/          # 5 utility scripts (Codex orchestration, PR review, context monitoring)
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
@@ -67,7 +67,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (custom skills + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 40 hook scripts
+  code-reviewer, review-loop, e2e, bugfix + 43 hook scripts
 
 Reflect (gstack)
   /retro
@@ -199,12 +199,10 @@ PR Ready to Merge?
 ├─ Gate 2: Review After Latest Push? ──── block-merge-without-review.sh
 │  └─ review.submittedAt > last push timestamp (stale reviews rejected)
 │
-├─ Gate 3: Claude Review LGTM? ────────── pr-merge-claude-review-gate.sh
-│  ├─ Sub-gate 0: CI checks completed (not still running)
-│  ├─ Sub-gate 1: claude-review label or comment exists
-│  ├─ Sub-gate 2: No unresolved CRITICAL/HIGH findings
-│  ├─ Sub-gate 3: Review is newer than latest push
-│  └─ Sub-gate 4: All review comments have been read
+├─ Gate 3: Review Verified? ───────────── pr-ci-review-gate.sh (LIGHT tier 3-pass OR)
+│  ├─ Pass A: code-reviewer agent completed (review-status.json)
+│  ├─ Pass B: No CRITICAL/HIGH findings (pending-review-comments.json)
+│  └─ Pass C: Manual verification (pr-review-lock.json verified=true)
 │
 ├─ Gate 4: Unresolved Comments? ────────── enforce-review-reading.sh
 │  └─ All CRITICAL/HIGH review findings must be addressed
@@ -254,7 +252,7 @@ Merged or closed PRs are automatically cleaned from the lock state:
 | **Post Merge** | `post-merge-close-issues.sh` | Auto-close linked issues |
 | **Session Stop** | `pr-ci-review-gate.sh` (STOP) | Warn about unverified PRs |
 
-## Hook System (40 Scripts)
+## Hook System (43 Scripts)
 
 ### Quality Gates (Pre-merge)
 - `block-merge-without-ci.sh` — Block merge unless all CI checks green
@@ -262,6 +260,8 @@ Merged or closed PRs are automatically cleaned from the lock state:
 - `pr-ci-review-gate.sh` — 6-mode gate (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) with tiered review
 - `pr-merge-claude-review-gate.sh` — 5-sub-gate Claude review enforcement
 - `pr-guard.sh` — Base branch, issue ref, conflict checks
+- `task-completion-gate.sh` — Block premature task completion (CI pending or CRITICAL/HIGH findings)
+- `stop-test-gate.sh` — Run project tests before session end (Stop hook with stop_hook_active guard)
 
 ### Safety Guards
 - `protect-branches.sh` — Prevent deletion of protected branches
@@ -302,6 +302,7 @@ Merged or closed PRs are automatically cleaned from the lock state:
 - `post-merge-close-issues.sh` — Auto-close linked issues after merge
 - `post-deploy-verify.sh` — Post-deployment verification checks
 - `workflow-sync-guard.sh` — Sync workflow state after push
+- `tool-failure-recovery.sh` — Error recovery guidance on tool failure (PostToolUseFailure)
 
 ## Hook Matcher Syntax
 

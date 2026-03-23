@@ -9,7 +9,7 @@
 # Exit 0 = allow, Exit 2 = block
 set -uo pipefail
 export GH_NO_UPDATE_NOTIFIER=1
-unset GH_FORCE_TTY 2>/dev/null || true
+export GH_FORCE_TTY=0
 
 [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] && exit 0
 [[ -n "${CLAUDE_AGENT_ID:-}" ]] && exit 0
@@ -38,7 +38,10 @@ if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+checks'; then
   [[ -z "$REPO" ]] && exit 0
 
   # Fetch and save via Python helper (stdin=/dev/null to avoid pipe issues)
-  python3 ~/.claude/hooks/inject-claude-review-helper.py "$REPO" "$PR_NUMBER" </dev/null >/dev/null 2>&1
+  # Issue #66 Fix #4: Do not suppress stderr — surface errors instead of silent failure
+  python3 ~/.claude/hooks/inject-claude-review-helper.py "$REPO" "$PR_NUMBER" </dev/null >/dev/null 2>"$STATE_DIR/inject-review-errors.log" || {
+    echo "[inject-claude-review] Python helper failed. See $STATE_DIR/inject-review-errors.log" >&2
+  }
 
   # Read back the saved state and output as reminder
   if [[ -f "$PENDING_FILE" ]]; then

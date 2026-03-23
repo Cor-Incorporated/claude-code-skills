@@ -492,6 +492,19 @@
         ]
       }
     ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|Edit|Write|Grep|WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/tool-failure-recovery.sh",
+            "timeout": 5,
+            "statusMessage": "Analyzing tool failure..."
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -504,8 +517,20 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/stop-test-gate.sh",
-            "timeout": 90,
-            "statusMessage": "Running test gate before session end..."
+            "timeout": 75,
+            "statusMessage": "Running project tests before stop..."
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/task-completion-gate.sh",
+            "timeout": 30,
+            "statusMessage": "Verifying CI and review status..."
           }
         ]
       }

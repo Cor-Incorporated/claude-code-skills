@@ -1,13 +1,43 @@
 #!/bin/bash
 # stop-test-gate.sh — Stop hook: run project tests before session end
 # ====================================================================
-# Detects the project's test framework and runs tests with a 60s timeout.
-# On failure, returns JSON hookSpecificOutput with truncated test output.
-# On success or no tests found, exits 0 silently.
+# Issue #66 Fix #3: stop_hook_active check added (official docs compliance)
+#
+# Ref: https://code.claude.com/docs/en/hooks
+#   Event: Stop (no matcher support)
+#   stdin: { stop_hook_active: bool, last_assistant_message: string }
+#   Exit 2 = prevent Claude from stopping (continue working)
+#   Exit 0 = allow stop
+#
+# Logic:
+#   1. Check stop_hook_active to prevent infinite loops
+#   2. Skip if dirty tree (active error recovery — Issue #58)
+#   3. Detect project test framework
+#   4. Run tests with 60s timeout
+#   5. On failure, block stop and show test output
 # ====================================================================
 
 set -uo pipefail
 # Note: -e is intentionally omitted because timeout returns non-zero
+
+# =========================================================================
+# Read stdin and check stop_hook_active (MUST be first check)
+# Ref: "To prevent Claude Code from running indefinitely,
+#       check stop_hook_active or analyze the transcript."
+# =========================================================================
+input=""
+if [[ ! -t 0 ]]; then
+  input=$(cat 2>/dev/null || echo "")
+fi
+
+if [[ -n "$input" ]] && command -v jq &>/dev/null; then
+  _stop_active=$(echo "$input" | jq -r '.stop_hook_active // false' 2>/dev/null || echo "false")
+  if [[ "$_stop_active" == "true" ]]; then
+    # Already continuing from a previous Stop hook — don't block again
+    echo "[stop-test-gate] stop_hook_active=true: 2回目のStop。テストスキップ。" >&2
+    exit 0
+  fi
+fi
 
 # =========================================================================
 # Issue #58: Skip gate during active error recovery
@@ -38,68 +68,81 @@ fi
 TEST_CMD=""
 
 if [ -f "$PROJECT_DIR/package.json" ] && command -v jq >/dev/null 2>&1 && jq -e '.scripts.test' "$PROJECT_DIR/package.json" >/dev/null 2>&1; then
-  TEST_CMD="npm test"
-elif [ -f "$PROJECT_DIR/pytest.ini" ] || [ -f "$PROJECT_DIR/pyproject.toml" ]; then
-  TEST_CMD="python -m pytest --tb=short -q"
+  # Node.js project with test script
+  if [ -f "$PROJECT_DIR/pnpm-lock.yaml" ]; then
+    TEST_CMD="cd $PROJECT_DIR && pnpm test"
+  elif [ -f "$PROJECT_DIR/yarn.lock" ]; then
+    TEST_CMD="cd $PROJECT_DIR && yarn test"
+  else
+    TEST_CMD="cd $PROJECT_DIR && npm test"
+  fi
+elif [ -f "$PROJECT_DIR/pyproject.toml" ] || [ -f "$PROJECT_DIR/setup.py" ]; then
+  if command -v pytest >/dev/null 2>&1; then
+    TEST_CMD="cd $PROJECT_DIR && pytest --tb=short -q"
+  elif [ -d "$PROJECT_DIR/tests" ]; then
+    TEST_CMD="cd $PROJECT_DIR && python3 -m pytest --tb=short -q"
+  fi
 elif [ -f "$PROJECT_DIR/go.mod" ]; then
-  TEST_CMD="go test ./... -short"
+  TEST_CMD="cd $PROJECT_DIR && go test ./... -count=1 -short"
 elif [ -f "$PROJECT_DIR/Cargo.toml" ]; then
-  TEST_CMD="cargo test"
-elif [ -f "$PROJECT_DIR/test/cli.bats" ]; then
-  TEST_CMD="bats test/"
-else
-  # No test framework detected — silent pass
+  TEST_CMD="cd $PROJECT_DIR && cargo test"
+elif [ -f "$PROJECT_DIR/Makefile" ] && grep -q '^test:' "$PROJECT_DIR/Makefile"; then
+  TEST_CMD="cd $PROJECT_DIR && make test"
+fi
+
+# No test framework detected — allow stop
+if [ -z "$TEST_CMD" ]; then
   exit 0
 fi
 
 # =========================================================================
-# Run tests with 60s timeout (macOS compatible)
+# Run tests with timeout (60 seconds)
 # =========================================================================
-# HIGH-1 fix: macOS has no GNU timeout. Fall back to gtimeout or perl.
 TIMEOUT_CMD=""
 if command -v timeout >/dev/null 2>&1; then
-  TIMEOUT_CMD="timeout"
+  TIMEOUT_CMD="timeout 60"
 elif command -v gtimeout >/dev/null 2>&1; then
-  TIMEOUT_CMD="gtimeout"
+  # macOS with coreutils installed via Homebrew
+  TIMEOUT_CMD="gtimeout 60"
 fi
 
-# HIGH-2 fix: Capture exit code directly instead of PIPESTATUS
-EXIT_CODE=0
-if [[ -n "$TIMEOUT_CMD" ]]; then
-  TEST_OUTPUT=$(cd "$PROJECT_DIR" && $TIMEOUT_CMD 60 $TEST_CMD 2>&1) || EXIT_CODE=$?
+TEST_OUTPUT=""
+TEST_EXIT=0
+if [ -n "$TIMEOUT_CMD" ]; then
+  TEST_OUTPUT=$($TIMEOUT_CMD bash -c "$TEST_CMD" 2>&1) || TEST_EXIT=$?
 else
-  # No timeout available — run with perl alarm as fallback
-  TEST_OUTPUT=$(cd "$PROJECT_DIR" && perl -e 'alarm 60; exec @ARGV' $TEST_CMD 2>&1) || EXIT_CODE=$?
+  # macOS fallback: use bash with SIGALRM via background process
+  TEST_OUTPUT=$(bash -c "$TEST_CMD" 2>&1 &
+    PID=$!
+    (sleep 60 && kill "$PID" 2>/dev/null) &
+    TIMER_PID=$!
+    wait "$PID" 2>/dev/null
+    EXIT_CODE=$?
+    kill "$TIMER_PID" 2>/dev/null 2>&1 || true
+    exit "$EXIT_CODE"
+  ) || TEST_EXIT=$?
 fi
 
-# timeout(1) returns 124 on timeout
-if [[ "$EXIT_CODE" -eq 124 ]]; then
-  TRUNCATED=$(printf '%s' "$TEST_OUTPUT" | head -30)
-  cat <<EOF
+# Timeout exit code (124 for timeout, 137 for SIGKILL)
+if [[ "$TEST_EXIT" -eq 124 ]] || [[ "$TEST_EXIT" -eq 137 ]]; then
+  echo "[stop-test-gate] テストがタイムアウト(60秒)。セッション終了を許可。" >&2
+  exit 0
+fi
+
+# Tests passed
+if [[ "$TEST_EXIT" -eq 0 ]]; then
+  exit 0
+fi
+
+# Tests failed — block stop and show output
+TRUNCATED_OUTPUT=$(echo "$TEST_OUTPUT" | tail -30)
+
+# Output as hookSpecificOutput JSON for additionalContext
+# Ref: Stop hook can output JSON with decision/reason on exit 0
+cat <<STOP_JSON
 {
-  "hookSpecificOutput": {
-    "hookEventName": "Stop",
-    "message": "Tests timed out after 60s. Review test suite performance.",
-    "testOutput": $(printf '%s' "$TRUNCATED" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""')
-  }
+  "decision": "block",
+  "reason": "[stop-test-gate] テスト失敗 (exit=$TEST_EXIT)。修正してください。\n\n--- テスト出力 (最後の30行) ---\n$(echo "$TRUNCATED_OUTPUT" | jq -Rs '.' | sed 's/^"//;s/"$//')\n\nコマンド: $TEST_CMD"
 }
-EOF
-  exit 2
-fi
-
-if [[ "$EXIT_CODE" -ne 0 ]]; then
-  TRUNCATED=$(printf '%s' "$TEST_OUTPUT" | head -30)
-  cat <<EOF
-{
-  "hookSpecificOutput": {
-    "hookEventName": "Stop",
-    "message": "Tests failed. Fix failing tests before ending session.",
-    "testOutput": $(printf '%s' "$TRUNCATED" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""')
-  }
-}
-EOF
-  exit 2
-fi
-
-# Tests passed — silent success
+STOP_JSON
 exit 0

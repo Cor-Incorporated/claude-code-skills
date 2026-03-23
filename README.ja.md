@@ -2,7 +2,7 @@
 
 [Claude Code](https://claude.com/claude-code)（Anthropic 公式 CLI）のためのスキル・ルール・フック集です。
 
-27 のカスタムスキル、40 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
+27 のカスタムスキル、43 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
 
 [English](README.md) | **日本語**
 
@@ -23,7 +23,7 @@ chmod +x setup.sh
 claude-code-skills/
 ├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 5 グローバルルール (コーディング規約, Git, 品質, テスト, 委任)
-├── hooks/            # 40 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
+├── hooks/            # 43 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
 ├── scripts/          # 5 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
@@ -47,7 +47,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (カスタムスキル + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 40 hook スクリプト
+  code-reviewer, review-loop, e2e, bugfix + 43 hook スクリプト
 
 Reflect (gstack)
   /retro
@@ -179,12 +179,10 @@ PR マージ可能？
 ├─ Gate 2: 最新 push 後のレビュー？ ──────── block-merge-without-review.sh
 │  └─ review.submittedAt > 最終 push 時刻（古いレビューは拒否）
 │
-├─ Gate 3: Claude レビュー LGTM？ ─────────── pr-merge-claude-review-gate.sh
-│  ├─ Sub-gate 0: CI チェック完了（実行中でない）
-│  ├─ Sub-gate 1: claude-review ラベルまたはコメントが存在
-│  ├─ Sub-gate 2: 未解決の CRITICAL/HIGH 指摘なし
-│  ├─ Sub-gate 3: レビューが最新 push より新しい
-│  └─ Sub-gate 4: 全レビューコメントが読了済み
+├─ Gate 3: レビュー検証済み？ ───────────── pr-ci-review-gate.sh (LIGHT tier 3-pass OR)
+│  ├─ Pass A: code-reviewer エージェント完了 (review-status.json)
+│  ├─ Pass B: CRITICAL/HIGH 指摘なし (pending-review-comments.json)
+│  └─ Pass C: 手動検証 (pr-review-lock.json verified=true)
 │
 ├─ Gate 4: 未解決コメント？ ──────────────── enforce-review-reading.sh
 │  └─ 全 CRITICAL/HIGH レビュー指摘が対処済み
@@ -234,7 +232,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 | **マージ後** | `post-merge-close-issues.sh` | リンクされた Issue を自動クローズ |
 | **セッション終了** | `pr-ci-review-gate.sh` (STOP) | 未検証 PR について警告 |
 
-## Hook システム（40 スクリプト）
+## Hook システム（43 スクリプト）
 
 ### 品質ゲート（マージ前）
 - `block-merge-without-ci.sh` — CI 全チェックグリーンなしでマージをブロック
@@ -242,6 +240,8 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - `pr-ci-review-gate.sh` — 6 モードゲート (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) Tier 制レビュー対応
 - `pr-merge-claude-review-gate.sh` — 5 サブゲート Claude レビュー強制
 - `pr-guard.sh` — ベースブランチ、Issue 参照、コンフリクトチェック
+- `task-completion-gate.sh` — 早期タスク完了をブロック（CI pending または CRITICAL/HIGH 指摘あり）
+- `stop-test-gate.sh` — セッション終了前にプロジェクトテスト実行（Stop hook、stop_hook_active ガード付き）
 
 ### 安全ガード
 - `protect-branches.sh` — 保護ブランチの削除防止
@@ -282,6 +282,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - `post-merge-close-issues.sh` — マージ後にリンクされた Issue を自動クローズ
 - `post-deploy-verify.sh` — デプロイ後の検証チェック
 - `workflow-sync-guard.sh` — push 後のワークフロー状態同期
+- `tool-failure-recovery.sh` — ツール失敗時のエラー回復ガイダンス（PostToolUseFailure）
 
 ## Hook Matcher 構文
 

@@ -325,49 +325,78 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
     fi
   fi
 
-  # Classify review tier for this branch
-  TIER=$(classify_review_tier "$BRANCH")
+  # =========================================================================
+  # Tier detection: EXEMPT (docs/chore/ci), LIGHT (default)
+  # Ref: Issue #66 — "レビューゼロマージ不可" と "手動マージ不要" の両立
+  # =========================================================================
+  case "$BRANCH" in
+    docs/*|chore/*|ci/*)
+      echo "✅ PR #${PR_NUMBER}: EXEMPT tier ($BRANCH). CIグリーンのみで許可。" >&2
+      exit 0 ;;
+  esac
 
-  # Tier 3 (EXEMPT): no review required — CI green is sufficient
-  if [[ "$TIER" == "EXEMPT" ]]; then
-    echo "✅ PR #${PR_NUMBER}: EXEMPT tier (branch=$BRANCH) — CI green確認済み。マージ許可。" >&2
-    exit 0
-  fi
+  # =========================================================================
+  # LIGHT tier: 3パスOR判定
+  # Issue #66 + Codex セカンドオピニオン: "全merge hookが同じ証跡を受理すべき"
+  # いずれか1つ合格 = マージ許可。全不合格 = ブロック。
+  #
+  # Pass A: review-status.json に code_review: true (code-reviewer agent 完了)
+  # Pass B: pending-review-comments.json の CRITICAL=0 AND HIGH=0
+  # Pass C: pr-review-lock.json に verified: true (手動/自動検証済み)
+  # =========================================================================
+  PASS_A="no"
+  PASS_B="no"
+  PASS_C="no"
 
-  # Check review status
+  # --- Pass A: code-reviewer agent completion ---
   CODE_REVIEW=$(read_review "$BRANCH" "code_review")
-  CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
+  [[ "$CODE_REVIEW" == "yes" ]] && PASS_A="yes"
 
-  MISSING=""
-  [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
-  # Only FULL tier requires Codex CLI; LIGHT does not
-  if [[ "$TIER" == "FULL" ]]; then
-    [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
-  fi
-
-  if [[ -n "$MISSING" ]]; then
-    MISSING="${MISSING%, }"
-
-    # LIGHT tier: warn only. Safety is enforced by block-merge-without-review.sh
-    # (CRITICAL/HIGH/BUG grep). Blocking LIGHT tier creates circular dependencies.
-    if [[ "$TIER" == "LIGHT" ]]; then
-      echo "⚠️ [WARNING] PR #${PR_NUMBER}: レビュー未完了 ($MISSING) — LIGHT tierのためマージ許可。" >&2
-    else
-      echo "" >&2
-      echo "🚫 [BLOCKED] PR #${PR_NUMBER} のマージを拒否。" >&2
-      echo "   ブランチ: $BRANCH (tier=$TIER)" >&2
-      echo "   未完了: $MISSING" >&2
-      echo "" >&2
-      echo "   解決方法:" >&2
-      echo "   1. レビュー実行後に再試行" >&2
-      echo "   2. bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER}" >&2
-      echo "" >&2
-      exit 2
+  # --- Pass B: No CRITICAL/HIGH in review comments ---
+  PENDING_FILE="$STATE_DIR/pending-review-comments.json"
+  if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
+    _pr_in_file=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+    # Validate scope: pending-review-comments must match current PR
+    if [[ "$_pr_in_file" == "$PR_NUMBER" ]] || [[ -z "$_pr_in_file" ]]; then
+      _critical=$(jq -r '.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+      _high=$(jq -r '.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+      _total=$(jq -r '.total // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+      if [[ "$_critical" -eq 0 ]] && [[ "$_high" -eq 0 ]] && [[ "$_total" -gt 0 ]]; then
+        PASS_B="yes"
+      fi
     fi
   fi
 
-  echo "✅ PR #${PR_NUMBER}: CI green + レビュー完了 (tier=$TIER)。マージ許可。" >&2
-  exit 0
+  # --- Pass C: Manual verification via pr-review-lock.json ---
+  if [[ -f "$LOCK_STATE" ]] && command -v jq &>/dev/null; then
+    _verified=$(jq -r --arg pr "$PR_NUMBER" '.[$pr].verified // false' "$LOCK_STATE" 2>/dev/null || echo "false")
+    [[ "$_verified" == "true" ]] && PASS_C="yes"
+  fi
+
+  # --- 3パスOR判定 ---
+  if [[ "$PASS_A" == "yes" ]] || [[ "$PASS_B" == "yes" ]] || [[ "$PASS_C" == "yes" ]]; then
+    PASSED=""
+    [[ "$PASS_A" == "yes" ]] && PASSED="${PASSED}code-reviewer✓ "
+    [[ "$PASS_B" == "yes" ]] && PASSED="${PASSED}C/H=0✓ "
+    [[ "$PASS_C" == "yes" ]] && PASSED="${PASSED}verified✓ "
+    echo "✅ PR #${PR_NUMBER}: LIGHT tier 3パスOR合格 (${PASSED}). マージ許可。" >&2
+    exit 0
+  fi
+
+  echo "" >&2
+  echo "🚫 [BLOCKED] PR #${PR_NUMBER} のマージを拒否。レビュー未完了。" >&2
+  echo "   ブランチ: $BRANCH" >&2
+  echo "   LIGHT tier — 以下のいずれか1つが必要:" >&2
+  echo "     A. code-reviewer エージェント完了 [${PASS_A}]" >&2
+  echo "     B. CRITICAL/HIGH指摘ゼロ (レビュー実行済み) [${PASS_B}]" >&2
+  echo "     C. 手動検証済み (verify-pr-review) [${PASS_C}]" >&2
+  echo "" >&2
+  echo "   解決方法:" >&2
+  echo "     1. Agent tool (subagent_type=code-reviewer) → Pass A" >&2
+  echo "     2. gh pr checks + レビューコメント全対応 → Pass B" >&2
+  echo "     3. bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER} → Pass C" >&2
+  echo "" >&2
+  exit 2
 fi
 
 # =========================================================================
@@ -460,6 +489,21 @@ fi
 # MODE: STOP — Block session stop if unverified PRs exist
 # =========================================================================
 if [[ "$GATE_MODE" == "STOP" ]]; then
+  # =========================================================================
+  # Issue #66 Fix #3: stop_hook_active チェック (公式ドキュメント準拠)
+  # Ref: https://code.claude.com/docs/en/hooks
+  #   "To prevent Claude Code from running indefinitely,
+  #    check stop_hook_active or analyze the transcript."
+  # stop_hook_active=true → 既に前回のStop hookで継続中 → 無限ループ防止
+  # =========================================================================
+  if [[ -n "$input" ]] && command -v jq &>/dev/null; then
+    _stop_active=$(echo "$input" | jq -r '.stop_hook_active // false' 2>/dev/null || echo "false")
+    if [[ "$_stop_active" == "true" ]]; then
+      echo "[stop-gate] stop_hook_active=true: 2回目のStop hook。ログ出力のみ。" >&2
+      exit 0
+    fi
+  fi
+
   # Issue #58: Skip gate during active error recovery
   # Dirty working tree = active work in progress → don't block session end
   if ! git diff --quiet HEAD 2>/dev/null; then
@@ -493,7 +537,7 @@ with open(lock_path, 'r+') as f:
   UNVERIFIED=$(_LOCK="$LOCK_STATE" python3 -c "
 import json, os
 with open(os.environ['_LOCK']) as f: s = json.load(f)
-unverified = [f'PR #{pr} ({d.get(\"branch\",\"?\")})' for pr, d in s.items()
+unverified = [f'PR #{pr} ({d.get("branch","?")})'  for pr, d in s.items()
               if isinstance(d, dict) and not d.get('verified', False)]
 print('|'.join(unverified) if unverified else '')
 " 2>/dev/null || echo "")
