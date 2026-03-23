@@ -9,24 +9,19 @@ set -euo pipefail
 
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
-CMD_FIRST_LINE=$(echo "$CMD" | head -1)
 
 # 保護対象のファイル名パターン
 PROTECTED="review-status\.json|pr-review-lock\.json|pr-review-read\.json|context-budget\.json|factcheck-status\.json|rebase-session\.json"
 
 # Bashコマンドが保護対象ファイルに書き込むか検出
-if echo "$CMD_FIRST_LINE" | grep -qE "$PROTECTED"; then
-  # 読み取り操作（cat, jq -r で読むだけ）は許可
-  if echo "$CMD_FIRST_LINE" | grep -qE '^\s*(cat|jq\s+-r|python3\s+-c.*json\.load|less|head|tail)\s'; then
-    exit 0
-  fi
+if echo "$CMD" | grep -qE "$PROTECTED"; then
   # 書き込みパターンを検出
   if echo "$CMD" | grep -qE '(>|json\.dump|echo.*>|tee|sed\s+-i|write_text|open.*\"w\")'; then
     cat >&2 <<ERRMSG
 
 ⛔ [BLOCKED] Bash経由の状態ファイル改ざンを検出
 
-コマンド: $(echo "$CMD_FIRST_LINE" | head -c 120)
+コマンド: $(echo "$CMD" | head -c 120)
 理由: ゲート状態ファイルへの直接書き込みは禁止されています。
 
 正しい方法:
@@ -37,6 +32,10 @@ if echo "$CMD_FIRST_LINE" | grep -qE "$PROTECTED"; then
 
 ERRMSG
     exit 2
+  fi
+  # 読み取り操作（cat, jq -r で読むだけ）は許可
+  if echo "$CMD" | grep -qE '^\s*(cat|jq\s+-r|python3\s+-c.*json\.load|less|head|tail)\s'; then
+    exit 0
   fi
 fi
 

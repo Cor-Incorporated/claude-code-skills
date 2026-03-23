@@ -80,7 +80,7 @@ if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+create'; then
   # (GitHub defaults to repo's default branch, which is often main)
   if [[ -z "$pr_base" ]]; then
     # Get the repo's default branch
-    repo_default=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo "")
+    repo_default=$(timeout 8 gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo "")
     if [[ "$repo_default" == "main" ]] || [[ "$repo_default" == "master" ]]; then
       echo "" >&2
       echo "[BLOCKED] enforce-develop-base: --baseが未指定です（デフォルト: ${repo_default}）。" >&2

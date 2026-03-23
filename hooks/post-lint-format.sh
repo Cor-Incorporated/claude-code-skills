@@ -133,3 +133,5 @@ if [[ -n "$diagnostics" ]] \
     }
   }'
 fi
+
+exit 0

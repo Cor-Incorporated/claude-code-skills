@@ -106,8 +106,9 @@ fi
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Update state and check thresholds — only for SOURCE CODE reads
+[[ ! -f "$STATE_FILE" ]] && echo '{}' > "$STATE_FILE"
 _STATE="$STATE_FILE" _FILE="$FILE_PATH" _NOW="$NOW" python3 << PYEOF
-import json, sys, os, re
+import json, sys, os, re, fcntl
 
 state_file = os.environ['_STATE']
 file_path = os.environ['_FILE']
@@ -119,21 +120,24 @@ ext = os.path.splitext(file_path)[1].lower()
 if ext not in source_exts:
     sys.exit(0)
 
-with open(state_file) as f:
+with open(state_file, "r+") as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
     state = json.load(f)
 
-if not state.get("started_at"):
-    state["started_at"] = now
+    if not state.get("started_at"):
+        state["started_at"] = now
 
-# Track unique file reads only
-if file_path and file_path not in state.get("read_files", []):
-    state.setdefault("read_files", []).append(file_path)
-    state["read_count"] = len(state["read_files"])
+    # Track unique file reads only
+    if file_path and file_path not in state.get("read_files", []):
+        state.setdefault("read_files", []).append(file_path)
+        state["read_count"] = len(state["read_files"])
 
-count = state["read_count"]
+    count = state.get("read_count", 0)
 
-with open(state_file, "w") as f:
+    f.seek(0)
+    f.truncate()
     json.dump(state, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 
 # Threshold warnings
 if count == 3:

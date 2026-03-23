@@ -118,8 +118,8 @@ print(s.get(os.environ['_PR'], {}).get('fallback_review_done', False))
     echo "" >&2
     echo "  B) code-reviewer エージェントで代替レビューを実行:" >&2
     echo "     Agent(subagent_type='code-reviewer', prompt='Review PR #${PR_NUMBER} ...')" >&2
-    echo "     完了後に既読マーク:" >&2
-    echo "     _REVIEW_FILE='$REVIEW_FILE' _PR='$PR_NUMBER' python3 -c \"import json, os; p=os.environ['_REVIEW_FILE']; s=json.load(open(p)); d=s.setdefault(os.environ['_PR'],{}); d['fallback_review_done']=True; d['review_read']=True; json.dump(s,open(p,'w'),indent=2)\"" >&2
+    echo "     完了後、必要に応じて VERIFY を実行してから再試行してください:" >&2
+    echo "     bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER}" >&2
     echo "" >&2
     exit 2
   fi
@@ -142,8 +142,8 @@ if [[ "$REVIEW_READ" != "True" ]]; then
   echo "  必ず以下の手順を踏んでください:" >&2
   echo "  1. レビューを読む:" >&2
   echo "     gh api repos/${REPO}/issues/${PR_NUMBER}/comments --jq '.[].body'" >&2
-  echo "  2. 既読マーク:" >&2
-  echo "     _REVIEW_FILE='$REVIEW_FILE' _PR='$PR_NUMBER' python3 -c \"import json, os; p=os.environ['_REVIEW_FILE']; s=json.load(open(p)); s.setdefault(os.environ['_PR'],{})['review_read']=True; json.dump(s,open(p,'w'),indent=2)\"" >&2
+  echo "  2. code-reviewer を実行済みなら、記録処理完了後に再試行:" >&2
+  echo "     bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER}" >&2
   echo "" >&2
   exit 2
 fi
@@ -192,8 +192,9 @@ print(s.get(os.environ['_PR'], {}).get('critical_acknowledged', False))
     echo "" >&2
     echo "[BLOCKED] PR #${PR_NUMBER}: CRITICAL 指摘が未対応です。" >&2
     echo "" >&2
-    echo "  修正 push → レビュー再読 → acknowledge:" >&2
-    echo "  _REVIEW_FILE='$REVIEW_FILE' _PR='$PR_NUMBER' python3 -c \"import json, os; p=os.environ['_REVIEW_FILE']; s=json.load(open(p)); s.setdefault(os.environ['_PR'],{})['critical_acknowledged']=True; json.dump(s,open(p,'w'),indent=2)\"" >&2
+    echo "  修正を push し、レビューを再確認したうえで正規フローを完了してください。" >&2
+    echo "  code-reviewer の再実行、または必要な確認後に VERIFY を再実行してください:" >&2
+    echo "  bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER}" >&2
     echo "" >&2
     exit 2
   fi
