@@ -21,6 +21,8 @@
 # =========================================================================
 
 set -uo pipefail
+export GH_FORCE_TTY=0
+export GH_NO_UPDATE_NOTIFIER=1
 
 # Read stdin
 input=""
@@ -39,12 +41,12 @@ fi
 # Skip non-PR tasks: only gate tasks related to PR/merge/deploy
 # This prevents blocking every single task completion
 if [[ -n "$TASK_SUBJECT" ]]; then
-  case "$TASK_SUBJECT" in
-    *PR*|*pr*|*merge*|*Merge*|*deploy*|*Deploy*|*ship*|*Ship*|*release*|*Release*)
+  _subject_lower=$(echo "$TASK_SUBJECT" | tr '[:upper:]' '[:lower:]')
+  case "$_subject_lower" in
+    *pr*|*merge*|*deploy*|*ship*|*release*|*"pull request"*)
       : # PR-related task — proceed with checks
       ;;
     *)
-      # Not PR-related — allow completion without checks
       exit 0
       ;;
   esac

@@ -35,6 +35,12 @@ REVIEW_STATE="$STATE_DIR/review-status.json"
 LOCK_STATE="$STATE_DIR/pr-review-lock.json"
 mkdir -p "$STATE_DIR"
 
+# Fail-closed: python3 is required for state file operations
+if ! command -v python3 &>/dev/null; then
+  echo "[pr-ci-review-gate] python3 not found. Blocking for safety." >&2
+  exit 2
+fi
+
 # DIAGNOSTIC: Log every invocation
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) INVOKED gate_mode=$GATE_MODE agent_depth=${CLAUDE_AGENT_DEPTH:-0} agent_id=${CLAUDE_AGENT_ID:-none}" >> "$STATE_DIR/pr-gate-diagnostic.log" 2>/dev/null
 [ ! -f "$REVIEW_STATE" ] && echo '{}' > "$REVIEW_STATE"
@@ -357,7 +363,7 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
   if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
     _pr_in_file=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
     # Validate scope: pending-review-comments must match current PR
-    if [[ "$_pr_in_file" == "$PR_NUMBER" ]] || [[ -z "$_pr_in_file" ]]; then
+    if [[ "$_pr_in_file" == "$PR_NUMBER" ]]; then
       _critical=$(jq -r '.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
       _high=$(jq -r '.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
       _total=$(jq -r '.total // 0' "$PENDING_FILE" 2>/dev/null || echo "0")

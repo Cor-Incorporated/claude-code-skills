@@ -280,7 +280,7 @@ def main() -> None:
 
     result = {
         "hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
+            "hookEventName": "PreToolUse",
             "additionalContext": output,
         }
     }

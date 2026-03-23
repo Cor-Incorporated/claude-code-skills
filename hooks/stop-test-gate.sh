@@ -111,16 +111,17 @@ TEST_EXIT=0
 if [ -n "$TIMEOUT_CMD" ]; then
   TEST_OUTPUT=$($TIMEOUT_CMD bash -c "$TEST_CMD" 2>&1) || TEST_EXIT=$?
 else
-  # macOS fallback: use bash with SIGALRM via background process
-  TEST_OUTPUT=$(bash -c "$TEST_CMD" 2>&1 &
-    PID=$!
-    (sleep 60 && kill "$PID" 2>/dev/null) &
-    TIMER_PID=$!
-    wait "$PID" 2>/dev/null
-    EXIT_CODE=$?
-    kill "$TIMER_PID" 2>/dev/null 2>&1 || true
-    exit "$EXIT_CODE"
-  ) || TEST_EXIT=$?
+  # macOS fallback: background process with timer
+  _tmp_out="/tmp/stop-test-output.$$"
+  bash -c "$TEST_CMD" > "$_tmp_out" 2>&1 &
+  _test_pid=$!
+  (sleep 60 && kill "$_test_pid" 2>/dev/null) &
+  _timer_pid=$!
+  wait "$_test_pid" 2>/dev/null
+  TEST_EXIT=$?
+  kill "$_timer_pid" 2>/dev/null; wait "$_timer_pid" 2>/dev/null || true
+  TEST_OUTPUT=$(cat "$_tmp_out" 2>/dev/null)
+  rm -f "$_tmp_out"
 fi
 
 # Timeout exit code (124 for timeout, 137 for SIGKILL)
@@ -137,12 +138,9 @@ fi
 # Tests failed — block stop and show output
 TRUNCATED_OUTPUT=$(echo "$TEST_OUTPUT" | tail -30)
 
-# Output as hookSpecificOutput JSON for additionalContext
-# Ref: Stop hook can output JSON with decision/reason on exit 0
-cat <<STOP_JSON
-{
-  "decision": "block",
-  "reason": "[stop-test-gate] テスト失敗 (exit=$TEST_EXIT)。修正してください。\n\n--- テスト出力 (最後の30行) ---\n$(echo "$TRUNCATED_OUTPUT" | jq -Rs '.' | sed 's/^"//;s/"$//')\n\nコマンド: $TEST_CMD"
-}
-STOP_JSON
-exit 0
+# Tests failed — block stop
+echo "[stop-test-gate] テスト失敗 (exit=$TEST_EXIT)。修正してください。" >&2
+echo "--- テスト出力 (最後の30行) ---" >&2
+echo "$TRUNCATED_OUTPUT" >&2
+echo "コマンド: $TEST_CMD" >&2
+exit 2

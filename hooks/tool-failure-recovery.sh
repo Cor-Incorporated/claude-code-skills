@@ -103,12 +103,14 @@ fi
 
 # Output additionalContext via hookSpecificOutput
 # Ref: PostToolUseFailure can inject additionalContext on exit 0
-cat <<RECOVERY_JSON
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PostToolUseFailure",
-    "additionalContext": "[recovery-guide] ${GUIDANCE}"
-  }
-}
+if command -v jq &>/dev/null; then
+  jq -n --arg ctx "[recovery-guide] ${GUIDANCE}" \
+    '{"hookSpecificOutput":{"hookEventName":"PostToolUseFailure","additionalContext":$ctx}}'
+else
+  # Fallback: sanitize for JSON
+  _safe=$(echo "$GUIDANCE" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  cat <<RECOVERY_JSON
+{"hookSpecificOutput":{"hookEventName":"PostToolUseFailure","additionalContext":"[recovery-guide] ${_safe}"}}
 RECOVERY_JSON
+fi
 exit 0
