@@ -6,7 +6,7 @@
 # Enforces the Dependency Rule: domain → ports/interfaces ← infrastructure
 #
 # Exit codes:
-#   0 = allow (outputs JSON unchanged)
+#   0 = allow
 #   2 = block (domain→infra import detected)
 # =============================================================================
 
