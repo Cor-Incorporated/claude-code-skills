@@ -18,7 +18,6 @@
       "mcp__plugin_context7_context7__query-docs",
       "mcp__brave-search__brave_web_search",
       "mcp__brave-search__brave_local_search",
-      "mcp__codex__codex",
       "Bash(openssl rand:*)",
       "Bash(source:*)",
       "Bash(curl:*)",
@@ -377,6 +376,15 @@
         ]
       },
       {
+        "matcher": "mcp__plugin_context7_context7__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Agent",
         "hooks": [
           {
@@ -492,6 +500,19 @@
         ]
       }
     ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|Edit|Write|Grep|WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/tool-failure-recovery.sh",
+            "timeout": 5,
+            "statusMessage": "Analyzing tool failure..."
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -504,8 +525,20 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/stop-test-gate.sh",
-            "timeout": 90,
-            "statusMessage": "Running test gate before session end..."
+            "timeout": 75,
+            "statusMessage": "Running project tests before stop..."
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/task-completion-gate.sh",
+            "timeout": 30,
+            "statusMessage": "Verifying CI and review status..."
           }
         ]
       }

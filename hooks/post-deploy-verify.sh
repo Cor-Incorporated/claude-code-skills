@@ -52,9 +52,23 @@ if $IS_DOCKER_PUSH; then
     IMAGE_NAME=$(echo "$command" | grep -oE 'docker push [^ ]+' | awk '{print $3}' || echo "unknown")
 fi
 
-# Output additional context as JSON
-cat <<CONTEXT_EOF
+# Output additional context as JSON (hookSpecificOutput format)
+CONTEXT_MSG="⚠️ DEPLOYMENT DETECTED — 検証必須 ⚠️\n\nデプロイコマンドが実行されました。完了報告の前に以下を必ず実行してください:\n\n## 必須チェックリスト\n\n### フロントエンド (SPA/Frontend) デプロイの場合:\n1. \`./scripts/verify-spa-deployment.sh <DEPLOYED_URL>\` を実行\n2. バンドル内に \`http://\` URL がないことを確認 (Mixed Content)\n3. バンドル内にハードコード IP がないことを確認\n4. STT プロキシモードが有効であることを確認\n5. webapp-testing スキルまたは curl でブラウザ動作確認\n\n### バックエンド (API) デプロイの場合:\n1. ヘルスエンドポイント (\`/v1/healthz\`) の疎通確認\n2. 環境変数が正しく設定されているか \`gcloud run services describe\` で確認\n3. Cloud Run ログに起動エラーがないか確認\n\n### GKE (k8s) デプロイの場合:\n1. Pod が Running 状態であることを確認\n2. \`kubectl logs\` でエラーがないことを確認\n3. Service/Ingress の疎通確認\n\n### Docker ビルド & Push の場合:\n1. ビルド引数 (build-arg) を確認 — HTTP URL がハードコードされていないか\n2. HTTPS 環境にデプロイするなら、ビルド引数に http:// URL を含めない\n3. マルチプラットフォーム (\`--platform linux/amd64\`) を確認\n\n⚠️ このチェックリストを完了するまで「デプロイ完了」と報告してはいけません。"
+
+if command -v jq >/dev/null 2>&1; then
+  jq -n --arg ctx "$CONTEXT_MSG" '{
+    hookSpecificOutput: {
+      hookEventName: "PostToolUse",
+      additionalContext: $ctx
+    }
+  }'
+else
+  cat <<CONTEXT_EOF
 {
-  "additionalContext": "⚠️ DEPLOYMENT DETECTED — 検証必須 ⚠️\n\nデプロイコマンドが実行されました。完了報告の前に以下を必ず実行してください:\n\n## 必須チェックリスト\n\n### フロントエンド (SPA/Frontend) デプロイの場合:\n1. \`./scripts/verify-spa-deployment.sh <DEPLOYED_URL>\` を実行\n2. バンドル内に \`http://\` URL がないことを確認 (Mixed Content)\n3. バンドル内にハードコード IP がないことを確認\n4. STT プロキシモードが有効であることを確認\n5. webapp-testing スキルまたは curl でブラウザ動作確認\n\n### バックエンド (API) デプロイの場合:\n1. ヘルスエンドポイント (\`/v1/healthz\`) の疎通確認\n2. 環境変数が正しく設定されているか \`gcloud run services describe\` で確認\n3. Cloud Run ログに起動エラーがないか確認\n\n### GKE (k8s) デプロイの場合:\n1. Pod が Running 状態であることを確認\n2. \`kubectl logs\` でエラーがないことを確認\n3. Service/Ingress の疎通確認\n\n### Docker ビルド & Push の場合:\n1. ビルド引数 (build-arg) を確認 — HTTP URL がハードコードされていないか\n2. HTTPS 環境にデプロイするなら、ビルド引数に http:// URL を含めない\n3. マルチプラットフォーム (\`--platform linux/amd64\`) を確認\n\n⚠️ このチェックリストを完了するまで「デプロイ完了」と報告してはいけません。"
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "$CONTEXT_MSG"
+  }
 }
 CONTEXT_EOF
+fi

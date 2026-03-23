@@ -30,11 +30,26 @@ esac
 
 diagnostics=""
 
+# Detect timeout command (macOS compatibility)
+TIMEOUT_CMD="timeout"
+if ! command -v timeout >/dev/null 2>&1; then
+  if command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="gtimeout"
+  else
+    # macOS fallback: skip timeout wrapper
+    TIMEOUT_CMD=""
+  fi
+fi
+
 # Safe timeout wrapper: passes file as argument, not interpolated in bash -c
 run_lint() {
   local tool="$1"
   shift
-  timeout "$TIMEOUT" "$tool" "$@" 2>&1 || true
+  if [[ -n "$TIMEOUT_CMD" ]]; then
+    "$TIMEOUT_CMD" "$TIMEOUT" "$tool" "$@" 2>&1 || true
+  else
+    "$tool" "$@" 2>&1 || true
+  fi
 }
 
 case "$file" in
