@@ -56,8 +56,11 @@ case "$PR_BRANCH" in
         ;;
 esac
 
-# --- EXEMPT tier: skip pessimistic lock, skip review requirements ---
-if [[ "$TIER" != "EXEMPT" ]]; then
+# --- EXEMPT/LIGHT tier: skip pessimistic lock ---
+# LIGHT tier (hook infrastructure) doesn't need pessimistic lock.
+# Safety is enforced by CRITICAL/HIGH/BUG grep check below.
+# Only FULL tier (source code changes) requires pessimistic lock.
+if [[ "$TIER" == "FULL" ]]; then
     # --- Pessimistic Lock Check (non-EXEMPT only) ---
     REVIEW_LOCK="$_STATE_BASE/pr-review-lock.json"
     if [ -f "$REVIEW_LOCK" ]; then
