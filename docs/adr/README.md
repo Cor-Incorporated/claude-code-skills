@@ -24,6 +24,7 @@
 | 002 | CLAUDE.md/rules Pointer Design Principle | Accepted | 2026-03-23 |
 | 003 | Feedback Speed Hierarchy | Accepted | 2026-03-23 |
 | 004 | Codex Large-Scale Delegation Model | Accepted | 2026-03-23 |
+| 005 | Plans.md JSON移行検討 | Rejected | 2026-03-23 |
 
 ## Reference
 
