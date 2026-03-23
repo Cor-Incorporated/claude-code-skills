@@ -4,7 +4,7 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 27 custom skills, 43 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 27 custom skills, 44 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ Restart Claude Code after installation.
 claude-code-skills/
 ├── skills/           # 27 custom skill definitions (SKILL.md + scripts + references)
 ├── rules/            # 5 global rule files (coding-style, git-workflow, quality, testing, delegation)
-├── hooks/            # 43 hook scripts (quality gates, safety guards, workflow enforcement)
+├── hooks/            # 44 hook scripts (quality gates, safety guards, workflow enforcement)
 ├── scripts/          # 5 utility scripts (Codex orchestration, PR review, context monitoring)
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
@@ -67,7 +67,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (custom skills + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 43 hook scripts
+  code-reviewer, review-loop, e2e, bugfix + 44 hook scripts
 
 Reflect (gstack)
   /retro
@@ -252,7 +252,7 @@ Merged or closed PRs are automatically cleaned from the lock state:
 | **Post Merge** | `post-merge-close-issues.sh` | Auto-close linked issues |
 | **Session Stop** | `pr-ci-review-gate.sh` (STOP) | Warn about unverified PRs |
 
-## Hook System (43 Scripts)
+## Hook System (44 Scripts)
 
 ### Quality Gates (Pre-merge)
 - `block-merge-without-ci.sh` — Block merge unless all CI checks green
@@ -272,6 +272,7 @@ Merged or closed PRs are automatically cleaned from the lock state:
 - `audit-docker-build-args.sh` — Check for http:// in Docker build args
 - `block-local-hooks-write.sh` — Prevent settings.local.json from overriding global hooks
 - `validate-no-local-hooks.sh` — Validate no hook overrides exist on session start
+- `enforce-branch-workflow.sh` — Auto-create develop branch, enforce feature branch workflow
 
 ### Context Budget Management
 - `context-budget-read-gate.sh` — Warn/block after 3+ source file reads
