@@ -18,7 +18,6 @@
       "mcp__plugin_context7_context7__query-docs",
       "mcp__brave-search__brave_web_search",
       "mcp__brave-search__brave_local_search",
-      "mcp__codex__codex",
       "Bash(openssl rand:*)",
       "Bash(source:*)",
       "Bash(curl:*)",
@@ -369,6 +368,15 @@
       },
       {
         "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_context7_context7__.*",
         "hooks": [
           {
             "type": "command",

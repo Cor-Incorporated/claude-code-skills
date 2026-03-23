@@ -12,7 +12,7 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 CMD_FIRST_LINE=$(echo "$CMD" | head -1)
 
 # 保護対象のファイル名パターン
-PROTECTED="review-status\.json|pr-review-lock\.json|context-budget\.json|factcheck-state\.json|rebase-session\.json"
+PROTECTED="review-status\.json|pr-review-lock\.json|pr-review-read\.json|context-budget\.json|factcheck-status\.json|rebase-session\.json"
 
 # Bashコマンドが保護対象ファイルに書き込むか検出
 if echo "$CMD_FIRST_LINE" | grep -qE "$PROTECTED"; then

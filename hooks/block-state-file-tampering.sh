@@ -24,8 +24,9 @@ BASENAME=$(basename "$FILE_PATH")
 PROTECTED_FILES=(
   "review-status.json"
   "pr-review-lock.json"
+  "pr-review-read.json"
   "context-budget.json"
-  "factcheck-state.json"
+  "factcheck-status.json"
   "pr-gate-diagnostic.log"
   "rebase-session.json"
 )
