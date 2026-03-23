@@ -2,7 +2,7 @@
 
 [Claude Code](https://claude.com/claude-code)（Anthropic 公式 CLI）のためのスキル・ルール・フック集です。
 
-27 のカスタムスキル、44 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
+27 のカスタムスキル、52 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
 
 [English](README.md) | **日本語**
 
@@ -23,7 +23,7 @@ chmod +x setup.sh
 claude-code-skills/
 ├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 5 グローバルルール (コーディング規約, Git, 品質, テスト, 委任)
-├── hooks/            # 44 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
+├── hooks/            # 52 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
 ├── scripts/          # 5 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
@@ -47,7 +47,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (カスタムスキル + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 44 hook スクリプト
+  code-reviewer, review-loop, e2e, bugfix + 52 hook スクリプト
 
 Reflect (gstack)
   /retro
@@ -232,13 +232,21 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 | **マージ後** | `post-merge-close-issues.sh` | リンクされた Issue を自動クローズ |
 | **セッション終了** | `pr-ci-review-gate.sh` (STOP) | 未検証 PR について警告 |
 
-## Hook システム（44 スクリプト）
+## Hook システム（52 スクリプト）
+
+### セッション初期化
+- `auto-init-permissions.sh` — セッション開始時にパーミッションを自動初期化
+- `context-budget-reset.sh` — セッション開始時にカウンターリセット（`fg_impl_agent_count` 含む）
+- `reset-factcheck.sh` — セッション開始時にファクトチェック状態をリセット
+- `enforce-branch-workflow.sh` — develop ブランチ自動作成、フィーチャーブランチワークフロー強制
+- `validate-no-local-hooks.sh` — セッション開始時に hook 上書きが存在しないことを検証
 
 ### 品質ゲート（マージ前）
 - `block-merge-without-ci.sh` — CI 全チェックグリーンなしでマージをブロック
 - `block-merge-without-review.sh` — 最新 push 後のレビューなしでマージをブロック
 - `pr-ci-review-gate.sh` — 6 モードゲート (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) Tier 制レビュー対応
 - `pr-merge-claude-review-gate.sh` — 5 サブゲート Claude レビュー強制
+- `inject-claude-review-on-checks.sh` — `gh pr checks` / `gh pr merge` 時にレビューコメントを自動取得
 - `pr-guard.sh` — ベースブランチ、Issue 参照、コンフリクトチェック
 - `task-completion-gate.sh` — 早期タスク完了をブロック（CI pending または CRITICAL/HIGH 指摘あり）
 - `stop-test-gate.sh` — セッション終了前にプロジェクトテスト実行（Stop hook、stop_hook_active ガード付き）
@@ -251,15 +259,17 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - `block-version-downgrade.sh` — 依存パッケージのダウングレード防止
 - `audit-docker-build-args.sh` — Docker build args の http:// チェック
 - `block-local-hooks-write.sh` — settings.local.json によるグローバル hook 上書きを防止
-- `validate-no-local-hooks.sh` — セッション開始時に hook 上書きが存在しないことを検証
-- `enforce-branch-workflow.sh` — Auto-create develop branch, enforce feature branch workflow
+- `block-codex-mcp.sh` — Codex MCP 使用をブロック、CLI 経由のみ強制 (PreToolUse)
+- `block-state-file-tampering.sh` — AI による状態ファイル自己改ざん防止 (Write/Edit)
+- `block-state-file-tampering-bash.sh` — AI による状態ファイル自己改ざん防止 (Bash)
+- `protect-linter-config.sh` — リンター設定の不正変更を防止
 
 ### コンテキスト予算管理
 - `context-budget-read-gate.sh` — 3+ ソースファイル読み込みで警告/ブロック
 - `context-budget-write-gate.sh` — テスト/ドキュメント作成を検出し Codex 委任提案
 - `context-budget-edit-write-gate.sh` — 多数ファイル読み込み後の編集をブロック
-- `context-budget-agent-gate.sh` — foreground実装Agentの制限（2つ目ブロック）、background/TeamCreate強制
-- `context-budget-reset.sh` — セッション開始時にカウンターリセット（`fg_impl_agent_count` 含む）
+- `context-budget-agent-gate.sh` — foreground 実装 Agent の制限（2つ目ブロック）、background/TeamCreate 強制
+- `codex-task-gate.sh` — 2回目以降の Codex CLI 呼び出しをブロック（同時1タスク制限）
 - `codex-task-release.sh` — Codex タスク完了後にカウンター解放（PostToolUse）
 
 ### ワークフロー強制
@@ -282,7 +292,10 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - `track-agent-team.sh` — エージェントチームの生成と完了を追跡
 - `post-merge-close-issues.sh` — マージ後にリンクされた Issue を自動クローズ
 - `post-deploy-verify.sh` — デプロイ後の検証チェック
+- `post-lint-format.sh` — ファイル編集後に lint/format チェック実行（PostToolUse Quality Loop）
+- `post-pr-create-review-trigger.sh` — PR 作成後にコードレビューを自動トリガー (PostToolUse)
 - `workflow-sync-guard.sh` — push 後のワークフロー状態同期
+- `verify-test-falsifiability.sh` — テストが宣言されたバグを実際に検出するか検証 (PostToolUse)
 - `tool-failure-recovery.sh` — ツール失敗時のエラー回復ガイダンス（PostToolUseFailure）
 
 ## Hook Matcher 構文

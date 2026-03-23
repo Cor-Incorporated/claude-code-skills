@@ -4,7 +4,7 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 27 custom skills, 44 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 27 custom skills, 52 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ Restart Claude Code after installation.
 claude-code-skills/
 ├── skills/           # 27 custom skill definitions (SKILL.md + scripts + references)
 ├── rules/            # 5 global rule files (coding-style, git-workflow, quality, testing, delegation)
-├── hooks/            # 44 hook scripts (quality gates, safety guards, workflow enforcement)
+├── hooks/            # 52 hook scripts (quality gates, safety guards, workflow enforcement)
 ├── scripts/          # 5 utility scripts (Codex orchestration, PR review, context monitoring)
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
@@ -32,24 +32,24 @@ claude-code-skills/
 
 ## Architecture Decision Records (ADR)
 
-設計判断はADRとして `docs/adr/` に記録されています。
+Design decisions are recorded as ADRs in `docs/adr/`.
 
-| ADR | タイトル | ステータス |
-|-----|---------|-----------|
+| ADR | Title | Status |
+|-----|-------|--------|
 | [001](docs/adr/001-posttooluse-quality-loop.md) | PostToolUse Quality Loop | Accepted |
-| [002](docs/adr/002-pointer-design-principle.md) | CLAUDE.md ポインタ型設計原則 | Accepted |
-| [003](docs/adr/003-feedback-speed-hierarchy.md) | フィードバック速度階層 | Accepted |
-| [004](docs/adr/004-codex-delegation-model.md) | Codex 大規模委任モデル | Accepted |
+| [002](docs/adr/002-pointer-design-principle.md) | CLAUDE.md Pointer Design Principle | Accepted |
+| [003](docs/adr/003-feedback-speed-hierarchy.md) | Feedback Speed Hierarchy | Accepted |
+| [004](docs/adr/004-codex-delegation-model.md) | Codex Large-Scale Delegation Model | Accepted |
 
-新しいADRを追加する場合は [テンプレート](docs/adr/template.md) を使用してください。
+To add a new ADR, use the [template](docs/adr/template.md).
 
 ## References
 
-| ドキュメント | 説明 |
-|-------------|------|
-| [Harness Engineering ベストプラクティス 2026](docs/references/harness-engineering-best-practices-2026.md) | 本リポジトリの設計方針の根拠となる記事のサマリ |
+| Document | Description |
+|----------|-------------|
+| [Harness Engineering Best Practices 2026](docs/references/harness-engineering-best-practices-2026.md) | Summary of the article that underpins this repository's design philosophy |
 
-詳細は [docs/references/](docs/references/) を参照してください。
+See [docs/references/](docs/references/) for details.
 
 ## Third-Party Dependencies
 
@@ -67,7 +67,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (custom skills + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 44 hook scripts
+  code-reviewer, review-loop, e2e, bugfix + 52 hook scripts
 
 Reflect (gstack)
   /retro
@@ -252,13 +252,21 @@ Merged or closed PRs are automatically cleaned from the lock state:
 | **Post Merge** | `post-merge-close-issues.sh` | Auto-close linked issues |
 | **Session Stop** | `pr-ci-review-gate.sh` (STOP) | Warn about unverified PRs |
 
-## Hook System (44 Scripts)
+## Hook System (52 Scripts)
+
+### Session Initialization
+- `auto-init-permissions.sh` — Auto-initialize permissions on session start
+- `context-budget-reset.sh` — Reset all counters on session start (incl. `fg_impl_agent_count`)
+- `reset-factcheck.sh` — Reset fact-check state on session start
+- `enforce-branch-workflow.sh` — Auto-create develop branch, enforce feature branch workflow
+- `validate-no-local-hooks.sh` — Validate no hook overrides exist on session start
 
 ### Quality Gates (Pre-merge)
 - `block-merge-without-ci.sh` — Block merge unless all CI checks green
 - `block-merge-without-review.sh` — Block merge unless review is newer than latest push
 - `pr-ci-review-gate.sh` — 6-mode gate (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) with tiered review
 - `pr-merge-claude-review-gate.sh` — 5-sub-gate Claude review enforcement
+- `inject-claude-review-on-checks.sh` — Auto-fetch review comments on `gh pr checks` / `gh pr merge`
 - `pr-guard.sh` — Base branch, issue ref, conflict checks
 - `task-completion-gate.sh` — Block premature task completion (CI pending or CRITICAL/HIGH findings)
 - `stop-test-gate.sh` — Run project tests before session end (Stop hook with stop_hook_active guard)
@@ -271,15 +279,17 @@ Merged or closed PRs are automatically cleaned from the lock state:
 - `block-version-downgrade.sh` — Prevent dependency downgrades
 - `audit-docker-build-args.sh` — Check for http:// in Docker build args
 - `block-local-hooks-write.sh` — Prevent settings.local.json from overriding global hooks
-- `validate-no-local-hooks.sh` — Validate no hook overrides exist on session start
-- `enforce-branch-workflow.sh` — Auto-create develop branch, enforce feature branch workflow
+- `block-codex-mcp.sh` — Block Codex MCP usage, enforce CLI-only (PreToolUse)
+- `block-state-file-tampering.sh` — Prevent AI self-bypass of state files (Write/Edit)
+- `block-state-file-tampering-bash.sh` — Prevent AI self-bypass of state files (Bash)
+- `protect-linter-config.sh` — Prevent unauthorized linter config modifications
 
 ### Context Budget Management
 - `context-budget-read-gate.sh` — Warn/block after 3+ source file reads
 - `context-budget-write-gate.sh` — Detect test/doc creation for Codex delegation
 - `context-budget-edit-write-gate.sh` — Block edits when too many files read
 - `context-budget-agent-gate.sh` — Enforce foreground impl agent limits (Rule 2+4), background/TeamCreate governance
-- `context-budget-reset.sh` — Reset all counters on session start (incl. `fg_impl_agent_count`)
+- `codex-task-gate.sh` — Block 2nd+ Codex CLI call (1 concurrent limit)
 - `codex-task-release.sh` — Release Codex call counter after task completion (PostToolUse)
 
 ### Workflow Enforcement
@@ -302,7 +312,10 @@ Merged or closed PRs are automatically cleaned from the lock state:
 - `track-agent-team.sh` — Track agent team spawning and completion
 - `post-merge-close-issues.sh` — Auto-close linked issues after merge
 - `post-deploy-verify.sh` — Post-deployment verification checks
+- `post-lint-format.sh` — Run lint and format checks after file edits (PostToolUse Quality Loop)
+- `post-pr-create-review-trigger.sh` — Auto-trigger code review after PR creation (PostToolUse)
 - `workflow-sync-guard.sh` — Sync workflow state after push
+- `verify-test-falsifiability.sh` — Verify tests actually detect declared bugs (PostToolUse)
 - `tool-failure-recovery.sh` — Error recovery guidance on tool failure (PostToolUseFailure)
 
 ## Hook Matcher Syntax
