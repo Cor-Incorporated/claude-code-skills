@@ -101,7 +101,7 @@ REVIEW_MSG="[AUTO-REVIEW REQUIRED] PR #${PR_NUMBER} を作成しました。マ�
    Agent(subagent_type='code-reviewer', prompt='Review PR #${PR_NUMBER} on branch ${BRANCH}')
 
 2. Codex CLI セカンドオピニオン:
-   bash codex exec review --base develop
+   codex exec review --base develop
 
 3. 全CRITICAL/HIGH指摘を修正
 
