@@ -30,6 +30,19 @@ claude-code-skills/
 └── README.md
 ```
 
+## Architecture Decision Records (ADR)
+
+設計判断はADRとして `docs/adr/` に記録されています。
+
+| ADR | タイトル | ステータス |
+|-----|---------|-----------|
+| [001](docs/adr/001-posttooluse-quality-loop.md) | PostToolUse Quality Loop | Accepted |
+| [002](docs/adr/002-pointer-design-principle.md) | CLAUDE.md ポインタ型設計原則 | Accepted |
+| [003](docs/adr/003-feedback-speed-hierarchy.md) | フィードバック速度階層 | Accepted |
+| [004](docs/adr/004-codex-delegation-model.md) | Codex 大規模委任モデル | Accepted |
+
+新しいADRを追加する場合は [テンプレート](docs/adr/template.md) を使用してください。
+
 ## Third-Party Dependencies
 
 This configuration integrates with the following third-party skill frameworks. They are **not bundled** in this repository — `setup.sh` installs them automatically.
