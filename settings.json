@@ -187,6 +187,17 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-develop-base.sh",
+            "timeout": 10,
+            "statusMessage": "Checking branch base (develop enforcement)..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/git-push-guard.sh"
           }
         ]
