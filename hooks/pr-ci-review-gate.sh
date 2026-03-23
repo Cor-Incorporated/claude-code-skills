@@ -314,13 +314,19 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
   # Classify review tier for this branch
   TIER=$(classify_review_tier "$BRANCH")
 
+  # Tier 3 (EXEMPT): no review required — CI green is sufficient
+  if [[ "$TIER" == "EXEMPT" ]]; then
+    echo "✅ PR #${PR_NUMBER}: EXEMPT tier (branch=$BRANCH) — CI green確認済み。マージ許可。" >&2
+    exit 0
+  fi
+
   # Check review status
   CODE_REVIEW=$(read_review "$BRANCH" "code_review")
   CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
 
   MISSING=""
   [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
-  # Tier FULL requires Codex; Tier LIGHT/EXEMPT does not
+  # Only FULL tier requires Codex CLI; LIGHT does not
   if [[ "$TIER" == "FULL" ]]; then
     [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
   fi
@@ -506,19 +512,31 @@ with open(os.environ['_LOCK']) as f: s = json.load(f)
 print(s.get(os.environ['_PR'], {}).get('branch', ''))
 " 2>/dev/null || echo "")
 
-  CODE_REVIEW=$(read_review "$BRANCH" "code_review")
-  CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
-  TIER=$(classify_review_tier "$BRANCH")
-
-  MISSING=""
-  [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
-  if [[ "$TIER" == "FULL" ]]; then
-    [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
+  # If branch not in lock state, try GitHub API
+  if [[ -z "$BRANCH" ]]; then
+    BRANCH=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.ref' 2>/dev/null || echo "")
   fi
 
-  if [[ -n "$MISSING" ]]; then
-    echo "❌ PR #${PR}: レビュー未完了 (${MISSING%, }) [tier=$TIER]" >&2
-    exit 1
+  # Classify review tier
+  TIER=$(classify_review_tier "$BRANCH")
+
+  # EXEMPT tier: CI green is sufficient, no review needed
+  if [[ "$TIER" == "EXEMPT" ]]; then
+    echo "✅ PR #${PR}: EXEMPT tier — CI green確認済み。" >&2
+  else
+    CODE_REVIEW=$(read_review "$BRANCH" "code_review")
+    CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
+
+    MISSING=""
+    [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
+    if [[ "$TIER" == "FULL" ]]; then
+      [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
+    fi
+
+    if [[ -n "$MISSING" ]]; then
+      echo "❌ PR #${PR}: レビュー未完了 (${MISSING%, }) [tier=$TIER]" >&2
+      exit 1
+    fi
   fi
 
   # All checks passed — mark as verified
