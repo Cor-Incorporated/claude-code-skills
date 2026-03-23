@@ -362,8 +362,9 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
   PENDING_FILE="$STATE_DIR/pending-review-comments.json"
   if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
     _pr_in_file=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+    _head_sha_in_file=$(jq -r '.head_sha // ""' "$PENDING_FILE" 2>/dev/null || echo "")
     # Validate scope: pending-review-comments must match current PR
-    if [[ "$_pr_in_file" == "$PR_NUMBER" ]]; then
+    if [[ "$_pr_in_file" == "$PR_NUMBER" ]] && [[ -n "$HEAD_SHA" ]] && [[ "$_head_sha_in_file" == "$HEAD_SHA" ]]; then
       _critical=$(jq -r '.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
       _high=$(jq -r '.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
       _total=$(jq -r '.total // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
@@ -543,14 +544,25 @@ with open(lock_path, 'r+') as f:
   UNVERIFIED=$(_LOCK="$LOCK_STATE" python3 -c "
 import json, os
 with open(os.environ['_LOCK']) as f: s = json.load(f)
-unverified = [f'PR #{pr} ({d.get("branch","?")})'  for pr, d in s.items()
-              if isinstance(d, dict) and not d.get('verified', False)]
+unverified = [f'PR #{pr} ({d.get(\"branch\",\"?\")})' for pr, d in s.items()
+              if isinstance(d, dict) and d.get('ci_green', False) and not d.get('verified', False)]
 print('|'.join(unverified) if unverified else '')
+" 2>/dev/null || echo "")
+  SKIPPED_UNVERIFIED=$(_LOCK="$LOCK_STATE" python3 -c "
+import json, os
+with open(os.environ['_LOCK']) as f: s = json.load(f)
+skipped = [f'PR #{pr} ({d.get(\"branch\",\"?\")})' for pr, d in s.items()
+           if isinstance(d, dict) and not d.get('ci_green', False) and not d.get('verified', False)]
+print('|'.join(skipped) if skipped else '')
 " 2>/dev/null || echo "")
 
   if [[ -n "$UNVERIFIED" ]]; then
     echo '{"decision":"block","reason":"[BLOCKED] 未検証PRが存在します。CI green + レビュー LGTM を確認してください。\n'"$(echo "$UNVERIFIED" | tr '|' '\n' | sed 's/^/  - /')"'\n\n解除方法:\n  1. gh pr checks <PR番号> で全グリーン確認\n  2. code-reviewer + Codex CLI レビュー実行\n  3. bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY <PR番号>"}'
     exit 0
+  fi
+  if [[ -n "$SKIPPED_UNVERIFIED" ]]; then
+    echo "[stop-gate] CI green 未達の未検証PRは停止ブロック対象外としてスキップしました:" >&2
+    echo "$SKIPPED_UNVERIFIED" | tr '|' '\n' | sed 's/^/  - /' >&2
   fi
   exit 0
 fi
@@ -612,9 +624,10 @@ print(s.get(os.environ['_PR'], {}).get('branch', ''))
       for pf in "$PENDING_FILE" "$GLOBAL_PENDING"; do
         if [[ -f "$pf" ]] && command -v jq &>/dev/null; then
           PR_MATCH=$(jq -r --arg p "$PR" '.pr // ""' "$pf" 2>/dev/null)
+          PENDING_HEAD_SHA=$(jq -r '.head_sha // ""' "$pf" 2>/dev/null)
           CR=$(jq -r '.critical // 0' "$pf" 2>/dev/null)
           HI=$(jq -r '.high // 0' "$pf" 2>/dev/null)
-          if [[ "$PR_MATCH" == "$PR" ]] && [[ "$CR" == "0" ]] && [[ "$HI" == "0" ]]; then
+          if [[ "$PR_MATCH" == "$PR" ]] && [[ -n "$HEAD_SHA" ]] && [[ "$PENDING_HEAD_SHA" == "$HEAD_SHA" ]] && [[ "$CR" == "0" ]] && [[ "$HI" == "0" ]]; then
             CODE_REVIEW="yes"
             echo "  ℹ️ claude-review CRITICAL/HIGH=0 → code_review=yes として扱う" >&2
             break
