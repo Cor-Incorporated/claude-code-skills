@@ -40,17 +40,25 @@ fi
 
 # Decrement codex_call_count (release the lock)
 BUDGET_FILE="${HOME}/.claude/state/context-budget.json"
+if [[ ! -f "$BUDGET_FILE" ]]; then
+    mkdir -p "$(dirname "$BUDGET_FILE")"
+    echo '{}' > "$BUDGET_FILE"
+fi
+
 if [[ -f "$BUDGET_FILE" ]]; then
     _BUDGET_FILE="$BUDGET_FILE" python3 -c "
-import json, os
-f = os.environ['_BUDGET_FILE']
-with open(f) as fh:
-    s = json.load(fh)
-count = s.get('codex_call_count', 0)
-if count > 0:
-    s['codex_call_count'] = count - 1
-with open(f, 'w') as fh:
-    json.dump(s, fh, indent=2)
+import fcntl, json, os
+f_path = os.environ['_BUDGET_FILE']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    count = s.get('codex_call_count', 0)
+    if count > 0:
+        s['codex_call_count'] = count - 1
+    f.seek(0)
+    f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
 fi
 
