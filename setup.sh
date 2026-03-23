@@ -49,10 +49,20 @@ echo "  Copied $(ls "$REPO_DIR"/scripts/* 2>/dev/null | wc -l | tr -d ' ') scrip
 echo "[5/5] Installing third-party dependencies..."
 
 # gstack
+# --- ctx7 (Context7 CLI) ---
+if ! command -v ctx7 &>/dev/null; then
+  echo "  + ctx7 (installing globally)..."
+  npm install -g ctx7@0.3.6
+  echo "  ✅ ctx7 installed"
+else
+  echo "  ↻ ctx7 (already installed: $(ctx7 --version 2>/dev/null || echo 'unknown'))"
+fi
+
 if [ ! -d "$SKILLS_DIR/gstack" ]; then
   echo "  + gstack (cloning from garrytan/gstack)..."
   git clone https://github.com/garrytan/gstack.git "$SKILLS_DIR/gstack"
-  cd "$SKILLS_DIR/gstack" && ./setup
+  cd "$SKILLS_DIR/gstack" && git checkout f4bbfaa5bdfd2d6ce59541c2145432febde57fed  # v0.11.10.0
+  ./setup
   ~/.claude/skills/gstack/bin/gstack-config set telemetry off
   cd "$REPO_DIR"
   echo "  ✅ gstack installed (telemetry disabled)"
@@ -63,7 +73,7 @@ fi
 # ui-ux-pro-max
 if ! command -v uipro &>/dev/null; then
   echo "  + ui-ux-pro-max (installing via npm)..."
-  npm install -g uipro-cli
+  npm install -g uipro-cli@2.2.3
   cd "$HOME/.claude" && uipro init --ai claude
   # Fix nested directory if created
   if [ -d "$HOME/.claude/.claude/skills/ui-ux-pro-max" ]; then

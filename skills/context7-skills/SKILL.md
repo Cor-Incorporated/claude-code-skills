@@ -1,6 +1,6 @@
 ---
 name: context7-skills
-description: "Manage Context7 CLI skills: search, install, list, remove, info via npx ctx7. Use when the user wants to find, install, list, remove, or inspect Context7 skills. Triggers: 'search skills', 'install skill', 'list my skills', 'remove skill', 'ctx7', 'context7'. Do NOT use for general package management (npm, pip), non-Context7 CLI commands, or skill authoring."
+description: "Manage Context7 CLI skills: search, install, list, remove, info via ctx7. Use when the user wants to find, install, list, remove, or inspect Context7 skills. Triggers: 'search skills', 'install skill', 'list my skills', 'remove skill', 'ctx7', 'context7'. Do NOT use for general package management (npm, pip), non-Context7 CLI commands, or skill authoring."
 allowed-tools: [Bash, WebFetch]
 ---
 
@@ -12,11 +12,11 @@ Execute Context7 CLI commands directly. Printing commands without execution is f
 
 | Intent | Command |
 |--------|---------|
-| Search | `npx ctx7 skills search <keywords...>` |
-| Install | `npx ctx7 skills install <repository> [skill] [--all] [target]` |
-| List | `npx ctx7 skills list [target]` |
-| Remove | `npx ctx7 skills remove <name> [target]` |
-| Info | `npx ctx7 skills info <repository>` |
+| Search | `ctx7 skills search <keywords...>` |
+| Install | `ctx7 skills install <repository> [skill] [--all] [target]` |
+| List | `ctx7 skills list [target]` |
+| Remove | `ctx7 skills remove <name> [target]` |
+| Info | `ctx7 skills info <repository>` |
 
 No other commands may be executed.
 
@@ -34,7 +34,7 @@ If multiple targets are requested, stop and ask the user to pick one.
 
 ## Execution Rules
 
-1. Always execute via `npx ctx7`. The `skills` namespace is mandatory.
+1. Always execute via `ctx7`. The `skills` namespace is mandatory.
 2. Only commands listed above may be executed.
 3. At most one target flag per command.
 4. `--all` is only valid with `install`.
@@ -63,7 +63,7 @@ Commands requiring network access (`search`, `info`, remote `install`):
    1. `--claude`  2. `--cursor`  3. `--codex`  4. `--opencode`  5. `--amp`  6. `--antigravity`  7. `--global`
 5. Do NOT use `--all` for single skill install.
 6. Request network permission if remote, then execute:
-   `npx ctx7 skills install <repository> <skill_name> <target_flag>`
+   `ctx7 skills install <repository> <skill_name> <target_flag>`
 7. Display raw CLI output as-is.
 
 ## Error Handling
