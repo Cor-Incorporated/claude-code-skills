@@ -43,6 +43,14 @@ claude-code-skills/
 
 新しいADRを追加する場合は [テンプレート](docs/adr/template.md) を使用してください。
 
+## References
+
+| ドキュメント | 説明 |
+|-------------|------|
+| [Harness Engineering ベストプラクティス 2026](docs/references/harness-engineering-best-practices-2026.md) | 本リポジトリの設計方針の根拠となる記事のサマリ |
+
+詳細は [docs/references/](docs/references/) を参照してください。
+
 ## Third-Party Dependencies
 
 This configuration integrates with the following third-party skill frameworks. They are **not bundled** in this repository — `setup.sh` installs them automatically.
