@@ -60,15 +60,15 @@ fi
 
 # --- 結果出力 ---
 if [[ -n "$WARNINGS" ]]; then
-  echo "🔍 テスト反証可能性チェック: $(basename "$FILE_PATH")"
-  echo ""
-  echo -e "$WARNINGS"
-  echo ""
-  echo "Bug記述箇所:"
-  echo "$BUG_DESCRIPTIONS" | head -5
-  echo ""
-  echo "📖 ルール: ~/.claude/rules/test-falsifiability.md"
-  echo "💡 深い検証が必要なら: /test-falsify を実行"
+  echo "🔍 テスト反証可能性チェック: $(basename "$FILE_PATH")" >&2
+  echo "" >&2
+  echo -e "$WARNINGS" >&2
+  echo "" >&2
+  echo "Bug記述箇所:" >&2
+  echo "$BUG_DESCRIPTIONS" | head -5 >&2
+  echo "" >&2
+  echo "📖 ルール: ~/.claude/rules/test-falsifiability.md" >&2
+  echo "💡 深い検証が必要なら: /test-falsify を実行" >&2
   # 警告のみ、ブロックはしない（exit 0）
   exit 0
 fi

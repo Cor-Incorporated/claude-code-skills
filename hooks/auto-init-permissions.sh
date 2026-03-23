@@ -57,7 +57,7 @@ if [ ${#detected[@]} -eq 0 ]; then
   }
 }
 EOF
-    echo "[permissions] No stack detected. Created minimal settings."
+    echo "[permissions] No stack detected. Created minimal settings." >&2
     exit 0
 fi
 
@@ -86,4 +86,4 @@ jq -n --argjson allows "$merged_allows" '{
     }
 }' > "$LOCAL_SETTINGS"
 
-echo "[permissions] Auto-initialized for: ${detected[*]} ($(echo "$merged_allows" | jq length) rules)"
+echo "[permissions] Auto-initialized for: ${detected[*]} ($(echo "$merged_allows" | jq length) rules)" >&2

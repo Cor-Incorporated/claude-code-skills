@@ -25,7 +25,6 @@ tool=$(printf '%s' "$input" | jq -r '.tool // ""')
 
 # Only applies to Edit tool (version changes happen via Edit)
 if [ "$tool" != "Edit" ]; then
-    printf '%s' "$input"
     exit 0
 fi
 
@@ -35,7 +34,6 @@ new_string=$(printf '%s' "$input" | jq -r '.tool_input.new_string // ""')
 
 # Skip .claude/ internal files
 if printf '%s' "$file_path" | grep -qE '\.claude/'; then
-    printf '%s' "$input"
     exit 0
 fi
 
@@ -50,7 +48,6 @@ NEW_VERSIONS=$(extract_versions "$new_string")
 
 # No version strings in either → not a version change, allow
 if [ -z "$OLD_VERSIONS" ] && [ -z "$NEW_VERSIONS" ]; then
-    printf '%s' "$input"
     exit 0
 fi
 
@@ -138,9 +135,7 @@ fi
 
 # Version change detected but not a downgrade → allow with reminder
 if [ -n "$OLD_VERSIONS" ] && [ -n "$NEW_VERSIONS" ]; then
-    printf '%s' "$input"
     exit 0
 fi
 
-printf '%s' "$input"
 exit 0

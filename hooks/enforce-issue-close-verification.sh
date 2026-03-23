@@ -62,7 +62,7 @@ if [ "$HAS_ACCEPTANCE_CHECK" = false ]; then
 fi
 
 if [ -n "$MISSING" ]; then
-  cat <<ERRMSG
+  cat >&2 <<ERRMSG
 
 ⛔ Issue #${ISSUE_NUM} クローズをブロック
 

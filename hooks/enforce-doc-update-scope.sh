@@ -21,7 +21,7 @@ case "$FILE_PATH" in
     ;;
 esac
 
-cat <<'MSG'
+cat >&2 <<'MSG'
 
 DOC UPDATE SCOPE: Also check/update:
   docs/STATUS.md, docs/DEVELOPER-GUIDE.md, Plans.md, MEMORY.md, CLAUDE.md files

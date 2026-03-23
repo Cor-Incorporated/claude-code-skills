@@ -17,13 +17,11 @@ file_path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""')
 
 # Skip if no file path
 if [ -z "$file_path" ]; then
-    printf '%s' "$input"
     exit 0
 fi
 
 # Only check files in domain/ or core/ layers
 if ! printf '%s' "$file_path" | grep -qE '/(domain|core)/'; then
-    printf '%s' "$input"
     exit 0
 fi
 
@@ -38,7 +36,6 @@ elif [ "$tool" = "Write" ]; then
 fi
 
 if [ -z "$content" ]; then
-    printf '%s' "$input"
     exit 0
 fi
 
@@ -93,4 +90,4 @@ if [ -n "$violations" ]; then
     exit 2
 fi
 
-printf '%s' "$input"
+exit 0
