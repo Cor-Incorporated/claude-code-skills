@@ -5,6 +5,13 @@
 # WHY: Agents tend to weaken linter rules instead of fixing code when they
 #      encounter lint errors. This hook deterministically prevents that.
 #
+# Protected file categories:
+#   - Linter configs: .eslintrc*, biome.json*, .oxlintrc*, .ruff.toml, .golangci.*
+#   - Formatter configs: .prettierrc*, .editorconfig
+#   - Type checker configs: tsconfig.json* (type safety is a quality gate)
+#   - Build tool configs: pyproject.toml, Cargo.toml (contain linter sections)
+#   - Pre-commit configs: lefthook.yml, .pre-commit-config*
+#
 # Exit 2 = block the tool call (Claude Code PreToolUse convention)
 set -euo pipefail
 
@@ -13,33 +20,19 @@ file="$(jq -r '.tool_input.file_path // .tool_input.path // empty' <<< "$input")
 
 [[ -z "$file" ]] && exit 0
 
-PROTECTED_PATTERNS=(
-  ".eslintrc"
-  "eslint.config"
-  "biome.json"
-  "biome.jsonc"
-  ".oxlintrc"
-  "pyproject.toml"
-  ".golangci."
-  "Cargo.toml"
-  ".prettierrc"
-  "prettier.config"
-  ".editorconfig"
-  "tsconfig.json"
-  "tsconfig."
-  "lefthook.yml"
-  ".pre-commit-config"
-  ".ruff.toml"
-  "ruff.toml"
-)
-
 basename_file="$(basename "$file")"
 
-for pattern in "${PROTECTED_PATTERNS[@]}"; do
-  case "$basename_file" in
-    *"$pattern"*)
-      cat >&2 <<MSG
-BLOCKED: $file is a protected linter/formatter config.
+# O(1) pattern matching using case statement (SUGGESTION-3 from review)
+case "$basename_file" in
+  .eslintrc*|eslint.config*|biome.json*|biome.jsonc|\
+  .oxlintrc*|.ruff.toml|ruff.toml|\
+  .golangci.yml|.golangci.yaml|\
+  .prettierrc*|prettier.config*|.editorconfig|\
+  tsconfig.json|tsconfig.*.json|\
+  pyproject.toml|Cargo.toml|\
+  lefthook.yml|.pre-commit-config*)
+    cat >&2 <<MSG
+BLOCKED: $basename_file is a protected linter/formatter/type-checker config.
 
 WHY: Agents tend to weaken linter rules instead of fixing code.
      When a linter reports errors, fix the SOURCE CODE, not the config.
@@ -48,8 +41,11 @@ WHY: Agents tend to weaken linter rules instead of fixing code.
 
 FIX: Fix the code that violates the rule.
      If the rule is genuinely wrong, propose an ADR to change it.
+
+NOTE: pyproject.toml and Cargo.toml are fully protected because they
+      contain linter/formatter configuration sections ([tool.ruff], [lints.clippy]).
+      tsconfig.json is protected because type safety is a quality gate.
 MSG
-      exit 2
-      ;;
-  esac
-done
+    exit 2
+    ;;
+esac

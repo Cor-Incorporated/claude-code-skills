@@ -8,7 +8,9 @@
 #   3. Return remaining violations via JSON additionalContext
 #
 # Performance: 2s timeout per tool. Silent skip if tool not installed.
-set -euo pipefail
+# Security: No npx --yes (supply-chain risk). Only pre-installed tools.
+set -uo pipefail
+# Note: -e intentionally omitted — timeout exits non-zero and we handle it
 
 TIMEOUT=2
 MAX_OUTPUT_LINES=20
@@ -28,74 +30,71 @@ esac
 
 diagnostics=""
 
-run_with_timeout() {
-  timeout "$TIMEOUT" bash -c "$1" 2>&1 || true
+# Safe timeout wrapper: passes file as argument, not interpolated in bash -c
+run_lint() {
+  local tool="$1"
+  shift
+  timeout "$TIMEOUT" "$tool" "$@" 2>&1 || true
 }
 
 case "$file" in
   *.ts|*.tsx|*.js|*.jsx)
-    # Phase 1: Auto-fix (silent)
+    # Phase 1: Auto-fix (silent) — only if tool is installed
     if command -v biome >/dev/null 2>&1; then
-      run_with_timeout "biome format --write '$file'" >/dev/null 2>&1
-    elif command -v npx >/dev/null 2>&1; then
-      run_with_timeout "npx --yes @biomejs/biome format --write '$file'" >/dev/null 2>&1
+      run_lint biome format --write "$file" >/dev/null 2>&1
     fi
 
     if command -v oxlint >/dev/null 2>&1; then
-      run_with_timeout "oxlint --fix '$file'" >/dev/null 2>&1
-    elif command -v npx >/dev/null 2>&1; then
-      run_with_timeout "npx --yes oxlint --fix '$file'" >/dev/null 2>&1
+      run_lint oxlint --fix "$file" >/dev/null 2>&1
     fi
 
     # Phase 2: Check remaining violations
     if command -v oxlint >/dev/null 2>&1; then
-      diagnostics="$(run_with_timeout "oxlint '$file'" | head -"$MAX_OUTPUT_LINES")"
-    elif command -v npx >/dev/null 2>&1; then
-      diagnostics="$(run_with_timeout "npx --yes oxlint '$file'" | head -"$MAX_OUTPUT_LINES")"
+      diagnostics="$(run_lint oxlint "$file" | head -"$MAX_OUTPUT_LINES")"
     fi
     ;;
 
   *.py)
     # Phase 1: Auto-fix (silent)
     if command -v ruff >/dev/null 2>&1; then
-      run_with_timeout "ruff check --fix '$file'" >/dev/null 2>&1
-      run_with_timeout "ruff format '$file'" >/dev/null 2>&1
+      run_lint ruff check --fix "$file" >/dev/null 2>&1
+      run_lint ruff format "$file" >/dev/null 2>&1
     fi
 
     # Phase 2: Check remaining violations
     if command -v ruff >/dev/null 2>&1; then
-      diagnostics="$(run_with_timeout "ruff check '$file'" | head -"$MAX_OUTPUT_LINES")"
+      diagnostics="$(run_lint ruff check "$file" | head -"$MAX_OUTPUT_LINES")"
     fi
     ;;
 
   *.go)
     # Phase 1: Auto-fix (silent)
     if command -v gofumpt >/dev/null 2>&1; then
-      run_with_timeout "gofumpt -w '$file'" >/dev/null 2>&1
+      run_lint gofumpt -w "$file" >/dev/null 2>&1
     fi
     if command -v golangci-lint >/dev/null 2>&1; then
-      run_with_timeout "golangci-lint run --fix '$file'" >/dev/null 2>&1
+      dir=""
+      dir="$(dirname "$file")"
+      run_lint golangci-lint run --fix "${dir}/..." >/dev/null 2>&1
     fi
 
-    # Phase 2: Check remaining violations
+    # Phase 2: Check remaining violations (directory scope)
     if command -v golangci-lint >/dev/null 2>&1; then
-      diagnostics="$(run_with_timeout "golangci-lint run '$file'" | head -"$MAX_OUTPUT_LINES")"
+      dir=""
+      dir="$(dirname "$file")"
+      diagnostics="$(run_lint golangci-lint run "${dir}/..." | head -"$MAX_OUTPUT_LINES")"
     fi
     ;;
 
   *.json|*.css)
     # Phase 1: Auto-fix (silent)
     if command -v biome >/dev/null 2>&1; then
-      run_with_timeout "biome check --write '$file'" >/dev/null 2>&1
-    elif command -v npx >/dev/null 2>&1; then
-      run_with_timeout "npx --yes @biomejs/biome check --write '$file'" >/dev/null 2>&1
+      run_lint biome check --write "$file" >/dev/null 2>&1
     fi
 
     # Phase 2: Check remaining violations
     if command -v biome >/dev/null 2>&1; then
-      diagnostics="$(run_with_timeout "biome check '$file'" | head -"$MAX_OUTPUT_LINES")"
-    elif command -v npx >/dev/null 2>&1; then
-      diagnostics="$(run_with_timeout "npx --yes @biomejs/biome check '$file'" | head -"$MAX_OUTPUT_LINES")"
+      diagnostics="$(run_lint biome check "$file" | head -"$MAX_OUTPUT_LINES")"
     fi
     ;;
 
@@ -111,7 +110,6 @@ if [[ -n "$diagnostics" ]] \
   && [[ "$diagnostics" != *"No lint violations"* ]] \
   && [[ "$diagnostics" != *"Found 0 error"* ]] \
   && [[ "$diagnostics" != *"All checks passed"* ]] \
-  && [[ "$diagnostics" != *"Checked 1 file"*"Found 0"* ]] \
   && [[ "$diagnostics" != *"0 diagnostics"* ]]; then
   jq -Rn --arg msg "$diagnostics" '{
     hookSpecificOutput: {
