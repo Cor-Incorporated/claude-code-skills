@@ -25,12 +25,12 @@ if [[ "$_develop_exists" == "yes" ]]; then
     [[ "$_dev_sha" == "$_main_sha" ]] && _develop_main_same="yes"
 fi
 
-if echo "$cmd" | grep -q '\-\-base main'; then
+if echo "$cmd" | grep -qE '\-\-base\s+main(\s|$)'; then
     _current=$(git branch --show-current 2>/dev/null || echo "")
     _is_release="no"
     # Allow release PR: develop → main
     [[ "$_current" == "develop" ]] && _is_release="yes"
-    echo "$cmd" | grep -q '\-\-head develop' && _is_release="yes"
+    echo "$cmd" | grep -qE '\-\-head\s+develop(\s|$)' && _is_release="yes"
 
     if [[ "$_is_release" == "yes" ]]; then
         : # Release PR from develop → main: allowed
@@ -38,7 +38,7 @@ if echo "$cmd" | grep -q '\-\-base main'; then
         BLOCKERS+=("[BLOCK] PRのターゲットがmainです。--base develop を使ってください。main ← develop ← feat/*")
         BLOCKERS+=("  develop → main リリースPRは develop ブランチから作成してください。")
     fi
-elif echo "$cmd" | grep -q '\-\-base develop'; then
+elif echo "$cmd" | grep -qE '\-\-base\s+develop(\s|$)'; then
     : # OK
 else
     if [[ "$_develop_exists" == "yes" ]]; then

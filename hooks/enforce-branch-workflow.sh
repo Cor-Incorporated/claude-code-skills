@@ -12,7 +12,7 @@
 # Ref: git-workflow.md — "保護ブランチ: develop, main, master"
 # =========================================================================
 
-set -uo pipefail
+set -euo pipefail
 
 # Only run in git repos
 git rev-parse --show-toplevel >/dev/null 2>&1 || exit 0
@@ -36,10 +36,10 @@ fi
 if [[ "$_has_develop" == "no" ]] && [[ "$_has_main" == "yes" ]]; then
   # Auto-create develop from main
   git branch develop main 2>/dev/null || true
-  git push -u origin develop 2>/dev/null || true
-  CONTEXT_LINES+=("[branch-workflow] develop ブランチを main から自動作成しました。")
+  CONTEXT_LINES+=("[branch-workflow] develop ブランチをローカルに作成しました。")
+  CONTEXT_LINES+=("  リモートへのpush: git push -u origin develop")
   CONTEXT_LINES+=("  今後は feat/* → develop → main のフローで開発してください。")
-  echo "[branch-workflow] develop ブランチを自動作成しました。" >&2
+  echo "[branch-workflow] develop ブランチをローカルに作成しました (push未実行)。" >&2
 fi
 
 # --- 2. Warn if on protected branch ---
@@ -58,15 +58,17 @@ esac
 
 # --- 3. Output additionalContext ---
 if [[ ${#CONTEXT_LINES[@]} -gt 0 ]]; then
-  JOINED=$(printf '%s\\n' "${CONTEXT_LINES[@]}")
-  cat <<HOOK_JSON
-{
-  "hookSpecificOutput": {
-    "hookEventName": "SessionStart",
-    "additionalContext": "${JOINED}"
-  }
-}
-HOOK_JSON
+  JOINED=$(printf '%s\n' "${CONTEXT_LINES[@]}")
+  if command -v jq &>/dev/null; then
+    jq -n --arg ctx "$JOINED" '{
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: $ctx
+      }
+    }'
+  else
+    echo "[branch-workflow] jq not found. Context output skipped." >&2
+  fi
 fi
 
 exit 0
