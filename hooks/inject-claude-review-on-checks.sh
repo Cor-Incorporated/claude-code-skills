@@ -68,6 +68,7 @@ fi
 # =========================================================================
 if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   if [[ -f "$PENDING_FILE" ]]; then
+    REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
     CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
 import json, os
 with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
@@ -83,6 +84,19 @@ import json, os
 with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('pr', ''))
 " 2>/dev/null || echo "")
+    PENDING_HEAD_SHA=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+print(d.get('head_sha', ''))
+" 2>/dev/null || echo "")
+
+    if [[ -n "$REPO" ]] && [[ -n "$PR" ]] && [[ -n "$PENDING_HEAD_SHA" ]]; then
+      CURRENT_HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha' 2>/dev/null || echo "")
+      if [[ -n "$CURRENT_HEAD_SHA" ]] && [[ "$PENDING_HEAD_SHA" != "$CURRENT_HEAD_SHA" ]]; then
+        echo "[inject-claude-review] pending-review-comments.json is stale for PR #${PR}; skip merge block." >&2
+        exit 0
+      fi
+    fi
 
     if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
       echo "" >&2
