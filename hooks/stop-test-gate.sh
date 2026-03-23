@@ -10,6 +10,18 @@ set -uo pipefail
 # Note: -e is intentionally omitted because timeout returns non-zero
 
 # =========================================================================
+# Issue #58: Skip gate during active error recovery
+# If the working tree has unstaged changes, the developer is actively working.
+# Blocking the session end during error recovery breaks autonomous fix loops.
+# =========================================================================
+if git diff --quiet HEAD 2>/dev/null; then
+  : # Clean tree — proceed with test gate
+else
+  # Dirty tree — active work in progress, skip gate
+  exit 0
+fi
+
+# =========================================================================
 # Determine project root
 # =========================================================================
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then

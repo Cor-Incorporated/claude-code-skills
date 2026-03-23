@@ -157,30 +157,37 @@ classify_review_tier() {
 }
 
 # Helper: read review status for a branch (jq-based, no python3 dependency)
+# Issue #60 Bug C: Check BOTH project-scoped AND global state (OR logic)
+# to prevent path mismatch causing permanent blocks.
 read_review() {
   local branch="$1"
   local field="$2"
-  if [[ ! -f "$REVIEW_STATE" ]]; then
-    echo "no"
-    return
+  local global_state="$HOME/.claude/state/review-status.json"
+
+  # Check both state files — return "yes" if EITHER has the field set to true
+  local files_to_check=("$REVIEW_STATE")
+  if [[ "$global_state" != "$REVIEW_STATE" ]]; then
+    files_to_check+=("$global_state")
   fi
-  if command -v jq &>/dev/null; then
-    local val
-    val=$(jq -r --arg b "$branch" --arg f "$field" '.[$b][$f] // false' "$REVIEW_STATE" 2>/dev/null)
-    if [[ "$val" == "true" ]]; then
-      echo "yes"
+
+  for state_file in "${files_to_check[@]}"; do
+    [[ ! -f "$state_file" ]] && continue
+    if command -v jq &>/dev/null; then
+      local val
+      val=$(jq -r --arg b "$branch" --arg f "$field" '.[$b][$f] // false' "$state_file" 2>/dev/null)
+      if [[ "$val" == "true" ]]; then
+        echo "yes"
+        return
+      fi
     else
-      echo "no"
+      if grep -q "\"$branch\"" "$state_file" 2>/dev/null && \
+         grep -A5 "\"$branch\"" "$state_file" 2>/dev/null | grep -q "\"$field\".*true"; then
+        echo "yes"
+        return
+      fi
     fi
-  else
-    # Fallback: grep-based check (less precise but always available)
-    if grep -q "\"$branch\"" "$REVIEW_STATE" 2>/dev/null && \
-       grep -A5 "\"$branch\"" "$REVIEW_STATE" 2>/dev/null | grep -q "\"$field\".*true"; then
-      echo "yes"
-    else
-      echo "no"
-    fi
-  fi
+  done
+  echo "no"
 }
 
 # =========================================================================
@@ -439,6 +446,12 @@ fi
 # MODE: STOP — Block session stop if unverified PRs exist
 # =========================================================================
 if [[ "$GATE_MODE" == "STOP" ]]; then
+  # Issue #58: Skip gate during active error recovery
+  # Dirty working tree = active work in progress → don't block session end
+  if ! git diff --quiet HEAD 2>/dev/null; then
+    exit 0
+  fi
+
   # Auto-cleanup: remove merged/closed PRs from lock state (housekeeping)
   REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
   if [[ -n "$REPO" ]]; then
@@ -526,6 +539,25 @@ print(s.get(os.environ['_PR'], {}).get('branch', ''))
   else
     CODE_REVIEW=$(read_review "$BRANCH" "code_review")
     CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
+
+    # Issue #60 Bug B: Also check pending-review-comments.json (claude-review results)
+    # If claude-review reported CRITICAL/HIGH=0, treat as review passed
+    if [[ "$CODE_REVIEW" != "yes" ]]; then
+      PENDING_FILE="$STATE_DIR/pending-review-comments.json"
+      GLOBAL_PENDING="$HOME/.claude/state/pending-review-comments.json"
+      for pf in "$PENDING_FILE" "$GLOBAL_PENDING"; do
+        if [[ -f "$pf" ]] && command -v jq &>/dev/null; then
+          PR_MATCH=$(jq -r --arg p "$PR" '.pr // ""' "$pf" 2>/dev/null)
+          CR=$(jq -r '.critical // 0' "$pf" 2>/dev/null)
+          HI=$(jq -r '.high // 0' "$pf" 2>/dev/null)
+          if [[ "$PR_MATCH" == "$PR" ]] && [[ "$CR" == "0" ]] && [[ "$HI" == "0" ]]; then
+            CODE_REVIEW="yes"
+            echo "  ℹ️ claude-review CRITICAL/HIGH=0 → code_review=yes として扱う" >&2
+            break
+          fi
+        fi
+      done
+    fi
 
     MISSING=""
     [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
