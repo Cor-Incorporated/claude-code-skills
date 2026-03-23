@@ -104,14 +104,51 @@ try:
 except Exception:
     pass
 
-# --- Rule 1: BLOCK worktree isolation ---
+# --- Rule 1: Worktree isolation — stale base guard ---
+# Issue #75 follow-up: blanket ban replaced with stale-base detection.
+# Worktree is allowed if the current branch base is up-to-date with remote.
 isolation = tool_input.get("isolation", "")
 if isolation == "worktree":
-    print('🚫 [Worktree Block] isolation: "worktree" は使用禁止です。', file=sys.stderr)
-    print("", file=sys.stderr)
-    print("理由: stale develop base問題で3回連続失敗 (2026-03-18)。", file=sys.stderr)
-    print("代替: TeamCreate / isolation なし Agent / 手動ブランチ作成", file=sys.stderr)
-    sys.exit(2)
+    import subprocess
+    try:
+        # Fetch latest remote state (lightweight, refs only)
+        subprocess.run(["git", "fetch", "--quiet"], capture_output=True, timeout=15)
+        # Detect base branch (develop > main > master)
+        base = None
+        for candidate in ["develop", "main", "master"]:
+            r = subprocess.run(
+                ["git", "rev-parse", "--verify", f"refs/remotes/origin/{candidate}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                base = candidate
+                break
+        if base:
+            local = subprocess.run(
+                ["git", "rev-parse", base],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            remote = subprocess.run(
+                ["git", "rev-parse", f"origin/{base}"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            if local != remote:
+                # Check if local is behind remote (stale) vs ahead (unpushed)
+                is_behind = subprocess.run(
+                    ["git", "merge-base", "--is-ancestor", f"origin/{base}", base],
+                    capture_output=True, timeout=5,
+                ).returncode != 0  # non-zero = origin/base is NOT ancestor of local = local is behind
+                if is_behind:
+                    print(f'[BLOCKED] worktree-stale-guard: ローカル {base} がリモートより遅れています。', file=sys.stderr)
+                    print(f"  local:  {local[:12]}", file=sys.stderr)
+                    print(f"  remote: {remote[:12]}", file=sys.stderr)
+                    print(f"解決方法: git checkout {base} && git pull origin {base}", file=sys.stderr)
+                    sys.exit(2)
+            # Base is up-to-date — allow worktree
+            print(f"ℹ️ [Worktree] {base} base同期確認OK。worktree起動を許可。", file=sys.stderr)
+    except Exception as e:
+        # Fetch failed (offline etc.) — allow with warning
+        print(f"⚠️ [Worktree] base同期チェック失敗 ({e})。worktree起動を許可。", file=sys.stderr)
 
 # --- Classify agent type ---
 subagent_type = tool_input.get("subagent_type", "")
