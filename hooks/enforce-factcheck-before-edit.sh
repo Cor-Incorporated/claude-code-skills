@@ -18,6 +18,24 @@ if [ ! -f "$STATE_FILE" ]; then
     echo '{"factchecked": false, "source": "", "timestamp": 0, "edit_count_since_check": 0}' > "$STATE_FILE"
 fi
 
+increment_edit_count() {
+    _STATE_FILE="$STATE_FILE" _COUNT="$1" python3 <<'PYEOF'
+import fcntl, json, os
+
+state_file = os.environ["_STATE_FILE"]
+count = int(os.environ["_COUNT"])
+
+with open(state_file, "r+") as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    state = json.load(f)
+    state["edit_count_since_check"] = count
+    f.seek(0)
+    f.truncate()
+    json.dump(state, f)
+    fcntl.flock(f, fcntl.LOCK_UN)
+PYEOF
+}
+
 input=$(cat)
 file_path=$(echo "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
 
@@ -87,7 +105,7 @@ if [ "$factchecked" = "false" ] || [ "$expired" = "true" ]; then
     fi
 
     # edit_countを増加
-    jq --argjson count "$((edit_count + 1))" '.edit_count_since_check = $count' "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    increment_edit_count "$((edit_count + 1))"
 
     if [ "$factchecked" = "false" ] && [ "$edit_count" -eq 0 ]; then
         echo "⚠️ [WARN] ファクトチェックが未実施です。修正内容が最新ドキュメントに沿っているか確認してください。" >&2
@@ -95,7 +113,7 @@ if [ "$factchecked" = "false" ] || [ "$expired" = "true" ]; then
     fi
 else
     # ファクトチェック済み: edit_countを増加
-    jq --argjson count "$((edit_count + 1))" '.edit_count_since_check = $count' "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    increment_edit_count "$((edit_count + 1))"
 fi
 
 exit 0

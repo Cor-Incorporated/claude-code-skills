@@ -5,6 +5,8 @@
 # Write/Edit ツールで settings.local.json を変更する際、hooks が含まれていたらブロック。
 # =========================================================================
 
+set -euo pipefail
+
 input=""
 if [[ ! -t 0 ]]; then
   input=$(cat 2>/dev/null || echo "")

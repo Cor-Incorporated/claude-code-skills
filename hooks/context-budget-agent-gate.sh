@@ -70,7 +70,7 @@ NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Pass all dynamic values via environment variables (not string interpolation)
 # to prevent shell injection via crafted JSON input
 _STATE_FILE="$STATE_FILE" _NOW="$NOW" _INPUT_JSON="$INPUT_JSON" python3 << 'PYEOF'
-import json, sys, os
+import json, sys, os, fcntl
 
 state_file = os.environ["_STATE_FILE"]
 now = os.environ["_NOW"]
@@ -87,12 +87,6 @@ RESEARCH_KEYWORDS = [
     "調査", "確認", "check", "review", "explore", "research",
     "read", "verify", "分析", "検証", "compare",
 ]
-
-with open(state_file) as f:
-    state = json.load(f)
-
-if not state.get("started_at"):
-    state["started_at"] = now
 
 # Parse Agent tool input
 tool_input = {}
@@ -166,36 +160,53 @@ is_background = bool(tool_input.get("run_in_background", False))
 # - 1st foreground impl: WARN (suggest background/TeamCreate for next)
 # - 2nd+ foreground impl: BLOCK
 has_team = bool(tool_input.get("team_name", ""))
-if not is_research and not has_team and not is_background:
-    impl_count = state.get("impl_agent_count", 0)
-    if impl_count >= 1:
-        print("🚫 [Foreground Impl Blocked] 2つ目のforeground実装Agentをブロック。", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("前回のforeground Agentでメインセッションがブロックされました。", file=sys.stderr)
-        print("独立タスクは並列実行が必須です。", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("修正方法:", file=sys.stderr)
-        print("  1. run_in_background: true を指定（推奨）", file=sys.stderr)
-        print("  2. TeamCreate で並列チームを構成", file=sys.stderr)
-        print("  3. Codex CLI 経路C で委任", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("Ref: Issue #31 — foreground実装Agentの逐次実行を防止", file=sys.stderr)
-        with open(state_file, "w") as f:
-            json.dump(state, f, indent=2)
-        sys.exit(2)
-    state["impl_agent_count"] = impl_count + 1
-    state["fg_impl_agent_count"] = state.get("fg_impl_agent_count", 0) + 1
-    # WARN on 1st foreground impl
+block_foreground_impl = False
+warn_foreground_impl = False
+
+with open(state_file, "r+") as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    state = json.load(f)
+
+    if not state.get("started_at"):
+        state["started_at"] = now
+
+    if not is_research and not has_team and not is_background:
+        impl_count = state.get("impl_agent_count", 0)
+        if impl_count >= 1:
+            block_foreground_impl = True
+        else:
+            state["impl_agent_count"] = impl_count + 1
+            state["fg_impl_agent_count"] = state.get("fg_impl_agent_count", 0) + 1
+            warn_foreground_impl = True
+
+    # --- Count total agents ---
+    if not block_foreground_impl:
+        state["agent_count"] = state.get("agent_count", 0) + 1
+        count = state["agent_count"]
+
+    f.seek(0)
+    f.truncate()
+    json.dump(state, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
+
+if block_foreground_impl:
+    print("🚫 [Foreground Impl Blocked] 2つ目のforeground実装Agentをブロック。", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("前回のforeground Agentでメインセッションがブロックされました。", file=sys.stderr)
+    print("独立タスクは並列実行が必須です。", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("修正方法:", file=sys.stderr)
+    print("  1. run_in_background: true を指定（推奨）", file=sys.stderr)
+    print("  2. TeamCreate で並列チームを構成", file=sys.stderr)
+    print("  3. Codex CLI 経路C で委任", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("Ref: Issue #31 — foreground実装Agentの逐次実行を防止", file=sys.stderr)
+    sys.exit(2)
+
+if warn_foreground_impl:
     print("⚠️ [Foreground Impl] 実装Agentがforegroundで起動されます。", file=sys.stderr)
     print("  → 2つ目以降はrun_in_background: trueまたはTeamCreateを使用してください。", file=sys.stderr)
     print("  → foreground実行はメインセッションをブロックします。", file=sys.stderr)
-
-# --- Count total agents ---
-state["agent_count"] = state.get("agent_count", 0) + 1
-count = state["agent_count"]
-
-with open(state_file, "w") as f:
-    json.dump(state, f, indent=2)
 
 # --- Rule 3: WARN at 3+ total agents ---
 if count == 3:

@@ -76,8 +76,9 @@ fi
 
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+[[ ! -f "$STATE_FILE" ]] && echo '{}' > "$STATE_FILE"
 _STATE_FILE="$STATE_FILE" _FILE_PATH="$FILE_PATH" _NOW="$NOW" python3 << PYEOF
-import json, sys, os, re
+import json, sys, os, re, fcntl
 
 state_file = os.environ['_STATE_FILE']
 file_path = os.environ['_FILE_PATH']
@@ -96,17 +97,20 @@ if re.search(r'(CLAUDE\.md|Plans\.md|MEMORY\.md|AGENTS\.md)', file_path):
 if not is_test and not is_doc:
     sys.exit(0)
 
-with open(state_file) as f:
+with open(state_file, "r+") as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
     state = json.load(f)
 
-if not state.get("started_at"):
-    state["started_at"] = now
+    if not state.get("started_at"):
+        state["started_at"] = now
 
-state["write_test_doc_count"] = state.get("write_test_doc_count", 0) + 1
-count = state["write_test_doc_count"]
+    state["write_test_doc_count"] = state.get("write_test_doc_count", 0) + 1
+    count = state["write_test_doc_count"]
 
-with open(state_file, "w") as f:
+    f.seek(0)
+    f.truncate()
     json.dump(state, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 
 file_type = "テスト" if is_test else "ドキュメント"
 
