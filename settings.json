@@ -110,6 +110,12 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/enforce-factcheck-before-edit.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/protect-linter-config.sh",
+            "timeout": 5,
+            "statusMessage": "Checking linter config protection..."
           }
         ]
       },
@@ -142,6 +148,12 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/block-version-downgrade.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/protect-linter-config.sh",
+            "timeout": 5,
+            "statusMessage": "Checking linter config protection..."
           }
         ]
       },
@@ -465,6 +477,17 @@
             "command": "bash ~/.claude/hooks/workflow-sync-guard.sh",
             "timeout": 10,
             "statusMessage": "Checking workflow file sync..."
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/post-lint-format.sh",
+            "timeout": 5,
+            "statusMessage": "Running PostToolUse Quality Loop (lint + format)..."
           }
         ]
       }
