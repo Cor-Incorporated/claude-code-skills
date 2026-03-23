@@ -34,9 +34,27 @@ case "$tool" in
 esac
 
 if [ -n "$source_name" ]; then
-    cat > "$STATE_FILE" <<EOJSON
-{"factchecked": true, "source": "$source_name", "timestamp": $now, "edit_count_since_check": 0}
-EOJSON
+    if [[ ! -f "$STATE_FILE" ]]; then
+        echo '{}' > "$STATE_FILE"
+    fi
+    _STATE_FILE="$STATE_FILE" _SOURCE_NAME="$source_name" _NOW="$now" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_STATE_FILE']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    try:
+        data = json.load(f)
+    except json.JSONDecodeError:
+        data = {}
+    data['factchecked'] = True
+    data['source'] = os.environ['_SOURCE_NAME']
+    data['timestamp'] = int(os.environ['_NOW'])
+    data['edit_count_since_check'] = 0
+    f.seek(0)
+    f.truncate()
+    json.dump(data, f)
+    fcntl.flock(f, fcntl.LOCK_UN)
+" 2>/dev/null
 fi
 
 exit 0

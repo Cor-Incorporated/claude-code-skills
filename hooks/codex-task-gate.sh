@@ -7,6 +7,66 @@ set -euo pipefail
 
 input=$(cat)
 
+ensure_json_file() {
+    local state_file="$1"
+    [[ -f "$state_file" ]] || echo '{}' > "$state_file"
+}
+
+reserve_codex_call() {
+    local budget_file="$1"
+    ensure_json_file "$budget_file"
+
+    _BUDGET_FILE="$budget_file" python3 -c '
+import json, os, fcntl, sys
+f_path = os.environ["_BUDGET_FILE"]
+with open(f_path, "r+") as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    try:
+        s = json.load(f)
+    except json.JSONDecodeError:
+        s = {}
+    try:
+        count = int(s.get("codex_call_count", 0))
+        if count >= 1:
+            print(count)
+            sys.exit(1)
+        s["codex_call_count"] = count + 1
+        f.seek(0)
+        f.truncate()
+        json.dump(s, f, indent=2)
+        print(count + 1)
+    finally:
+        fcntl.flock(f, fcntl.LOCK_UN)
+' 2>/dev/null
+}
+
+increment_json_counter() {
+    local state_file="$1"
+    local counter_key="$2"
+    ensure_json_file "$state_file"
+
+    _STATE_FILE="$state_file" _COUNTER_KEY="$counter_key" python3 -c '
+import json, os, fcntl
+f_path = os.environ["_STATE_FILE"]
+counter_key = os.environ["_COUNTER_KEY"]
+with open(f_path, "r+") as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    try:
+        s = json.load(f)
+    except json.JSONDecodeError:
+        s = {}
+    try:
+        new_count = int(s.get(counter_key, 0)) + 1
+        s[counter_key] = new_count
+        f.seek(0)
+        f.truncate()
+        json.dump(s, f, indent=2)
+        print(new_count)
+    finally:
+        fcntl.flock(f, fcntl.LOCK_UN)
+' 2>/dev/null
+}
+
 # --- Rule: Codex batch enforcement (for Bash tool) ---
 # Detect codex-parallel.sh / codex exec calls and block 2nd+ call
 tool_name=$(echo "$input" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
@@ -25,31 +85,15 @@ fi
 
 if [[ "$tool_name" == "Bash" ]] && [[ "$is_codex_exec" == "true" ]]; then
     BUDGET_FILE="${HOME}/.claude/state/context-budget.json"
-    if [[ -f "$BUDGET_FILE" ]]; then
-        codex_count=$(_BUDGET_FILE="$BUDGET_FILE" python3 -c "
-import json, os
-with open(os.environ['_BUDGET_FILE']) as f:
-    print(json.load(f).get('codex_call_count', 0))
-" 2>/dev/null || echo "0")
-        if [[ "$codex_count" -ge 1 ]]; then
-            echo "🚫 [Codex Batch Required] 2回目のCodex呼び出しをブロック。" >&2
-            echo "" >&2
-            echo "ルール: Codexには1つの統合タスクとして委任してください。" >&2
-            echo "  → 複数小分けではなく、1プロンプトにまとめる" >&2
-            echo "  → Codex内部サブエージェントが分割を担当" >&2
-            echo "  → codex-orchestrate.sh + tasks.json で一括委任" >&2
-            exit 2
-        fi
-        # Increment codex call count
-        _BUDGET_FILE="$BUDGET_FILE" python3 -c "
-import json, os
-f = os.environ['_BUDGET_FILE']
-with open(f) as fh:
-    s = json.load(fh)
-s['codex_call_count'] = s.get('codex_call_count', 0) + 1
-with open(f, 'w') as fh:
-    json.dump(s, fh, indent=2)
-" 2>/dev/null
+    mkdir -p "$(dirname "$BUDGET_FILE")"
+    if ! reserve_codex_call "$BUDGET_FILE" >/dev/null; then
+        echo "🚫 [Codex Batch Required] 2回目のCodex呼び出しをブロック。" >&2
+        echo "" >&2
+        echo "ルール: Codexには1つの統合タスクとして委任してください。" >&2
+        echo "  → 複数小分けではなく、1プロンプトにまとめる" >&2
+        echo "  → Codex内部サブエージェントが分割を担当" >&2
+        echo "  → codex-orchestrate.sh + tasks.json で一括委任" >&2
+        exit 2
     fi
     exit 0
 fi
@@ -66,7 +110,7 @@ fi
 # State file for tracking
 STATE_FILE="${HOME}/.claude/state/codex-task-gate.json"
 mkdir -p "$(dirname "$STATE_FILE")"
-[ ! -f "$STATE_FILE" ] && echo '{"test_files_created":0,"doc_files_created":0}' > "$STATE_FILE"
+ensure_json_file "$STATE_FILE"
 
 # Detect test file creation
 is_test=false
@@ -81,9 +125,7 @@ if echo "$file_path" | grep -qE '\.(md|rst|txt)$' && echo "$file_path" | grep -q
 fi
 
 if [ "$is_test" = true ]; then
-    count=$(jq -r '.test_files_created // 0' "$STATE_FILE")
-    new_count=$((count + 1))
-    jq --argjson c "$new_count" '.test_files_created = $c' "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    new_count=$(increment_json_counter "$STATE_FILE" "test_files_created")
 
     if [ "$new_count" -ge 3 ]; then
         echo "" >&2
@@ -102,9 +144,7 @@ if [ "$is_test" = true ]; then
 fi
 
 if [ "$is_doc" = true ]; then
-    count=$(jq -r '.doc_files_created // 0' "$STATE_FILE")
-    new_count=$((count + 1))
-    jq --argjson c "$new_count" '.doc_files_created = $c' "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    new_count=$(increment_json_counter "$STATE_FILE" "doc_files_created")
 
     if [ "$new_count" -ge 2 ]; then
         echo "" >&2
