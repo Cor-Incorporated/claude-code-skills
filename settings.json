@@ -360,6 +360,17 @@
             "statusMessage": "Checking settings.local.json for hooks override..."
           }
         ]
+      },
+      {
+        "matcher": "mcp__codex__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-codex-mcp.sh",
+            "timeout": 5,
+            "statusMessage": "Checking Codex usage policy..."
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -502,6 +513,17 @@
             "command": "bash ~/.claude/hooks/post-lint-format.sh",
             "timeout": 5,
             "statusMessage": "Running PostToolUse Quality Loop (lint + format)..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/post-pr-create-review-trigger.sh",
+            "timeout": 15,
+            "statusMessage": "Checking if PR was created..."
           }
         ]
       }
