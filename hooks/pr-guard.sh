@@ -17,7 +17,7 @@ project_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 
 # --- 0. PR target branch check ---
 # Allow --base main when: develop doesn't exist, or develop == main (in sync)
-_develop_exists=$(git rev-parse --verify origin/develop 2>/dev/null && echo "yes" || echo "no")
+_develop_exists=$(git rev-parse --verify origin/develop >/dev/null 2>&1 && echo "yes" || echo "no")
 _develop_main_same="no"
 if [[ "$_develop_exists" == "yes" ]]; then
     _dev_sha=$(git rev-parse origin/develop 2>/dev/null || echo "")
@@ -26,17 +26,24 @@ if [[ "$_develop_exists" == "yes" ]]; then
 fi
 
 if echo "$cmd" | grep -q '\-\-base main'; then
-    if [[ "$_develop_exists" == "yes" ]] && [[ "$_develop_main_same" == "no" ]]; then
+    _current=$(git branch --show-current 2>/dev/null || echo "")
+    _is_release="no"
+    # Allow release PR: develop → main
+    [[ "$_current" == "develop" ]] && _is_release="yes"
+    echo "$cmd" | grep -q '\-\-head develop' && _is_release="yes"
+
+    if [[ "$_is_release" == "yes" ]]; then
+        : # Release PR from develop → main: allowed
+    elif [[ "$_develop_exists" == "yes" ]] && [[ "$_develop_main_same" == "no" ]]; then
         BLOCKERS+=("[BLOCK] PRのターゲットがmainです。--base develop を使ってください。main ← develop ← feat/*")
+        BLOCKERS+=("  develop → main リリースPRは develop ブランチから作成してください。")
     fi
-    # If develop doesn't exist or develop==main, --base main is OK
 elif echo "$cmd" | grep -q '\-\-base develop'; then
     : # OK
 else
     if [[ "$_develop_exists" == "yes" ]]; then
         BLOCKERS+=("[BLOCK] --base が未指定です。明示的に --base develop を指定してください")
     fi
-    # If develop doesn't exist, --base omission is OK (defaults to main)
 fi
 
 # --- 1. BLOCK: Issue reference with close keyword required ---

@@ -2,7 +2,7 @@
 
 [Claude Code](https://claude.com/claude-code)（Anthropic 公式 CLI）のためのスキル・ルール・フック集です。
 
-27 のカスタムスキル、43 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
+27 のカスタムスキル、44 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
 
 [English](README.md) | **日本語**
 
@@ -23,7 +23,7 @@ chmod +x setup.sh
 claude-code-skills/
 ├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 5 グローバルルール (コーディング規約, Git, 品質, テスト, 委任)
-├── hooks/            # 43 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
+├── hooks/            # 44 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
 ├── scripts/          # 5 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
@@ -47,7 +47,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (カスタムスキル + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 43 hook スクリプト
+  code-reviewer, review-loop, e2e, bugfix + 44 hook スクリプト
 
 Reflect (gstack)
   /retro
@@ -232,7 +232,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 | **マージ後** | `post-merge-close-issues.sh` | リンクされた Issue を自動クローズ |
 | **セッション終了** | `pr-ci-review-gate.sh` (STOP) | 未検証 PR について警告 |
 
-## Hook システム（43 スクリプト）
+## Hook システム（44 スクリプト）
 
 ### 品質ゲート（マージ前）
 - `block-merge-without-ci.sh` — CI 全チェックグリーンなしでマージをブロック
@@ -252,6 +252,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - `audit-docker-build-args.sh` — Docker build args の http:// チェック
 - `block-local-hooks-write.sh` — settings.local.json によるグローバル hook 上書きを防止
 - `validate-no-local-hooks.sh` — セッション開始時に hook 上書きが存在しないことを検証
+- `enforce-branch-workflow.sh` — Auto-create develop branch, enforce feature branch workflow
 
 ### コンテキスト予算管理
 - `context-budget-read-gate.sh` — 3+ ソースファイル読み込みで警告/ブロック

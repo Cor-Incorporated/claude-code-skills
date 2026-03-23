@@ -75,6 +75,12 @@
             "command": "bash ~/.claude/hooks/validate-no-local-hooks.sh",
             "timeout": 5,
             "statusMessage": "Validating settings.local.json has no hook overrides..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-branch-workflow.sh",
+            "timeout": 15,
+            "statusMessage": "Checking branch workflow..."
           }
         ]
       }
