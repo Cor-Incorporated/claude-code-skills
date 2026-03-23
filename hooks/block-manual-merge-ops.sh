@@ -26,7 +26,16 @@ _write_rebase_state() {
     local target="$1"
     local now_epoch
     now_epoch=$(date +%s)
-    cat > "$REBASE_STATE_FILE" <<EOJSON
+    _STATE="$REBASE_STATE_FILE" _TARGET="$target" _EPOCH="$now_epoch" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_STATE']
+data = {'rebase_in_progress': True, 'rebase_target': os.environ['_TARGET'], 'started_epoch': int(os.environ['_EPOCH'])}
+fd = os.open(f_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+with os.fdopen(fd, 'w') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    json.dump(data, f)
+    fcntl.flock(f, fcntl.LOCK_UN)
+" 2>/dev/null || cat > "$REBASE_STATE_FILE" <<EOJSON
 {"rebase_in_progress":true,"rebase_target":"${target}","started_epoch":${now_epoch}}
 EOJSON
 }

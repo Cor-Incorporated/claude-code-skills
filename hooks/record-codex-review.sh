@@ -44,12 +44,17 @@ write_codex_review() {
     fi
   else
     _STATE="$target" _BR="$BRANCH" _NOW="$NOW" python3 -c "
-import json, os
+import json, os, fcntl
 f_path = os.environ['_STATE']
-with open(f_path) as f: s = json.load(f)
-s.setdefault(os.environ['_BR'], {})['codex_review'] = True
-s[os.environ['_BR']]['codex_review_at'] = os.environ['_NOW']
-with open(f_path, 'w') as f: json.dump(s, f, indent=2)
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    s.setdefault(os.environ['_BR'], {})['codex_review'] = True
+    s[os.environ['_BR']]['codex_review_at'] = os.environ['_NOW']
+    f.seek(0)
+    f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null || true
   fi
 }
