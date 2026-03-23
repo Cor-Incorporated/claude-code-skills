@@ -25,12 +25,12 @@ if echo "$question" | grep -qi "設定.*してください\|変更.*してくだ
 fi
 
 if [ ${#BLOCKERS[@]} -gt 0 ]; then
-    echo "🚫 ファクトチェック未完了の手動操作依頼を検出:"
+    echo "[BLOCKED] enforce-factcheck-before-user-request: ファクトチェック未完了の手動操作依頼を検出:" >&2
     for b in "${BLOCKERS[@]}"; do
-        echo "  $b"
+        echo "  $b" >&2
     done
-    echo ""
-    echo "対応: WebSearch/公式ドキュメントで事実確認 → 自動化検討 → 自動化不可能な場合のみ依頼"
+    echo "" >&2
+    echo "解決方法: WebSearch/公式ドキュメントで事実確認 → 自動化検討 → 自動化不可能な場合のみ依頼" >&2
     exit 2
 fi
 

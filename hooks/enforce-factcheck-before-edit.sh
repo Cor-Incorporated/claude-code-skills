@@ -66,21 +66,23 @@ fi
 if [ "$factchecked" = "false" ] || [ "$expired" = "true" ]; then
     # インフラ/設定ファイルの場合は完全ブロック
     if echo "$file_path" | grep -qE '\.(yml|yaml)$|Dockerfile|vercel\.json|\.env|Makefile|docker-compose|cloudbuild|terraform'; then
-        echo "🚫 [BLOCK] インフラ/設定ファイルの修正前にファクトチェックが必要です。"
-        echo "  対象ファイル: $file_path"
-        echo "  必須: context7 (resolve-library-id → query-docs) または WebSearch で公式ドキュメントを確認してから修正してください。"
-        echo ""
-        echo "  例: Vercel設定 → context7でVercel docs確認"
-        echo "  例: GitHub Actions → context7でGitHub Actions docs確認"
-        echo "  例: Cloud Run → WebSearchでCloud Run最新ドキュメント確認"
+        echo "[BLOCKED] enforce-factcheck-before-edit: インフラ/設定ファイルの修正前にファクトチェックが必要です。" >&2
+        echo "  対象ファイル: $file_path" >&2
+        echo "  必須: context7 (resolve-library-id → query-docs) または WebSearch で公式ドキュメントを確認してから修正してください。" >&2
+        echo "" >&2
+        echo "  例: Vercel設定 → context7でVercel docs確認" >&2
+        echo "  例: GitHub Actions → context7でGitHub Actions docs確認" >&2
+        echo "  例: Cloud Run → WebSearchでCloud Run最新ドキュメント確認" >&2
+        echo "解決方法: context7/WebSearch/WebFetchで公式ドキュメントを確認してから再度実行してください。" >&2
         exit 2
     fi
 
     # ソースコードの場合は警告（初回は通す、2回目以降はブロック）
     if [ "$edit_count" -ge 2 ] && [ "$factchecked" = "false" ]; then
-        echo "🚫 [BLOCK] 複数ファイルの修正前にファクトチェックが必要です。"
-        echo "  context7、WebSearch、または関連ドキュメントのReadを実行してから修正してください。"
-        echo "  ファクトチェック済みの場合: context7/WebSearch/WebFetch を1回使うとフラグが立ちます。"
+        echo "[BLOCKED] enforce-factcheck-before-edit: 複数ファイルの修正前にファクトチェックが必要です。" >&2
+        echo "  context7、WebSearch、または関連ドキュメントのReadを実行してから修正してください。" >&2
+        echo "  ファクトチェック済みの場合: context7/WebSearch/WebFetch を1回使うとフラグが立ちます。" >&2
+        echo "解決方法: context7/WebSearch/WebFetchのいずれかを1回使用してからファイル修正を実行してください。" >&2
         exit 2
     fi
 

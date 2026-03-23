@@ -104,8 +104,8 @@ if printf '%s' "$old_string" | grep -qE ':latest' && printf '%s' "$new_string" |
 fi
 
 if [ -n "$DOWNGRADE_FOUND" ]; then
-    cat <<BLOCK_MSG
-🚫 Version DOWNGRADE detected and blocked.
+    cat >&2 <<BLOCK_MSG
+[BLOCKED] block-version-downgrade: Version DOWNGRADE detected.
 
 File: $file_path
 Downgrade: $DOWNGRADE_FOUND
@@ -115,17 +115,14 @@ Version downgrades are prohibited. If this is intentional:
 2. Confirm the downgraded version supports ALL features required by related ADRs
 3. Get explicit user approval before proceeding
 
-Related ADRs to check:
-- ADR-0011: Qwen3.5 + GLM-4.7-Flash hybrid model requirements
-- ADR-0014: llm-gateway streaming + classification requirements
-- ADR-0006: Deployment topology constraints
+解決方法: ADR-0011/0014/0006 を確認し、互換性を検証してからユーザー承認を得てください。
 BLOCK_MSG
     exit 2
 fi
 
 if [ -n "$LATEST_PIN" ]; then
-    cat <<BLOCK_MSG
-⚠️ :latest → specific version pin detected.
+    cat >&2 <<BLOCK_MSG
+[BLOCKED] block-version-downgrade: :latest → specific version pin detected.
 
 File: $file_path
 
@@ -134,7 +131,7 @@ Before pinning from :latest, verify:
 2. Check the software's supported models/features changelog
 3. State which ADR you verified and confirm compatibility
 
-Pinning to a version that lacks required features is equivalent to a downgrade.
+解決方法: 関連ADRの互換性要件を確認し、pinned versionが全要件を満たすことを検証してください。
 BLOCK_MSG
     exit 2
 fi
