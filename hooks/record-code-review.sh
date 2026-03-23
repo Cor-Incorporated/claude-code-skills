@@ -45,17 +45,25 @@ if [[ "$IS_REVIEW" != "true" ]]; then
   exit 0
 fi
 
-# Determine state directory
+# Determine state directories — write to BOTH global and project-scoped
+# to prevent CWD-dependent state mismatch (Issue #7)
+GLOBAL_STATE_DIR="$HOME/.claude/state"
+mkdir -p "$GLOBAL_STATE_DIR"
+[ ! -f "$GLOBAL_STATE_DIR/review-status.json" ] && echo '{}' > "$GLOBAL_STATE_DIR/review-status.json"
+
+PROJECT_STATE_DIR=""
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
-  STATE_DIR="${CLAUDE_PROJECT_DIR}/.claude/state"
+  PROJECT_STATE_DIR="${CLAUDE_PROJECT_DIR}/.claude/state"
 elif git rev-parse --show-toplevel &>/dev/null; then
-  STATE_DIR="$(git rev-parse --show-toplevel)/.claude/state"
-else
-  STATE_DIR="$HOME/.claude/state"
+  PROJECT_STATE_DIR="$(git rev-parse --show-toplevel)/.claude/state"
 fi
-REVIEW_STATE="$STATE_DIR/review-status.json"
-mkdir -p "$STATE_DIR"
-[ ! -f "$REVIEW_STATE" ] && echo '{}' > "$REVIEW_STATE"
+if [[ -n "$PROJECT_STATE_DIR" ]] && [[ "$PROJECT_STATE_DIR" != "$GLOBAL_STATE_DIR" ]]; then
+  mkdir -p "$PROJECT_STATE_DIR"
+  [ ! -f "$PROJECT_STATE_DIR/review-status.json" ] && echo '{}' > "$PROJECT_STATE_DIR/review-status.json"
+fi
+
+# Primary state file (global — always consistent regardless of CWD)
+REVIEW_STATE="$GLOBAL_STATE_DIR/review-status.json"
 
 # Get current branch
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")
@@ -71,14 +79,46 @@ if command -v jq &>/dev/null; then
     '.[$b] = ((.[$b] // {}) + {"code_review": true, "code_review_at": $t})' \
     "$REVIEW_STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$REVIEW_STATE"
 else
-  # Fallback: python3
-  python3 -c "
-import json
-with open('$REVIEW_STATE') as f: s=json.load(f)
-s.setdefault('$BRANCH', {})['code_review'] = True
-s['$BRANCH']['code_review_at'] = '$NOW'
-with open('$REVIEW_STATE', 'w') as f: json.dump(s, f, indent=2)
+  # Fallback: python3 (safe: env vars, not string interpolation)
+  _STATE="$REVIEW_STATE" _BR="$BRANCH" _NOW="$NOW" python3 -c "
+import json, os
+f_path = os.environ['_STATE']
+with open(f_path) as f: s = json.load(f)
+s.setdefault(os.environ['_BR'], {})['code_review'] = True
+s[os.environ['_BR']]['code_review_at'] = os.environ['_NOW']
+with open(f_path, 'w') as f: json.dump(s, f, indent=2)
 " 2>/dev/null || true
+fi
+
+# Also write to project-scoped state if it exists (dual-write for CWD consistency)
+if [[ -n "$PROJECT_STATE_DIR" ]] && [[ "$PROJECT_STATE_DIR" != "$GLOBAL_STATE_DIR" ]]; then
+  PROJECT_REVIEW="$PROJECT_STATE_DIR/review-status.json"
+  if command -v jq &>/dev/null; then
+    tmp=$(mktemp)
+    if jq --arg b "$BRANCH" --arg t "$NOW" \
+      '.[$b] = ((.[$b] // {}) + {"code_review": true, "code_review_at": $t})' \
+      "$PROJECT_REVIEW" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$PROJECT_REVIEW"
+    else
+      rm -f "$tmp"
+      # Reset corrupted file and retry once
+      echo '{}' > "$PROJECT_REVIEW"
+      tmp=$(mktemp)
+      jq --arg b "$BRANCH" --arg t "$NOW" \
+        '.[$b] = {"code_review": true, "code_review_at": $t}' \
+        "$PROJECT_REVIEW" > "$tmp" 2>/dev/null && mv "$tmp" "$PROJECT_REVIEW" || rm -f "$tmp"
+    fi
+  else
+    # Fallback: python3 (same as global write path)
+    _STATE="$PROJECT_REVIEW" _BR="$BRANCH" _NOW="$NOW" python3 -c "
+import json, os
+f_path = os.environ['_STATE']
+with open(f_path) as f: s = json.load(f)
+s.setdefault(os.environ['_BR'], {})['code_review'] = True
+s[os.environ['_BR']]['code_review_at'] = os.environ['_NOW']
+with open(f_path, 'w') as f: json.dump(s, f, indent=2)
+" 2>/dev/null || true
+  fi
 fi
 
 echo "✅ [review-gate] code-reviewer 完了を記録: branch=$BRANCH" >&2

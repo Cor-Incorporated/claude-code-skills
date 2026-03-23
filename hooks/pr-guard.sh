@@ -7,8 +7,7 @@ input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 cmd_first_line=$(echo "$cmd" | head -1)
-if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*create'; then
-    echo "$input"
+if ! echo "$cmd_first_line" | grep -qE 'gh\s+pr\s+create\b'; then
     exit 0
 fi
 
@@ -16,13 +15,35 @@ WARNINGS=()
 BLOCKERS=()
 project_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 
-# --- 0. BLOCK: PR must target develop, never main ---
-if echo "$cmd" | grep -q '\-\-base main'; then
-    BLOCKERS+=("[BLOCK] PRのターゲットがmainです。--base develop を使ってください。main ← develop ← feat/*")
-elif echo "$cmd" | grep -q '\-\-base develop'; then
+# --- 0. PR target branch check ---
+# Allow --base main when: develop doesn't exist, or develop == main (in sync)
+_develop_exists=$(git rev-parse --verify origin/develop >/dev/null 2>&1 && echo "yes" || echo "no")
+_develop_main_same="no"
+if [[ "$_develop_exists" == "yes" ]]; then
+    _dev_sha=$(git rev-parse origin/develop 2>/dev/null || echo "")
+    _main_sha=$(git rev-parse origin/main 2>/dev/null || echo "")
+    [[ "$_dev_sha" == "$_main_sha" ]] && _develop_main_same="yes"
+fi
+
+if echo "$cmd" | grep -qE '\-\-base\s+main(\s|$)'; then
+    _current=$(git branch --show-current 2>/dev/null || echo "")
+    _is_release="no"
+    # Allow release PR: develop → main
+    [[ "$_current" == "develop" ]] && _is_release="yes"
+    echo "$cmd" | grep -qE '\-\-head\s+develop(\s|$)' && _is_release="yes"
+
+    if [[ "$_is_release" == "yes" ]]; then
+        : # Release PR from develop → main: allowed
+    elif [[ "$_develop_exists" == "yes" ]] && [[ "$_develop_main_same" == "no" ]]; then
+        BLOCKERS+=("[BLOCK] PRのターゲットがmainです。--base develop を使ってください。main ← develop ← feat/*")
+        BLOCKERS+=("  develop → main リリースPRは develop ブランチから作成してください。")
+    fi
+elif echo "$cmd" | grep -qE '\-\-base\s+develop(\s|$)'; then
     : # OK
 else
-    BLOCKERS+=("[BLOCK] --base が未指定です。明示的に --base develop を指定してください")
+    if [[ "$_develop_exists" == "yes" ]]; then
+        BLOCKERS+=("[BLOCK] --base が未指定です。明示的に --base develop を指定してください")
+    fi
 fi
 
 # --- 1. BLOCK: Issue reference with close keyword required ---
@@ -87,5 +108,4 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
     done
 fi
 
-echo "$input"
 exit 0

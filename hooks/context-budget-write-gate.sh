@@ -41,9 +41,9 @@ EOF
 fi
 
 # --- Planning mode exemption ---
-MODE=$(python3 -c "
-import json
-with open('$STATE_FILE') as f:
+MODE=$(_STATE="$STATE_FILE" python3 -c "
+import json, os
+with open(os.environ['_STATE']) as f:
     print(json.load(f).get('mode', 'auto'))
 " 2>/dev/null || echo "auto")
 
@@ -59,7 +59,7 @@ fi
 FILE_PATH=""
 if [[ -n "$INPUT_JSON" ]]; then
   FILE_PATH=$(echo "$INPUT_JSON" | python3 -c "
-import json, sys
+import json, os, sys
 try:
     data = json.load(sys.stdin)
     fp = data.get('tool_input', {}).get('file_path', '')
@@ -76,12 +76,12 @@ fi
 
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-python3 << PYEOF
+_STATE_FILE="$STATE_FILE" _FILE_PATH="$FILE_PATH" _NOW="$NOW" python3 << PYEOF
 import json, sys, os, re
 
-state_file = "$STATE_FILE"
-file_path = """$FILE_PATH"""
-now = "$NOW"
+state_file = os.environ['_STATE_FILE']
+file_path = os.environ['_FILE_PATH']
+now = os.environ['_NOW']
 basename = os.path.basename(file_path)
 
 # Detect test file patterns

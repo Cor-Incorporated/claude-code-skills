@@ -7,27 +7,52 @@ input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 if ! echo "$cmd" | grep -qE 'git\s+commit\s+.*-m'; then
-    echo "$input"
     exit 0
 fi
 
-# --- Rule 0: Block direct commits on feature branches from main session ---
-# TeamCreate workers and subagents are exempt (they SHOULD commit)
-if [[ "${CLAUDE_AGENT_DEPTH:-0}" -eq 0 ]] && [[ -z "${CLAUDE_AGENT_ID:-}" ]]; then
-    current_branch=$(git branch --show-current 2>/dev/null || echo "")
-    if echo "$current_branch" | grep -qE '^(feat|fix|refactor|chore)/'; then
-        echo "🚫 [Delegation Required] メインエージェントはfeatureブランチに直接commitできません。" >&2
-        echo "" >&2
-        echo "ブランチ: $current_branch" >&2
-        echo "" >&2
-        echo "対応方法:" >&2
-        echo "  1. TeamCreate でワーカーに委任する" >&2
-        echo "  2. /review-loop で自動修正ループを起動する" >&2
-        echo "  3. Agent tool (team_name付き) でワーカーに作業させる" >&2
-        echo "" >&2
-        echo "理由: メインが直接featureブランチで作業すると、" >&2
-        echo "  未関係ファイルの混入、ruff format漏れ、コンテキスト消費が発生する。" >&2
-        exit 2
+# --- Rule 0: Block direct commits on non-base branches from main session ---
+# WHITELIST approach: only base branches (develop, main, master) allowed for main agent.
+# All other branches require delegation to subagent/TeamCreate.
+# This prevents bypass via creative branch naming (e.g., update/, hotfix/, etc.)
+# Ref: Issue #10 — AI self-bypass via branch rename (2026-03-22)
+#
+# Subagent detection: check BOTH env var AND JSON input for agent context.
+# CLAUDE_AGENT_DEPTH may not propagate to hook processes, so also check
+# agent_id in the stdin JSON (official Claude Code hook spec).
+IS_SUBAGENT="false"
+if [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] || [[ -n "${CLAUDE_AGENT_ID:-}" ]]; then
+    IS_SUBAGENT="true"
+fi
+# Also check JSON input for agent_id (more reliable than env vars)
+if command -v jq &>/dev/null && [[ -n "$input" ]]; then
+    json_agent_id=$(echo "$input" | jq -r '.agent_id // ""' 2>/dev/null || echo "")
+    [[ -n "$json_agent_id" ]] && IS_SUBAGENT="true"
+fi
+if [[ "$IS_SUBAGENT" == "false" ]]; then
+    # claude-code-skills repo exemption: this repo IS the hook infrastructure.
+    # Blocking main agent commits causes circular dependencies when fixing hooks.
+    _remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+    if [[ "$_remote_url" != *"/claude-code-skills"* ]]; then
+        current_branch=$(git branch --show-current 2>/dev/null || echo "")
+        # Whitelist: only base branches are allowed for main agent commits
+        case "$current_branch" in
+            develop|main|master) ;; # allowed base branches
+            "")
+                echo "🚫 [Delegation Required] detached HEAD状態でのcommitはsubagentに委任してください。" >&2
+                exit 2
+                ;;
+            *)
+                echo "🚫 [Delegation Required] メインエージェントは非ベースブランチに直接commitできません。" >&2
+                echo "" >&2
+                echo "ブランチ: $current_branch" >&2
+                echo "" >&2
+                echo "対応方法:" >&2
+                echo "  1. Agent tool (subagent_type=general-purpose) でcommitを委任" >&2
+                echo "  2. TeamCreate でワーカーに委任する" >&2
+                echo "" >&2
+                exit 2
+                ;;
+        esac
     fi
 fi
 
@@ -40,7 +65,7 @@ else
     [ -z "$commit_msg" ] && commit_msg=$(echo "$cmd" | sed -n "s/.*-m[[:space:]]*'\\([^']*\\)'.*/\\1/p" | head -1)
 fi
 
-[ -z "$commit_msg" ] && { echo "$input"; exit 0; }
+[ -z "$commit_msg" ] && exit 0
 commit_msg=$(echo "$commit_msg" | sed 's/^[[:space:]]*//')
 
 # --- 1. Conventional Commit format ---
@@ -123,4 +148,4 @@ if [ -n "$project_root" ]; then
     fi
 fi
 
-echo "$input"
+exit 0

@@ -37,6 +37,12 @@ Claude Code が `review-status.json` に手動で `true` を書き込み、code-
 - `block-state-file-tampering-bash.sh` (Bash PreToolUse) — Bash経由の改ざんもブロック
 - レビュー記録は `record-code-review.sh` (PostToolUse hook) のみが行う
 
+## Codex MCP 使用禁止（2026-03-22追加）
+**Codex は CLI (`codex exec`, `codex-parallel.sh`, `codex-orchestrate.sh`) 経由でのみ使用する。**
+MCP (`mcp__codex__codex`) は正式な委任経路ではない。
+- サブエージェントが git commit 等の操作で Codex MCP にフォールバックすることを禁止
+- Ref: Issue #11 — subagent が MCP Codex を使用した事故 (2026-03-22)
+
 ## 核心ルール
 - 独立タスクは必ず並列実行。順次は依存関係がある場合のみ
 - **2タスク以上の独立実装 → Agent Team（TeamCreate）必須**
@@ -301,8 +307,21 @@ bash ~/.claude/scripts/codex-orchestrate.sh --csv ~/Developer/repo tasks.csv "{m
 └─ 調査が必要? → Explore エージェント
 ```
 
-## レビューパイプライン（PR前必須）
-1. code-reviewerエージェント
-2. Codex CLIセカンドオピニオン: `codex exec -C <repo> -o review.md review --base <branch>`
+## レビューパイプライン（PR前必須・Tier制）
+
+### レビューTier（変更内容ベースで自動判定）
+| Tier | 対象 | 必要なレビュー | 判定基準 |
+|------|------|--------------|---------|
+| **FULL** | ソースコード変更 | code-reviewer + Codex CLI | `src/`, `lib/`, `app/` 等のソース変更あり |
+| **LIGHT** | CI/config/docs変更のみ | code-reviewer のみ | `.github/workflows/`, `*.md`, `Dockerfile` 等のみ |
+| **EXEMPT** | ブランチ名で判定 | 不要 | `docs/*`, `chore/*`, `ci/*` ブランチ |
+
+### パイプライン
+1. code-reviewerエージェント（全Tier共通）
+2. Codex CLIセカンドオピニオン（**Tier FULL のみ**）: `codex exec -C <repo> -o review.md review --base <branch>`
 3. 全指摘修正（指摘が独立なら経路Cで並列修正可）
 4. PR作成
+
+### Housekeeping
+- `GATE_MODE=CLEANUP bash pr-ci-review-gate.sh`: merge済みPRのstale lockを安全にクリーンアップ
+- STOP hook は merge済みPRを自動除外（GitHub API で state 確認）

@@ -2,7 +2,7 @@
 
 [Claude Code](https://claude.com/claude-code)（Anthropic 公式 CLI）のためのスキル・ルール・フック集です。
 
-27 のカスタムスキル、40 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
+27 のカスタムスキル、52 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
 
 [English](README.md) | **日本語**
 
@@ -23,7 +23,7 @@ chmod +x setup.sh
 claude-code-skills/
 ├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 5 グローバルルール (コーディング規約, Git, 品質, テスト, 委任)
-├── hooks/            # 40 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
+├── hooks/            # 52 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
 ├── scripts/          # 5 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
@@ -47,7 +47,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (カスタムスキル + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 40 hook スクリプト
+  code-reviewer, review-loop, e2e, bugfix + 52 hook スクリプト
 
 Reflect (gstack)
   /retro
@@ -137,21 +137,24 @@ hook スクリプトが委任ルールを自動的に強制します:
 
 ```
 タスク受信
-├─ 1-2ファイル変更 + lint不要? → Agent Team（worktree isolation）
+├─ 2+ 独立タスク? → Agent Team（TeamCreate）
+├─ 1タスク + 長時間 + 自律的 + 大規模? → Codex CLI 経路C（1タスク限定）
 ├─ 読み込みファイル 3 未満? → Claude Code（自力実行）
-├─ テスト/ドキュメント作成? → Codex CLI 経路C
-├─ 予想 5 ターン超? → Codex CLI 経路C
-├─ 複数の独立タスク? → codex-orchestrate.sh（worktree 並列）
+├─ テスト/ドキュメント作成（単一タスク）? → Codex CLI 経路C
+├─ 予想 5 ターン超（単一タスク）? → Codex CLI 経路C
 └─ リアルタイム判断が必要? → Claude Code（メイン）
 ```
+
+**重要**: Codex CLI は**1タスク限定**。複数の独立タスクは Agent Team (TeamCreate) を使用し、Codex には委任しない。
 
 | hook | トリガー | アクション |
 |------|---------|----------|
 | `context-budget-read-gate.sh` | Read ツール | 3+ ファイルで警告、6+ で強い警告 |
 | `context-budget-write-gate.sh` | Write ツール | テスト/ドキュメント作成検出 → Codex 提案 |
 | `context-budget-edit-write-gate.sh` | Edit/Write | 多数ソースファイル読み込み後の編集をブロック |
-| `context-budget-agent-gate.sh` | Agent ツール | サブエージェント数を監視 |
-| `codex-task-gate.sh` | テストファイル Edit/Write | テスト作成を Codex に委任提案 |
+| `context-budget-agent-gate.sh` | Agent ツール | foreground実装Agent 2つ目をブロック、1つ目に警告、background/TeamCreate強制 |
+| `codex-task-gate.sh` | Bash (Codex実行) | 2回目以降の Codex CLI 呼び出しをブロック（同時1タスク制限） |
+| `codex-task-release.sh` | PostToolUse Bash | Codex タスク完了後にカウンターを解放（順次再利用を可能に） |
 
 ### ユーティリティスクリプト
 
@@ -176,12 +179,10 @@ PR マージ可能？
 ├─ Gate 2: 最新 push 後のレビュー？ ──────── block-merge-without-review.sh
 │  └─ review.submittedAt > 最終 push 時刻（古いレビューは拒否）
 │
-├─ Gate 3: Claude レビュー LGTM？ ─────────── pr-merge-claude-review-gate.sh
-│  ├─ Sub-gate 0: CI チェック完了（実行中でない）
-│  ├─ Sub-gate 1: claude-review ラベルまたはコメントが存在
-│  ├─ Sub-gate 2: 未解決の CRITICAL/HIGH 指摘なし
-│  ├─ Sub-gate 3: レビューが最新 push より新しい
-│  └─ Sub-gate 4: 全レビューコメントが読了済み
+├─ Gate 3: レビュー検証済み？ ───────────── pr-ci-review-gate.sh (LIGHT tier 3-pass OR)
+│  ├─ Pass A: code-reviewer エージェント完了 (review-status.json)
+│  ├─ Pass B: CRITICAL/HIGH 指摘なし (pending-review-comments.json)
+│  └─ Pass C: 手動検証 (pr-review-lock.json verified=true)
 │
 ├─ Gate 4: 未解決コメント？ ──────────────── enforce-review-reading.sh
 │  └─ 全 CRITICAL/HIGH レビュー指摘が対処済み
@@ -190,15 +191,34 @@ PR マージ可能？
    └─ `gh pr checks` / `gh pr merge` 時にレビューコメントを自動取得
 ```
 
+### Tier 制レビューシステム
+
+レビュー要件は変更内容に応じて自動調整されます:
+
+| Tier | 対象 | 必要なレビュー | 判定基準 |
+|------|------|--------------|---------|
+| **FULL** | ソースコード変更 | code-reviewer + Codex CLI | `src/`, `lib/`, `app/`, `*.ts`, `*.py` 等の変更あり |
+| **LIGHT** | CI/設定/ドキュメントのみ | code-reviewer のみ | `.github/workflows/`, `*.md`, `Dockerfile`, `*.yml` 等のみ |
+| **EXEMPT** | ブランチ名で判定 | 不要 | `docs/*`, `chore/*`, `ci/*` ブランチ |
+
+CI ワークフローの変更に Codex CLI のセカンドオピニオンは不要です。
+
 ### 外部レビューがない場合
 
 PR に GitHub レビューがない場合（ソロ開発など）、**ローカルレビューパイプライン**にフォールバックします:
 
 1. **`code-reviewer` スキル** — OWASP セキュリティチェック付き自動 PR 分析
-2. **Codex CLI 経路A** — 独立したセカンドオピニオン: `codex exec review --base <branch>`
-3. **両方パス**しなければレビュー完了とみなさない
+2. **Codex CLI 経路A**（FULL tier のみ） — 独立したセカンドオピニオン: `codex exec review --base <branch>`
+3. **両方パス**（FULL tier）または手順1のみ（LIGHT tier）でレビュー完了
 
-これにより、人間のレビュアーがいなくても、全ての PR が最低2つの独立レビューを受けることが保証されます。
+変更のリスクレベルに応じた適切なレビュー深度が保証されます。
+
+### ハウスキーピング
+
+マージ済み/クローズ済みの PR はロック状態から自動クリーンアップされます:
+
+- **STOP hook**: GitHub API で state 確認し、merge/closed エントリを自動除去
+- **手動クリーンアップ**: `GATE_MODE=CLEANUP bash hooks/pr-ci-review-gate.sh`
 
 ### PR ライフサイクル hook
 
@@ -212,35 +232,49 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 | **マージ後** | `post-merge-close-issues.sh` | リンクされた Issue を自動クローズ |
 | **セッション終了** | `pr-ci-review-gate.sh` (STOP) | 未検証 PR について警告 |
 
-## Hook システム（40 スクリプト）
+## Hook システム（52 スクリプト）
+
+### セッション初期化
+- `auto-init-permissions.sh` — セッション開始時にパーミッションを自動初期化
+- `context-budget-reset.sh` — セッション開始時にカウンターリセット（`fg_impl_agent_count` 含む）
+- `reset-factcheck.sh` — セッション開始時にファクトチェック状態をリセット
+- `enforce-branch-workflow.sh` — develop ブランチ自動作成、フィーチャーブランチワークフロー強制
+- `validate-no-local-hooks.sh` — セッション開始時に hook 上書きが存在しないことを検証
 
 ### 品質ゲート（マージ前）
 - `block-merge-without-ci.sh` — CI 全チェックグリーンなしでマージをブロック
 - `block-merge-without-review.sh` — 最新 push 後のレビューなしでマージをブロック
-- `pr-ci-review-gate.sh` — 4 モードゲート (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP)
+- `pr-ci-review-gate.sh` — 6 モードゲート (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) Tier 制レビュー対応
 - `pr-merge-claude-review-gate.sh` — 5 サブゲート Claude レビュー強制
+- `inject-claude-review-on-checks.sh` — `gh pr checks` / `gh pr merge` 時にレビューコメントを自動取得
 - `pr-guard.sh` — ベースブランチ、Issue 参照、コンフリクトチェック
+- `task-completion-gate.sh` — 早期タスク完了をブロック（CI pending または CRITICAL/HIGH 指摘あり）
+- `stop-test-gate.sh` — セッション終了前にプロジェクトテスト実行（Stop hook、stop_hook_active ガード付き）
 
 ### 安全ガード
 - `protect-branches.sh` — 保護ブランチの削除防止
-- `block-manual-merge-ops.sh` — cherry-pick/merge/rebase をブロック（Codex に委任）
+- `block-manual-merge-ops.sh` — cherry-pick/merge/rebase をブロック（main/master/develop からの同期は許可）
 - `git-push-guard.sh` — プッシュ安全チェック
 - `git-commit-guard.sh` — コミットメッセージとスコープ検証
 - `block-version-downgrade.sh` — 依存パッケージのダウングレード防止
 - `audit-docker-build-args.sh` — Docker build args の http:// チェック
 - `block-local-hooks-write.sh` — settings.local.json によるグローバル hook 上書きを防止
-- `validate-no-local-hooks.sh` — セッション開始時に hook 上書きが存在しないことを検証
+- `block-codex-mcp.sh` — Codex MCP 使用をブロック、CLI 経由のみ強制 (PreToolUse)
+- `block-state-file-tampering.sh` — AI による状態ファイル自己改ざん防止 (Write/Edit)
+- `block-state-file-tampering-bash.sh` — AI による状態ファイル自己改ざん防止 (Bash)
+- `protect-linter-config.sh` — リンター設定の不正変更を防止
 
 ### コンテキスト予算管理
 - `context-budget-read-gate.sh` — 3+ ソースファイル読み込みで警告/ブロック
 - `context-budget-write-gate.sh` — テスト/ドキュメント作成を検出し Codex 委任提案
 - `context-budget-edit-write-gate.sh` — 多数ファイル読み込み後の編集をブロック
-- `context-budget-agent-gate.sh` — エージェント生成数を監視
-- `context-budget-reset.sh` — セッション開始時にカウンターリセット
+- `context-budget-agent-gate.sh` — foreground 実装 Agent の制限（2つ目ブロック）、background/TeamCreate 強制
+- `codex-task-gate.sh` — 2回目以降の Codex CLI 呼び出しをブロック（同時1タスク制限）
+- `codex-task-release.sh` — Codex タスク完了後にカウンター解放（PostToolUse）
 
 ### ワークフロー強制
 - `enforce-git-freshness.sh` — リモートより遅れている場合に編集をブロック
-- `enforce-factcheck-before-edit.sh` — インフラ変更前にファクトチェック必須
+- `enforce-factcheck-before-edit.sh` — インフラ変更前にファクトチェック必須（.yml/.md 等の非コードファイルは除外）
 - `enforce-factcheck-before-user-request.sh` — 手動操作依頼前にファクトチェック必須
 - `enforce-architecture-layers.sh` — domain/core レイヤー変更を検証
 - `enforce-domain-naming.sh` — DDD 命名規則の強制
@@ -253,11 +287,16 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 
 ### アクション後 hook
 - `record-code-review.sh` — コードレビュー完了をマージゲートトラッキング用に記録
+- `record-codex-review.sh` — Codex CLI レビュー完了を記録（codex-parallel.sh から呼び出し）
 - `mark-factcheck-done.sh` — リサーチ後にファクトチェック完了をマーク
 - `track-agent-team.sh` — エージェントチームの生成と完了を追跡
 - `post-merge-close-issues.sh` — マージ後にリンクされた Issue を自動クローズ
 - `post-deploy-verify.sh` — デプロイ後の検証チェック
+- `post-lint-format.sh` — ファイル編集後に lint/format チェック実行（PostToolUse Quality Loop）
+- `post-pr-create-review-trigger.sh` — PR 作成後にコードレビューを自動トリガー (PostToolUse)
 - `workflow-sync-guard.sh` — push 後のワークフロー状態同期
+- `verify-test-falsifiability.sh` — テストが宣言されたバグを実際に検出するか検証 (PostToolUse)
+- `tool-failure-recovery.sh` — ツール失敗時のエラー回復ガイダンス（PostToolUseFailure）
 
 ## Hook Matcher 構文
 
@@ -272,7 +311,19 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 { "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"" }
 ```
 
-hook スクリプトは `stdin` でツール呼び出しの JSON を受け取り、`tool_input.command` や `tool_input.file_path` を検査してフィルタリングします。詳細は[公式 hooks ドキュメント](https://docs.anthropic.com/en/docs/claude-code/hooks)を参照。
+hook スクリプトは `stdin` でツール呼び出しの JSON を受け取り、`tool_input.command` や `tool_input.file_path` を検査してフィルタリングします。
+
+### Exit Code 規約（公式仕様準拠）
+
+| Exit Code | 意味 | PreToolUse の動作 |
+|-----------|------|-----------------|
+| `0` | 許可 | ツール呼び出しを続行。JSON 出力があれば `hookSpecificOutput` を解析 |
+| `2` | ブロック | ツール呼び出しをブロック。`stderr` が Claude にエラーメッセージとして伝達 |
+| その他 | 非ブロッキングエラー | `stderr` は verbose モードでのみ表示。実行は続行 |
+
+**重要**: `exit 0` で許可する際、入力 JSON を stdout にエコーバックしないでください。公式パターンは単純に `exit 0` のみです。本リポジトリの全 hook はこの規約に準拠しています。
+
+詳細は[公式 hooks ドキュメント](https://docs.anthropic.com/en/docs/claude-code/hooks)を参照。
 
 ## ルール
 
@@ -411,4 +462,4 @@ SKILL.md 本文（フロントマターではない）で `<important if="条件
 
 ## ライセンス
 
-MIT
+[MIT](LICENSE)

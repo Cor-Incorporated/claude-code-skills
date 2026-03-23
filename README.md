@@ -4,7 +4,7 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 27 custom skills, 40 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 27 custom skills, 52 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
 
 ## Quick Start
 
@@ -23,12 +23,33 @@ Restart Claude Code after installation.
 claude-code-skills/
 ├── skills/           # 27 custom skill definitions (SKILL.md + scripts + references)
 ├── rules/            # 5 global rule files (coding-style, git-workflow, quality, testing, delegation)
-├── hooks/            # 40 hook scripts (quality gates, safety guards, workflow enforcement)
+├── hooks/            # 52 hook scripts (quality gates, safety guards, workflow enforcement)
 ├── scripts/          # 5 utility scripts (Codex orchestration, PR review, context monitoring)
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
 └── README.md
 ```
+
+## Architecture Decision Records (ADR)
+
+Design decisions are recorded as ADRs in `docs/adr/`.
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [001](docs/adr/001-posttooluse-quality-loop.md) | PostToolUse Quality Loop | Accepted |
+| [002](docs/adr/002-pointer-design-principle.md) | CLAUDE.md Pointer Design Principle | Accepted |
+| [003](docs/adr/003-feedback-speed-hierarchy.md) | Feedback Speed Hierarchy | Accepted |
+| [004](docs/adr/004-codex-delegation-model.md) | Codex Large-Scale Delegation Model | Accepted |
+
+To add a new ADR, use the [template](docs/adr/template.md).
+
+## References
+
+| Document | Description |
+|----------|-------------|
+| [Harness Engineering Best Practices 2026](docs/references/harness-engineering-best-practices-2026.md) | Summary of the article that underpins this repository's design philosophy |
+
+See [docs/references/](docs/references/) for details.
 
 ## Third-Party Dependencies
 
@@ -46,7 +67,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (custom skills + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 40 hook scripts
+  code-reviewer, review-loop, e2e, bugfix + 52 hook scripts
 
 Reflect (gstack)
   /retro
@@ -136,20 +157,24 @@ Hook scripts automatically enforce delegation rules:
 
 ```
 Task received
+├─ 2+ independent tasks? → Agent Team (TeamCreate)
+├─ 1 task + long-running + autonomous + large? → Codex CLI Route C (single task only)
 ├─ <3 files to read? → Claude Code (self-execute)
-├─ Test/doc creation? → Codex CLI Route C
-├─ >5 expected turns? → Codex CLI Route C
-├─ Multiple independent tasks? → codex-orchestrate.sh (parallel worktrees)
+├─ Test/doc creation (single task)? → Codex CLI Route C
+├─ >5 expected turns (single task)? → Codex CLI Route C
 └─ Needs real-time judgment? → Claude Code (main)
 ```
+
+**Important**: Codex CLI is limited to **one task at a time**. Multiple independent tasks must use Agent Team (TeamCreate), not Codex orchestration.
 
 | Hook | Trigger | Action |
 |------|---------|--------|
 | `context-budget-read-gate.sh` | Read tool | Warn at 3+ files, strong warn at 6+ |
 | `context-budget-write-gate.sh` | Write tool | Detect test/doc creation → suggest Codex |
 | `context-budget-edit-write-gate.sh` | Edit/Write | Block when too many source files read |
-| `context-budget-agent-gate.sh` | Agent tool | Monitor subagent count |
-| `codex-task-gate.sh` | Edit/Write test files | Suggest Codex for test creation |
+| `context-budget-agent-gate.sh` | Agent tool | Block 2+ foreground impl agents, warn on 1st, enforce background/TeamCreate |
+| `codex-task-gate.sh` | Bash (Codex exec) | Block 2nd+ Codex CLI call (1 concurrent limit) |
+| `codex-task-release.sh` | PostToolUse Bash | Release Codex counter after task completes (enables sequential reuse) |
 
 ### Utility Scripts
 
@@ -174,12 +199,10 @@ PR Ready to Merge?
 ├─ Gate 2: Review After Latest Push? ──── block-merge-without-review.sh
 │  └─ review.submittedAt > last push timestamp (stale reviews rejected)
 │
-├─ Gate 3: Claude Review LGTM? ────────── pr-merge-claude-review-gate.sh
-│  ├─ Sub-gate 0: CI checks completed (not still running)
-│  ├─ Sub-gate 1: claude-review label or comment exists
-│  ├─ Sub-gate 2: No unresolved CRITICAL/HIGH findings
-│  ├─ Sub-gate 3: Review is newer than latest push
-│  └─ Sub-gate 4: All review comments have been read
+├─ Gate 3: Review Verified? ───────────── pr-ci-review-gate.sh (LIGHT tier 3-pass OR)
+│  ├─ Pass A: code-reviewer agent completed (review-status.json)
+│  ├─ Pass B: No CRITICAL/HIGH findings (pending-review-comments.json)
+│  └─ Pass C: Manual verification (pr-review-lock.json verified=true)
 │
 ├─ Gate 4: Unresolved Comments? ────────── enforce-review-reading.sh
 │  └─ All CRITICAL/HIGH review findings must be addressed
@@ -188,15 +211,34 @@ PR Ready to Merge?
    └─ Auto-fetches review comments on `gh pr checks` / `gh pr merge`
 ```
 
+### Tiered Review System
+
+Review requirements are automatically adjusted based on what changed:
+
+| Tier | Target | Required Reviews | Detection |
+|------|--------|-----------------|-----------|
+| **FULL** | Source code changes | code-reviewer + Codex CLI | Changes in `src/`, `lib/`, `app/`, `*.ts`, `*.py`, etc. |
+| **LIGHT** | CI/config/docs only | code-reviewer only | Only `.github/workflows/`, `*.md`, `Dockerfile`, `*.yml`, etc. |
+| **EXEMPT** | Branch-based | None | `docs/*`, `chore/*`, `ci/*` branches |
+
+This prevents over-engineering review requirements. A CI workflow change doesn't need a Codex CLI second opinion.
+
 ### When No External Review Exists
 
 If a PR has no GitHub review (e.g., solo development), the system falls back to a **local review pipeline**:
 
 1. **`code-reviewer` skill** — Automated PR analysis with OWASP security checks, quality scoring
-2. **Codex CLI Route A** — Independent second opinion: `codex exec review --base <branch>`
-3. **Both must pass** before the PR is considered reviewed
+2. **Codex CLI Route A** (FULL tier only) — Independent second opinion: `codex exec review --base <branch>`
+3. **Both must pass** (FULL tier) or just step 1 (LIGHT tier) before the PR is considered reviewed
 
-This ensures every PR gets at least two independent reviews, even without human reviewers.
+This ensures every PR gets appropriate review depth based on the risk level of changes.
+
+### Housekeeping
+
+Merged or closed PRs are automatically cleaned from the lock state:
+
+- **STOP hook**: Auto-removes merged/closed PR entries via GitHub API
+- **Manual cleanup**: `GATE_MODE=CLEANUP bash hooks/pr-ci-review-gate.sh`
 
 ### PR Lifecycle Hooks
 
@@ -210,35 +252,49 @@ This ensures every PR gets at least two independent reviews, even without human 
 | **Post Merge** | `post-merge-close-issues.sh` | Auto-close linked issues |
 | **Session Stop** | `pr-ci-review-gate.sh` (STOP) | Warn about unverified PRs |
 
-## Hook System (40 Scripts)
+## Hook System (52 Scripts)
+
+### Session Initialization
+- `auto-init-permissions.sh` — Auto-initialize permissions on session start
+- `context-budget-reset.sh` — Reset all counters on session start (incl. `fg_impl_agent_count`)
+- `reset-factcheck.sh` — Reset fact-check state on session start
+- `enforce-branch-workflow.sh` — Auto-create develop branch, enforce feature branch workflow
+- `validate-no-local-hooks.sh` — Validate no hook overrides exist on session start
 
 ### Quality Gates (Pre-merge)
 - `block-merge-without-ci.sh` — Block merge unless all CI checks green
 - `block-merge-without-review.sh` — Block merge unless review is newer than latest push
-- `pr-ci-review-gate.sh` — 4-mode gate (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP)
+- `pr-ci-review-gate.sh` — 6-mode gate (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) with tiered review
 - `pr-merge-claude-review-gate.sh` — 5-sub-gate Claude review enforcement
+- `inject-claude-review-on-checks.sh` — Auto-fetch review comments on `gh pr checks` / `gh pr merge`
 - `pr-guard.sh` — Base branch, issue ref, conflict checks
+- `task-completion-gate.sh` — Block premature task completion (CI pending or CRITICAL/HIGH findings)
+- `stop-test-gate.sh` — Run project tests before session end (Stop hook with stop_hook_active guard)
 
 ### Safety Guards
 - `protect-branches.sh` — Prevent deletion of protected branches
-- `block-manual-merge-ops.sh` — Block cherry-pick/merge/rebase (delegate to Codex)
+- `block-manual-merge-ops.sh` — Block cherry-pick/merge/rebase (sync from main/master/develop is allowed)
 - `git-push-guard.sh` — Push safety checks
 - `git-commit-guard.sh` — Commit message and scope validation
 - `block-version-downgrade.sh` — Prevent dependency downgrades
 - `audit-docker-build-args.sh` — Check for http:// in Docker build args
 - `block-local-hooks-write.sh` — Prevent settings.local.json from overriding global hooks
-- `validate-no-local-hooks.sh` — Validate no hook overrides exist on session start
+- `block-codex-mcp.sh` — Block Codex MCP usage, enforce CLI-only (PreToolUse)
+- `block-state-file-tampering.sh` — Prevent AI self-bypass of state files (Write/Edit)
+- `block-state-file-tampering-bash.sh` — Prevent AI self-bypass of state files (Bash)
+- `protect-linter-config.sh` — Prevent unauthorized linter config modifications
 
 ### Context Budget Management
 - `context-budget-read-gate.sh` — Warn/block after 3+ source file reads
 - `context-budget-write-gate.sh` — Detect test/doc creation for Codex delegation
 - `context-budget-edit-write-gate.sh` — Block edits when too many files read
-- `context-budget-agent-gate.sh` — Monitor agent spawning count
-- `context-budget-reset.sh` — Reset counters on session start
+- `context-budget-agent-gate.sh` — Enforce foreground impl agent limits (Rule 2+4), background/TeamCreate governance
+- `codex-task-gate.sh` — Block 2nd+ Codex CLI call (1 concurrent limit)
+- `codex-task-release.sh` — Release Codex call counter after task completion (PostToolUse)
 
 ### Workflow Enforcement
 - `enforce-git-freshness.sh` — Block edits if behind remote
-- `enforce-factcheck-before-edit.sh` — Require fact-check before modifying infra
+- `enforce-factcheck-before-edit.sh` — Require fact-check before modifying infra (non-code files like .yml/.md excluded)
 - `enforce-factcheck-before-user-request.sh` — Fact-check before asking user for manual ops
 - `enforce-architecture-layers.sh` — Validate domain/core layer modifications
 - `enforce-domain-naming.sh` — DDD naming convention enforcement
@@ -251,11 +307,16 @@ This ensures every PR gets at least two independent reviews, even without human 
 
 ### Post-Action Hooks
 - `record-code-review.sh` — Record code review completion for merge gate tracking
+- `record-codex-review.sh` — Record Codex CLI review completion (called by codex-parallel.sh)
 - `mark-factcheck-done.sh` — Mark fact-check as completed after research
 - `track-agent-team.sh` — Track agent team spawning and completion
 - `post-merge-close-issues.sh` — Auto-close linked issues after merge
 - `post-deploy-verify.sh` — Post-deployment verification checks
+- `post-lint-format.sh` — Run lint and format checks after file edits (PostToolUse Quality Loop)
+- `post-pr-create-review-trigger.sh` — Auto-trigger code review after PR creation (PostToolUse)
 - `workflow-sync-guard.sh` — Sync workflow state after push
+- `verify-test-falsifiability.sh` — Verify tests actually detect declared bugs (PostToolUse)
+- `tool-failure-recovery.sh` — Error recovery guidance on tool failure (PostToolUseFailure)
 
 ## Hook Matcher Syntax
 
@@ -270,7 +331,19 @@ This ensures every PR gets at least two independent reviews, even without human 
 { "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"" }
 ```
 
-Hook scripts receive the tool invocation as JSON on `stdin` and should filter by inspecting `tool_input.command` or `tool_input.file_path` internally. See the [official hooks documentation](https://docs.anthropic.com/en/docs/claude-code/hooks) for details.
+Hook scripts receive the tool invocation as JSON on `stdin` and should filter by inspecting `tool_input.command` or `tool_input.file_path` internally.
+
+### Exit Code Convention (Official Spec)
+
+| Exit Code | Meaning | PreToolUse Behavior |
+|-----------|---------|-------------------|
+| `0` | Allow | Tool call proceeds. JSON output (if any) is parsed for `hookSpecificOutput`. |
+| `2` | Block | Tool call is blocked. `stderr` is fed back to Claude as error message. |
+| Other | Non-blocking error | `stderr` shown in verbose mode only. Execution continues. |
+
+**Important**: Do NOT echo the input JSON back to stdout on `exit 0`. The official pattern is simply `exit 0` to allow a tool call. All hooks in this repository follow this convention.
+
+See the [official hooks documentation](https://docs.anthropic.com/en/docs/claude-code/hooks) for details.
 
 ## Rules
 
@@ -409,4 +482,4 @@ Use `<important if="condition">` tags in SKILL.md body (NOT in frontmatter) to f
 
 ## License
 
-MIT
+[MIT](LICENSE)

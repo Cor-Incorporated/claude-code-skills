@@ -18,7 +18,16 @@ if [ -z "$ISSUE_NUM" ]; then
 fi
 
 # Check if the close comment contains verification evidence
-COMMENT=$(echo "$COMMAND" | grep -oP '(?<=--comment ")[^"]*' || echo "$COMMAND")
+# Extract comment from -c "..." or --comment "..." (BSD compatible, no grep -P)
+COMMENT=$(echo "$COMMAND" | sed -En 's/.*(--comment|-c) "([^"]*)".*/\2/p')
+if [ -z "$COMMENT" ]; then
+  # Try single-quoted variant: -c '...'
+  COMMENT=$(echo "$COMMAND" | sed -En "s/.*(--comment|-c) '([^']*)'.*/\2/p")
+fi
+if [ -z "$COMMENT" ]; then
+  # No explicit comment flag found — use entire command for pattern matching
+  COMMENT="$COMMAND"
+fi
 
 # Required patterns in the close comment
 HAS_FILE_EVIDENCE=false

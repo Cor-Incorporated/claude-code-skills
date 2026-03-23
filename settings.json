@@ -18,7 +18,6 @@
       "mcp__plugin_context7_context7__query-docs",
       "mcp__brave-search__brave_web_search",
       "mcp__brave-search__brave_local_search",
-      "mcp__codex__codex",
       "Bash(openssl rand:*)",
       "Bash(source:*)",
       "Bash(curl:*)",
@@ -76,6 +75,12 @@
             "command": "bash ~/.claude/hooks/validate-no-local-hooks.sh",
             "timeout": 5,
             "statusMessage": "Validating settings.local.json has no hook overrides..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-branch-workflow.sh",
+            "timeout": 15,
+            "statusMessage": "Checking branch workflow..."
           }
         ]
       }
@@ -110,6 +115,12 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/enforce-factcheck-before-edit.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/protect-linter-config.sh",
+            "timeout": 5,
+            "statusMessage": "Checking linter config protection..."
           }
         ]
       },
@@ -142,6 +153,12 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/block-version-downgrade.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/protect-linter-config.sh",
+            "timeout": 5,
+            "statusMessage": "Checking linter config protection..."
           }
         ]
       },
@@ -343,6 +360,17 @@
             "statusMessage": "Checking settings.local.json for hooks override..."
           }
         ]
+      },
+      {
+        "matcher": "mcp__codex__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-codex-mcp.sh",
+            "timeout": 5,
+            "statusMessage": "Checking Codex usage policy..."
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -357,6 +385,15 @@
       },
       {
         "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_context7_context7__.*",
         "hooks": [
           {
             "type": "command",
@@ -385,6 +422,15 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/enforce-memory-update-on-commit.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/codex-task-release.sh"
           }
         ]
       },
@@ -458,6 +504,41 @@
             "statusMessage": "Checking workflow file sync..."
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/post-lint-format.sh",
+            "timeout": 5,
+            "statusMessage": "Running PostToolUse Quality Loop (lint + format)..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/post-pr-create-review-trigger.sh",
+            "timeout": 15,
+            "statusMessage": "Checking if PR was created..."
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|Edit|Write|Grep|WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/tool-failure-recovery.sh",
+            "timeout": 5,
+            "statusMessage": "Analyzing tool failure..."
+          }
+        ]
       }
     ],
     "Stop": [
@@ -468,6 +549,24 @@
             "command": "GATE_MODE=STOP bash ~/.claude/hooks/pr-ci-review-gate.sh",
             "timeout": 30,
             "statusMessage": "Checking unverified PRs..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/stop-test-gate.sh",
+            "timeout": 75,
+            "statusMessage": "Running project tests before stop..."
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/task-completion-gate.sh",
+            "timeout": 30,
+            "statusMessage": "Verifying CI and review status..."
           }
         ]
       }

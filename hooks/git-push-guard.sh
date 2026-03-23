@@ -6,7 +6,53 @@ set -euo pipefail
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
-# --- 1. Protected branch check ---
+# --- 1. Force push to shared branches check (Issue #17) ---
+# Block --force / --force-with-lease to develop/main/master
+# Feature branches are allowed (user's own branch history cleanup is legitimate)
+if echo "$cmd" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b)' || \
+   echo "$cmd" | grep -qE 'git\s+push\s+-[a-zA-Z]*f'; then
+    # Check explicit branch names in the command
+    for branch in develop main master; do
+        if echo "$cmd" | grep -qE "(^|[[:space:]])${branch}([[:space:]]|$|:)"; then
+            cat >&2 <<ERRMSG
+[BLOCK] 共有ブランチ '${branch}' への force push を検出
+
+理由: force push は履歴を書き換えます。
+  - 他のエンジニアの作業ベースが壊れる可能性
+  - レビュー済みコミット履歴が失われる可能性
+  - --force-with-lease も --force と同等に扱います
+
+対処法: ユーザーが手動で実行してください。
+  (Claude Code プロンプトで) ! git push --force-with-lease origin ${branch}
+
+Ref: Issue #17 — AI からの force push はブロック、ユーザー手動実行に限定
+ERRMSG
+            exit 2
+        fi
+    done
+
+    # Fallback: if no explicit branch in command, check current branch
+    # Catches: git push --force, git push --force origin (implicit branch)
+    current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    for branch in develop main master; do
+        if [[ "$current_branch" == "$branch" ]]; then
+            cat >&2 <<ERRMSG
+[BLOCK] 共有ブランチ '${branch}' への force push を検出（暗黙的ブランチ）
+
+現在のブランチ '${branch}' は共有ブランチです。
+コマンドにブランチ名が明示されていなくても、force push はブロックされます。
+
+対処法: ユーザーが手動で実行してください。
+  (Claude Code プロンプトで) ! git push --force-with-lease origin ${branch}
+
+Ref: Issue #28 — 差分有無にかかわらず共有ブランチへの force push をブロック
+ERRMSG
+            exit 2
+        fi
+    done
+fi
+
+# --- 2. Protected branch direct push check ---
 for branch in develop main master; do
     if echo "$cmd" | grep -qE "git\s+push\s+.*\b${branch}\b" && \
        ! echo "$cmd" | grep -qE "(--delete|:${branch})"; then
@@ -20,7 +66,7 @@ for branch in develop main master; do
     fi
 done
 
-# --- 2. Local CI check before push (AP-10 prevention) ---
+# --- 3. Local CI check before push (AP-10 prevention) ---
 project_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 if [ -n "$project_root" ]; then
     ci_failed=false
@@ -66,4 +112,4 @@ if [ -n "$project_root" ]; then
     fi
 fi
 
-echo "$input"
+exit 0

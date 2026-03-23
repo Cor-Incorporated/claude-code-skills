@@ -24,9 +24,11 @@ BASENAME=$(basename "$FILE_PATH")
 PROTECTED_FILES=(
   "review-status.json"
   "pr-review-lock.json"
+  "pr-review-read.json"
   "context-budget.json"
-  "factcheck-state.json"
+  "factcheck-status.json"
   "pr-gate-diagnostic.log"
+  "rebase-session.json"
 )
 
 for protected in "${PROTECTED_FILES[@]}"; do
@@ -43,6 +45,7 @@ for protected in "${PROTECTED_FILES[@]}"; do
   - review-status.json → code-reviewer実行後に record-code-review.sh が自動更新
   - pr-review-lock.json → pr-ci-review-gate.sh が POST_PUSH モードで自動設定
   - context-budget.json → context-budget-reset.sh がセッション開始時に初期化
+  - rebase-session.json → block-manual-merge-ops.sh が同期rebase許可時に自動記録
 
 📋 2026-03-21事故: AI が review-status.json に手動で true を書き込み、
    レビュー未実施のまま PR を作成。ゲートの存在意義を無にした。

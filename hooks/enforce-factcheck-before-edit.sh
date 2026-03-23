@@ -31,6 +31,16 @@ if echo "$file_path" | grep -qE '\.log$|/log/|/tmp/|coverage'; then
     exit 0
 fi
 
+# 非コードファイルは除外 (LSP分析不要: CI, docs, config)
+if echo "$file_path" | grep -qE '\.(md|yml|yaml)$|Dockerfile|\.dockerignore|\.gitignore|\.gitattributes|\.editorconfig|LICENSE|CHANGELOG'; then
+    exit 0
+fi
+
+# GitHub Actions / CI workflows は除外
+if echo "$file_path" | grep -qE '\.github/(workflows|actions)/'; then
+    exit 0
+fi
+
 # ファクトチェック状態を確認
 factchecked=$(jq -r '.factchecked // false' "$STATE_FILE" 2>/dev/null || echo "false")
 edit_count=$(jq -r '.edit_count_since_check // 0' "$STATE_FILE" 2>/dev/null || echo "0")

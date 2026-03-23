@@ -9,7 +9,7 @@
 # Exit 0 = allow, Exit 2 = block
 set -uo pipefail
 export GH_NO_UPDATE_NOTIFIER=1
-unset GH_FORCE_TTY 2>/dev/null || true
+export GH_FORCE_TTY=0
 
 [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] && exit 0
 [[ -n "${CLAUDE_AGENT_ID:-}" ]] && exit 0
@@ -38,13 +38,16 @@ if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+checks'; then
   [[ -z "$REPO" ]] && exit 0
 
   # Fetch and save via Python helper (stdin=/dev/null to avoid pipe issues)
-  python3 ~/.claude/hooks/inject-claude-review-helper.py "$REPO" "$PR_NUMBER" </dev/null >/dev/null 2>&1
+  # Issue #66 Fix #4: Do not suppress stderr — surface errors instead of silent failure
+  python3 ~/.claude/hooks/inject-claude-review-helper.py "$REPO" "$PR_NUMBER" </dev/null >/dev/null 2>"$STATE_DIR/inject-review-errors.log" || {
+    echo "[inject-claude-review] Python helper failed. See $STATE_DIR/inject-review-errors.log" >&2
+  }
 
   # Read back the saved state and output as reminder
   if [[ -f "$PENDING_FILE" ]]; then
-    OUTPUT=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f:
+    OUTPUT=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f:
     d = json.load(f)
 print(d.get('output', ''))
 " 2>/dev/null || echo "")
@@ -65,19 +68,19 @@ fi
 # =========================================================================
 if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   if [[ -f "$PENDING_FILE" ]]; then
-    CRITICAL=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
+    CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('critical', 0))
 " 2>/dev/null || echo "0")
-    HIGH=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
+    HIGH=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('high', 0))
 " 2>/dev/null || echo "0")
-    PR=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
+    PR=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('pr', ''))
 " 2>/dev/null || echo "")
 
@@ -102,21 +105,21 @@ if echo "$(echo "$cmd" | head -1)" | grep -qE '^(git |ls |cat |echo |python3 |he
 fi
 
 if [[ -f "$PENDING_FILE" ]]; then
-  TOTAL=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
+  TOTAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('total', 0))
 " 2>/dev/null || echo "0")
-  CRITICAL=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
+  CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('critical', 0))
 " 2>/dev/null || echo "0")
 
   if [[ "$TOTAL" -gt 0 ]] && [[ "$CRITICAL" -gt 0 ]]; then
-    PR=$(python3 -c "
-import json
-with open('$PENDING_FILE') as f: d = json.load(f)
+    PR=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('pr', ''))
 " 2>/dev/null || echo "")
     echo "[REMINDER] PR #${PR}: ${TOTAL}件のレビューコメント（CRITICAL=${CRITICAL}）が未対応です。" >&2
