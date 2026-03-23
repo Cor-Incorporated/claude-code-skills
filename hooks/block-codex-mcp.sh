@@ -23,8 +23,8 @@ echo "" >&2
 echo "理由: delegation.md — 'Codex MCP使用禁止 — CLI経由のみ (Ref: Issue #11)'" >&2
 echo "" >&2
 echo "代替方法 (Codex CLI):" >&2
-echo "  レビュー:  bash codex exec review --base develop" >&2
+echo "  レビュー:  codex exec review --base develop" >&2
 echo "  実装委任:  bash ~/.claude/scripts/codex-parallel.sh <repo> <branch> '<prompt>'" >&2
-echo "  対話:      bash codex chat '<question>'" >&2
+echo "  対話:      codex exec '<question>'" >&2
 echo "" >&2
 exit 2

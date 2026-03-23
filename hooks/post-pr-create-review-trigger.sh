@@ -46,11 +46,16 @@ fi
 if [[ -z "$PR_NUMBER" ]]; then
   BRANCH=$(git branch --show-current 2>/dev/null || echo "")
   if [[ -n "$BRANCH" ]]; then
-    PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
+    PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number // empty' 2>/dev/null || echo "")
   fi
 fi
 
 [[ -z "$PR_NUMBER" ]] && exit 0
+
+# Validate PR number is numeric
+if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+  exit 0
+fi
 
 # Set review_pending in state file
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
@@ -70,17 +75,22 @@ LOCK_STATE="$STATE_DIR/pr-review-lock.json"
 
 if command -v python3 &>/dev/null; then
   _PR="$PR_NUMBER" _BRANCH="$BRANCH" _LOCK="$LOCK_STATE" python3 -c "
-import json, os
+import json, os, fcntl
 lock_file = os.environ['_LOCK']
-with open(lock_file) as f: s = json.load(f)
-s[os.environ['_PR']] = {
-  'status': 'review_pending',
-  'branch': os.environ['_BRANCH'],
-  'ci_green': False,
-  'review_lgtm': False,
-  'verified': False
-}
-with open(lock_file, 'w') as f: json.dump(s, f, indent=2)
+with open(lock_file, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    s[os.environ['_PR']] = {
+        'status': 'review_pending',
+        'branch': os.environ['_BRANCH'],
+        'ci_green': False,
+        'review_lgtm': False,
+        'verified': False
+    }
+    f.seek(0)
+    f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
 fi
 
