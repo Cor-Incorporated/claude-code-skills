@@ -21,7 +21,6 @@
       "Bash(openssl rand:*)",
       "Bash(source:*)",
       "Bash(curl:*)",
-      "Bash(npx:*)",
       "Bash(node:*)",
       "Bash(npm:*)",
       "Bash(pnpm:*)",
