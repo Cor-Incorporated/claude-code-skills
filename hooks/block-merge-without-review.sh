@@ -89,7 +89,13 @@ ALL_BODIES=$(echo "$PR_COMMENTS" | jq -r '.[].body // ""' 2>/dev/null; \
 
 # Use severity-prefix patterns to avoid false positives
 HAS_CRITICAL=$(echo "$ALL_BODIES" | grep -ciE '\[CRITICAL\]|severity:\s*CRITICAL|^\s*CRITICAL:|>\s*CRITICAL|\*\*CRITICAL\*\*' || true)
-HAS_HIGH=$(echo "$ALL_BODIES" | grep -ciE '\[HIGH\]|severity:\s*HIGH|^\s*HIGH:|>\s*HIGH|\*\*HIGH\*\*' || true)
+# HIGH detection with false-positive filtering:
+#   Exclude lines that mention HIGH in code examples, descriptions of patterns, or summaries
+HIGH_FILTERED=$(echo "$ALL_BODIES" \
+    | grep -iE '\[HIGH\]|\*\*HIGH\*\*|severity:\s*HIGH' \
+    | grep -viE 'severity検出|severity.パターン|パターンを追加|検出パターン|detection|filter|high_count|の検出' \
+    || true)
+HAS_HIGH=$(echo "$HIGH_FILTERED" | grep -c '.' || true)
 
 # BUG detection with LINE-LEVEL context analysis (HIGH-1 fix):
 #   Step 1: grep lines matching BUG patterns

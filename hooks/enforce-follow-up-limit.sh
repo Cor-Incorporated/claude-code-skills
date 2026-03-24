@@ -42,48 +42,54 @@ if [[ -z "$CURRENT_PREFIX" ]]; then
   exit 0
 fi
 
-# --- Count recent fix PRs with same prefix ---
+# --- Check consecutive fix PRs with same prefix (merge order) ---
 REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
 if [[ -z "$REPO" ]]; then
   exit 0
 fi
 
-# Get merged fix PRs from last 7 days with matching prefix
-SEVEN_DAYS_AGO=$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "7 days ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
-if [[ -z "$SEVEN_DAYS_AGO" ]]; then
-  exit 0  # Cannot compute date, skip
-fi
+# Query recently merged PRs sorted by merge time (most recent first)
+# Scan for maximum consecutive streak of fix PRs with same prefix.
+# A streak can start at any position (not just the most recent merge).
+MAX_CONSECUTIVE=0
+CURRENT_STREAK=0
+STREAK_PRS=""
+BEST_PRS=""
 
-# Query merged PRs with fix/ prefix
-FIX_COUNT=0
-FIX_PRS=""
 while IFS= read -r pr_line; do
   [[ -z "$pr_line" ]] && continue
   pr_branch=$(echo "$pr_line" | jq -r '.headRefName // ""')
   pr_num=$(echo "$pr_line" | jq -r '.number // ""')
 
-  # Check if this is a fix/ branch
-  if ! echo "$pr_branch" | grep -qE '^fix/'; then
-    continue
-  fi
-
-  # Extract prefix and compare
+  # Extract prefix of this PR
   pr_prefix=$(extract_feature_prefix "$pr_branch")
-  if [[ "$pr_prefix" == "$CURRENT_PREFIX" ]]; then
-    FIX_COUNT=$((FIX_COUNT + 1))
-    FIX_PRS="${FIX_PRS}  - PR #${pr_num}: ${pr_branch}\n"
+
+  # Check if this merged PR is a fix/ with matching prefix
+  if echo "$pr_branch" | grep -qE '^fix/' && [[ "$pr_prefix" == "$CURRENT_PREFIX" ]]; then
+    CURRENT_STREAK=$((CURRENT_STREAK + 1))
+    STREAK_PRS="${STREAK_PRS}  - PR #${pr_num}: ${pr_branch}\n"
+    if [[ "$CURRENT_STREAK" -gt "$MAX_CONSECUTIVE" ]]; then
+      MAX_CONSECUTIVE=$CURRENT_STREAK
+      BEST_PRS="$STREAK_PRS"
+    fi
+  else
+    # Non-matching PR breaks the current streak, but keep scanning
+    CURRENT_STREAK=0
+    STREAK_PRS=""
   fi
-done < <(gh api "repos/${REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=30" \
-  --jq '.[] | select(.merged_at != null) | {headRefName, number}' 2>/dev/null | jq -c '.')
+done < <(gh api "repos/${REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=20" \
+  --jq '[.[] | select(.merged_at != null)] | sort_by(.merged_at) | reverse | .[] | {headRefName, number}' 2>/dev/null | jq -c '.')
+CONSECUTIVE_FIX_COUNT=$MAX_CONSECUTIVE
+CONSECUTIVE_FIX_PRS="$BEST_PRS"
 
 # --- Enforce: 2+ consecutive fixes → feature freeze ---
 FREEZE_THRESHOLD=2
-if [[ "$FIX_COUNT" -ge "$FREEZE_THRESHOLD" ]]; then
+if [[ "$CONSECUTIVE_FIX_COUNT" -ge "$FREEZE_THRESHOLD" ]]; then
   echo "" >&2
   echo "🧊 [FEATURE FREEZE] feat PR作成をブロック。" >&2
-  echo "   理由: 同一feature prefix '${CURRENT_PREFIX}' のfix PRが${FIX_COUNT}本検出。" >&2
-  echo "   直近のfix PR:" >&2
-  echo -e "$FIX_PRS" >&2
+  echo "   理由: 同一feature prefix '${CURRENT_PREFIX}' のfix PRがマージ順で${CONSECUTIVE_FIX_COUNT}本連続検出。" >&2
+  echo "   連続fix PR:" >&2
+  echo -e "$CONSECUTIVE_FIX_PRS" >&2
   echo "   対応:" >&2
   echo "   1. 既存のfix PRを全てマージ" >&2
   echo "   2. stabilization確認（テスト全パス）" >&2

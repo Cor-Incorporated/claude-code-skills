@@ -166,9 +166,31 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/block-state-file-tampering-bash.sh",
-            "timeout": 5,
-            "statusMessage": "Checking state file integrity..."
+            "command": "bash ~/.claude/hooks/protect-branches.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/git-push-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/codex-task-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-manual-merge-ops.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/git-commit-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/audit-docker-build-args.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-issue-close-verification.sh"
           }
         ]
       },
@@ -177,7 +199,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/protect-branches.sh"
+            "command": "bash ~/.claude/hooks/block-state-file-tampering-bash.sh",
+            "timeout": 5,
+            "statusMessage": "Checking state file integrity..."
           }
         ]
       },
@@ -193,47 +217,11 @@
         ]
       },
       {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/git-push-guard.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/codex-task-gate.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/codex-task-gate.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/block-manual-merge-ops.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/git-commit-guard.sh"
           }
         ]
       },
@@ -273,29 +261,11 @@
         ]
       },
       {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/audit-docker-build-args.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/enforce-architecture-layers.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-issue-close-verification.sh"
           }
         ]
       },
@@ -443,6 +413,23 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/codex-task-release.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/post-merge-close-issues.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/post-deploy-verify.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/enforce-memory-update-on-commit.sh"
           },
           {
@@ -450,33 +437,6 @@
             "command": "bash ~/.claude/hooks/enforce-post-merge-validation.sh",
             "timeout": 15,
             "statusMessage": "Checking post-merge validation requirements..."
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/codex-task-release.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/post-merge-close-issues.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/post-deploy-verify.sh"
           }
         ]
       },
