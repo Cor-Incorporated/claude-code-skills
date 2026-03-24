@@ -33,6 +33,13 @@ echo "[Merge Guard] PR #${PR_NUM} の CI/CD ステータスを確認中..." >&2
 
 CHECK_STATUS=$(_timeout 10 gh pr checks "$PR_NUM" 2>&1 || true)
 
+# Fail-closed: if CHECK_STATUS is empty (timeout or API failure), block merge
+if [ -z "$CHECK_STATUS" ]; then
+    echo "[BLOCK] PR #${PR_NUM} の CI/CD ステータスを取得できませんでした（タイムアウトまたはAPI障害）。fail-closed でブロックします。" >&2
+    echo "  手動で確認してください: gh pr checks $PR_NUM" >&2
+    exit 2
+fi
+
 # Check for failures
 if echo "$CHECK_STATUS" | grep -qi "fail\|error"; then
     echo "[BLOCK] PR #${PR_NUM} の CI/CD にfailureがあります。オールグリーンになるまでマージ禁止。" >&2

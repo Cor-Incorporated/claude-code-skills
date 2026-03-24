@@ -9,16 +9,20 @@ Usage:
 """
 
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 
 def run(cmd: str, timeout: int = 15) -> str:
-    """Run shell command, return stdout or empty string on failure."""
+    """Run command, return stdout or empty string on failure.
+
+    Issue #136: shell=True replaced with shlex.split() to prevent injection.
+    """
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout
+            shlex.split(cmd), capture_output=True, text=True, timeout=timeout
         )
         return result.stdout.strip()
     except Exception:

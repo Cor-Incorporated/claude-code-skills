@@ -34,6 +34,11 @@ case "$tool" in
 esac
 
 if [ -n "$source_name" ]; then
+    if ! command -v python3 &>/dev/null; then
+        echo "[WARN] python3 が見つかりません。ファクトチェック記録をスキップできないため fail-closed します。" >&2
+        echo "  python3 をインストールしてください。" >&2
+        exit 2
+    fi
     if [[ ! -f "$STATE_FILE" ]]; then
         echo '{}' > "$STATE_FILE"
     fi

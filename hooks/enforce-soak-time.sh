@@ -95,7 +95,7 @@ fi
 # .github/workflows/ is CI/CD config, NOT production infra — no extra soak needed
 CHANGED_FILES=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUM}/files" --jq '.[].filename' 2>/dev/null || echo "")
 HAS_PROD_INFRA=false
-if echo "$CHANGED_FILES" | grep -qE '^(terraform/|migration/|Dockerfile|docker-compose|cloudbuild)'; then
+if echo "$CHANGED_FILES" | grep -qE '^(terraform/|migration/|infra/|supabase/migrations/|Dockerfile|docker-compose|cloudbuild)|\.tf$|\.sql$|^main\.tf$'; then
   HAS_PROD_INFRA=true
 fi
 

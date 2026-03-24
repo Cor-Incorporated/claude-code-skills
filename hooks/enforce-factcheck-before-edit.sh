@@ -50,8 +50,15 @@ if echo "$file_path" | grep -qE '\.log$|/log/|/tmp/|coverage'; then
 fi
 
 # 非コードファイルは除外 (LSP分析不要: CI, docs, config)
-if echo "$file_path" | grep -qE '\.(md|yml|yaml)$|Dockerfile|\.dockerignore|\.gitignore|\.gitattributes|\.editorconfig|LICENSE|CHANGELOG'; then
+# ただしインフラ関連YAML (docker-compose, cloudbuild等) はファクトチェック必須のため除外しない
+if echo "$file_path" | grep -qE '\.(md)$|Dockerfile|\.dockerignore|\.gitignore|\.gitattributes|\.editorconfig|LICENSE|CHANGELOG'; then
     exit 0
+fi
+if echo "$file_path" | grep -qE '\.(yml|yaml)$'; then
+    # インフラ関連YAMLはファクトチェック必須 — 除外しない
+    if ! echo "$file_path" | grep -qE 'docker-compose.*\.(yml|yaml)$|cloudbuild.*\.(yml|yaml)$|terraform.*\.(yml|yaml)$|ansible.*\.(yml|yaml)$|infra/.*\.(yml|yaml)$'; then
+        exit 0
+    fi
 fi
 
 # GitHub Actions / CI workflows は除外

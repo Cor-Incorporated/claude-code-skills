@@ -3,7 +3,7 @@
 # ========================================================================
 # PreToolUse hook: Tracks file read count per session.
 # At 3+ unique SOURCE CODE file reads, outputs a warning.
-# At 6+ reads, outputs a BLOCK warning (strong recommendation).
+# At 4+ reads, outputs a BLOCK warning (strong recommendation).
 #
 # Exemptions (2026-03-11):
 #   - Subagent context (CLAUDE_AGENT_DEPTH >= 1)
