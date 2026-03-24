@@ -141,5 +141,22 @@ with open(f_path, 'r+') as f:
     fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
 
+# Also mark review as read (resolves pr-merge-claude-review-gate.sh / block-state-file-tampering-bash.sh design gap — Issue #99)
+# verify-pr-review.sh fetches and displays all review comments above, satisfying the "read" requirement.
+REVIEW_READ_FILE="$_STATE_BASE/pr-review-read.json"
+[ ! -f "$REVIEW_READ_FILE" ] && echo '{}' > "$REVIEW_READ_FILE"
+_RR="$REVIEW_READ_FILE" _PR="$PR_NUM" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_RR']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    s.setdefault(os.environ['_PR'], {})['review_read'] = True
+    f.seek(0)
+    f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
+" 2>/dev/null || true
+
 echo "✅ PR #${PR_NUM} ロック解除。claude-review クリーン確認済み。マージ可能。"
 exit 0
