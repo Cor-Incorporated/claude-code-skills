@@ -67,7 +67,7 @@ fi
 # ADR-003 Phase 1: change-related file detection
 # =========================================================================
 TEST_FILE_REGEX='(_test\.(go|py|ts|tsx|js|jsx)|\.test\.(ts|tsx|js|jsx)|\.spec\.(ts|tsx|js|jsx)|test_[a-z].*\.py|/__tests__/)'
-NON_TESTABLE_REGEX='\.(md|yml|yaml|json|toml|css|scss|svg|png|jpg|gif|ico|lock|txt|rst)$|^\.github/|^\.claude/|^docs/|^\.vscode/|^\.idea/'
+NON_TESTABLE_REGEX='\.(md|yml|yaml|css|scss|svg|png|jpg|gif|ico|lock|txt|rst)$|^\.github/|^\.claude/|^docs/|^\.vscode/|^\.idea/'
 CROSS_CUTTING_SOURCE_THRESHOLD=20
 
 detect_changed_files() {
@@ -83,9 +83,9 @@ detect_changed_files() {
     base=$(git rev-parse HEAD~1)
   fi
 
-  [[ -z "$base" ]] && return 0
+  [[ -z "$base" ]] && { echo "[stop-test-gate] merge-base 未解決: full suite fallback。" >&2; return 1; }
 
-  git diff --name-only "$base"...HEAD 2>/dev/null
+  git diff --name-only "$base"..HEAD 2>/dev/null
 }
 
 classify_files() {
@@ -142,21 +142,26 @@ if [ -z "$TEST_CMD" ]; then
 fi
 
 CHANGED_FILES=()
+_detect_exit=0
 while IFS= read -r changed_file; do
   [[ -n "$changed_file" ]] && CHANGED_FILES+=("$changed_file")
-done < <(detect_changed_files)
+done < <(detect_changed_files) || _detect_exit=$?
 
-if [[ "${#CHANGED_FILES[@]}" -eq 0 ]]; then
+if [[ "$_detect_exit" -ne 0 ]]; then
+  echo "[stop-test-gate] merge-base解決失敗: full suite fallback。" >&2
+  # Fall through to full suite execution (skip classification)
+elif [[ "${#CHANGED_FILES[@]}" -eq 0 ]]; then
   echo "[stop-test-gate] 変更ファイル未検出: テスト不要。" >&2
   exit 0
 fi
 
-TEST_FILES=()
-SOURCE_FILES=()
-NON_TESTABLE_FILES=()
-classify_files "${CHANGED_FILES[@]}"
+if [[ "$_detect_exit" -eq 0 ]] && [[ "${#CHANGED_FILES[@]}" -gt 0 ]]; then
+  TEST_FILES=()
+  SOURCE_FILES=()
+  NON_TESTABLE_FILES=()
+  classify_files "${CHANGED_FILES[@]}"
 
-if [[ "${#NON_TESTABLE_FILES[@]}" -eq "${#CHANGED_FILES[@]}" ]]; then
+  if [[ "${#NON_TESTABLE_FILES[@]}" -eq "${#CHANGED_FILES[@]}" ]]; then
   echo "[stop-test-gate] docs/config-only 変更: テスト不要。" >&2
   exit 0
 fi
@@ -166,7 +171,8 @@ if [[ "${#SOURCE_FILES[@]}" -ge "$CROSS_CUTTING_SOURCE_THRESHOLD" ]]; then
 elif [[ "${#TEST_FILES[@]}" -eq 0 ]]; then
   echo "[stop-test-gate] change-related tests 0件: full suite fallback。" >&2
 else
-  echo "[stop-test-gate] Phase 1: test file ${#TEST_FILES[@]}件を検出。実行は既存TEST_CMDを維持。" >&2
+    echo "[stop-test-gate] Phase 1: test file ${#TEST_FILES[@]}件を検出。実行は既存TEST_CMDを維持。" >&2
+  fi
 fi
 
 # =========================================================================
