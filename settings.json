@@ -333,6 +333,12 @@
           },
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-follow-up-limit.sh",
+            "timeout": 15,
+            "statusMessage": "Checking follow-up fix limit..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/pr-guard.sh",
             "timeout": 30,
             "statusMessage": "Checking PR guard (base branch, issue ref, conflicts)..."
