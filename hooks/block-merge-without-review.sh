@@ -45,12 +45,7 @@ TIER="FULL"
 case "$PR_BRANCH" in
     docs/*|chore/*|ci/*) TIER="EXEMPT" ;;
     *)
-        # Check if repo is claude-code-skills (meta-task → LIGHT)
         # Use remote URL for defense-in-depth (aligned with classify_review_tier)
-        remote_url=$(git remote get-url origin 2>/dev/null || echo "")
-        if [[ "$remote_url" == *"/claude-code-skills"* ]] || [[ "$remote_url" == *"/claude-code-skills.git"* ]]; then
-            TIER="LIGHT"
-        fi
         ;;
 esac
 
