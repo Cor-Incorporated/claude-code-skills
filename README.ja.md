@@ -2,7 +2,7 @@
 
 [Claude Code](https://claude.com/claude-code)（Anthropic 公式 CLI）のためのスキル・ルール・フック集です。
 
-27 のカスタムスキル、52 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
+26 のカスタムスキル、57 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
 
 [English](README.md) | **日本語**
 
@@ -21,10 +21,10 @@ chmod +x setup.sh
 
 ```
 claude-code-skills/
-├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
+├── skills/           # 26 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 5 グローバルルール (コーディング規約, Git, 品質, テスト, 委任)
-├── hooks/            # 52 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
-├── scripts/          # 5 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
+├── hooks/            # 57 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
+├── scripts/          # 6 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
 ├── README.md         # 英語版 README
@@ -47,7 +47,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (カスタムスキル + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 52 hook スクリプト
+  code-reviewer, review-loop, e2e, bugfix + 57 hook スクリプト
 
 Reflect (gstack)
   /retro
@@ -232,7 +232,83 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 | **マージ後** | `post-merge-close-issues.sh` | リンクされた Issue を自動クローズ |
 | **セッション終了** | `pr-ci-review-gate.sh` (STOP) | 未検証 PR について警告 |
 
-## Hook システム（52 スクリプト）
+
+## 設計哲学
+
+本リポジトリは3つの基礎原則に基づいています。
+
+### 1. Harness Engineering Best Practices (2026)
+
+[ベストプラクティス記事](https://nyosegawa.com/posts/harness-engineering-best-practices-2026/)に基づくアーキテクチャ:
+
+| 原則 | 実装 | カバレッジ |
+|------|------|-----------|
+| LLMプロンプトより決定論的ツール | 57 hook スクリプト（exit code 強制） | 96.5% hook カバレッジ |
+| フィードバック速度階層 | PostToolUse(ms) > pre-commit > CI(min) > レビュー(hr) | ADR-003 |
+| ポインタベースドキュメント | ルール各50行以内、ADR/hookへポインタ | ADR-002 |
+| 設定ファイル保護 | `protect-linter-config.sh` でエージェントのルール緩和をブロック | PreToolUse |
+| 計画-実行分離 | Plans.md + plan mode + planner エージェント | TaskCreate/Update |
+| Stop時E2Eテスト | `stop-test-gate.sh` で変更関連テスト実行 | Stop hook |
+| Git = セッション間ブリッジ | `enforce-memory-update-on-commit.sh` | PostToolUse |
+| Claude Code + Codex ハイブリッド | 60/40 分担、自動委任 | ADR-004 |
+
+**ベストプラクティス記事カバー率: 88% (36項目中32項目)**
+
+### 2. Epic #130:「実装 ≠ 動作」
+
+11/18 のhook (61%) が「実装済み」だが実際には発火しなかった事故から生まれた運用原則:
+
+> **「コードが存在する」と「システムが動作する」は別の検証ステップ。コードレビューだけでは運用の正しさを保証できない。**
+
+以下で強制:
+- **4段階検証**: コード存在 → 構文OK → settings.json登録 → 実際に発火
+- **`delivery_score.py`**: 定量品質スコア（hookカバレッジ、CI合格率、レビュー遵守率）
+- **`validate-hook-deployment.sh`**: ソース ↔ デプロイ ↔ 登録の整合性チェック
+- **CI/CD**: shellcheck + JSON validation + syntax checking（全PR）
+
+**Epic #130 前**: hookゲート動作率 39% (7/18) → **後**: 96.5% (55/57)
+
+### 3. Delivery Quality Score
+
+`python3 scripts/delivery_score.py` で定量品質評価:
+
+```
+==================================================
+  Delivery Quality Score: claude-code-skills
+==================================================
+  Total: 99.0/100 (A+)
+  hook_coverage: 96.5 / ci_pass_rate: 100.0
+  soak_time: 100.0 / review_compliance: 100.0
+==================================================
+```
+
+`--json` オプションでCI/自動化統合可能。
+
+## 既知の問題 & ロードマップ
+
+Epic #130 包括レビュー (2026-03-24) で発見:
+
+### P1-HIGH
+| Issue | 説明 |
+|-------|------|
+| [#141](../../issues/141) | `pr-ci-review-gate.sh` tier分類がローカルHEADを使用 |
+| [#142](../../issues/142) | `block-merge-without-review.sh` HIGH pattern偽陽性フィルタ後に狭すぎ |
+
+### P2-MEDIUM
+| Issue | 説明 |
+|-------|------|
+| [#136](../../issues/136) | `delivery_score.py` shell=True使用 |
+| [#137](../../issues/137) | `pr-ci-review-gate.sh` 783行 → モード別分割必要 |
+| [#138](../../issues/138) | python3未検出時のhookサイレント劣化 |
+| [#139](../../issues/139) | `enforce-factcheck-before-edit.sh` YAML除外の不整合 |
+| [#140](../../issues/140) | `context-budget-read-gate.sh` 閾値とドキュメントの不一致 |
+| [#143](../../issues/143) | `block-merge-without-ci.sh` タイムアウト時fail-open |
+| [#144](../../issues/144) | `enforce-soak-time.sh` Terraform/SQLパス検出範囲不足 |
+| [#145](../../issues/145) | `validate-hook-deployment.sh` SessionStart未登録 |
+| [#146](../../issues/146) | PreCompact hook未実装 |
+| [#147](../../issues/147) | Rules合計186行 vs ADR-002目標165行 |
+
+## Hook システム（57 スクリプト）
 
 ### セッション初期化
 - `auto-init-permissions.sh` — セッション開始時にパーミッションを自動初期化
