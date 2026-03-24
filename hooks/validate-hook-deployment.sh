@@ -48,14 +48,11 @@ is_excluded() {
   return 1
 }
 
-# --- Phase 1: Collect project hook files (excluding _unused/, __pycache__) ---
+# --- Phase 1: Collect project hook files ---
+# -maxdepth 1 inherently excludes _unused/ and __pycache__/ subdirectories
 project_files=()
 while IFS= read -r -d '' filepath; do
   filename=$(basename "$filepath")
-  # Skip files inside _unused/ or __pycache__/
-  case "$filepath" in
-    */_unused/*|*/__pycache__/*) continue ;;
-  esac
   project_files+=("$filename")
 done < <(find "$PROJECT_HOOKS_DIR" -maxdepth 1 \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 
@@ -72,22 +69,20 @@ if [[ -f "$SETTINGS_FILE" ]]; then
   # Read settings.json content once
   settings_content=$(cat "$SETTINGS_FILE")
 
+  # -maxdepth 1 inherently excludes _unused/ and __pycache__/ subdirectories
   while IFS= read -r -d '' filepath; do
     filename=$(basename "$filepath")
-    # Skip non-script files and special entries
+    # Skip non-script files
     case "$filename" in
       README.md|*.pyc) continue ;;
-    esac
-    # Skip _unused/ and __pycache__
-    case "$filepath" in
-      */_unused/*|*/__pycache__/*) continue ;;
     esac
     # Skip known exclusions
     if is_excluded "$filename"; then
       continue
     fi
-    # Check if registered in settings.json (pattern: bash ~/.claude/hooks/FILENAME)
-    if ! echo "$settings_content" | grep -q "bash ~/.claude/hooks/$filename"; then
+    # Check if registered in settings.json
+    # Supports both bash and python3 invocation patterns
+    if ! echo "$settings_content" | grep -q "~/.claude/hooks/$filename"; then
       issues+=("NOT REGISTERED: $filename")
     fi
   done < <(find "$INSTALLED_HOOKS_DIR" -maxdepth 1 \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
