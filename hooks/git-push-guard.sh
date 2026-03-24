@@ -6,6 +6,13 @@ set -euo pipefail
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
+# --- 0. Early exit: only run on git push commands (Issue #150) ---
+# Without this guard, black/ruff checks in section 3 block ALL Bash commands,
+# creating an unrecoverable deadlock where even `black .` is blocked.
+if ! echo "$cmd" | grep -qE '\bgit\s+push\b'; then
+  exit 0
+fi
+
 # --- 1. Force push to shared branches check (Issue #17) ---
 # Block --force / --force-with-lease to develop/main/master
 # Feature branches are allowed (user's own branch history cleanup is legitimate)

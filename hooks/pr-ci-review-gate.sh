@@ -101,24 +101,32 @@ current_branch() {
 # =========================================================================
 classify_review_tier() {
   local branch="$1"
+  local pr_number="${2:-}"
 
   # Tier 3: Branch-based exemption
   case "$branch" in docs/*|chore/*|ci/*) echo "EXEMPT"; return ;; esac
 
+  # Issue #141: Use GitHub API for PR changed files instead of local git diff.
+  # Local `git diff base...HEAD` gives wrong results when run from develop branch.
+  local changed_files=""
 
-  # Determine base branch for diff
-  local base_branch="main"
-  if git rev-parse --verify develop &>/dev/null; then
-    base_branch="develop"
-  elif git rev-parse --verify main &>/dev/null; then
-    base_branch="main"
-  elif git rev-parse --verify master &>/dev/null; then
-    base_branch="master"
+  # Try GitHub API first if PR number and repo are available
+  if [[ -n "$pr_number" ]] && [[ -n "${REPO:-}" ]]; then
+    changed_files=$(_timeout 10 gh api "repos/${REPO}/pulls/${pr_number}/files" --jq '.[].filename' 2>/dev/null || echo "")
   fi
 
-  # Get list of changed files vs base
-  local changed_files
-  changed_files=$(git diff --name-only "${base_branch}...HEAD" 2>/dev/null || git diff --name-only "${base_branch}" 2>/dev/null || echo "")
+  # Fallback to local git diff if API failed
+  if [[ -z "$changed_files" ]]; then
+    local base_branch="main"
+    if git rev-parse --verify develop &>/dev/null; then
+      base_branch="develop"
+    elif git rev-parse --verify main &>/dev/null; then
+      base_branch="main"
+    elif git rev-parse --verify master &>/dev/null; then
+      base_branch="master"
+    fi
+    changed_files=$(git diff --name-only "${base_branch}...HEAD" 2>/dev/null || git diff --name-only "${base_branch}" 2>/dev/null || echo "")
+  fi
 
   if [[ -z "$changed_files" ]]; then
     # Cannot determine changes — default to FULL for safety
@@ -217,7 +225,7 @@ if [[ "$GATE_MODE" == "PRE_CREATE" ]]; then
   [[ -z "$BRANCH" ]] && { echo "[WARN] Cannot determine branch. Blocking PR creation." >&2; exit 2; }
 
   # Classify review tier based on branch name + changed files
-  TIER=$(classify_review_tier "$BRANCH")
+  TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) TIER=$TIER" >> "$LOG_FILE" 2>/dev/null
 
   # Tier 3 (EXEMPT): no review required
@@ -337,7 +345,7 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
   # LIGHT: config/docs file changes → 3-pass OR (code-reviewer OR C/H=0 OR verified)
   # FULL: source code changes → code-reviewer + Codex CLI required
   # =========================================================================
-  TIER=$(classify_review_tier "$BRANCH")
+  TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
 
   if [[ "$TIER" == "EXEMPT" ]]; then
     echo "✅ PR #${PR_NUMBER}: EXEMPT tier ($BRANCH). CIグリーンのみで許可。" >&2
@@ -506,8 +514,9 @@ with open(f_path, 'r+') as f:
     echo "  → PR作成/マージ前に code-reviewer + Codex CLI を再実行してください。" >&2
   fi
 
+  REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
   # Classify tier to show appropriate requirements
-  TIER=$(classify_review_tier "$BRANCH")
+  TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
   echo "" >&2
   echo "🔒 PR #${PR_NUMBER} をロック (tier=$TIER)。以下が完了するまでマージ禁止:" >&2
   echo "   1. gh pr checks ${PR_NUMBER} — 全グリーン" >&2
@@ -643,7 +652,7 @@ print(s.get(os.environ['_PR'], {}).get('branch', ''))
   fi
 
   # Classify review tier
-  TIER=$(classify_review_tier "$BRANCH")
+  TIER=$(classify_review_tier "$BRANCH" "${PR:-}")
 
   # EXEMPT tier: CI green is sufficient, no review needed
   if [[ "$TIER" == "EXEMPT" ]]; then

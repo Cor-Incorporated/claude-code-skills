@@ -45,14 +45,44 @@ print('yes' if s.get(os.environ['_PR'], {}).get('auto_review_needed', False) els
 # Source 1: Review bodies
 REVIEWS=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" 2>/dev/null || echo "[]")
 
-# Source 2: Inline comments
-PR_COMMENTS=$(gh api "repos/${REPO}/pulls/${PR_NUM}/comments" 2>/dev/null || echo "[]")
+# Source 2: Inline PR comments — intentionally excluded from severity check.
+# Issue #152: We only check the LATEST review summary, not individual inline comments,
+# because old inline comments from prior pushes cause false positives.
+# Inline CRITICAL/BLOCKING findings will appear in the review summary comment.
 
 # Source 3: Issue comments (review summaries)
 ISSUE_COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" 2>/dev/null || echo "[]")
 
-# Count blocking indicators across ALL sources
-COMBINED="$REVIEWS $PR_COMMENTS $ISSUE_COMMENTS"
+# Issue #152: Only check the LATEST claude-review comment, not all historical ones.
+# Old reviews may contain 🔴 from issues already fixed in subsequent pushes.
+LATEST_REVIEW_BODY=$(echo "$ISSUE_COMMENTS" | python3 -c "
+import json, sys
+comments = json.load(sys.stdin)
+# Match claude[bot], any Bot with review content, OR any comment with severity markers
+review_comments = [c for c in comments
+    if c.get('user', {}).get('login') == 'claude[bot]'
+    or (c.get('user', {}).get('type') == 'Bot'
+        and 'review' in c.get('body', '').lower()[:500])
+    or any(sev in c.get('body', '')[:2000]
+           for sev in ['[CRITICAL]', '[HIGH]', '[BLOCKING]', '[MUST_FIX]', '[BUG]',
+                       '**CRITICAL**', '**HIGH**', '**BLOCKING**'])]
+if review_comments:
+    print(review_comments[-1].get('body', ''))
+else:
+    print('')
+" 2>/dev/null || echo "")
+
+LATEST_FORMAL_REVIEW=$(echo "$REVIEWS" | python3 -c "
+import json, sys
+reviews = json.load(sys.stdin)
+if reviews:
+    print(reviews[-1].get('body', ''))
+else:
+    print('')
+" 2>/dev/null || echo "")
+
+# Combine ONLY latest review content (not all historical)
+COMBINED="$LATEST_REVIEW_BODY $LATEST_FORMAL_REVIEW"
 # Use severity-prefix patterns to avoid false positives (aligned with block-merge-without-review.sh)
 BLOCKING=$(echo "$COMBINED" | grep -ciE '\[BLOCKING\]|severity:\s*BLOCKING|^\s*BLOCKING[:\s-]|>\s*BLOCKING|\*\*BLOCKING\*\*|🔴' || true)
 MUST_FIX=$(echo "$COMBINED" | grep -ciE '\[MUST.FIX\]|severity:\s*MUST.FIX|^\s*MUST.FIX[:\s-]|>\s*MUST.FIX|\*\*MUST.FIX\*\*' || true)
@@ -127,7 +157,7 @@ reviews = json.load(sys.stdin)
 actual = [r for r in reviews if r.get('state', '') != 'PENDING']
 print(len(actual))
 " 2>/dev/null || echo "0")
-    INLINE_COUNT=$(echo "$PR_COMMENTS" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+    INLINE_COUNT=$(echo "[]" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
     BOT_COMMENT_COUNT=$(echo "$ISSUE_COMMENTS" | python3 -c "
 import json, sys
 comments = json.load(sys.stdin)
