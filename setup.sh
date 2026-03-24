@@ -61,8 +61,7 @@ fi
 if [ ! -d "$SKILLS_DIR/gstack" ]; then
   echo "  + gstack (cloning from garrytan/gstack)..."
   git clone https://github.com/garrytan/gstack.git "$SKILLS_DIR/gstack"
-  cd "$SKILLS_DIR/gstack" && git checkout f4bbfaa5bdfd2d6ce59541c2145432febde57fed  # v0.11.10.0
-  ./setup
+  cd "$SKILLS_DIR/gstack" && git checkout f4bbfaa5bdfd2d6ce59541c2145432febde57fed && ./setup  # v0.11.10.0
   ~/.claude/skills/gstack/bin/gstack-config set telemetry off
   cd "$REPO_DIR"
   echo "  ✅ gstack installed (telemetry disabled)"
