@@ -50,18 +50,29 @@ if [[ -z "$PR_JSON" ]]; then
 fi
 
 BASE_BRANCH=$(echo "$PR_JSON" | jq -r '.base.ref // ""')
-UPDATED_AT=$(echo "$PR_JSON" | jq -r '.updated_at // ""')
+HEAD_SHA=$(echo "$PR_JSON" | jq -r '.head.sha // ""')
 
-if [[ -z "$UPDATED_AT" ]]; then
+# Get head commit's committer date (not updated_at which changes on comments/labels)
+# Note: committer.date is commit creation time, not push time.
+# This is better than updated_at but may undercount soak time if commit
+# was created long before pushing. Acceptable trade-off per #123.
+if [[ -n "$HEAD_SHA" ]]; then
+  COMMIT_JSON=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}" 2>/dev/null || echo "")
+  PUSH_TIME=$(echo "$COMMIT_JSON" | jq -r '.commit.committer.date // ""' 2>/dev/null || echo "")
+else
+  PUSH_TIME=""
+fi
+
+if [[ -z "$PUSH_TIME" ]]; then
   exit 0
 fi
 
 # --- Calculate elapsed time ---
 # macOS compatible date parsing
-if date -jf "%Y-%m-%dT%H:%M:%SZ" "$UPDATED_AT" +%s >/dev/null 2>&1; then
-  PUSH_EPOCH=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$UPDATED_AT" +%s)
-elif date -d "$UPDATED_AT" +%s >/dev/null 2>&1; then
-  PUSH_EPOCH=$(date -d "$UPDATED_AT" +%s)
+if date -jf "%Y-%m-%dT%H:%M:%SZ" "$PUSH_TIME" +%s >/dev/null 2>&1; then
+  PUSH_EPOCH=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$PUSH_TIME" +%s)
+elif date -d "$PUSH_TIME" +%s >/dev/null 2>&1; then
+  PUSH_EPOCH=$(date -d "$PUSH_TIME" +%s)
 else
   # Cannot parse date, skip enforcement
   exit 0
@@ -107,7 +118,7 @@ if [[ "$REQUIRED_SOAK" -gt 0 ]] && [[ "$ELAPSED" -lt "$REQUIRED_SOAK" ]]; then
   echo "" >&2
   echo "⏳ [SOAK TIME] PR #${PR_NUM} のマージをブロック。" >&2
   echo "   理由: ${SOAK_REASON}" >&2
-  echo "   最終更新: ${UPDATED_AT}" >&2
+  echo "   最終push: ${PUSH_TIME}" >&2
   echo "   経過時間: $((ELAPSED / 3600))h $((ELAPSED % 3600 / 60))m" >&2
   echo "   残り時間: ${REMAINING_H}h ${REMAINING_M}m" >&2
   echo "" >&2

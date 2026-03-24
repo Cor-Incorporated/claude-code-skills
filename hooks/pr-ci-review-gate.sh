@@ -19,6 +19,16 @@ export GH_NO_UPDATE_NOTIFIER=1
 
 GATE_MODE="${GATE_MODE:-STOP}"
 
+# Portable timeout: macOS has no timeout command (GNU coreutils)
+if command -v timeout &>/dev/null; then
+  _timeout() { timeout "$@"; }
+elif command -v gtimeout &>/dev/null; then
+  _timeout() { gtimeout "$@"; }
+else
+  _timeout() { shift; "$@"; }  # skip timeout arg, run command directly
+fi
+
+
 # DIAGNOSTIC: Log every invocation regardless of mode
 
 # =========================================================================
@@ -294,7 +304,7 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
   # the PR's source branch to check review-status.json correctly.
   REPO_FOR_BRANCH=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
   if [[ -n "$REPO_FOR_BRANCH" ]]; then
-    BRANCH=$(gh api "repos/${REPO_FOR_BRANCH}/pulls/${PR_NUMBER}" --jq '.head.ref' 2>/dev/null || echo "")
+    BRANCH=$(_timeout 10 gh api "repos/${REPO_FOR_BRANCH}/pulls/${PR_NUMBER}" --jq '.head.ref' 2>/dev/null || echo "")
   fi
   if [[ -z "$BRANCH" ]]; then
     BRANCH=$(current_branch)
@@ -303,12 +313,12 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
 
   # Check CI status
   REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
-  HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null || echo "")
+  HEAD_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null || echo "")
 
   if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
-    CI_FAILURES=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+    CI_FAILURES=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
       --jq '[.check_runs[] | select(.conclusion=="failure")] | length' 2>/dev/null || echo "0")
-    CI_PENDING=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+    CI_PENDING=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
       --jq '[.check_runs[] | select(.status!="completed")] | length' 2>/dev/null || echo "0")
 
     if [[ "$CI_FAILURES" -gt 0 ]]; then
@@ -601,15 +611,15 @@ if [[ "$GATE_MODE" == "VERIFY" ]] || [[ "${1:-}" == "VERIFY" ]]; then
   [ -z "$PR" ] && { echo "Usage: $0 VERIFY <PR_NUMBER>" >&2; exit 1; }
 
   REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
-  HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha' 2>/dev/null || echo "")
+  HEAD_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha' 2>/dev/null || echo "")
   if [[ -z "$REPO" ]] || [[ -z "$HEAD_SHA" ]]; then
     echo "⚠️ PR #${PR}: リポジトリ/SHA取得失敗。手動確認してください。" >&2
     exit 1
   fi
 
-  CI_FAILURES=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+  CI_FAILURES=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
     --jq '[.check_runs[] | select(.conclusion=="failure")] | length' 2>/dev/null || echo "0")
-  CI_PENDING=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+  CI_PENDING=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
     --jq '[.check_runs[] | select(.status!="completed")] | length' 2>/dev/null || echo "0")
 
   if [[ "$CI_FAILURES" -gt 0 ]]; then
@@ -629,7 +639,7 @@ print(s.get(os.environ['_PR'], {}).get('branch', ''))
 
   # If branch not in lock state, try GitHub API
   if [[ -z "$BRANCH" ]]; then
-    BRANCH=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.ref' 2>/dev/null || echo "")
+    BRANCH=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR}" --jq '.head.ref' 2>/dev/null || echo "")
   fi
 
   # Classify review tier
@@ -770,4 +780,4 @@ else:
 fi
 
 echo "Unknown GATE_MODE: $GATE_MODE" >&2
-exit 1
+exit 2
