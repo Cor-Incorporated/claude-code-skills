@@ -4,7 +4,9 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 27 custom skills, 52 hook scripts, 5 rule sets, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 26 custom skills, 57 hook scripts, 5 rule sets, 6 utility scripts, and integration with third-party skill frameworks.
+
+> **Design Philosophy**: This project implements the principles from [Harness Engineering Best Practices 2026](https://nyosegawa.com/posts/harness-engineering-best-practices-2026/) — deterministic quality gates via hooks, pointer-based documentation (ADR-002), and the feedback speed hierarchy (PostToolUse > pre-commit > CI > human review).
 
 ## Quick Start
 
@@ -21,10 +23,10 @@ Restart Claude Code after installation.
 
 ```
 claude-code-skills/
-├── skills/           # 27 custom skill definitions (SKILL.md + scripts + references)
+├── skills/           # 26 custom skill definitions (SKILL.md + scripts + references)
 ├── rules/            # 5 global rule files (coding-style, git-workflow, quality, testing, delegation)
-├── hooks/            # 52 hook scripts (quality gates, safety guards, workflow enforcement)
-├── scripts/          # 5 utility scripts (Codex orchestration, PR review, context monitoring)
+├── hooks/            # 57 hook scripts (quality gates, safety guards, workflow enforcement)
+├── scripts/          # 6 utility scripts (Codex orchestration, PR review, context monitoring)
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
 └── README.md
@@ -40,6 +42,7 @@ Design decisions are recorded as ADRs in `docs/adr/`.
 | [002](docs/adr/002-pointer-design-principle.md) | CLAUDE.md Pointer Design Principle | Accepted |
 | [003](docs/adr/003-feedback-speed-hierarchy.md) | Feedback Speed Hierarchy | Accepted |
 | [004](docs/adr/004-codex-delegation-model.md) | Codex Large-Scale Delegation Model | Accepted |
+| [005](docs/adr/005-plans-json-migration.md) | Plans.md → JSON Migration | Accepted |
 
 To add a new ADR, use the [template](docs/adr/template.md).
 
@@ -67,7 +70,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (custom skills + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 52 hook scripts
+  code-reviewer, review-loop, e2e, bugfix + 57 hook scripts
 
 Reflect (gstack)
   /retro
@@ -184,6 +187,7 @@ Task received
 | `codex-orchestrate.sh` | Multi-task parallel execution via worktrees (JSON or CSV input) |
 | `check-pr-reviews.sh` | Verify PR review timestamps against latest push |
 | `verify-pr-review.sh` | Validate review coverage before merge |
+| `delivery_score.py` | Quantitative delivery quality scoring (hook coverage, CI, reviews) |
 | `context-monitor.py` | Monitor context window usage and token consumption |
 
 ## Review Pipeline (PR Merge Gate)
@@ -252,7 +256,87 @@ Merged or closed PRs are automatically cleaned from the lock state:
 | **Post Merge** | `post-merge-close-issues.sh` | Auto-close linked issues |
 | **Session Stop** | `pr-ci-review-gate.sh` (STOP) | Warn about unverified PRs |
 
-## Hook System (52 Scripts)
+
+## Design Philosophy
+
+This repository is built on three foundational principles:
+
+### 1. Harness Engineering Best Practices (2026)
+
+Based on [the article](https://nyosegawa.com/posts/harness-engineering-best-practices-2026/) that underpins this system's architecture:
+
+| Principle | Implementation | Coverage |
+|-----------|---------------|----------|
+| Deterministic tools over LLM prompts | 57 hook scripts with exit code enforcement | 96.5% hook coverage |
+| Feedback speed hierarchy | PostToolUse (ms) > pre-commit > CI (min) > review (hr) | ADR-003 |
+| Pointer-based documentation | Rules ≤50 lines each, pointing to ADRs/hooks | ADR-002 |
+| Configuration protection | `protect-linter-config.sh` blocks agent rule relaxation | PreToolUse |
+| Plan-execute separation | Plans.md + plan mode + planner agent | TaskCreate/Update |
+| E2E test at Stop | `stop-test-gate.sh` runs change-related tests | Stop hook |
+| Git as cross-session bridge | `enforce-memory-update-on-commit.sh` | PostToolUse |
+| Claude Code + Codex hybrid | 60/40 split with automatic delegation | ADR-004 |
+
+**Best practices article coverage: 88% (32/36 checkpoints)**
+
+### 2. Epic #130: "Implemented ≠ Working"
+
+The core operational principle, born from an incident where 11 of 18 hooks (61%) were "implemented" in source code but never actually fired:
+
+> **"Code exists" and "system works" are separate verification steps. Code review alone cannot guarantee operational correctness.**
+
+This principle is enforced through:
+- **4-stage verification**: Code exists → Syntax OK → Registered in settings.json → Actually fires
+- **`delivery_score.py`**: Quantitative quality scoring (hook coverage, CI pass rate, review compliance)
+- **`validate-hook-deployment.sh`**: Source ↔ deployed ↔ registered consistency check
+- **CI/CD**: shellcheck + JSON validation + syntax checking on every PR
+
+**Before Epic #130**: Hook gate operation rate 39% (7/18)
+**After Epic #130**: Hook gate operation rate 96.5% (55/57)
+
+### 3. Delivery Quality Score
+
+Run `python3 scripts/delivery_score.py` to get a quantitative quality assessment:
+
+```
+==================================================
+  Delivery Quality Score: claude-code-skills
+==================================================
+  Total: 99.0/100 (A+)
+──────────────────────────────────────────────────
+  hook_coverage            :  96.5/100
+  ci_pass_rate             : 100.0/100
+  soak_time                : 100.0/100
+  review_compliance        : 100.0/100
+==================================================
+```
+
+Use `--json` for CI/automation integration.
+
+## Known Issues & Roadmap
+
+Issues discovered during the Epic #130 comprehensive review (2026-03-24):
+
+### P1-HIGH
+| Issue | Description |
+|-------|-------------|
+| [#141](../../issues/141) | `pr-ci-review-gate.sh` tier classification uses local HEAD instead of PR diff |
+| [#142](../../issues/142) | `block-merge-without-review.sh` HIGH pattern too narrow after false-positive filter |
+
+### P2-MEDIUM
+| Issue | Description |
+|-------|-------------|
+| [#136](../../issues/136) | `delivery_score.py` uses `shell=True` with string interpolation |
+| [#137](../../issues/137) | `pr-ci-review-gate.sh` 783 lines — needs mode-based splitting |
+| [#138](../../issues/138) | Multiple hooks silently degrade when `python3` unavailable |
+| [#139](../../issues/139) | `enforce-factcheck-before-edit.sh` YAML exemption inconsistency |
+| [#140](../../issues/140) | `context-budget-read-gate.sh` threshold/documentation mismatch |
+| [#143](../../issues/143) | `block-merge-without-ci.sh` fail-open on timeout |
+| [#144](../../issues/144) | `enforce-soak-time.sh` Terraform/SQL path detection too narrow |
+| [#145](../../issues/145) | `validate-hook-deployment.sh` not wired into SessionStart |
+| [#146](../../issues/146) | PreCompact hook not implemented (context protection) |
+| [#147](../../issues/147) | Rules total 186 lines vs ADR-002 target 165 lines |
+
+## Hook System (57 Scripts)
 
 ### Session Initialization
 - `auto-init-permissions.sh` — Auto-initialize permissions on session start
@@ -343,7 +427,7 @@ Hook scripts receive the tool invocation as JSON on `stdin` and should filter by
 
 **Important**: Do NOT echo the input JSON back to stdout on `exit 0`. The official pattern is simply `exit 0` to allow a tool call. All hooks in this repository follow this convention.
 
-See the [official hooks documentation](https://docs.anthropic.com/en/docs/claude-code/hooks) for details.
+See the [official hooks documentation](https://code.claude.com/docs/en/hooks) for details.
 
 ## Rules
 
