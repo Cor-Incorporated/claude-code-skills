@@ -154,9 +154,9 @@ fi
 # Accumulated old comments cause false positives; CI pass = latest is clean.
 # =========================================================================
 CLAUDE_REVIEW_STATUS=$(gh pr checks "${PR_NUMBER}" -R "${REPO}" 2>/dev/null | grep -i 'claude-review' | awk '{print $2}' || echo "")
-if [[ "$CLAUDE_REVIEW_STATUS" == "pass" ]]; then
+if [[ "$CLAUDE_REVIEW_STATUS" == "pass" ]] || [[ -z "$CLAUDE_REVIEW_STATUS" ]]; then
   HAS_CRITICAL="NO"
-  # claude-review CI passed → skip comment-based CRITICAL detection
+  # claude-review CI passed or not configured → skip comment-based CRITICAL detection
 else
   # Check both issue comments and fallback review state for CRITICAL
   HAS_CRITICAL="NO"
