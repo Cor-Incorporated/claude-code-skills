@@ -139,11 +139,11 @@ if [[ "$REVIEW_READ" != "True" ]]; then
   echo "" >&2
   echo "[BLOCKED] PR #${PR_NUMBER}: レビューを未読のままマージしようとしています。" >&2
   echo "" >&2
-  echo "  必ず以下の手順を踏んでください:" >&2
-  echo "  1. レビューを読む:" >&2
-  echo "     gh api repos/${REPO}/issues/${PR_NUMBER}/comments --jq '.[].body'" >&2
-  echo "  2. code-reviewer を実行済みなら、記録処理完了後に再試行:" >&2
-  echo "     bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER}" >&2
+  echo "  以下を実行してください（レビュー読み取り＋既読マークを一括で行います）:" >&2
+  echo "     bash ~/.claude/scripts/verify-pr-review.sh ${PR_NUMBER}" >&2
+  echo "" >&2
+  echo "  ※ verify-pr-review.sh はレビュー内容を表示し、問題なければ自動で既読マークします。" >&2
+  echo "  ※ 直接 pr-review-read.json を書き換える必要はありません (Issue #151)。" >&2
   echo "" >&2
   exit 2
 fi

@@ -51,8 +51,31 @@ PR_COMMENTS=$(gh api "repos/${REPO}/pulls/${PR_NUM}/comments" 2>/dev/null || ech
 # Source 3: Issue comments (review summaries)
 ISSUE_COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" 2>/dev/null || echo "[]")
 
-# Count blocking indicators across ALL sources
-COMBINED="$REVIEWS $PR_COMMENTS $ISSUE_COMMENTS"
+# Issue #152: Only check the LATEST claude-review comment, not all historical ones.
+# Old reviews may contain 🔴 from issues already fixed in subsequent pushes.
+LATEST_REVIEW_BODY=$(echo "$ISSUE_COMMENTS" | python3 -c "
+import json, sys
+comments = json.load(sys.stdin)
+claude_comments = [c for c in comments
+    if c.get('user', {}).get('login') == 'claude[bot]'
+    or ('CRITICAL' in c.get('body', '')[:1000] and 'review' in c.get('body', '').lower()[:500])]
+if claude_comments:
+    print(claude_comments[-1].get('body', ''))
+else:
+    print('')
+" 2>/dev/null || echo "")
+
+LATEST_FORMAL_REVIEW=$(echo "$REVIEWS" | python3 -c "
+import json, sys
+reviews = json.load(sys.stdin)
+if reviews:
+    print(reviews[-1].get('body', ''))
+else:
+    print('')
+" 2>/dev/null || echo "")
+
+# Combine ONLY latest review content (not all historical)
+COMBINED="$LATEST_REVIEW_BODY $LATEST_FORMAL_REVIEW"
 # Use severity-prefix patterns to avoid false positives (aligned with block-merge-without-review.sh)
 BLOCKING=$(echo "$COMBINED" | grep -ciE '\[BLOCKING\]|severity:\s*BLOCKING|^\s*BLOCKING[:\s-]|>\s*BLOCKING|\*\*BLOCKING\*\*|🔴' || true)
 MUST_FIX=$(echo "$COMBINED" | grep -ciE '\[MUST.FIX\]|severity:\s*MUST.FIX|^\s*MUST.FIX[:\s-]|>\s*MUST.FIX|\*\*MUST.FIX\*\*' || true)
