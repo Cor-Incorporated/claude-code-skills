@@ -1,5 +1,5 @@
 #!/bin/bash
-# stop-test-gate.sh — Stop hook: run project tests before session end
+# stop-test-gate.sh — Stop hook: run change-related test gate before session end
 # ====================================================================
 # Issue #66 Fix #3: stop_hook_active check added (official docs compliance)
 #
@@ -13,8 +13,9 @@
 #   1. Check stop_hook_active to prevent infinite loops
 #   2. Skip if dirty tree (active error recovery — Issue #58)
 #   3. Detect project test framework
-#   4. Run tests with 60s timeout
-#   5. On failure, block stop and show test output
+#   4. Detect and classify changed files (ADR-003 Phase 1)
+#   5. Skip docs/config-only changes, otherwise run test gate
+#   6. On failure, block stop and show test output
 # ====================================================================
 
 set -uo pipefail
@@ -63,6 +64,51 @@ else
 fi
 
 # =========================================================================
+# ADR-003 Phase 1: change-related file detection
+# =========================================================================
+TEST_FILE_REGEX='(_test\.(go|py|ts|tsx|js|jsx)|\.test\.(ts|tsx|js|jsx)|\.spec\.(ts|tsx|js|jsx)|test_[a-z].*\.py|/__tests__/)'
+NON_TESTABLE_REGEX='\.(md|yml|yaml|css|scss|svg|png|jpg|gif|ico|lock|txt|rst)$|^\.github/|^\.claude/|^docs/|^\.vscode/|^\.idea/'
+CROSS_CUTTING_SOURCE_THRESHOLD=20
+
+detect_changed_files() {
+  local base=""
+
+  if base=$(git merge-base HEAD develop 2>/dev/null); then
+    :
+  elif base=$(git merge-base HEAD main 2>/dev/null); then
+    :
+  elif git rev-parse --verify HEAD~10 >/dev/null 2>&1; then
+    base=$(git rev-parse HEAD~10)
+  elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+    base=$(git rev-parse HEAD~1)
+  fi
+
+  [[ -z "$base" ]] && { echo "[stop-test-gate] merge-base 未解決: full suite fallback。" >&2; return 1; }
+
+  git diff --name-only "$base"..HEAD 2>/dev/null
+}
+
+classify_files() {
+  local file=""
+
+  TEST_FILES=()
+  SOURCE_FILES=()
+  NON_TESTABLE_FILES=()
+
+  for file in "$@"; do
+    [[ -z "$file" ]] && continue
+
+    if printf '%s\n' "$file" | grep -Eq "$NON_TESTABLE_REGEX"; then
+      NON_TESTABLE_FILES+=("$file")
+    elif printf '%s\n' "$file" | grep -Eq "$TEST_FILE_REGEX"; then
+      TEST_FILES+=("$file")
+    else
+      SOURCE_FILES+=("$file")
+    fi
+  done
+}
+
+# =========================================================================
 # Test detection logic (priority order)
 # =========================================================================
 TEST_CMD=""
@@ -95,6 +141,40 @@ if [ -z "$TEST_CMD" ]; then
   exit 0
 fi
 
+CHANGED_FILES=()
+_detect_exit=0
+while IFS= read -r changed_file; do
+  [[ -n "$changed_file" ]] && CHANGED_FILES+=("$changed_file")
+done < <(detect_changed_files) || _detect_exit=$?
+
+if [[ "$_detect_exit" -ne 0 ]]; then
+  echo "[stop-test-gate] merge-base解決失敗: full suite fallback。" >&2
+  # Fall through to full suite execution (skip classification)
+elif [[ "${#CHANGED_FILES[@]}" -eq 0 ]]; then
+  echo "[stop-test-gate] 変更ファイル未検出: テスト不要。" >&2
+  exit 0
+fi
+
+if [[ "$_detect_exit" -eq 0 ]] && [[ "${#CHANGED_FILES[@]}" -gt 0 ]]; then
+  TEST_FILES=()
+  SOURCE_FILES=()
+  NON_TESTABLE_FILES=()
+  classify_files "${CHANGED_FILES[@]}"
+
+  if [[ "${#NON_TESTABLE_FILES[@]}" -eq "${#CHANGED_FILES[@]}" ]]; then
+  echo "[stop-test-gate] docs/config-only 変更: テスト不要。" >&2
+  exit 0
+fi
+
+if [[ "${#SOURCE_FILES[@]}" -ge "$CROSS_CUTTING_SOURCE_THRESHOLD" ]]; then
+  echo "[stop-test-gate] source file ${#SOURCE_FILES[@]}件: full suite fallback。" >&2
+elif [[ "${#TEST_FILES[@]}" -eq 0 ]]; then
+  echo "[stop-test-gate] change-related tests 0件: full suite fallback。" >&2
+else
+    echo "[stop-test-gate] Phase 1: test file ${#TEST_FILES[@]}件を検出。実行は既存TEST_CMDを維持。" >&2
+  fi
+fi
+
 # =========================================================================
 # Run tests with timeout (60 seconds)
 # =========================================================================
@@ -109,7 +189,7 @@ fi
 TEST_OUTPUT=""
 TEST_EXIT=0
 if [ -n "$TIMEOUT_CMD" ]; then
-  _TEST_CMD="$TEST_CMD" TEST_OUTPUT=$($TIMEOUT_CMD bash -c 'eval "$_TEST_CMD"' 2>&1) || TEST_EXIT=$?
+  TEST_OUTPUT=$(_TEST_CMD="$TEST_CMD" $TIMEOUT_CMD bash -c 'eval "$_TEST_CMD"' 2>&1) || TEST_EXIT=$?
 else
   # macOS fallback: background process with timer
   _tmp_out="/tmp/stop-test-output.$$"

@@ -249,7 +249,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - `inject-claude-review-on-checks.sh` — `gh pr checks` / `gh pr merge` 時にレビューコメントを自動取得
 - `pr-guard.sh` — ベースブランチ、Issue 参照、コンフリクトチェック
 - `task-completion-gate.sh` — 早期タスク完了をブロック（CI pending または CRITICAL/HIGH 指摘あり）
-- `stop-test-gate.sh` — セッション終了前にプロジェクトテスト実行（Stop hook、stop_hook_active ガード付き）
+- `stop-test-gate.sh` — セッション終了前に change-related test gate 実行（docs/config-only はスキップ、必要時は full suite fallback、stop_hook_active ガード付き）
 
 ### 安全ガード
 - `protect-branches.sh` — 保護ブランチの削除防止

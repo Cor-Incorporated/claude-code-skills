@@ -269,7 +269,7 @@ Merged or closed PRs are automatically cleaned from the lock state:
 - `inject-claude-review-on-checks.sh` — Auto-fetch review comments on `gh pr checks` / `gh pr merge`
 - `pr-guard.sh` — Base branch, issue ref, conflict checks
 - `task-completion-gate.sh` — Block premature task completion (CI pending or CRITICAL/HIGH findings)
-- `stop-test-gate.sh` — Run project tests before session end (Stop hook with stop_hook_active guard)
+- `stop-test-gate.sh` — Run change-related test gate before session end (docs/config-only skip, full-suite fallback, stop_hook_active guard)
 
 ### Safety Guards
 - `protect-branches.sh` — Prevent deletion of protected branches
