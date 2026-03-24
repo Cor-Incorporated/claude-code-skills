@@ -514,6 +514,7 @@ with open(f_path, 'r+') as f:
     echo "  → PR作成/マージ前に code-reviewer + Codex CLI を再実行してください。" >&2
   fi
 
+  REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
   # Classify tier to show appropriate requirements
   TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
   echo "" >&2
@@ -651,7 +652,7 @@ print(s.get(os.environ['_PR'], {}).get('branch', ''))
   fi
 
   # Classify review tier
-  TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
+  TIER=$(classify_review_tier "$BRANCH" "${PR:-}")
 
   # EXEMPT tier: CI green is sufficient, no review needed
   if [[ "$TIER" == "EXEMPT" ]]; then

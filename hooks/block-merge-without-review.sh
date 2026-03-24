@@ -93,7 +93,7 @@ HAS_CRITICAL=$(echo "$ALL_BODIES" | grep -ciE '\[CRITICAL\]|severity:\s*CRITICAL
 #   Step 1: grep ALL severity patterns including ^\s*HIGH: and >\s*HIGH (restored)
 #   Step 2: exclude lines that mention HIGH in code examples, descriptions, or summaries
 HIGH_FILTERED=$(echo "$ALL_BODIES" \
-    | grep -iE '\[HIGH\]|\*\*HIGH\*\*|severity:\s*HIGH|^\s*HIGH[:\s-]|>\s*HIGH' \
+    | grep -iE '\[HIGH\]|\*\*HIGH\*\*|severity:\s*HIGH|^\s*HIGH[:[:space:]-]|>\s*HIGH' \
     | grep -viE 'severity検出|severity.パターン|パターンを追加|検出パターン|detection|filter|high_count|の検出' \
     || true)
 HAS_HIGH=$(echo "$HIGH_FILTERED" | grep -c '.' || true)
