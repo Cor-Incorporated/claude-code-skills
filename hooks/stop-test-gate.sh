@@ -108,6 +108,30 @@ classify_files() {
   done
 }
 
+shell_join_args() {
+  local arg=""
+  local joined=""
+
+  for arg in "$@"; do
+    [[ -z "$arg" ]] && continue
+    [[ -n "$joined" ]] && joined+=" "
+    joined+="$(printf '%q' "$arg")"
+  done
+
+  printf '%s' "$joined"
+}
+
+resolve_runner_bin() {
+  local runner_name="$1"
+  local local_bin="$PROJECT_DIR/node_modules/.bin/$runner_name"
+
+  if [[ -x "$local_bin" ]]; then
+    printf '%s' "$local_bin"
+  elif command -v "$runner_name" >/dev/null 2>&1; then
+    command -v "$runner_name"
+  fi
+}
+
 # =========================================================================
 # Test detection logic (priority order)
 # =========================================================================
@@ -116,24 +140,24 @@ TEST_CMD=""
 if [ -f "$PROJECT_DIR/package.json" ] && command -v jq >/dev/null 2>&1 && jq -e '.scripts.test' "$PROJECT_DIR/package.json" >/dev/null 2>&1; then
   # Node.js project with test script
   if [ -f "$PROJECT_DIR/pnpm-lock.yaml" ]; then
-    TEST_CMD="cd $PROJECT_DIR && pnpm test"
+    TEST_CMD="cd \"$PROJECT_DIR\" && pnpm test"
   elif [ -f "$PROJECT_DIR/yarn.lock" ]; then
-    TEST_CMD="cd $PROJECT_DIR && yarn test"
+    TEST_CMD="cd \"$PROJECT_DIR\" && yarn test"
   else
-    TEST_CMD="cd $PROJECT_DIR && npm test"
+    TEST_CMD="cd \"$PROJECT_DIR\" && npm test"
   fi
 elif [ -f "$PROJECT_DIR/pyproject.toml" ] || [ -f "$PROJECT_DIR/setup.py" ]; then
   if command -v pytest >/dev/null 2>&1; then
-    TEST_CMD="cd $PROJECT_DIR && pytest --tb=short -q"
+    TEST_CMD="cd \"$PROJECT_DIR\" && pytest --tb=short -q"
   elif [ -d "$PROJECT_DIR/tests" ]; then
-    TEST_CMD="cd $PROJECT_DIR && python3 -m pytest --tb=short -q"
+    TEST_CMD="cd \"$PROJECT_DIR\" && python3 -m pytest --tb=short -q"
   fi
 elif [ -f "$PROJECT_DIR/go.mod" ]; then
-  TEST_CMD="cd $PROJECT_DIR && go test ./... -count=1 -short"
+  TEST_CMD="cd \"$PROJECT_DIR\" && go test ./... -count=1 -short"
 elif [ -f "$PROJECT_DIR/Cargo.toml" ]; then
-  TEST_CMD="cd $PROJECT_DIR && cargo test"
+  TEST_CMD="cd \"$PROJECT_DIR\" && cargo test"
 elif [ -f "$PROJECT_DIR/Makefile" ] && grep -q '^test:' "$PROJECT_DIR/Makefile"; then
-  TEST_CMD="cd $PROJECT_DIR && make test"
+  TEST_CMD="cd \"$PROJECT_DIR\" && make test"
 fi
 
 # No test framework detected — allow stop
@@ -142,6 +166,9 @@ if [ -z "$TEST_CMD" ]; then
 fi
 
 CHANGED_FILES=()
+TEST_FILES=()
+SOURCE_FILES=()
+NON_TESTABLE_FILES=()
 _detect_exit=0
 while IFS= read -r changed_file; do
   [[ -n "$changed_file" ]] && CHANGED_FILES+=("$changed_file")
@@ -162,17 +189,84 @@ if [[ "$_detect_exit" -eq 0 ]] && [[ "${#CHANGED_FILES[@]}" -gt 0 ]]; then
   classify_files "${CHANGED_FILES[@]}"
 
   if [[ "${#NON_TESTABLE_FILES[@]}" -eq "${#CHANGED_FILES[@]}" ]]; then
-  echo "[stop-test-gate] docs/config-only 変更: テスト不要。" >&2
-  exit 0
-fi
+    echo "[stop-test-gate] docs/config-only 変更: テスト不要。" >&2
+    exit 0
+  fi
 
-if [[ "${#SOURCE_FILES[@]}" -ge "$CROSS_CUTTING_SOURCE_THRESHOLD" ]]; then
-  echo "[stop-test-gate] source file ${#SOURCE_FILES[@]}件: full suite fallback。" >&2
-elif [[ "${#TEST_FILES[@]}" -eq 0 ]]; then
-  echo "[stop-test-gate] change-related tests 0件: full suite fallback。" >&2
-else
+  if [[ "${#SOURCE_FILES[@]}" -ge "$CROSS_CUTTING_SOURCE_THRESHOLD" ]]; then
+    echo "[stop-test-gate] source file ${#SOURCE_FILES[@]}件: full suite fallback。" >&2
+  elif [[ "${#TEST_FILES[@]}" -eq 0 ]]; then
+    echo "[stop-test-gate] change-related tests 0件: full suite fallback。" >&2
+  else
     echo "[stop-test-gate] Phase 1: test file ${#TEST_FILES[@]}件を検出。実行は既存TEST_CMDを維持。" >&2
   fi
+fi
+
+# =========================================================================
+# Phase 2: runner-specific targeted test command
+# =========================================================================
+TARGETED_CMD=""
+FULL_SUITE_CMD="$TEST_CMD"
+
+if [[ "$_detect_exit" -eq 0 ]] && [[ "${#SOURCE_FILES[@]}" -gt 0 || "${#TEST_FILES[@]}" -gt 0 ]]; then
+  SOURCE_FILES_STR="$(shell_join_args "${SOURCE_FILES[@]}")"
+  TEST_FILES_STR="$(shell_join_args "${TEST_FILES[@]}")"
+
+  if [[ -n "$SOURCE_FILES_STR" ]] && { [[ -f "$PROJECT_DIR/vitest.config.ts" ]] || [[ -f "$PROJECT_DIR/vite.config.ts" ]]; }; then
+    VITEST_BIN="$(resolve_runner_bin vitest)"
+    if [[ -n "$VITEST_BIN" ]]; then
+      TARGETED_CMD="cd \"$PROJECT_DIR\" && \"$VITEST_BIN\" run --related ${SOURCE_FILES_STR} --passWithNoTests"
+    fi
+  fi
+
+  if [[ -z "$TARGETED_CMD" ]] && [[ -n "$SOURCE_FILES_STR" ]] && [[ -f "$PROJECT_DIR/package.json" ]]; then
+    JEST_BIN="$(resolve_runner_bin jest)"
+    if [[ -n "$JEST_BIN" ]]; then
+      TARGETED_CMD="cd \"$PROJECT_DIR\" && \"$JEST_BIN\" --findRelatedTests ${SOURCE_FILES_STR} --passWithNoTests"
+    else
+      REACT_SCRIPTS_BIN="$(resolve_runner_bin react-scripts)"
+      if [[ -n "$REACT_SCRIPTS_BIN" ]]; then
+        TARGETED_CMD="cd \"$PROJECT_DIR\" && CI=1 \"$REACT_SCRIPTS_BIN\" test --findRelatedTests ${SOURCE_FILES_STR} --passWithNoTests"
+      fi
+    fi
+  fi
+
+  if [[ -z "$TARGETED_CMD" ]] && [[ -n "$TEST_FILES_STR" ]] && { [[ -f "$PROJECT_DIR/pyproject.toml" ]] || [[ -f "$PROJECT_DIR/setup.py" ]]; }; then
+    if command -v pytest >/dev/null 2>&1; then
+      TARGETED_CMD="cd \"$PROJECT_DIR\" && pytest ${TEST_FILES_STR} --tb=short -q"
+    elif [[ -d "$PROJECT_DIR/tests" ]]; then
+      TARGETED_CMD="cd \"$PROJECT_DIR\" && python3 -m pytest ${TEST_FILES_STR} --tb=short -q"
+    fi
+  fi
+
+  if [[ -z "$TARGETED_CMD" ]] && [[ -f "$PROJECT_DIR/go.mod" ]]; then
+    GO_PKGS=()
+    GO_PKGS_STR=""
+
+    while IFS= read -r go_pkg; do
+      [[ -n "$go_pkg" ]] && GO_PKGS+=("$go_pkg")
+    done < <(
+      for f in "${SOURCE_FILES[@]}" "${TEST_FILES[@]}"; do
+        [[ -z "$f" ]] && continue
+        _dir=$(dirname "$f")
+        if [[ "$_dir" == "." ]]; then
+          printf './...\n'
+        else
+          printf './%s/...\n' "$_dir"
+        fi
+      done | sort -u
+    )
+
+    GO_PKGS_STR="$(shell_join_args "${GO_PKGS[@]}")"
+    if [[ -n "$GO_PKGS_STR" ]]; then
+      TARGETED_CMD="cd \"$PROJECT_DIR\" && go test ${GO_PKGS_STR} -count=1 -short"
+    fi
+  fi
+fi
+
+if [[ -n "$TARGETED_CMD" ]]; then
+  TEST_CMD="$TARGETED_CMD"
+  echo "[stop-test-gate] Phase 2: targeted test command constructed" >&2
 fi
 
 # =========================================================================
@@ -186,22 +280,37 @@ elif command -v gtimeout >/dev/null 2>&1; then
   TIMEOUT_CMD="gtimeout 60"
 fi
 
+run_test_command() {
+  local command_string="$1"
+  local tmp_out=""
+
+  TEST_OUTPUT=""
+  TEST_EXIT=0
+
+  if [ -n "$TIMEOUT_CMD" ]; then
+    TEST_OUTPUT=$(_TEST_CMD="$command_string" $TIMEOUT_CMD bash -c 'eval "$_TEST_CMD"' 2>&1) || TEST_EXIT=$?
+  else
+    tmp_out=$(mktemp /tmp/stop-test-output.XXXXXX 2>/dev/null || printf '/tmp/stop-test-output.%s' "$$")
+    _TEST_CMD="$command_string" bash -c 'eval "$_TEST_CMD"' > "$tmp_out" 2>&1 &
+    _test_pid=$!
+    (sleep 60 && kill "$_test_pid" 2>/dev/null) &
+    _timer_pid=$!
+    wait "$_test_pid" 2>/dev/null
+    TEST_EXIT=$?
+    kill "$_timer_pid" 2>/dev/null; wait "$_timer_pid" 2>/dev/null || true
+    TEST_OUTPUT=$(cat "$tmp_out" 2>/dev/null)
+    rm -f "$tmp_out"
+  fi
+}
+
 TEST_OUTPUT=""
 TEST_EXIT=0
-if [ -n "$TIMEOUT_CMD" ]; then
-  TEST_OUTPUT=$(_TEST_CMD="$TEST_CMD" $TIMEOUT_CMD bash -c 'eval "$_TEST_CMD"' 2>&1) || TEST_EXIT=$?
-else
-  # macOS fallback: background process with timer
-  _tmp_out="/tmp/stop-test-output.$$"
-  _TEST_CMD="$TEST_CMD" bash -c 'eval "$_TEST_CMD"' > "$_tmp_out" 2>&1 &
-  _test_pid=$!
-  (sleep 60 && kill "$_test_pid" 2>/dev/null) &
-  _timer_pid=$!
-  wait "$_test_pid" 2>/dev/null
-  TEST_EXIT=$?
-  kill "$_timer_pid" 2>/dev/null; wait "$_timer_pid" 2>/dev/null || true
-  TEST_OUTPUT=$(cat "$_tmp_out" 2>/dev/null)
-  rm -f "$_tmp_out"
+run_test_command "$TEST_CMD"
+
+if [[ -n "$TARGETED_CMD" ]] && [[ "$TEST_EXIT" -ne 0 ]]; then
+  echo "[stop-test-gate] targeted command failed (exit=$TEST_EXIT): full suite fallback。" >&2
+  TEST_CMD="$FULL_SUITE_CMD"
+  run_test_command "$TEST_CMD"
 fi
 
 # Timeout exit code (124 for timeout, 137 for SIGKILL)
