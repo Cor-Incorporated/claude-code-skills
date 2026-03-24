@@ -5,12 +5,23 @@
 #
 # Rules (git-workflow.md):
 #   - develop→main release PR: 12h (43200s) minimum
-#   - infra/migration/Terraform changes: 24h (86400s) minimum
+#   - prod infra/migration/Terraform → main: 24h (86400s) minimum
+#   - prod infra/migration/Terraform → develop: 4h (14400s) minimum
+#   - CI/CD workflow changes (.github/workflows/): no extra soak time
 #   - Other PRs to develop: no soak time required
 #
 # Exit 2 = HARD BLOCK
 # =========================================================================
 set -euo pipefail
+
+# Portable timeout: macOS has no timeout command (GNU coreutils)
+if command -v timeout &>/dev/null; then
+  _timeout() { timeout "$@"; }
+elif command -v gtimeout &>/dev/null; then
+  _timeout() { gtimeout "$@"; }
+else
+  _timeout() { shift; "$@"; }  # skip timeout arg, run command directly
+fi
 
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
@@ -69,16 +80,22 @@ if [[ "$BASE_BRANCH" == "main" ]] || [[ "$BASE_BRANCH" == "master" ]]; then
   SOAK_REASON="develop→main release PR: 12時間のsoak time必須"
 fi
 
-# Rule 2: infra/migration/Terraform changes require 24h (overrides rule 1)
-CHANGED_FILES=$(gh api "repos/${REPO}/pulls/${PR_NUM}/files" --jq '.[].filename' 2>/dev/null || echo "")
-HAS_INFRA=false
-if echo "$CHANGED_FILES" | grep -qE '^(terraform/|migration/|\.github/workflows/|cloudbuild|Dockerfile|docker-compose)'; then
-  HAS_INFRA=true
+# Rule 2: Production infra changes require extended soak time
+# .github/workflows/ is CI/CD config, NOT production infra — no extra soak needed
+CHANGED_FILES=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUM}/files" --jq '.[].filename' 2>/dev/null || echo "")
+HAS_PROD_INFRA=false
+if echo "$CHANGED_FILES" | grep -qE '^(terraform/|migration/|Dockerfile|docker-compose|cloudbuild)'; then
+  HAS_PROD_INFRA=true
 fi
 
-if [[ "$HAS_INFRA" == "true" ]]; then
-  REQUIRED_SOAK=86400  # 24 hours
-  SOAK_REASON="infra/migration/Terraform変更: 24時間のsoak time必須"
+if [[ "$HAS_PROD_INFRA" == "true" ]]; then
+  if [[ "$BASE_BRANCH" == "main" ]] || [[ "$BASE_BRANCH" == "master" ]]; then
+    REQUIRED_SOAK=86400  # 24h for prod infra → main
+    SOAK_REASON="本番infra変更 → main: 24時間のsoak time必須"
+  else
+    REQUIRED_SOAK=14400  # 4h for prod infra → develop
+    SOAK_REASON="本番infra変更 → develop: 4時間のsoak time必須"
+  fi
 fi
 
 # --- Enforce ---
