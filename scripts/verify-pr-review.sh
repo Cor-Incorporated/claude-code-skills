@@ -102,6 +102,53 @@ print('yes' if review_comments else 'no')
     echo "  Auto-review: レビューコメント検出 ✓"
 fi
 
+# --- CRITICAL: Ensure at least one review comment exists (Issue #114) ---
+# "レビュー0件でtrivially pass" の抜け穴を塞ぐ
+# EXEMPT tier (docs/chore/ci branches) はスキップ
+PR_BRANCH=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.ref' 2>/dev/null || echo "")
+IS_EXEMPT="no"
+case "$PR_BRANCH" in docs/*|chore/*|ci/*) IS_EXEMPT="yes" ;; esac
+
+if [ "$IS_EXEMPT" = "no" ]; then
+    # Count total review-related comments (reviews + inline + issue comments from bots/agents)
+    REVIEW_COUNT=$(echo "$REVIEWS" | python3 -c "
+import json, sys
+reviews = json.load(sys.stdin)
+# Count non-PENDING reviews (APPROVED, CHANGES_REQUESTED, COMMENTED)
+actual = [r for r in reviews if r.get('state', '') != 'PENDING']
+print(len(actual))
+" 2>/dev/null || echo "0")
+    INLINE_COUNT=$(echo "$PR_COMMENTS" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+    BOT_COMMENT_COUNT=$(echo "$ISSUE_COMMENTS" | python3 -c "
+import json, sys
+comments = json.load(sys.stdin)
+# Count comments from bots/agents that contain review-like content
+review_bots = [c for c in comments if
+    c.get('user', {}).get('type') == 'Bot' or
+    'review' in c.get('body', '').lower()[:500] or
+    'walkthrough' in c.get('body', '').lower()[:500] or
+    'CRITICAL' in c.get('body', '')[:500] or
+    'BLOCKING' in c.get('body', '')[:500]]
+print(len(review_bots))
+" 2>/dev/null || echo "0")
+
+    TOTAL_REVIEW_EVIDENCE=$((REVIEW_COUNT + INLINE_COUNT + BOT_COMMENT_COUNT))
+
+    if [ "$TOTAL_REVIEW_EVIDENCE" -eq 0 ]; then
+        echo "" >&2
+        echo "❌ PR #${PR_NUM} にレビューが存在しません。code-reviewer を実行してください。" >&2
+        echo "   レビューなしでのマージは許可されません。" >&2
+        echo "" >&2
+        echo "   実行方法:" >&2
+        echo "   1. Agent (subagent_type=code-reviewer) でレビュー実行" >&2
+        echo "   2. CodeRabbit レビュー待ち" >&2
+        echo "   3. gh pr review ${PR_NUM} --approve で手動レビュー" >&2
+        echo "" >&2
+        exit 1
+    fi
+    echo "  レビュー存在確認: ${TOTAL_REVIEW_EVIDENCE}件 ✓"
+fi
+
 if [ "$BLOCKING" -gt 0 ] || [ "$MUST_FIX" -gt 0 ] || [ "$CRITICAL" -gt 0 ]; then
     echo "❌ PR #${PR_NUM} にBlocking/MustFix/Critical指摘が残っています。ロック解除できません。"
 
