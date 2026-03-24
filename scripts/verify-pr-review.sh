@@ -161,7 +161,7 @@ fi
 if [ "$BLOCKING" -gt 0 ] || [ "$MUST_FIX" -gt 0 ] || [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ] || [ "$BUG" -gt 0 ]; then
     echo "❌ PR #${PR_NUM} にBlocking/MustFix/Critical/High/Bug指摘が残っています。ロック解除できません。"
 
-    _LOCK="$REVIEW_LOCK" _PR="$PR_NUM" _BLOCKING="$BLOCKING" _MUST_FIX="$MUST_FIX" _HIGH="$HIGH" _BUG="$BUG" python3 -c "
+    _LOCK="$REVIEW_LOCK" _PR="$PR_NUM" _BLOCKING="$BLOCKING" _MUST_FIX="$MUST_FIX" _CRITICAL="$CRITICAL" _HIGH="$HIGH" _BUG="$BUG" python3 -c "
 import json, os, fcntl
 f_path = os.environ['_LOCK']
 with open(f_path, 'r+') as f:
@@ -170,6 +170,7 @@ with open(f_path, 'r+') as f:
     s.setdefault(os.environ['_PR'], {})
     s[os.environ['_PR']]['blocking_count'] = int(os.environ['_BLOCKING'])
     s[os.environ['_PR']]['must_fix_count'] = int(os.environ['_MUST_FIX'])
+    s[os.environ['_PR']]['critical_count'] = int(os.environ['_CRITICAL'])
     s[os.environ['_PR']]['high_count'] = int(os.environ['_HIGH'])
     s[os.environ['_PR']]['bug_count'] = int(os.environ['_BUG'])
     s[os.environ['_PR']]['verified'] = False
@@ -191,6 +192,7 @@ with open(f_path, 'r+') as f:
     s.setdefault(os.environ['_PR'], {})
     s[os.environ['_PR']]['blocking_count'] = 0
     s[os.environ['_PR']]['must_fix_count'] = 0
+    s[os.environ['_PR']]['critical_count'] = 0
     s[os.environ['_PR']]['high_count'] = 0
     s[os.environ['_PR']]['bug_count'] = 0
     s[os.environ['_PR']]['verified'] = True
