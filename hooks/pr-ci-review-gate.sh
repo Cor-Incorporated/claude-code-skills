@@ -322,23 +322,24 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
   fi
 
   # =========================================================================
-  # Tier detection: EXEMPT (docs/chore/ci), LIGHT (default)
-  # Ref: Issue #66 — "レビューゼロマージ不可" と "手動マージ不要" の両立
+  # Tier detection via classify_review_tier (content-based)
+  # EXEMPT: docs/chore/ci branches → CI green only
+  # LIGHT: config/docs file changes → 3-pass OR (code-reviewer OR C/H=0 OR verified)
+  # FULL: source code changes → code-reviewer + Codex CLI required
   # =========================================================================
-  case "$BRANCH" in
-    docs/*|chore/*|ci/*)
-      echo "✅ PR #${PR_NUMBER}: EXEMPT tier ($BRANCH). CIグリーンのみで許可。" >&2
-      exit 0 ;;
-  esac
+  TIER=$(classify_review_tier "$BRANCH")
+
+  if [[ "$TIER" == "EXEMPT" ]]; then
+    echo "✅ PR #${PR_NUMBER}: EXEMPT tier ($BRANCH). CIグリーンのみで許可。" >&2
+    exit 0
+  fi
 
   # =========================================================================
-  # LIGHT tier: 3パスOR判定
-  # Issue #66 + Codex セカンドオピニオン: "全merge hookが同じ証跡を受理すべき"
-  # いずれか1つ合格 = マージ許可。全不合格 = ブロック。
-  #
+  # 3パスOR判定 (LIGHT) / AND判定 (FULL)
   # Pass A: review-status.json に code_review: true (code-reviewer agent 完了)
   # Pass B: pending-review-comments.json の CRITICAL=0 AND HIGH=0
   # Pass C: pr-review-lock.json に verified: true (手動/自動検証済み)
+  # FULL tier additionally requires Codex CLI second opinion
   # =========================================================================
   PASS_A="no"
   PASS_B="no"
@@ -370,30 +371,57 @@ if [[ "$GATE_MODE" == "PRE_MERGE" ]]; then
     [[ "$_verified" == "true" ]] && PASS_C="yes"
   fi
 
-  # --- 3パスOR判定 ---
-  if [[ "$PASS_A" == "yes" ]] || [[ "$PASS_B" == "yes" ]] || [[ "$PASS_C" == "yes" ]]; then
-    PASSED=""
-    [[ "$PASS_A" == "yes" ]] && PASSED="${PASSED}code-reviewer✓ "
-    [[ "$PASS_B" == "yes" ]] && PASSED="${PASSED}C/H=0✓ "
-    [[ "$PASS_C" == "yes" ]] && PASSED="${PASSED}verified✓ "
-    echo "✅ PR #${PR_NUMBER}: LIGHT tier 3パスOR合格 (${PASSED}). マージ許可。" >&2
-    exit 0
-  fi
+  # --- Tier-aware判定 ---
+  CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
 
-  echo "" >&2
-  echo "🚫 [BLOCKED] PR #${PR_NUMBER} のマージを拒否。レビュー未完了。" >&2
-  echo "   ブランチ: $BRANCH" >&2
-  echo "   LIGHT tier — 以下のいずれか1つが必要:" >&2
-  echo "     A. code-reviewer エージェント完了 [${PASS_A}]" >&2
-  echo "     B. CRITICAL/HIGH指摘ゼロ (レビュー実行済み) [${PASS_B}]" >&2
-  echo "     C. 手動検証済み (verify-pr-review) [${PASS_C}]" >&2
-  echo "" >&2
-  echo "   解決方法:" >&2
-  echo "     1. Agent tool (subagent_type=code-reviewer) → Pass A" >&2
-  echo "     2. gh pr checks + レビューコメント全対応 → Pass B" >&2
-  echo "     3. bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER} → Pass C" >&2
-  echo "" >&2
-  exit 2
+  if [[ "$TIER" == "FULL" ]]; then
+    # FULL tier: code-reviewer (A/B/C) AND Codex CLI required
+    PASS_ANY="no"
+    [[ "$PASS_A" == "yes" ]] || [[ "$PASS_B" == "yes" ]] || [[ "$PASS_C" == "yes" ]] && PASS_ANY="yes"
+
+    if [[ "$PASS_ANY" == "yes" ]] && [[ "$CODEX_REVIEW" == "yes" ]]; then
+      echo "✅ PR #${PR_NUMBER}: FULL tier 合格 (code-review✓ + Codex✓). マージ許可。" >&2
+      exit 0
+    fi
+
+    MISSING=""
+    [[ "$PASS_ANY" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
+    [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
+    MISSING="${MISSING%, }"
+
+    echo "" >&2
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER} のマージを拒否。レビュー未完了。" >&2
+    echo "   ブランチ: $BRANCH | Tier: FULL" >&2
+    echo "   未完了: $MISSING" >&2
+    echo "   Pass A [${PASS_A}] | Pass B [${PASS_B}] | Pass C [${PASS_C}] | Codex [${CODEX_REVIEW}]" >&2
+    echo "" >&2
+    exit 2
+  else
+    # LIGHT tier: 3パスOR判定
+    if [[ "$PASS_A" == "yes" ]] || [[ "$PASS_B" == "yes" ]] || [[ "$PASS_C" == "yes" ]]; then
+      PASSED=""
+      [[ "$PASS_A" == "yes" ]] && PASSED="${PASSED}code-reviewer✓ "
+      [[ "$PASS_B" == "yes" ]] && PASSED="${PASSED}C/H=0✓ "
+      [[ "$PASS_C" == "yes" ]] && PASSED="${PASSED}verified✓ "
+      echo "✅ PR #${PR_NUMBER}: LIGHT tier 3パスOR合格 (${PASSED}). マージ許可。" >&2
+      exit 0
+    fi
+
+    echo "" >&2
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER} のマージを拒否。レビュー未完了。" >&2
+    echo "   ブランチ: $BRANCH | Tier: LIGHT" >&2
+    echo "   以下のいずれか1つが必要:" >&2
+    echo "     A. code-reviewer エージェント完了 [${PASS_A}]" >&2
+    echo "     B. CRITICAL/HIGH指摘ゼロ (レビュー実行済み) [${PASS_B}]" >&2
+    echo "     C. 手動検証済み (verify-pr-review) [${PASS_C}]" >&2
+    echo "" >&2
+    echo "   解決方法:" >&2
+    echo "     1. Agent tool (subagent_type=code-reviewer) → Pass A" >&2
+    echo "     2. gh pr checks + レビューコメント全対応 → Pass B" >&2
+    echo "     3. bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER} → Pass C" >&2
+    echo "" >&2
+    exit 2
+  fi
 fi
 
 # =========================================================================
