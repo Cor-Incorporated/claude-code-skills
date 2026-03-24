@@ -9,7 +9,6 @@ Usage:
 """
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,7 +21,7 @@ def run(cmd: str, timeout: int = 15) -> str:
             cmd, shell=True, capture_output=True, text=True, timeout=timeout
         )
         return result.stdout.strip()
-    except (subprocess.TimeoutExpired, Exception):
+    except Exception:
         return ""
 
 
@@ -82,12 +81,8 @@ def score_hook_coverage(project_root: Path) -> dict:
     }
 
 
-def score_ci_pass_rate() -> dict:
+def score_ci_pass_rate(repo: str) -> dict:
     """Calculate CI pass rate from recent GitHub Actions runs."""
-    repo = run("gh repo view --json nameWithOwner -q '.nameWithOwner'")
-    if not repo:
-        return {"score": 0, "total": 0, "passed": 0, "detail": "repo not detected"}
-
     runs_json = run(f"gh api repos/{repo}/actions/runs?per_page=20 --jq '.workflow_runs | map({{conclusion, status}})' 2>/dev/null")
     if not runs_json:
         return {"score": 0, "total": 0, "passed": 0, "detail": "no CI runs found"}
@@ -108,12 +103,8 @@ def score_ci_pass_rate() -> dict:
     }
 
 
-def score_soak_time_compliance() -> dict:
+def score_soak_time_compliance(repo: str) -> dict:
     """Check if merged PRs respected soak time requirements."""
-    repo = run("gh repo view --json nameWithOwner -q '.nameWithOwner'")
-    if not repo:
-        return {"score": 0, "detail": "repo not detected"}
-
     # Get recently merged PRs
     prs_json = run(
         f"gh api 'repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=10' "
@@ -136,12 +127,8 @@ def score_soak_time_compliance() -> dict:
     }
 
 
-def score_review_compliance() -> dict:
+def score_review_compliance(repo: str) -> dict:
     """Check if PRs have review comments before merge."""
-    repo = run("gh repo view --json nameWithOwner -q '.nameWithOwner'")
-    if not repo:
-        return {"score": 0, "detail": "repo not detected"}
-
     prs_json = run(
         f"gh api 'repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=10' "
         f"--jq '[.[] | select(.merged_at != null) | {{number}}]'"
@@ -158,8 +145,11 @@ def score_review_compliance() -> dict:
     for pr in prs[:5]:  # Check last 5
         pr_num = pr["number"]
         reviews = run(f"gh api repos/{repo}/pulls/{pr_num}/reviews --jq 'length'")
-        if reviews and int(reviews) > 0:
-            reviewed += 1
+        try:
+            if reviews and int(reviews) > 0:
+                reviewed += 1
+        except ValueError:
+            pass
 
     checked = min(len(prs), 5)
     rate = reviewed / max(checked, 1) * 100
@@ -208,11 +198,13 @@ def main():
     output_json = "--json" in sys.argv
     project_root = get_project_root()
 
+    repo = run("gh repo view --json nameWithOwner -q '.nameWithOwner'")
+
     scores = {
         "hook_coverage": score_hook_coverage(project_root),
-        "ci_pass_rate": score_ci_pass_rate(),
-        "soak_time": score_soak_time_compliance(),
-        "review_compliance": score_review_compliance(),
+        "ci_pass_rate": score_ci_pass_rate(repo),
+        "soak_time": score_soak_time_compliance(repo),
+        "review_compliance": score_review_compliance(repo),
     }
 
     total = calculate_total(scores)

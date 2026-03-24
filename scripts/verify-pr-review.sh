@@ -58,8 +58,12 @@ BLOCKING=$(echo "$COMBINED" | grep -ciE '\[BLOCKING\]|severity:\s*BLOCKING|^\s*B
 MUST_FIX=$(echo "$COMBINED" | grep -ciE '\[MUST.FIX\]|severity:\s*MUST.FIX|^\s*MUST.FIX[:\s-]|>\s*MUST.FIX|\*\*MUST.FIX\*\*' || true)
 CRITICAL=$(echo "$COMBINED" | grep -ciE '\[CRITICAL\]|severity:\s*CRITICAL|^\s*CRITICAL[:\s-]|>\s*CRITICAL|\*\*CRITICAL\*\*' || true)
 # Issue #116: quality.md requires "CRITICAL/HIGHゼロまで完了ではない"
-HIGH=$(echo "$COMBINED" | grep -ciE '\[HIGH\]|severity:\s*HIGH|^\s*HIGH[:\s-]|>\s*HIGH|\*\*HIGH\*\*' || true)
-BUG=$(echo "$COMBINED" | grep -ciE '\[BUG\]|severity:\s*BUG|^\s*BUG[:\s-]|>\s*BUG|\*\*BUG\*\*' || true)
+HIGH=$(echo "$COMBINED" | grep -ciE '\[HIGH\]|severity:\s*HIGH|^\s*HIGH:|>\s*HIGH|\*\*HIGH\*\*' || true)
+# BUG: 2-pass with false-positive filtering (aligned with block-merge-without-review.sh)
+BUG_FILTERED=$(echo "$COMBINED" \
+    | grep -iE '\[BUG\]|\*\*BUG\*\*|severity:\s*BUG|bug\s+found|バグ発見|バグあり' \
+    | grep -viE 'bug\s*fix|fix.*bug|no\s+bug|bug-free|debug' || true)
+BUG=$(echo "$BUG_FILTERED" | grep -c '.' || true)
 
 # Get latest claude-review summary
 LATEST_SUMMARY=$(echo "$ISSUE_COMMENTS" | python3 -c "
@@ -187,6 +191,8 @@ with open(f_path, 'r+') as f:
     s.setdefault(os.environ['_PR'], {})
     s[os.environ['_PR']]['blocking_count'] = 0
     s[os.environ['_PR']]['must_fix_count'] = 0
+    s[os.environ['_PR']]['high_count'] = 0
+    s[os.environ['_PR']]['bug_count'] = 0
     s[os.environ['_PR']]['verified'] = True
     s[os.environ['_PR']]['verified_at'] = os.environ['_NOW']
     f.seek(0)

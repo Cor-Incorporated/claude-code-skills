@@ -69,7 +69,7 @@ while IFS= read -r pr_line; do
     # A non-matching PR breaks the consecutive streak
     break
   fi
-done < <(gh api "repos/${REPO}/pulls?state=closed&sort=created&direction=desc&per_page=20" \
+done < <(gh api "repos/${REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=20" \
   --jq '[.[] | select(.merged_at != null)] | sort_by(.merged_at) | reverse | .[] | {headRefName, number}' 2>/dev/null | jq -c '.')
 
 # --- Enforce: 2+ consecutive fixes → feature freeze ---
