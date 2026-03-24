@@ -288,10 +288,10 @@ run_test_command() {
   TEST_EXIT=0
 
   if [ -n "$TIMEOUT_CMD" ]; then
-    TEST_OUTPUT=$(_TEST_CMD="$command_string" $TIMEOUT_CMD bash -c 'eval "$_TEST_CMD"' 2>&1) || TEST_EXIT=$?
+    TEST_OUTPUT=$($TIMEOUT_CMD bash -c "$command_string" 2>&1) || TEST_EXIT=$?
   else
     tmp_out=$(mktemp /tmp/stop-test-output.XXXXXX 2>/dev/null || printf '/tmp/stop-test-output.%s' "$$")
-    _TEST_CMD="$command_string" bash -c 'eval "$_TEST_CMD"' > "$tmp_out" 2>&1 &
+    bash -c "$command_string" > "$tmp_out" 2>&1 &
     _test_pid=$!
     (sleep 60 && kill "$_test_pid" 2>/dev/null) &
     _timer_pid=$!
