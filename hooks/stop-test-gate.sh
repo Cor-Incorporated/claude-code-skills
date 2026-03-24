@@ -116,24 +116,24 @@ TEST_CMD=""
 if [ -f "$PROJECT_DIR/package.json" ] && command -v jq >/dev/null 2>&1 && jq -e '.scripts.test' "$PROJECT_DIR/package.json" >/dev/null 2>&1; then
   # Node.js project with test script
   if [ -f "$PROJECT_DIR/pnpm-lock.yaml" ]; then
-    TEST_CMD="cd $PROJECT_DIR && pnpm test"
+    TEST_CMD="cd \"$PROJECT_DIR\" && pnpm test"
   elif [ -f "$PROJECT_DIR/yarn.lock" ]; then
-    TEST_CMD="cd $PROJECT_DIR && yarn test"
+    TEST_CMD="cd \"$PROJECT_DIR\" && yarn test"
   else
-    TEST_CMD="cd $PROJECT_DIR && npm test"
+    TEST_CMD="cd \"$PROJECT_DIR\" && npm test"
   fi
 elif [ -f "$PROJECT_DIR/pyproject.toml" ] || [ -f "$PROJECT_DIR/setup.py" ]; then
   if command -v pytest >/dev/null 2>&1; then
-    TEST_CMD="cd $PROJECT_DIR && pytest --tb=short -q"
+    TEST_CMD="cd \"$PROJECT_DIR\" && pytest --tb=short -q"
   elif [ -d "$PROJECT_DIR/tests" ]; then
-    TEST_CMD="cd $PROJECT_DIR && python3 -m pytest --tb=short -q"
+    TEST_CMD="cd \"$PROJECT_DIR\" && python3 -m pytest --tb=short -q"
   fi
 elif [ -f "$PROJECT_DIR/go.mod" ]; then
-  TEST_CMD="cd $PROJECT_DIR && go test ./... -count=1 -short"
+  TEST_CMD="cd \"$PROJECT_DIR\" && go test ./... -count=1 -short"
 elif [ -f "$PROJECT_DIR/Cargo.toml" ]; then
-  TEST_CMD="cd $PROJECT_DIR && cargo test"
+  TEST_CMD="cd \"$PROJECT_DIR\" && cargo test"
 elif [ -f "$PROJECT_DIR/Makefile" ] && grep -q '^test:' "$PROJECT_DIR/Makefile"; then
-  TEST_CMD="cd $PROJECT_DIR && make test"
+  TEST_CMD="cd \"$PROJECT_DIR\" && make test"
 fi
 
 # No test framework detected — allow stop
