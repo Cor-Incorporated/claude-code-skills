@@ -258,6 +258,12 @@
           },
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-soak-time.sh",
+            "timeout": 15,
+            "statusMessage": "Checking soak time..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/block-merge-without-review.sh"
           },
           {
