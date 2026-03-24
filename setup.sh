@@ -33,8 +33,11 @@ echo "  Copied $(ls "$REPO_DIR"/rules/*.md | wc -l | tr -d ' ') rule files"
 echo "[3/5] Installing hooks..."
 mkdir -p "$HOOKS_DIR"
 cp "$REPO_DIR"/hooks/*.sh "$HOOKS_DIR/"
+cp "$REPO_DIR"/hooks/*.py "$HOOKS_DIR/" 2>/dev/null || true
 chmod +x "$HOOKS_DIR"/*.sh
-echo "  Copied $(ls "$REPO_DIR"/hooks/*.sh | wc -l | tr -d ' ') hook scripts"
+SH_COUNT=$(ls "$REPO_DIR"/hooks/*.sh 2>/dev/null | wc -l | tr -d ' ')
+PY_COUNT=$(ls "$REPO_DIR"/hooks/*.py 2>/dev/null | wc -l | tr -d ' ')
+echo "  Copied ${SH_COUNT} shell + ${PY_COUNT} python hook scripts"
 
 # 4. Copy scripts
 echo "[4/5] Installing scripts..."
