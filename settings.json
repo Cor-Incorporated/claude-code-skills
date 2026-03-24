@@ -444,6 +444,12 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/enforce-memory-update-on-commit.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-post-merge-validation.sh",
+            "timeout": 15,
+            "statusMessage": "Checking post-merge validation requirements..."
           }
         ]
       },
