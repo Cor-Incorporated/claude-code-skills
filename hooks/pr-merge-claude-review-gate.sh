@@ -150,9 +150,16 @@ fi
 
 # =========================================================================
 # GATE 4: If CRITICAL findings, must be acknowledged
+# Issue #154: If claude-review CI check passed, skip CRITICAL check.
+# Accumulated old comments cause false positives; CI pass = latest is clean.
 # =========================================================================
-# Check both issue comments and fallback review state for CRITICAL
-HAS_CRITICAL="NO"
+CLAUDE_REVIEW_STATUS=$(_timeout 10 gh pr checks "${PR_NUMBER}" -R "${REPO}" 2>/dev/null   | grep -i 'claude-review' | awk '{print $2}' || echo "")
+if [[ "$CLAUDE_REVIEW_STATUS" == "pass" ]]; then
+  HAS_CRITICAL="NO"
+  # claude-review CI passed → skip comment-based CRITICAL detection
+else
+  # Check both issue comments and fallback review state for CRITICAL
+  HAS_CRITICAL="NO"
 if [[ "$COMMENT_COUNT" -gt 0 ]]; then
   HAS_CRITICAL=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq '.[].body' 2>/dev/null | python3 -c "
 import sys, re
@@ -198,6 +205,7 @@ print(s.get(os.environ['_PR'], {}).get('critical_acknowledged', False))
     echo "" >&2
     exit 2
   fi
+fi  # close claude-review pass check
 fi
 
 echo "✅ PR #${PR_NUMBER}: CI green + レビュー確認済み。マージ許可。" >&2
