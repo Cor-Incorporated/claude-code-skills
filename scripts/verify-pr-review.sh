@@ -33,11 +33,13 @@ mkdir -p "$(dirname "$REVIEW_LOCK")"
 echo "🔍 PR #${PR_NUM} claude-review 3ソース検証中..."
 
 # --- Check if auto-review was needed (no claude-review workflow) ---
-AUTO_REVIEW_NEEDED=$(python3 -c "
-import json
-with open('$REVIEW_LOCK') as f:
+AUTO_REVIEW_NEEDED=$(_LOCK="$REVIEW_LOCK" _PR="$PR_NUM" python3 -c "
+import json, os, fcntl
+with open(os.environ['_LOCK']) as f:
+    fcntl.flock(f, fcntl.LOCK_SH)
     s = json.load(f)
-print('yes' if s.get('$PR_NUM', {}).get('auto_review_needed', False) else 'no')
+    fcntl.flock(f, fcntl.LOCK_UN)
+print('yes' if s.get(os.environ['_PR'], {}).get('auto_review_needed', False) else 'no')
 " 2>/dev/null || echo "no")
 
 # Source 1: Review bodies
@@ -103,34 +105,40 @@ fi
 if [ "$BLOCKING" -gt 0 ] || [ "$MUST_FIX" -gt 0 ] || [ "$CRITICAL" -gt 0 ]; then
     echo "❌ PR #${PR_NUM} にBlocking/MustFix/Critical指摘が残っています。ロック解除できません。"
 
-    python3 -c "
-import json
-f = '$REVIEW_LOCK'
-with open(f) as fh:
-    s = json.load(fh)
-s.setdefault('$PR_NUM', {})
-s['$PR_NUM']['blocking_count'] = $BLOCKING
-s['$PR_NUM']['must_fix_count'] = $MUST_FIX
-s['$PR_NUM']['verified'] = False
-with open(f, 'w') as fh:
-    json.dump(s, fh, indent=2)
+    _LOCK="$REVIEW_LOCK" _PR="$PR_NUM" _BLOCKING="$BLOCKING" _MUST_FIX="$MUST_FIX" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_LOCK']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    s.setdefault(os.environ['_PR'], {})
+    s[os.environ['_PR']]['blocking_count'] = int(os.environ['_BLOCKING'])
+    s[os.environ['_PR']]['must_fix_count'] = int(os.environ['_MUST_FIX'])
+    s[os.environ['_PR']]['verified'] = False
+    f.seek(0)
+    f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
     exit 1
 fi
 
 # ALL CLEAN — release lock
-python3 -c "
-import json
-f = '$REVIEW_LOCK'
-with open(f) as fh:
-    s = json.load(fh)
-s.setdefault('$PR_NUM', {})
-s['$PR_NUM']['blocking_count'] = 0
-s['$PR_NUM']['must_fix_count'] = 0
-s['$PR_NUM']['verified'] = True
-s['$PR_NUM']['verified_at'] = '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
-with open(f, 'w') as fh:
-    json.dump(s, fh, indent=2)
+_LOCK="$REVIEW_LOCK" _PR="$PR_NUM" _NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_LOCK']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    s = json.load(f)
+    s.setdefault(os.environ['_PR'], {})
+    s[os.environ['_PR']]['blocking_count'] = 0
+    s[os.environ['_PR']]['must_fix_count'] = 0
+    s[os.environ['_PR']]['verified'] = True
+    s[os.environ['_PR']]['verified_at'] = os.environ['_NOW']
+    f.seek(0)
+    f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
 
 echo "✅ PR #${PR_NUM} ロック解除。claude-review クリーン確認済み。マージ可能。"

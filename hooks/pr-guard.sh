@@ -58,7 +58,7 @@ fi
 # --- 2. Codex review check ---
 TOOL_INPUT="${CLAUDE_TOOL_INPUT:-$cmd}"
 if ! echo "$TOOL_INPUT" | grep -qi "codex"; then
-    WARNINGS+=("[Review] Codex レビュー記載なし。mcp__codex__codex でレビュー実施を推奨")
+    WARNINGS+=("[Review] Codex レビュー記載なし。codex exec でレビュー実施を推奨")
 fi
 
 # --- 3. Terraform check ---
