@@ -153,7 +153,7 @@ fi
 # Issue #154: If claude-review CI check passed, skip CRITICAL check.
 # Accumulated old comments cause false positives; CI pass = latest is clean.
 # =========================================================================
-CLAUDE_REVIEW_STATUS=$(_timeout 10 gh pr checks "${PR_NUMBER}" -R "${REPO}" 2>/dev/null   | grep -i 'claude-review' | awk '{print $2}' || echo "")
+CLAUDE_REVIEW_STATUS=$(gh pr checks "${PR_NUMBER}" -R "${REPO}" 2>/dev/null | grep -i 'claude-review' | awk '{print $2}' || echo "")
 if [[ "$CLAUDE_REVIEW_STATUS" == "pass" ]]; then
   HAS_CRITICAL="NO"
   # claude-review CI passed → skip comment-based CRITICAL detection

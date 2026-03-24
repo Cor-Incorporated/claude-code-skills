@@ -58,13 +58,16 @@ ISSUE_COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" 2>/dev/null ||
 LATEST_REVIEW_BODY=$(echo "$ISSUE_COMMENTS" | python3 -c "
 import json, sys
 comments = json.load(sys.stdin)
-claude_comments = [c for c in comments
+# Match claude[bot], any Bot with review content, OR any comment with severity markers
+review_comments = [c for c in comments
     if c.get('user', {}).get('login') == 'claude[bot]'
     or (c.get('user', {}).get('type') == 'Bot'
-        and 'CRITICAL' in c.get('body', '')[:1000]
-        and 'review' in c.get('body', '').lower()[:500])]
-if claude_comments:
-    print(claude_comments[-1].get('body', ''))
+        and 'review' in c.get('body', '').lower()[:500])
+    or any(sev in c.get('body', '')[:2000]
+           for sev in ['[CRITICAL]', '[HIGH]', '[BLOCKING]', '[MUST_FIX]', '[BUG]',
+                       '**CRITICAL**', '**HIGH**', '**BLOCKING**'])]
+if review_comments:
+    print(review_comments[-1].get('body', ''))
 else:
     print('')
 " 2>/dev/null || echo "")

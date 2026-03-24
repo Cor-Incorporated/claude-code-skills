@@ -87,6 +87,14 @@ ISSUE_COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" 2>/dev/null ||
 ALL_BODIES=$(echo "$PR_COMMENTS" | jq -r '.[].body // ""' 2>/dev/null; \
              echo "$ISSUE_COMMENTS" | jq -r '.[].body // ""' 2>/dev/null)
 
+# Issue #154: If claude-review CI check passed, skip comment-based severity check.
+# Accumulated old comments cause false positives; CI pass = latest push is clean.
+CLAUDE_REVIEW_CI=$(gh pr checks "${PR_NUM}" -R "${REPO}" 2>/dev/null | grep -i 'claude-review' | awk '{print $2}' || echo "")
+if [[ "$CLAUDE_REVIEW_CI" == "pass" ]]; then
+    HAS_CRITICAL=0
+    HAS_HIGH=0
+    HAS_BUG=0
+else
 # Use severity-prefix patterns to avoid false positives
 HAS_CRITICAL=$(echo "$ALL_BODIES" | grep -ciE '\[CRITICAL\]|severity:\s*CRITICAL|^\s*CRITICAL:|>\s*CRITICAL|\*\*CRITICAL\*\*' || true)
 # Issue #142: HIGH detection with restored patterns + false-positive filtering:
@@ -107,6 +115,7 @@ BUG_FILTERED=$(echo "$ALL_BODIES" \
     | grep -viE 'no\s+bug|bug\s*fix|fix.*bug|0\s+bug|バグなし|バグ修正|バグ0件|バグ解消|バグありません|bug\s*free' \
     || true)
 HAS_BUG=$(echo "$BUG_FILTERED" | grep -c '.' || true)
+fi  # close claude-review CI pass check
 
 BLOCKERS=""
 [ "$HAS_CRITICAL" -gt 0 ] && BLOCKERS="${BLOCKERS}CRITICAL($HAS_CRITICAL) "
