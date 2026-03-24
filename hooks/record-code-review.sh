@@ -73,6 +73,11 @@ fi
 
 # Update review-status.json: mark code_review as true for this branch
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+if ! command -v python3 &>/dev/null; then
+  echo "[WARN] python3 が見つかりません。レビュー記録をスキップできないため fail-closed します。" >&2
+  echo "  python3 をインストールしてください。" >&2
+  exit 2
+fi
 if command -v python3 &>/dev/null; then
   # Primary: python3 + fcntl for atomic flock write
   _STATE="$REVIEW_STATE" _BR="$BRANCH" _NOW="$NOW" python3 -c "
@@ -89,7 +94,7 @@ with open(f_path, 'r+') as f:
     f.seek(0); f.truncate()
     json.dump(s, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
-" 2>/dev/null || true
+"
 elif command -v jq &>/dev/null; then
   # Fallback: jq (not atomic — no flock)
   tmp=$(mktemp)
@@ -117,7 +122,7 @@ with open(f_path, 'r+') as f:
     f.seek(0); f.truncate()
     json.dump(s, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
-" 2>/dev/null || true
+"
   elif command -v jq &>/dev/null; then
     # Fallback: jq (not atomic — no flock)
     tmp=$(mktemp)

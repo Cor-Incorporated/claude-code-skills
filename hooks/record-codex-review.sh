@@ -15,6 +15,12 @@
 
 set -euo pipefail
 
+if ! command -v python3 &>/dev/null; then
+  echo "[WARN] python3 が見つかりません。Codexレビュー記録をスキップできないため fail-closed します。" >&2
+  echo "  python3 をインストールしてください。" >&2
+  exit 2
+fi
+
 BRANCH="${1:?branch required}"
 REPO_PATH="${2:-$(pwd)}"
 
@@ -68,7 +74,7 @@ with open(f_path, 'r+') as f:
     f.truncate()
     json.dump(data, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
-" 2>/dev/null || true
+"
     fi
   else
     _STATE="$target" _BR="$BRANCH" _NOW="$NOW" python3 -c "
@@ -83,7 +89,7 @@ with open(f_path, 'r+') as f:
     f.truncate()
     json.dump(s, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
-" 2>/dev/null || true
+"
   fi
 }
 
