@@ -115,24 +115,24 @@ with open(state_file, "r+") as f:
 file_type = "テスト" if is_test else "ドキュメント"
 
 if count == 1:
-    print(f"⚠️ [Context Budget Gate] {file_type}ファイル作成を検出: {basename}")
-    print(f"  → delegation.md ルール: {file_type}作成は原則 Codex CLI 経路C に委任してください。")
+    print(f"⚠️ [Context Budget Gate] {file_type}ファイル作成を検出: {basename}", file=sys.stderr)
+    print(f"  → delegation.md ルール: {file_type}作成は原則 Codex CLI 経路C に委任してください。", file=sys.stderr)
     if is_test:
-        print("  → 例外: TDD Red-Greenサイクル中、1ファイル10行未満、対話的判断が必要な場合")
-    print("  → bash ~/.claude/scripts/codex-parallel.sh <repo> <branch> \"プロンプト\"")
+        print("  → 例外: TDD Red-Greenサイクル中、1ファイル10行未満、対話的判断が必要な場合", file=sys.stderr)
+    print("  → bash ~/.claude/scripts/codex-parallel.sh <repo> <branch> \"プロンプト\"", file=sys.stderr)
     # 1件目は警告のみ、続行許可
     sys.exit(0)
 elif count >= 2:
-    print(f"🚫 [Context Budget Gate] {file_type}ファイル{count}件目の作成をブロックしました。")
-    print(f"  → delegation.md ルール: 2件以上の{file_type}/ドキュメント作成は Codex CLI 経路C に委任必須。")
-    print("  → bash ~/.claude/scripts/codex-parallel.sh <repo> <branch> \"プロンプト\"")
-    print("  → 例外事由がある場合: mode=planning に設定してください")
-    print("    bash ~/.claude/hooks/context-budget-set-mode.sh planning")
-    # 2件目以降はブロック（exit 1）
+    print(f"🚫 [Context Budget Gate] {file_type}ファイル{count}件目の作成をブロックしました。", file=sys.stderr)
+    print(f"  → delegation.md ルール: 2件以上の{file_type}/ドキュメント作成は Codex CLI 経路C に委任必須。", file=sys.stderr)
+    print("  → bash ~/.claude/scripts/codex-parallel.sh <repo> <branch> \"プロンプト\"", file=sys.stderr)
+    print("  → 例外事由がある場合: mode=planning に設定してください", file=sys.stderr)
+    print("    bash ~/.claude/hooks/context-budget-set-mode.sh planning", file=sys.stderr)
+    # 2件目以降はブロック（exit 2 = block per official spec）
     sys.exit(2)
 
 PYEOF
 
 # Hook exit code is determined by Python script above
-# If Python exits 0, hook allows; if Python exits 1, hook blocks
+# exit 0 = allow, exit 2 = block (official spec)
 exit $?

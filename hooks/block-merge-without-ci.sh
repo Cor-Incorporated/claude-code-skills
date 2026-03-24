@@ -3,6 +3,15 @@
 # PreToolUse hook for gh pr merge commands
 set -euo pipefail
 
+# Portable timeout: macOS has no timeout command (GNU coreutils)
+if command -v timeout &>/dev/null; then
+  _timeout() { timeout "$@"; }
+elif command -v gtimeout &>/dev/null; then
+  _timeout() { gtimeout "$@"; }
+else
+  _timeout() { shift; "$@"; }  # skip timeout arg, run command directly
+fi
+
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 cmd_first_line=$(echo "$cmd" | head -1)
@@ -22,7 +31,7 @@ fi
 # Check CI status
 echo "[Merge Guard] PR #${PR_NUM} の CI/CD ステータスを確認中..." >&2
 
-CHECK_STATUS=$(gh pr checks "$PR_NUM" 2>&1 || true)
+CHECK_STATUS=$(_timeout 10 gh pr checks "$PR_NUM" 2>&1 || true)
 
 # Check for failures
 if echo "$CHECK_STATUS" | grep -qi "fail\|error"; then
@@ -46,7 +55,7 @@ if echo "$CHECK_STATUS" | grep -qi "no checks"; then
 fi
 
 # Check mergeable status
-MERGEABLE=$(gh pr view "$PR_NUM" --json mergeable -q '.mergeable' 2>/dev/null || echo "UNKNOWN")
+MERGEABLE=$(_timeout 10 gh pr view "$PR_NUM" --json mergeable -q '.mergeable' 2>/dev/null || echo "UNKNOWN")
 if [ "$MERGEABLE" = "CONFLICTING" ]; then
     echo "[BLOCK] PR #${PR_NUM} にコンフリクトがあります。Codex CLIでリベースしてください。" >&2
     exit 2

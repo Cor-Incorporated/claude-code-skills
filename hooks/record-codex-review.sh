@@ -27,20 +27,48 @@ write_codex_review() {
   [ ! -f "$target" ] && echo '{}' > "$target"
 
   if command -v jq &>/dev/null; then
-    local tmp
-    tmp=$(mktemp)
-    if jq --arg b "$BRANCH" --arg t "$NOW" \
-      '.[$b] = ((.[$b] // {}) + {"codex_review": true, "codex_review_at": $t})' \
-      "$target" > "$tmp" 2>/dev/null; then
-      mv "$tmp" "$target"
+    # Atomic read-modify-write with portable locking (Issue #129)
+    # macOS: use Python fcntl; Linux: use flock command
+    if command -v flock &>/dev/null; then
+      (
+        flock -x 200
+        local tmp
+        tmp=$(mktemp)
+        if jq --arg b "$BRANCH" --arg t "$NOW" \
+          '.[$b] = ((.[$b] // {}) + {"codex_review": true, "codex_review_at": $t})' \
+          "$target" > "$tmp" 2>/dev/null; then
+          mv "$tmp" "$target"
+        else
+          rm -f "$tmp"
+          echo '{}' > "$target"
+          tmp=$(mktemp)
+          jq --arg b "$BRANCH" --arg t "$NOW" \
+            '.[$b] = {"codex_review": true, "codex_review_at": $t}' \
+            "$target" > "$tmp" 2>/dev/null && mv "$tmp" "$target" || rm -f "$tmp"
+        fi
+      ) 200>"${target}.lock"
     else
-      rm -f "$tmp"
-      # Reset corrupted file and retry once
-      echo '{}' > "$target"
-      tmp=$(mktemp)
-      jq --arg b "$BRANCH" --arg t "$NOW" \
-        '.[$b] = {"codex_review": true, "codex_review_at": $t}' \
-        "$target" > "$tmp" 2>/dev/null && mv "$tmp" "$target" || rm -f "$tmp"
+      # macOS fallback: use Python fcntl.flock for locking + jq for transform
+      _STATE="$target" _BR="$BRANCH" _NOW="$NOW" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_STATE']
+br = os.environ['_BR']
+now = os.environ['_NOW']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    try:
+        data = json.load(f)
+    except json.JSONDecodeError:
+        data = {}
+    if br not in data:
+        data[br] = {}
+    data[br]['codex_review'] = True
+    data[br]['codex_review_at'] = now
+    f.seek(0)
+    f.truncate()
+    json.dump(data, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
+" 2>/dev/null || true
     fi
   else
     _STATE="$target" _BR="$BRANCH" _NOW="$NOW" python3 -c "
