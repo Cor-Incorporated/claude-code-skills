@@ -144,9 +144,14 @@ def score_review_compliance(repo: str) -> dict:
     reviewed = 0
     for pr in prs[:5]:  # Check last 5
         pr_num = pr["number"]
+        # Check all review signals: reviews, inline comments, bot issue comments
         reviews = run(f"gh api repos/{repo}/pulls/{pr_num}/reviews --jq 'length'")
+        inline = run(f"gh api repos/{repo}/pulls/{pr_num}/comments --jq 'length'")
+        jq_filter = '[.[] | select(.user.type == "Bot")] | length'
+        bot_comments = run(f"gh api repos/{repo}/issues/{pr_num}/comments --jq '{jq_filter}'")
         try:
-            if reviews and int(reviews) > 0:
+            total = (int(reviews or "0") + int(inline or "0") + int(bot_comments or "0"))
+            if total > 0:
                 reviewed += 1
         except ValueError:
             pass

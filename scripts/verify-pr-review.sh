@@ -62,7 +62,7 @@ HIGH=$(echo "$COMBINED" | grep -ciE '\[HIGH\]|severity:\s*HIGH|^\s*HIGH:|>\s*HIG
 # BUG: 2-pass with false-positive filtering (aligned with block-merge-without-review.sh)
 BUG_FILTERED=$(echo "$COMBINED" \
     | grep -iE '\[BUG\]|\*\*BUG\*\*|severity:\s*BUG|bug\s+found|バグ発見|バグあり' \
-    | grep -viE 'bug\s*fix|fix.*bug|no\s+bug|bug-free|debug' || true)
+    | grep -viE 'bug\s*fix|fix.*bug|no\s+bug|bug-free' || true)
 BUG=$(echo "$BUG_FILTERED" | grep -c '.' || true)
 
 # Get latest claude-review summary

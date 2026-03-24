@@ -49,9 +49,12 @@ if [[ -z "$REPO" ]]; then
 fi
 
 # Query recently merged PRs sorted by merge time (most recent first)
-# We check merge-order consecutiveness, not just count within a time window.
-CONSECUTIVE_FIX_COUNT=0
-CONSECUTIVE_FIX_PRS=""
+# Scan for maximum consecutive streak of fix PRs with same prefix.
+# A streak can start at any position (not just the most recent merge).
+MAX_CONSECUTIVE=0
+CURRENT_STREAK=0
+STREAK_PRS=""
+BEST_PRS=""
 
 while IFS= read -r pr_line; do
   [[ -z "$pr_line" ]] && continue
@@ -63,14 +66,21 @@ while IFS= read -r pr_line; do
 
   # Check if this merged PR is a fix/ with matching prefix
   if echo "$pr_branch" | grep -qE '^fix/' && [[ "$pr_prefix" == "$CURRENT_PREFIX" ]]; then
-    CONSECUTIVE_FIX_COUNT=$((CONSECUTIVE_FIX_COUNT + 1))
-    CONSECUTIVE_FIX_PRS="${CONSECUTIVE_FIX_PRS}  - PR #${pr_num}: ${pr_branch}\n"
+    CURRENT_STREAK=$((CURRENT_STREAK + 1))
+    STREAK_PRS="${STREAK_PRS}  - PR #${pr_num}: ${pr_branch}\n"
+    if [[ "$CURRENT_STREAK" -gt "$MAX_CONSECUTIVE" ]]; then
+      MAX_CONSECUTIVE=$CURRENT_STREAK
+      BEST_PRS="$STREAK_PRS"
+    fi
   else
-    # A non-matching PR breaks the consecutive streak
-    break
+    # Non-matching PR breaks the current streak, but keep scanning
+    CURRENT_STREAK=0
+    STREAK_PRS=""
   fi
 done < <(gh api "repos/${REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=20" \
   --jq '[.[] | select(.merged_at != null)] | sort_by(.merged_at) | reverse | .[] | {headRefName, number}' 2>/dev/null | jq -c '.')
+CONSECUTIVE_FIX_COUNT=$MAX_CONSECUTIVE
+CONSECUTIVE_FIX_PRS="$BEST_PRS"
 
 # --- Enforce: 2+ consecutive fixes → feature freeze ---
 FREEZE_THRESHOLD=2
