@@ -25,6 +25,21 @@ if [[ -z "$CMD" ]]; then
   exit 0
 fi
 
+# 安全なコマンドの早期除外
+# gitコマンド: state fileには書き込まない（commit msgにファイル名が出現するだけ）
+# grep/rg/find: 検索コマンドは読み取り専用
+# echo/printf without redirect: 単純な出力
+CMD_FIRST_TOKEN=$(echo "$CMD" | head -1 | sed 's/^[[:space:]]*//' | cut -d' ' -f1)
+case "$CMD_FIRST_TOKEN" in
+  git|gh|grep|rg|find|which|type|command|test|\[)
+    exit 0
+    ;;
+esac
+# cd && git ... パターンも除外
+if echo "$CMD" | head -1 | grep -qE '^\s*(cd\s+[^;|&]*&&\s*)?(git|gh)\s'; then
+  exit 0
+fi
+
 # 保護対象のファイル名パターン
 PROTECTED="review-status\.json|pr-review-lock\.json|pr-review-read\.json|context-budget\.json|factcheck-status\.json|rebase-session\.json|pr-gate-diagnostic\.log"
 

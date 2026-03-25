@@ -68,6 +68,24 @@ expect_allow "echo hello" \
 expect_allow "python3 通常スクリプト" \
   "$(make_input "python3 -c \\\"print('hello')\\\" ")"
 
+expect_allow "git commit mentioning protected file" \
+  "$(make_input "git commit -m 'fix: update review-status.json handling'")"
+
+expect_allow "git log mentioning protected file" \
+  "$(make_input "git log --oneline -- review-status.json")"
+
+expect_allow "git diff with protected file path" \
+  "$(make_input "git diff HEAD -- .claude/state/review-status.json")"
+
+expect_allow "cd && git commit (common pattern)" \
+  "$(make_input "cd /path/to/repo && git commit -F /tmp/msg.txt")"
+
+expect_allow "gh pr create with protected file in body" \
+  "$(make_input "gh pr create --title 'fix review-status.json' --body 'Closes #157'")"
+
+expect_allow "grep for protected file name" \
+  "$(make_input "grep -r 'review-status.json' hooks/")"
+
 # =========================================================================
 echo ""
 echo "=== 2. read-only操作 (ALLOW) ==="
@@ -170,6 +188,9 @@ expect_block "node -e での書き込み" \
 
 expect_block "perl -e での書き込み" \
   "$(make_input "perl -e 'open(F,\\\">review-status.json\\\");print F \\\"{}\\\"'")"
+
+expect_block "python3 write (NOT exempted by git rule)" \
+  "$(make_input "python3 -c 'import json; json.dump({}, open(\\\"review-status.json\\\",\\\"w\\\"))'")"
 
 # =========================================================================
 echo ""
