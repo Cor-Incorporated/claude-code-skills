@@ -54,7 +54,7 @@ if echo "$CMD" | grep -qE "$PROTECTED"; then
   # 判定: read-only AND NOT write AND NOT multiline AND NOT piped → 許可
   # パイプ経由の書き込み（jq ... | sponge file 等）を防止
   if [[ "$MULTILINE" == "false" ]] && \
-     ! echo "$CMD" | grep -qF '|' && \
+     ! echo "$CMD" | grep -qE '[|;]|&&' && \
      echo "$CMD" | grep -qE "$READ_ONLY_PATTERNS" && \
      ! echo "$CMD_FOR_WRITE_CHECK" | grep -qE "$WRITE_PATTERNS"; then
     exit 0

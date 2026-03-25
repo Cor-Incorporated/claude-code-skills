@@ -182,6 +182,12 @@ expect_block "jq | sponge (sponge バイパス)" \
 expect_block "cat | パイプ経由の不明な書き込み" \
   "$(make_input "cat review-status.json | some-unknown-tool")"
 
+expect_block "stat && install チェイン攻撃 (Codex P2)" \
+  "$(make_input "stat .claude/state/review-status.json && install /tmp/pwn .claude/state/review-status.json")"
+
+expect_block "cat ; rm セミコロンチェイン" \
+  "$(make_input "cat .claude/state/review-status.json ; rm .claude/state/review-status.json")"
+
 # =========================================================================
 echo ""
 echo "=== 8. 他の保護対象ファイル (BLOCK) ==="
