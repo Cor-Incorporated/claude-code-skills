@@ -77,7 +77,7 @@ expect_allow "git log mentioning protected file" \
 expect_allow "git diff with protected file path" \
   "$(make_input "git diff HEAD -- .claude/state/review-status.json")"
 
-expect_allow "cd && git commit (common pattern)" \
+expect_allow "cd && git commit (no protected file mentioned)" \
   "$(make_input "cd /path/to/repo && git commit -F /tmp/msg.txt")"
 
 expect_allow "gh pr create with protected file in body" \
@@ -140,6 +140,12 @@ expect_block "mv overwrite review-status.json" \
 
 expect_block "cat > absolute path overwrite (Codex P1)" \
   "$(make_input "cat .claude/state/review-status.json >/home/user/.claude/state/review-status.json")"
+
+expect_block "git show > state file (redirect bypass attempt)" \
+  "$(make_input "git show HEAD:.claude/state/review-status.json > .claude/state/review-status.json")"
+
+expect_block "cd && git with protected file (compound op blocked)" \
+  "$(make_input "cd /repo && git log review-status.json")"
 
 # =========================================================================
 echo ""
