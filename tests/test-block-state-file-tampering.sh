@@ -173,23 +173,32 @@ expect_block "perl -e での書き込み" \
 
 # =========================================================================
 echo ""
-echo "=== 7. sponge/pipe経由の書き込み (BLOCK) ==="
+echo "=== 7. パイプ/チェイン/複合コマンド (BLOCK) ==="
 # =========================================================================
 
 expect_block "jq | sponge (sponge バイパス)" \
   "$(make_input "jq '.x = true' review-status.json | sponge review-status.json")"
 
-expect_allow "cat | パイプ経由 (write pattern なし → 許可)" \
+expect_block "cat | パイプ経由の不明な書き込み (全面禁止)" \
   "$(make_input "cat review-status.json | some-unknown-tool")"
 
-expect_allow "cat | python3 -m json.tool | head (read-only パイプ)" \
-  "$(make_input "cat .claude/state/review-status.json | python3 -m json.tool | head -20")"
+expect_block "cat | python3 -m json.tool (パイプ全面禁止)" \
+  "$(make_input "cat .claude/state/review-status.json | python3 -m json.tool")"
 
 expect_block "stat && install チェイン攻撃 (Codex P2)" \
   "$(make_input "stat .claude/state/review-status.json && install /tmp/pwn .claude/state/review-status.json")"
 
 expect_block "cat ; rm セミコロンチェイン" \
   "$(make_input "cat .claude/state/review-status.json ; rm .claude/state/review-status.json")"
+
+expect_block "cat || git checkout チェイン (Codex P1 #3)" \
+  "$(make_input "cat missing .claude/state/review-status.json || git checkout -- .claude/state/review-status.json")"
+
+expect_block "cat | sh -c writer (Codex P1 #3)" \
+  "$(make_input "cat .claude/state/review-status.json | sh -c 'git checkout -- .claude/state/review-status.json'")"
+
+expect_block "cat | install stdin (Codex P1 #3)" \
+  "$(make_input "cat .claude/state/review-status.json | install /dev/stdin .claude/state/review-status.json")"
 
 # =========================================================================
 echo ""

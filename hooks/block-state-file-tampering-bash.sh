@@ -51,10 +51,14 @@ if echo "$CMD" | grep -qE "$PROTECTED"; then
   # cat file >/path/to/protected.json のバイパスを許していた (Codex P1)
   CMD_FOR_WRITE_CHECK=$(echo "$CMD" | sed -E 's/[0-9]*>\/dev\/null//g; s/[0-9]*>&[0-9]+//g')
 
-  # 判定: read-only AND NOT write AND NOT multiline AND NOT chained (&&/;) → 許可
-  # パイプ(|)は許可するが、書き込みパターンがある場合はブロック
+  # 判定: read-only AND NOT compound AND NOT multiline AND NOT write → 許可
+  # 全てのshell複合演算子 (|, ||, &&, ;) をブロック
+  # パイプ/チェイン経由で任意の書き込みコマンドを隠せるため、
+  # 保護ファイル検出時はsimpleコマンドのみ許可
+  # AIはReadツールで状態ファイルを読めるのでBashパイプは不要
+  COMPOUND_OPS='[|;]|&&|\|\|'
   if [[ "$MULTILINE" == "false" ]] && \
-     ! echo "$CMD" | grep -qE ';|&&' && \
+     ! echo "$CMD" | grep -qE "$COMPOUND_OPS" && \
      echo "$CMD" | grep -qE "$READ_ONLY_PATTERNS" && \
      ! echo "$CMD_FOR_WRITE_CHECK" | grep -qE "$WRITE_PATTERNS"; then
     exit 0
