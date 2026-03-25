@@ -227,6 +227,18 @@ expect_block "cat | sh -c writer (Codex P1 #3)" \
 expect_block "cat | install stdin (Codex P1 #3)" \
   "$(make_input "cat .claude/state/review-status.json | install /dev/stdin .claude/state/review-status.json")"
 
+BACKTICK_INPUT=$(cat <<'JSONEOF'
+{"tool_input":{"command":"cat `rm review-status.json`"}}
+JSONEOF
+)
+expect_block "backtick command substitution" "$BACKTICK_INPUT"
+
+DOLLAR_PAREN_INPUT=$(cat <<'JSONEOF'
+{"tool_input":{"command":"cat $(rm review-status.json)"}}
+JSONEOF
+)
+expect_block "\$() command substitution" "$DOLLAR_PAREN_INPUT"
+
 # =========================================================================
 echo ""
 echo "=== 8. 他の保護対象ファイル (BLOCK) ==="

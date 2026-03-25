@@ -56,7 +56,7 @@ if echo "$CMD" | grep -qE "$PROTECTED"; then
   # パイプ/チェイン経由で任意の書き込みコマンドを隠せるため、
   # 保護ファイル検出時はsimpleコマンドのみ許可
   # AIはReadツールで状態ファイルを読めるのでBashパイプは不要
-  COMPOUND_OPS='[|;]|&&|\|\|'
+  COMPOUND_OPS='[|;`]|&&|\|\||\$\(|\$\{'
   if [[ "$MULTILINE" == "false" ]] && \
      ! echo "$CMD" | grep -qE "$COMPOUND_OPS" && \
      echo "$CMD" | grep -qE "$READ_ONLY_PATTERNS" && \
