@@ -45,9 +45,11 @@ if echo "$CMD" | grep -qE "$PROTECTED"; then
 
   READ_ONLY_PATTERNS='^\s*(cat|jq(\s+-[re]+)*|less|head|tail|wc|file|stat|md5sum|sha256sum|diff)\s'
 
-  # 書き込み判定用: 安全なリダイレクト（2>/dev/null, >/dev/null, 2>&1）を除去
-  # これらはstderr抑制であり、保護ファイルへの書き込みではない
-  CMD_FOR_WRITE_CHECK=$(echo "$CMD" | sed -E 's/[0-9]*>[>&\/][^ ]*//g')
+  # 書き込み判定用: 既知の安全なリダイレクトのみを除去
+  # 除去対象: 2>/dev/null, >/dev/null（stderr/stdout抑制）, 2>&1, 2>&2（fd複製）
+  # 注意: 以前の広範パターン s/[0-9]*>[>&\/][^ ]*//g は >/absolute/path も除去し
+  # cat file >/path/to/protected.json のバイパスを許していた (Codex P1)
+  CMD_FOR_WRITE_CHECK=$(echo "$CMD" | sed -E 's/[0-9]*>\/dev\/null//g; s/[0-9]*>&[0-9]+//g')
 
   # 判定: read-only AND NOT write AND NOT multiline AND NOT piped → 許可
   # パイプ経由の書き込み（jq ... | sponge file 等）を防止
