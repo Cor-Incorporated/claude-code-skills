@@ -94,6 +94,12 @@ expect_allow "stat review-status.json" \
 expect_allow "diff review-status.json" \
   "$(make_input "diff .claude/state/review-status.json /tmp/expected.json")"
 
+expect_allow "jq -r with 2>/dev/null (stderrリダイレクト)" \
+  "$(make_input "jq -r '.branch' .claude/state/review-status.json 2>/dev/null")"
+
+expect_allow "cat with 2>&1 (stderrリダイレクト)" \
+  "$(make_input "cat .claude/state/review-status.json 2>&1")"
+
 # =========================================================================
 echo ""
 echo "=== 3. 書き込み操作 — 単行 (BLOCK) ==="

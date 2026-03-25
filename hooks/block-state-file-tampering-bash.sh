@@ -45,12 +45,16 @@ if echo "$CMD" | grep -qE "$PROTECTED"; then
 
   READ_ONLY_PATTERNS='^\s*(cat|jq(\s+-[re]+)*|less|head|tail|wc|file|stat|md5sum|sha256sum|diff)\s'
 
+  # 書き込み判定用: 安全なリダイレクト（2>/dev/null, >/dev/null, 2>&1）を除去
+  # これらはstderr抑制であり、保護ファイルへの書き込みではない
+  CMD_FOR_WRITE_CHECK=$(echo "$CMD" | sed -E 's/[0-9]*>[>&\/][^ ]*//g')
+
   # 判定: read-only AND NOT write AND NOT multiline AND NOT piped → 許可
   # パイプ経由の書き込み（jq ... | sponge file 等）を防止
   if [[ "$MULTILINE" == "false" ]] && \
      ! echo "$CMD" | grep -qF '|' && \
      echo "$CMD" | grep -qE "$READ_ONLY_PATTERNS" && \
-     ! echo "$CMD" | grep -qE "$WRITE_PATTERNS"; then
+     ! echo "$CMD_FOR_WRITE_CHECK" | grep -qE "$WRITE_PATTERNS"; then
     exit 0
   fi
 
