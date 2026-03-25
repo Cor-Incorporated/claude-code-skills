@@ -51,10 +51,10 @@ if echo "$CMD" | grep -qE "$PROTECTED"; then
   # cat file >/path/to/protected.json のバイパスを許していた (Codex P1)
   CMD_FOR_WRITE_CHECK=$(echo "$CMD" | sed -E 's/[0-9]*>\/dev\/null//g; s/[0-9]*>&[0-9]+//g')
 
-  # 判定: read-only AND NOT write AND NOT multiline AND NOT piped → 許可
-  # パイプ経由の書き込み（jq ... | sponge file 等）を防止
+  # 判定: read-only AND NOT write AND NOT multiline AND NOT chained (&&/;) → 許可
+  # パイプ(|)は許可するが、書き込みパターンがある場合はブロック
   if [[ "$MULTILINE" == "false" ]] && \
-     ! echo "$CMD" | grep -qE '[|;]|&&' && \
+     ! echo "$CMD" | grep -qE ';|&&' && \
      echo "$CMD" | grep -qE "$READ_ONLY_PATTERNS" && \
      ! echo "$CMD_FOR_WRITE_CHECK" | grep -qE "$WRITE_PATTERNS"; then
     exit 0

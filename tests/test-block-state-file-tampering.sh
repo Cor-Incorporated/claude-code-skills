@@ -179,8 +179,11 @@ echo "=== 7. sponge/pipe経由の書き込み (BLOCK) ==="
 expect_block "jq | sponge (sponge バイパス)" \
   "$(make_input "jq '.x = true' review-status.json | sponge review-status.json")"
 
-expect_block "cat | パイプ経由の不明な書き込み" \
+expect_allow "cat | パイプ経由 (write pattern なし → 許可)" \
   "$(make_input "cat review-status.json | some-unknown-tool")"
+
+expect_allow "cat | python3 -m json.tool | head (read-only パイプ)" \
+  "$(make_input "cat .claude/state/review-status.json | python3 -m json.tool | head -20")"
 
 expect_block "stat && install チェイン攻撃 (Codex P2)" \
   "$(make_input "stat .claude/state/review-status.json && install /tmp/pwn .claude/state/review-status.json")"
