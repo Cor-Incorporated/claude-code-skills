@@ -64,3 +64,28 @@ jobs:
             exit 1
           fi
           echo "All JSON files are valid"
+
+  hook-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Run hook test suites
+        run: |
+          errors=0
+          for f in tests/test-*.sh; do
+            if [ -f "$f" ]; then
+              echo "--- Running: $f ---"
+              if ! bash "$f"; then
+                echo "FAILED: $f"
+                errors=$((errors + 1))
+              fi
+              echo ""
+            fi
+          done
+          if [ "$errors" -gt 0 ]; then
+            echo "$errors test suite(s) failed"
+            exit 1
+          fi
+          echo "All hook tests passed"
