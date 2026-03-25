@@ -241,7 +241,18 @@ expect_block "\$() command substitution" "$DOLLAR_PAREN_INPUT"
 
 # =========================================================================
 echo ""
-echo "=== 8. 他の保護対象ファイル (BLOCK) ==="
+echo "=== 8. エンコーディングバイパス (BLOCK) ==="
+# =========================================================================
+
+expect_block "base64 decode to review-status.json" \
+  "$(make_input "echo cmV2aWV3LXN0YXR1cy5qc29u | base64 -d > review-status.json")"
+
+expect_block "heredoc redirect (<<<)" \
+  "$(make_input "cat <<< 'review-status.json'")"
+
+# =========================================================================
+echo ""
+echo "=== 9. 他の保護対象ファイル (BLOCK) ==="
 # =========================================================================
 
 expect_block "pr-review-lock.json 書き込み" \
@@ -261,7 +272,7 @@ expect_block "pr-gate-diagnostic.log 書き込み" \
 
 # =========================================================================
 echo ""
-echo "=== 9. エッジケース ==="
+echo "=== 10. エッジケース ==="
 # =========================================================================
 
 expect_allow "空コマンド" \

@@ -422,6 +422,12 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/post-deploy-verify.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/verify-state-file-integrity.sh",
+            "timeout": 5,
+            "statusMessage": "Verifying state file integrity..."
           }
         ]
       },

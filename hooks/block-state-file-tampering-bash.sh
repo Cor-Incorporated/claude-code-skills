@@ -31,6 +31,10 @@ PROTECTED="review-status\.json|pr-review-lock\.json|pr-review-read\.json|context
 # コマンド全体（多行含む）で保護対象ファイルを検出
 if echo "$CMD" | grep -qE "$PROTECTED"; then
 
+  # --- 監査ログ: 保護ファイル参照を全て記録（allow/block問わず） ---
+  AUDIT_LOG="${HOME}/.claude/state/tampering-audit.log"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CMD=$(echo "$CMD" | head -c 300 | tr '\n' '\\n')" >> "$AUDIT_LOG" 2>/dev/null || true
+
   # --- 書き込みパターン（広範に検出） ---
   WRITE_PATTERNS='(>|>>|json\.dump|json\.dumps|echo\s.*>|printf\s.*>|tee\s|sponge\s|sed\s+-i|write_text|open\s*\(.*["\x27]w|open\s*\(.*["\x27]a|\.write\s*\(|Path\s*\(.*write_|truncate|dd\s+of=|cp\s+.*\.(json|log)|mv\s+.*\.(json|log)|ln\s+-[sf]|eval\s|exec\s+[0-9]*>|curl\s.*-o|wget\s.*-O|ruby\s+-e|perl\s+-e|perl\s+-i|node\s+-e|deno\s+(eval|run)|php\s+-r)'
 
@@ -57,6 +61,21 @@ if echo "$CMD" | grep -qE "$PROTECTED"; then
   # 保護ファイル検出時はsimpleコマンドのみ許可
   # AIはReadツールで状態ファイルを読めるのでBashパイプは不要
   COMPOUND_OPS='[|;`]|&&|\|\||\$\(|\$\{'
+
+  # エンコーディングバイパス検出: base64, heredoc, env var indirection
+  ENCODING_BYPASS='base64|heredoc|<<<|<<[[:space:]]*[A-Z]|decode|atob'
+  if echo "$CMD" | grep -qiE "$ENCODING_BYPASS"; then
+    cat >&2 <<ERRMSG
+
+⛔ [BLOCKED] エンコーディングバイパスの疑い
+
+コマンド（先頭200文字）: $(echo "$CMD" | head -c 200)
+理由: base64/heredoc等のエンコーディングを使った保護ファイルアクセスは禁止
+
+ERRMSG
+    exit 2
+  fi
+
   if [[ "$MULTILINE" == "false" ]] && \
      ! echo "$CMD" | grep -qE "$COMPOUND_OPS" && \
      echo "$CMD" | grep -qE "$READ_ONLY_PATTERNS" && \
