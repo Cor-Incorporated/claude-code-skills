@@ -138,6 +138,12 @@ expect_block "cp overwrite review-status.json" \
 expect_block "mv overwrite review-status.json" \
   "$(make_input "mv /tmp/fake.json .claude/state/review-status.json")"
 
+expect_block "git checkout -- protected file" \
+  "$(make_input "git checkout -- .claude/state/review-status.json")"
+
+expect_block "git restore protected file" \
+  "$(make_input "git restore .claude/state/review-status.json")"
+
 expect_block "cat > absolute path overwrite (Codex P1)" \
   "$(make_input "cat .claude/state/review-status.json >/home/user/.claude/state/review-status.json")"
 

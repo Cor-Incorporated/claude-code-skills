@@ -47,7 +47,7 @@ if echo "$CMD" | grep -qE "$PROTECTED"; then
     MULTILINE="true"
   fi
 
-  READ_ONLY_PATTERNS='^\s*(cat|jq(\s+-[re]+)*|less|head|tail|wc|file|stat|md5sum|sha256sum|diff|git|gh|grep|rg|find|which|type|command|test)\s'
+  READ_ONLY_PATTERNS='^\s*(cat|jq(\s+-[re]+)*|less|head|tail|wc|file|stat|md5sum|sha256sum|diff|git\s+(log|show|diff|status|ls-files|rev-parse|branch|remote|tag|describe|shortlog|blame|commit|add|push|pull|fetch|merge|rebase|cherry-pick|stash)|gh|grep|rg|find|which|type|command|test)\s'
 
   # 書き込み判定用: 既知の安全なリダイレクトのみを除去
   # 除去対象: 2>/dev/null, >/dev/null（stderr/stdout抑制）, 2>&1, 2>&2（fd複製）
