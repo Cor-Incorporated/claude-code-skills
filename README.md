@@ -51,6 +51,7 @@ To add a new ADR, use the [template](docs/adr/template.md).
 | Document | Description |
 |----------|-------------|
 | [Harness Engineering Best Practices 2026](docs/references/harness-engineering-best-practices-2026.md) | Summary of the article that underpins this repository's design philosophy |
+| [The Complete Guide to Building Skills for Claude](docs/references/The-Complete-Guide-to-Building-Skills-for-Claude.pdf) | Anthropic official guide — skill structure, progressive disclosure, testing, distribution ([summary](docs/references/anthropic-skill-guide-summary.md)) |
 
 See [docs/references/](docs/references/) for details.
 
