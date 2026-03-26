@@ -7,6 +7,7 @@
 #
 # Ref: Issue #146, Best Practices Section 2.2
 # =========================================================================
+# No -e: continue collecting context even if individual sections fail
 set -uo pipefail
 
 STATE_DIR="${HOME}/.claude/state"
@@ -70,9 +71,9 @@ fi
 
 # 5. Factcheck state
 if [[ -f "$STATE_DIR/factcheck-status.json" ]]; then
-  fc_state=$(python3 -c "
-import json
-with open('$STATE_DIR/factcheck-status.json') as f:
+  fc_state=$(_STATE="$STATE_DIR/factcheck-status.json" python3 -c "
+import json, os
+with open(os.environ['_STATE']) as f:
     d = json.load(f)
 print(f'factchecked={d.get(\"factchecked\",False)}, source={d.get(\"source\",\"none\")}')
 " 2>/dev/null || echo "unknown")

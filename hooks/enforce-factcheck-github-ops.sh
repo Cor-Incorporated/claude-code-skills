@@ -60,21 +60,21 @@ if [ "$factchecked" = "true" ]; then
 fi
 
 if [ "$factchecked" = "false" ] || [ "$expired" = "true" ]; then
-    echo "🚫 [BLOCK] GitHub Issue/PR への書き込み前にファクトチェックが必要です。"
-    echo ""
-    echo "  検出コマンド: $(echo "$command" | head -c 100)..."
-    echo ""
-    echo "  外部に公開される情報には、検証済みの事実のみを含めてください。"
-    echo "  以下のいずれかを実行してからやり直してください:"
-    echo ""
-    echo "  1. gcloud / CLI コマンドで事実を確認"
-    echo "  2. WebSearch で公式ドキュメントを確認"
-    echo "  3. context7 でライブラリドキュメントを確認"
-    echo "  4. コードベースで grep/Read で実装を確認"
-    echo ""
-    echo "  ⚠️ 推測に基づくIssueコメントやPR説明文は禁止です。"
-    echo "  📋 インシデント事例: Issue #329 で「Generative Language API」の名称を"
-    echo "     GCPコンソールで検証せずに記載し、不正確な情報を投稿"
+    echo "🚫 [BLOCK] GitHub Issue/PR への書き込み前にファクトチェックが必要です。" >&2
+    echo "" >&2
+    echo "  検出コマンド: $(echo "$command" | head -c 100)..." >&2
+    echo "" >&2
+    echo "  外部に公開される情報には、検証済みの事実のみを含めてください。" >&2
+    echo "  以下のいずれかを実行してからやり直してください:" >&2
+    echo "" >&2
+    echo "  1. gcloud / CLI コマンドで事実を確認" >&2
+    echo "  2. WebSearch で公式ドキュメントを確認" >&2
+    echo "  3. context7 でライブラリドキュメントを確認" >&2
+    echo "  4. コードベースで grep/Read で実装を確認" >&2
+    echo "" >&2
+    echo "  ⚠️ 推測に基づくIssueコメントやPR説明文は禁止です。" >&2
+    echo "  📋 インシデント事例: Issue #329 で「Generative Language API」の名称を" >&2
+    echo "     GCPコンソールで検証せずに記載し、不正確な情報を投稿" >&2
     exit 2
 fi
 
