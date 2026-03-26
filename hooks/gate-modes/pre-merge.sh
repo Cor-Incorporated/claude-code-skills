@@ -49,10 +49,22 @@ if [[ -z "${BRANCH:-}" ]]; then
 fi
 [[ -z "$BRANCH" ]] && { echo "[WARN] Cannot determine branch. Blocking PR merge." >&2; exit 2; }
 
-# Check CI status
+# =========================================================================
+# Tier detection FIRST (before CI check) — fixes #163
+# EXEMPT tier must bypass CI failures to avoid chicken-and-egg problem
+# (e.g., ci/* branch fixing a broken workflow can't merge if that
+# workflow's CI failure blocks tier detection)
+# =========================================================================
 REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
 HEAD_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null || echo "")
+TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
 
+if [[ "$TIER" == "EXEMPT" ]]; then
+  echo "✅ PR #${PR_NUMBER}: EXEMPT tier ($BRANCH). CIグリーンのみで許可。" >&2
+  exit 0
+fi
+
+# CI status check (non-EXEMPT tiers only)
 if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
   CI_FAILURES=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
     --jq '[.check_runs[] | select(.conclusion=="failure")] | length' 2>/dev/null || echo "0")
@@ -67,19 +79,6 @@ if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
     echo "🚫 [BLOCKED] CI に実行中ジョブあり ($CI_PENDING 件)。完了を待ってください。" >&2
     exit 2
   fi
-fi
-
-# =========================================================================
-# Tier detection via classify_review_tier (content-based)
-# EXEMPT: docs/chore/ci branches -> CI green only
-# LIGHT: config/docs file changes -> 3-pass OR (code-reviewer OR C/H=0 OR verified)
-# FULL: source code changes -> code-reviewer + Codex CLI required
-# =========================================================================
-TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
-
-if [[ "$TIER" == "EXEMPT" ]]; then
-  echo "✅ PR #${PR_NUMBER}: EXEMPT tier ($BRANCH). CIグリーンのみで許可。" >&2
-  exit 0
 fi
 
 # =========================================================================
