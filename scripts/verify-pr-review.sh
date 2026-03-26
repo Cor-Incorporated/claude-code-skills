@@ -53,6 +53,14 @@ REVIEWS=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" 2>/dev/null || echo "[]
 # Source 3: Issue comments (review summaries)
 ISSUE_COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" 2>/dev/null || echo "[]")
 
+# Issue #165: Check claude-review CI status. If passed or not configured, skip keyword severity detection.
+HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
+CLAUDE_REVIEW_CI=""
+if [[ -n "$HEAD_SHA" ]]; then
+  CLAUDE_REVIEW_CI=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+    --jq '[.check_runs[] | select(.name | test("claude-review"; "i"))] | .[0].conclusion // ""' 2>/dev/null || echo "")
+fi
+
 # Issue #152: Only check the LATEST claude-review comment, not all historical ones.
 # Old reviews may contain 🔴 from issues already fixed in subsequent pushes.
 LATEST_REVIEW_BODY=$(echo "$ISSUE_COMMENTS" | python3 -c "
@@ -83,17 +91,24 @@ else:
 
 # Combine ONLY latest review content (not all historical)
 COMBINED="$LATEST_REVIEW_BODY $LATEST_FORMAL_REVIEW"
-# Use severity-prefix patterns to avoid false positives (aligned with block-merge-without-review.sh)
-BLOCKING=$(echo "$COMBINED" | grep -ciE '\[BLOCKING\]|severity:\s*BLOCKING|^\s*BLOCKING[:\s-]|>\s*BLOCKING|\*\*BLOCKING\*\*|🔴' || true)
-MUST_FIX=$(echo "$COMBINED" | grep -ciE '\[MUST.FIX\]|severity:\s*MUST.FIX|^\s*MUST.FIX[:\s-]|>\s*MUST.FIX|\*\*MUST.FIX\*\*' || true)
-CRITICAL=$(echo "$COMBINED" | grep -ciE '\[CRITICAL\]|severity:\s*CRITICAL|^\s*CRITICAL[:\s-]|>\s*CRITICAL|\*\*CRITICAL\*\*' || true)
-# Issue #116: quality.md requires "CRITICAL/HIGHゼロまで完了ではない"
-HIGH=$(echo "$COMBINED" | grep -ciE '\[HIGH\]|severity:\s*HIGH|^\s*HIGH:|>\s*HIGH|\*\*HIGH\*\*' || true)
-# BUG: 2-pass with false-positive filtering (aligned with block-merge-without-review.sh)
-BUG_FILTERED=$(echo "$COMBINED" \
-    | grep -iE '\[BUG\]|\*\*BUG\*\*|severity:\s*BUG|bug\s+found|バグ発見|バグあり' \
-    | grep -viE 'bug\s*fix|fix.*bug|no\s+bug|bug-free' || true)
-BUG=$(echo "$BUG_FILTERED" | grep -c '.' || true)
+
+# Issue #165: If claude-review CI passed or not configured, skip keyword-based severity detection
+if [[ "$CLAUDE_REVIEW_CI" == "success" ]] || [[ -z "$CLAUDE_REVIEW_CI" ]]; then
+  # claude-review CI passed or not configured — skip keyword-based severity detection
+  BLOCKING=0; MUST_FIX=0; CRITICAL=0; HIGH=0; BUG=0
+else
+  # Use severity-prefix patterns to avoid false positives (aligned with block-merge-without-review.sh)
+  BLOCKING=$(echo "$COMBINED" | grep -ciE '\[BLOCKING\]|severity:\s*BLOCKING|^\s*BLOCKING[:\s-]|>\s*BLOCKING|\*\*BLOCKING\*\*|🔴' || true)
+  MUST_FIX=$(echo "$COMBINED" | grep -ciE '\[MUST.FIX\]|severity:\s*MUST.FIX|^\s*MUST.FIX[:\s-]|>\s*MUST.FIX|\*\*MUST.FIX\*\*' || true)
+  CRITICAL=$(echo "$COMBINED" | grep -ciE '\[CRITICAL\]|severity:\s*CRITICAL|^\s*CRITICAL[:\s-]|>\s*CRITICAL|\*\*CRITICAL\*\*' || true)
+  # Issue #116: quality.md requires "CRITICAL/HIGHゼロまで完了ではない"
+  HIGH=$(echo "$COMBINED" | grep -ciE '\[HIGH\]|severity:\s*HIGH|^\s*HIGH:|>\s*HIGH|\*\*HIGH\*\*' || true)
+  # BUG: 2-pass with false-positive filtering (aligned with block-merge-without-review.sh)
+  BUG_FILTERED=$(echo "$COMBINED" \
+      | grep -iE '\[BUG\]|\*\*BUG\*\*|severity:\s*BUG|bug\s+found|バグ発見|バグあり' \
+      | grep -viE 'bug\s*fix|fix.*bug|no\s+bug|bug-free' || true)
+  BUG=$(echo "$BUG_FILTERED" | grep -c '.' || true)
+fi
 
 # Get latest claude-review summary
 LATEST_SUMMARY=$(echo "$ISSUE_COMMENTS" | python3 -c "
