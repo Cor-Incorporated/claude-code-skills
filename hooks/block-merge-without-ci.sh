@@ -28,36 +28,56 @@ if [ -z "$PR_NUM" ]; then
     exit 2
 fi
 
-# Check CI status
+# Check CI status using commit-level check-runs API (not PR-level gh pr checks)
+# This avoids false blocking by review bots (CodeRabbit, etc.) that appear
+# as "pending" in PR checks but are not CI/CD jobs. Fixes #163 root cause.
 echo "[Merge Guard] PR #${PR_NUM} の CI/CD ステータスを確認中..." >&2
 
-CHECK_STATUS=$(_timeout 10 gh pr checks "$PR_NUM" 2>&1 || true)
+REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+HEAD_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
 
-# Fail-closed: if CHECK_STATUS is empty (timeout or API failure), block merge
-if [ -z "$CHECK_STATUS" ]; then
-    echo "[BLOCK] PR #${PR_NUM} の CI/CD ステータスを取得できませんでした（タイムアウトまたはAPI障害）。fail-closed でブロックします。" >&2
+# Fail-closed: if HEAD_SHA is empty, block merge
+if [ -z "$HEAD_SHA" ] || [ -z "$REPO" ]; then
+    echo "[BLOCK] PR #${PR_NUM} の HEAD SHA を取得できませんでした（タイムアウトまたはAPI障害）。" >&2
     echo "  手動で確認してください: gh pr checks $PR_NUM" >&2
     exit 2
 fi
 
-# Check for failures
-if echo "$CHECK_STATUS" | grep -qi "fail\|error"; then
-    echo "[BLOCK] PR #${PR_NUM} の CI/CD にfailureがあります。オールグリーンになるまでマージ禁止。" >&2
-    echo "$CHECK_STATUS" >&2
+# Query commit-level check runs
+CHECK_RUNS=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" 2>/dev/null || echo "")
+
+if [ -z "$CHECK_RUNS" ]; then
+    echo "[BLOCK] PR #${PR_NUM} のチェック情報を取得できませんでした。fail-closed でブロックします。" >&2
     exit 2
 fi
 
-# Check for pending
-if echo "$CHECK_STATUS" | grep -qi "pending\|queued\|in_progress"; then
-    echo "[BLOCK] PR #${PR_NUM} の CI/CD がまだ実行中です。完了を待ってください。" >&2
-    echo "$CHECK_STATUS" >&2
-    exit 2
-fi
+# Exclude known non-CI review bots (CodeRabbit only).
+# Claude Review (GitHub Actions) is NOT excluded — it is a real CI check.
+# Pattern: case-insensitive match on "coderabbit" in check run name.
+EXCLUDED_PATTERN="coderabbit"
 
-# Check for no checks at all
-if echo "$CHECK_STATUS" | grep -qi "no checks"; then
-    echo "[BLOCK] PR #${PR_NUM} にCIチェックがありません。コンフリクトの可能性があります。" >&2
+CI_TOTAL=$(echo "$CHECK_RUNS" | jq --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select(.name | test($ex; "i") | not)] | length' 2>/dev/null || echo "0")
+CI_FAILURES=$(echo "$CHECK_RUNS" | jq --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select((.name | test($ex; "i") | not) and .conclusion=="failure")] | length' 2>/dev/null || echo "0")
+CI_PENDING=$(echo "$CHECK_RUNS" | jq --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select((.name | test($ex; "i") | not) and .status!="completed")] | length' 2>/dev/null || echo "0")
+
+# No checks at all (after exclusion)
+if [ "$CI_TOTAL" -eq 0 ]; then
+    echo "[BLOCK] PR #${PR_NUM} にCIチェックがありません。" >&2
     echo "確認: gh pr view $PR_NUM --json mergeable,mergeStateStatus" >&2
+    exit 2
+fi
+
+# Check for failures (CodeRabbit excluded, Claude Review included)
+if [ "$CI_FAILURES" -gt 0 ]; then
+    FAILED_NAMES=$(echo "$CHECK_RUNS" | jq -r --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select((.name | test($ex; "i") | not) and .conclusion=="failure") | .name] | join(", ")' 2>/dev/null || echo "unknown")
+    echo "[BLOCK] PR #${PR_NUM} の CI/CD に失敗あり ($CI_FAILURES 件: $FAILED_NAMES)。" >&2
+    exit 2
+fi
+
+# Check for pending (CodeRabbit excluded, Claude Review included)
+if [ "$CI_PENDING" -gt 0 ]; then
+    PENDING_NAMES=$(echo "$CHECK_RUNS" | jq -r --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select((.name | test($ex; "i") | not) and .status!="completed") | .name] | join(", ")' 2>/dev/null || echo "unknown")
+    echo "[BLOCK] PR #${PR_NUM} の CI/CD がまだ実行中です ($CI_PENDING 件: $PENDING_NAMES)。" >&2
     exit 2
 fi
 
