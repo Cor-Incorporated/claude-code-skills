@@ -90,5 +90,15 @@ else
     exit 1
 fi
 
+echo "=== Test: Block chain bypass (gh issue create && gh issue view) ==="
+echo '{"factchecked": false, "source": "", "timestamp": 0, "edit_count_since_check": 0}' > "$STATE_FILE"
+result=$(echo '{"tool_input":{"command":"gh issue create --title \"test\" && gh issue view 1"}}' | bash "$HOOK" 2>&1) || true
+if echo "$result" | grep -q "BLOCK"; then
+    echo "✅ PASS: Blocked chain bypass attempt"
+else
+    echo "❌ FAIL: Chain bypass succeeded (gh create && gh view)"
+    exit 1
+fi
+
 echo ""
 echo "All tests passed ✅"

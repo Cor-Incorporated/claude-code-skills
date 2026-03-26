@@ -31,13 +31,12 @@ fi
 input=$(cat)
 command=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 
-# gh issue/pr の書き込み操作のみ対象
-if ! echo "$command" | grep -qE 'gh (issue (comment|create)|pr create)'; then
-    exit 0
-fi
+# Extract first command from chain (before &&, ||, ;, |)
+# This prevents bypass via "gh issue create && gh issue view"
+first_cmd=$(echo "$command" | sed 's/[&|;].*//' | xargs 2>/dev/null || echo "$command")
 
-# 読み取り操作は除外
-if echo "$command" | grep -qE 'gh (issue (list|view|close)|pr (list|view|merge|checks))'; then
+# gh issue/pr の書き込み操作のみ対象（\s+ for multi-space tolerance）
+if ! echo "$first_cmd" | grep -qE 'gh\s+(issue\s+(comment|create)|pr\s+create)'; then
     exit 0
 fi
 
