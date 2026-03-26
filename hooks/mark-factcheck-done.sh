@@ -1,6 +1,6 @@
 #!/bin/bash
 # mark-factcheck-done.sh
-# PostToolUse: context7/WebSearch/WebFetch/Read(docs) 使用後にファクトチェック済みフラグを立てる
+# PostToolUse: context7/WebSearch/WebFetch/Read(docs)/Bash(gcloud/kubectl/aws) 使用後にファクトチェック済みフラグを立てる
 set -euo pipefail
 
 STATE_FILE="${HOME}/.claude/state/factcheck-status.json"
@@ -29,6 +29,15 @@ case "$tool" in
         file_path=$(echo "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
         if echo "$file_path" | grep -qEi 'README|CLAUDE\.md|docs/|\.md$'; then
             source_name="DocRead"
+        fi
+        ;;
+    Bash)
+        # Bashはgcloud/kubectl/aws CLIコマンドの場合のみカウント（事実確認用）
+        bash_command=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
+        if echo "$bash_command" | grep -qE '^(gcloud |kubectl |aws )'; then
+            source_name="CLI"
+        elif echo "$bash_command" | grep -qE '(gcloud |kubectl |aws ) .*(list|describe|get|show|info|services|projects)'; then
+            source_name="CLI"
         fi
         ;;
 esac
