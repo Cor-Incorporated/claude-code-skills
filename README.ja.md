@@ -2,7 +2,7 @@
 
 [Claude Code](https://claude.com/claude-code)（Anthropic 公式 CLI）のためのスキル・ルール・フック集です。
 
-26 のカスタムスキル、57 の hook スクリプト、5 つのルールセットを含む、本番環境レベルの Claude Code 設定を提供します。
+26 のカスタムスキル、59 の hook スクリプト（+ 7 ゲートモードモジュール）、5 つのルールセット、6 つのユーティリティスクリプトを含む、本番環境レベルの Claude Code 設定を提供します。
 
 [English](README.md) | **日本語**
 
@@ -23,13 +23,36 @@ chmod +x setup.sh
 claude-code-skills/
 ├── skills/           # 26 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 5 グローバルルール (コーディング規約, Git, 品質, テスト, 委任)
-├── hooks/            # 57 hook スクリプト (品質ゲート, 安全ガード, ワークフロー強制)
+├── hooks/            # 59 hook スクリプト + 7 ゲートモードモジュール (品質ゲート, 安全ガード, ワークフロー強制)
 ├── scripts/          # 6 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
 ├── README.md         # 英語版 README
 └── README.ja.md      # 日本語版 README (本ファイル)
 ```
+
+## アーキテクチャ決定記録 (ADR)
+
+設計決定は `docs/adr/` に ADR として記録されています。
+
+| ADR | タイトル | ステータス |
+|-----|---------|----------|
+| [001](docs/adr/001-posttooluse-quality-loop.md) | PostToolUse Quality Loop | Accepted |
+| [002](docs/adr/002-pointer-design-principle.md) | CLAUDE.md Pointer Design Principle | Accepted |
+| [003](docs/adr/003-feedback-speed-hierarchy.md) | Feedback Speed Hierarchy | Accepted |
+| [004](docs/adr/004-codex-delegation-model.md) | Codex Large-Scale Delegation Model | Accepted |
+| [005](docs/adr/005-plans-json-migration.md) | Plans.md → JSON Migration | Rejected |
+
+新しい ADR を追加するには[テンプレート](docs/adr/template.md)を使用してください。
+
+## 参考文献
+
+| ドキュメント | 説明 |
+|------------|------|
+| [Harness Engineering Best Practices 2026](docs/references/harness-engineering-best-practices-2026.md) | 本リポジトリの設計哲学の基盤となる記事の要約 |
+| [The Complete Guide to Building Skills for Claude](docs/references/The-Complete-Guide-to-Building-Skills-for-Claude.pdf) | Anthropic 公式ガイド — スキル構造、プログレッシブディスクロージャー、テスト、配布（[要約](docs/references/anthropic-skill-guide-summary.md)） |
+
+詳細は [docs/references/](docs/references/) を参照。
 
 ## サードパーティ依存
 
@@ -243,9 +266,9 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 
 | 原則 | 実装 | カバレッジ |
 |------|------|-----------|
-| LLMプロンプトより決定論的ツール | 57 hook スクリプト（exit code 強制） | 96.5% hook カバレッジ |
+| LLMプロンプトより決定論的ツール | 59 hook スクリプト + 7 ゲートモードモジュール | 98%+ hook カバレッジ |
 | フィードバック速度階層 | PostToolUse(ms) > pre-commit > CI(min) > レビュー(hr) | ADR-003 |
-| ポインタベースドキュメント | ルール各50行以内、ADR/hookへポインタ | ADR-002 |
+| ポインタベースドキュメント | ルール各50行以内（合計122行）、ADR/hookへポインタ | ADR-002 |
 | 設定ファイル保護 | `protect-linter-config.sh` でエージェントのルール緩和をブロック | PreToolUse |
 | 計画-実行分離 | Plans.md + plan mode + planner エージェント | TaskCreate/Update |
 | Stop時E2Eテスト | `stop-test-gate.sh` で変更関連テスト実行 | Stop hook |
@@ -266,7 +289,7 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - **`validate-hook-deployment.sh`**: ソース ↔ デプロイ ↔ 登録の整合性チェック
 - **CI/CD**: shellcheck + JSON validation + syntax checking（全PR）
 
-**Epic #130 前**: hookゲート動作率 39% (7/18) → **後**: 96.5% (55/57)
+**Epic #130 前**: hookゲート動作率 39% (7/18) → **後**: 98%+ (59/59 hooks 登録 + デプロイ済み)
 
 ### 3. Delivery Quality Score
 
@@ -286,29 +309,14 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 
 ## 既知の問題 & ロードマップ
 
-Epic #130 包括レビュー (2026-03-24) で発見:
+Epic #130 レビュー (2026-03-24) の全 P1-HIGH Issue は解決済みです。
+P2-MEDIUM Issue #136-#147 も後続 PR で解決済みです。現在のオープン項目:
 
-### P1-HIGH
-| Issue | 説明 |
-|-------|------|
-| [#141](../../issues/141) | `pr-ci-review-gate.sh` tier分類がローカルHEADを使用 |
-| [#142](../../issues/142) | `block-merge-without-review.sh` HIGH pattern偽陽性フィルタ後に狭すぎ |
+| Issue | 説明 | ステータス |
+|-------|------|----------|
+| [#161](../../issues/161) | `delegation.md` 327→50行圧縮（ADR-002、#107 再オープン） | 本リリースで修正済み |
 
-### P2-MEDIUM
-| Issue | 説明 |
-|-------|------|
-| [#136](../../issues/136) | `delivery_score.py` shell=True使用 |
-| [#137](../../issues/137) | `pr-ci-review-gate.sh` 783行 → モード別分割必要 |
-| [#138](../../issues/138) | python3未検出時のhookサイレント劣化 |
-| [#139](../../issues/139) | `enforce-factcheck-before-edit.sh` YAML除外の不整合 |
-| [#140](../../issues/140) | `context-budget-read-gate.sh` 閾値とドキュメントの不一致 |
-| [#143](../../issues/143) | `block-merge-without-ci.sh` タイムアウト時fail-open |
-| [#144](../../issues/144) | `enforce-soak-time.sh` Terraform/SQLパス検出範囲不足 |
-| [#145](../../issues/145) | `validate-hook-deployment.sh` SessionStart未登録 |
-| [#146](../../issues/146) | PreCompact hook未実装 |
-| [#147](../../issues/147) | Rules合計186行 vs ADR-002目標165行 |
-
-## Hook システム（57 スクリプト）
+## Hook システム（59 スクリプト + 7 ゲートモードモジュール）
 
 ### セッション初期化
 - `auto-init-permissions.sh` — セッション開始時にパーミッションを自動初期化
@@ -316,6 +324,7 @@ Epic #130 包括レビュー (2026-03-24) で発見:
 - `reset-factcheck.sh` — セッション開始時にファクトチェック状態をリセット
 - `enforce-branch-workflow.sh` — develop ブランチ自動作成、フィーチャーブランチワークフロー強制
 - `validate-no-local-hooks.sh` — セッション開始時に hook 上書きが存在しないことを検証
+- `validate-hook-deployment.sh` — 全 hook のインストールと settings.json への登録を検証
 
 ### 品質ゲート（マージ前）
 - `block-merge-without-ci.sh` — CI 全チェックグリーンなしでマージをブロック
@@ -352,6 +361,7 @@ Epic #130 包括レビュー (2026-03-24) で発見:
 - `enforce-git-freshness.sh` — リモートより遅れている場合に編集をブロック
 - `enforce-factcheck-before-edit.sh` — インフラ変更前にファクトチェック必須（.yml/.md 等の非コードファイルは除外）
 - `enforce-factcheck-before-user-request.sh` — 手動操作依頼前にファクトチェック必須
+- `enforce-factcheck-github-ops.sh` — `gh issue comment/create`、`gh pr create` 実行前にファクトチェック必須
 - `enforce-architecture-layers.sh` — domain/core レイヤー変更を検証
 - `enforce-domain-naming.sh` — DDD 命名規則の強制
 - `enforce-endpoint-dataflow.sh` — API 変更時のフルデータフロー検証
@@ -373,6 +383,7 @@ Epic #130 包括レビュー (2026-03-24) で発見:
 - `workflow-sync-guard.sh` — push 後のワークフロー状態同期
 - `verify-test-falsifiability.sh` — テストが宣言されたバグを実際に検出するか検証 (PostToolUse)
 - `tool-failure-recovery.sh` — ツール失敗時のエラー回復ガイダンス（PostToolUseFailure）
+- `pre-compact-context-save.sh` — コンパクション前に重要コンテキスト（ブランチ、PR、レビュー状態）を保存（PreCompact）
 
 ## Hook Matcher 構文
 
