@@ -585,6 +585,18 @@
           }
         ]
       }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/pre-compact-context-save.sh",
+            "timeout": 10,
+            "statusMessage": "Saving context before compaction..."
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {
