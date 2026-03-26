@@ -16,6 +16,7 @@ set -uo pipefail
 # --- Known exclusions (not directly registered in settings.json) ---
 EXCLUDED_FROM_REGISTRATION=(
   "inject-claude-review-helper.py"
+  "record-codex-review.sh"
   "README.md"
 )
 

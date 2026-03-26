@@ -152,9 +152,13 @@ fi
 # GATE 4: If CRITICAL findings, must be acknowledged
 # Issue #154: If claude-review CI check passed, skip CRITICAL check.
 # Accumulated old comments cause false positives; CI pass = latest is clean.
+# Issue #165: Use commit-level check-runs API instead of `gh pr checks`
+# to avoid false positives from residual review bot comments (CodeRabbit,
+# Copilot etc.) and fragile awk parsing.
 # =========================================================================
-CLAUDE_REVIEW_STATUS=$(gh pr checks "${PR_NUMBER}" -R "${REPO}" 2>/dev/null | grep -i 'claude-review' | awk '{print $2}' || echo "")
-if [[ "$CLAUDE_REVIEW_STATUS" == "pass" ]] || [[ -z "$CLAUDE_REVIEW_STATUS" ]]; then
+CLAUDE_REVIEW_STATUS=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+  --jq '[.check_runs[] | select(.name | test("claude-review"; "i"))] | .[0].conclusion // ""' 2>/dev/null || echo "")
+if [[ "$CLAUDE_REVIEW_STATUS" == "success" ]] || [[ -z "$CLAUDE_REVIEW_STATUS" ]]; then
   HAS_CRITICAL="NO"
   # claude-review CI passed or not configured → skip comment-based CRITICAL detection
 else
