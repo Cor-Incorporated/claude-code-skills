@@ -80,6 +80,12 @@
             "command": "bash ~/.claude/hooks/enforce-branch-workflow.sh",
             "timeout": 15,
             "statusMessage": "Checking branch workflow..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/validate-hook-deployment.sh",
+            "timeout": 10,
+            "statusMessage": "Validating hook deployment integrity..."
           }
         ]
       }
@@ -191,6 +197,12 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/enforce-issue-close-verification.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-factcheck-github-ops.sh",
+            "timeout": 10,
+            "statusMessage": "Checking factcheck before GitHub write operation..."
           }
         ]
       },
@@ -386,6 +398,15 @@
       },
       {
         "matcher": "mcp__plugin_context7_context7__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
