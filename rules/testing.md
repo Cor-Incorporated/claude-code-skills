@@ -2,22 +2,12 @@
 
 ## カバレッジ80%以上（ユニット + 統合 + E2E）
 
-## テストレベル厳密定義（curl≠E2E）
-| レベル | 何をテスト | ツール | 「完了」と言える範囲 |
-|--------|-----------|--------|-------------------|
-| Unit | 単一関数/クラス | pytest/jest | コードの正しさのみ |
-| Integration | HTTPエンドポイント | curl/httpx | バックエンドAPIの動作 |
-| E2E | ブラウザ→FE→BE→描画 | Playwright/手動ブラウザ | ユーザー向け機能の動作 |
+## テストレベル: curlテストを「E2E完了」と報告禁止。E2Eはブラウザ検証を伴う場合のみ。
+- Unit: pytest/jest / Integration: curl/httpx / E2E: Playwright/手動ブラウザ
 
-curlテストを「E2E完了」と報告することは禁止。E2Eはブラウザ検証を伴う場合のみ。
+## TDD: RED→GREEN→IMPROVE→カバレッジ確認
 
-## TDDワークフロー
-RED(テスト書く) → GREEN(最小実装) → IMPROVE(リファクタ) → カバレッジ確認
-
-## 反証可能性
-テストが「Bug Xを検出する」と宣言するなら、Bug X存在時にテスト失敗することを証明せよ。
-- 意図-アサーション一致: docstring記載のバグでアサーション失敗するか
-- 均一性チェック: 異なる入力で同じ出力=異常（「機械的」）
-- 詳細は `/test-falsify` スキル参照
+## 反証可能性 (hook: `verify-test-falsifiability.sh`)
+Bug X存在時にテスト失敗することを証明。詳細は `/test-falsify` スキル参照。
 
 ## エージェント: tdd-guide(新機能), e2e-runner(Playwright)

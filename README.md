@@ -4,7 +4,7 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 26 custom skills, 57 hook scripts, 5 rule sets, 6 utility scripts, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 26 custom skills, 59 hook scripts (+ 7 gate-mode modules), 5 rule sets, 6 utility scripts, and integration with third-party skill frameworks.
 
 > **Design Philosophy**: This project implements the principles from [Harness Engineering Best Practices 2026](https://nyosegawa.com/posts/harness-engineering-best-practices-2026/) — deterministic quality gates via hooks, pointer-based documentation (ADR-002), and the feedback speed hierarchy (PostToolUse > pre-commit > CI > human review).
 
@@ -25,7 +25,7 @@ Restart Claude Code after installation.
 claude-code-skills/
 ├── skills/           # 26 custom skill definitions (SKILL.md + scripts + references)
 ├── rules/            # 5 global rule files (coding-style, git-workflow, quality, testing, delegation)
-├── hooks/            # 57 hook scripts (quality gates, safety guards, workflow enforcement)
+├── hooks/            # 59 hook scripts + 7 gate-mode modules (quality gates, safety guards, workflow enforcement)
 ├── scripts/          # 6 utility scripts (Codex orchestration, PR review, context monitoring)
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
@@ -42,7 +42,7 @@ Design decisions are recorded as ADRs in `docs/adr/`.
 | [002](docs/adr/002-pointer-design-principle.md) | CLAUDE.md Pointer Design Principle | Accepted |
 | [003](docs/adr/003-feedback-speed-hierarchy.md) | Feedback Speed Hierarchy | Accepted |
 | [004](docs/adr/004-codex-delegation-model.md) | Codex Large-Scale Delegation Model | Accepted |
-| [005](docs/adr/005-plans-json-migration.md) | Plans.md → JSON Migration | Accepted |
+| [005](docs/adr/005-plans-json-migration.md) | Plans.md → JSON Migration | Rejected |
 
 To add a new ADR, use the [template](docs/adr/template.md).
 
@@ -51,6 +51,7 @@ To add a new ADR, use the [template](docs/adr/template.md).
 | Document | Description |
 |----------|-------------|
 | [Harness Engineering Best Practices 2026](docs/references/harness-engineering-best-practices-2026.md) | Summary of the article that underpins this repository's design philosophy |
+| [The Complete Guide to Building Skills for Claude](docs/references/The-Complete-Guide-to-Building-Skills-for-Claude.pdf) | Anthropic official guide — skill structure, progressive disclosure, testing, distribution ([summary](docs/references/anthropic-skill-guide-summary.md)) |
 
 See [docs/references/](docs/references/) for details.
 
@@ -267,9 +268,9 @@ Based on [the article](https://nyosegawa.com/posts/harness-engineering-best-prac
 
 | Principle | Implementation | Coverage |
 |-----------|---------------|----------|
-| Deterministic tools over LLM prompts | 57 hook scripts with exit code enforcement | 96.5% hook coverage |
+| Deterministic tools over LLM prompts | 59 hook scripts + 7 gate-mode modules | 98%+ hook coverage |
 | Feedback speed hierarchy | PostToolUse (ms) > pre-commit > CI (min) > review (hr) | ADR-003 |
-| Pointer-based documentation | Rules ≤50 lines each, pointing to ADRs/hooks | ADR-002 |
+| Pointer-based documentation | Rules ≤50 lines each (total 122 lines), pointing to ADRs/hooks | ADR-002 |
 | Configuration protection | `protect-linter-config.sh` blocks agent rule relaxation | PreToolUse |
 | Plan-execute separation | Plans.md + plan mode + planner agent | TaskCreate/Update |
 | E2E test at Stop | `stop-test-gate.sh` runs change-related tests | Stop hook |
@@ -291,7 +292,7 @@ This principle is enforced through:
 - **CI/CD**: shellcheck + JSON validation + syntax checking on every PR
 
 **Before Epic #130**: Hook gate operation rate 39% (7/18)
-**After Epic #130**: Hook gate operation rate 96.5% (55/57)
+**After Epic #130**: Hook gate operation rate 98%+ (59/59 hooks registered + deployed)
 
 ### 3. Delivery Quality Score
 
@@ -314,29 +315,14 @@ Use `--json` for CI/automation integration.
 
 ## Known Issues & Roadmap
 
-Issues discovered during the Epic #130 comprehensive review (2026-03-24):
+All P1-HIGH issues from the Epic #130 review (2026-03-24) have been resolved.
+P2-MEDIUM issues #136-#147 resolved in subsequent PRs. Current open items:
 
-### P1-HIGH
-| Issue | Description |
-|-------|-------------|
-| [#141](../../issues/141) | `pr-ci-review-gate.sh` tier classification uses local HEAD instead of PR diff |
-| [#142](../../issues/142) | `block-merge-without-review.sh` HIGH pattern too narrow after false-positive filter |
+| Issue | Description | Status |
+|-------|-------------|--------|
+| [#161](../../issues/161) | `delegation.md` 327→50 lines (ADR-002, #107 reopened) | Fixed in this release |
 
-### P2-MEDIUM
-| Issue | Description |
-|-------|-------------|
-| [#136](../../issues/136) | `delivery_score.py` uses `shell=True` with string interpolation |
-| [#137](../../issues/137) | `pr-ci-review-gate.sh` 783 lines — needs mode-based splitting |
-| [#138](../../issues/138) | Multiple hooks silently degrade when `python3` unavailable |
-| [#139](../../issues/139) | `enforce-factcheck-before-edit.sh` YAML exemption inconsistency |
-| [#140](../../issues/140) | `context-budget-read-gate.sh` threshold/documentation mismatch |
-| [#143](../../issues/143) | `block-merge-without-ci.sh` fail-open on timeout |
-| [#144](../../issues/144) | `enforce-soak-time.sh` Terraform/SQL path detection too narrow |
-| [#145](../../issues/145) | `validate-hook-deployment.sh` not wired into SessionStart |
-| [#146](../../issues/146) | PreCompact hook not implemented (context protection) |
-| [#147](../../issues/147) | Rules total 186 lines vs ADR-002 target 165 lines |
-
-## Hook System (57 Scripts)
+## Hook System (59 Scripts + 7 Gate-Mode Modules)
 
 ### Session Initialization
 - `auto-init-permissions.sh` — Auto-initialize permissions on session start
@@ -344,6 +330,7 @@ Issues discovered during the Epic #130 comprehensive review (2026-03-24):
 - `reset-factcheck.sh` — Reset fact-check state on session start
 - `enforce-branch-workflow.sh` — Auto-create develop branch, enforce feature branch workflow
 - `validate-no-local-hooks.sh` — Validate no hook overrides exist on session start
+- `validate-hook-deployment.sh` — Verify all hooks are installed and registered in settings.json
 
 ### Quality Gates (Pre-merge)
 - `block-merge-without-ci.sh` — Block merge unless all CI checks green
@@ -380,6 +367,7 @@ Issues discovered during the Epic #130 comprehensive review (2026-03-24):
 - `enforce-git-freshness.sh` — Block edits if behind remote
 - `enforce-factcheck-before-edit.sh` — Require fact-check before modifying infra (non-code files like .yml/.md excluded)
 - `enforce-factcheck-before-user-request.sh` — Fact-check before asking user for manual ops
+- `enforce-factcheck-github-ops.sh` — Block `gh issue comment/create`, `gh pr create` without prior fact-check
 - `enforce-architecture-layers.sh` — Validate domain/core layer modifications
 - `enforce-domain-naming.sh` — DDD naming convention enforcement
 - `enforce-endpoint-dataflow.sh` — Full data flow verification for API changes
@@ -401,6 +389,7 @@ Issues discovered during the Epic #130 comprehensive review (2026-03-24):
 - `workflow-sync-guard.sh` — Sync workflow state after push
 - `verify-test-falsifiability.sh` — Verify tests actually detect declared bugs (PostToolUse)
 - `tool-failure-recovery.sh` — Error recovery guidance on tool failure (PostToolUseFailure)
+- `pre-compact-context-save.sh` — Save critical context (branch, PRs, review state) before compaction (PreCompact)
 
 ## Hook Matcher Syntax
 
