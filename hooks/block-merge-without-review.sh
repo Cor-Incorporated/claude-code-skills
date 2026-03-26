@@ -41,6 +41,7 @@ fi
 
 # Get PR branch for tier classification
 PR_BRANCH=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.ref' 2>/dev/null || echo "")
+HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
 TIER="FULL"
 case "$PR_BRANCH" in
     docs/*|chore/*|ci/*) TIER="EXEMPT" ;;
@@ -87,10 +88,10 @@ ISSUE_COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" 2>/dev/null ||
 ALL_BODIES=$(echo "$PR_COMMENTS" | jq -r '.[].body // ""' 2>/dev/null; \
              echo "$ISSUE_COMMENTS" | jq -r '.[].body // ""' 2>/dev/null)
 
-# Issue #154: If claude-review CI check passed, skip comment-based severity check.
-# Accumulated old comments cause false positives; CI pass = latest push is clean.
-CLAUDE_REVIEW_CI=$(gh pr checks "${PR_NUM}" -R "${REPO}" 2>/dev/null | grep -i 'claude-review' | awk '{print $2}' || echo "")
-if [[ "$CLAUDE_REVIEW_CI" == "pass" ]]; then
+# Issue #165: Use commit-level check-runs API instead of fragile gh pr checks
+CLAUDE_REVIEW_CI=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+  --jq '[.check_runs[] | select(.name | test("claude-review"; "i"))] | .[0].conclusion // ""' 2>/dev/null || echo "")
+if [[ "$CLAUDE_REVIEW_CI" == "success" ]] || [[ -z "$CLAUDE_REVIEW_CI" ]]; then
     HAS_CRITICAL=0
     HAS_HIGH=0
     HAS_BUG=0
