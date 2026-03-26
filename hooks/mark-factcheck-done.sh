@@ -33,10 +33,10 @@ case "$tool" in
         ;;
     Bash)
         # Bashはgcloud/kubectl/aws CLIコマンドの場合のみカウント（事実確認用）
+        # パターン1: コマンド先頭がCLIツール（単純実行）
+        # パターン2: パイプ/チェーン内のCLIツール（例: cd /tmp && gcloud services list）
         bash_command=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
-        if echo "$bash_command" | grep -qE '^(gcloud |kubectl |aws )'; then
-            source_name="CLI"
-        elif echo "$bash_command" | grep -qE '(gcloud |kubectl |aws ) .*(list|describe|get|show|info|services|projects)'; then
+        if echo "$bash_command" | grep -qE '(^|&&|\|\||;)\s*(gcloud|kubectl|aws) '; then
             source_name="CLI"
         fi
         ;;

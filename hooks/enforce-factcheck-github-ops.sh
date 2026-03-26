@@ -20,6 +20,13 @@
 set -euo pipefail
 
 STATE_FILE="${HOME}/.claude/state/factcheck-status.json"
+mkdir -p "$(dirname "$STATE_FILE")"
+
+# jq必須: fail-closed（jqなしでは判定不能 → ブロック）
+if ! command -v jq &>/dev/null; then
+    echo "[BLOCK] jq が見つかりません。ファクトチェック判定に必要です。" >&2
+    exit 2
+fi
 
 input=$(cat)
 command=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
