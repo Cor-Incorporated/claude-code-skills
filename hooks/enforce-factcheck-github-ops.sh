@@ -77,4 +77,37 @@ if [ "$factchecked" = "false" ] || [ "$expired" = "true" ]; then
     exit 2
 fi
 
+# --- コンテンツ検証: 未解決プレースホルダー検出 (Issue #179) ---
+# ファクトチェック済みでも、本文にプレースホルダーが残っていればブロック
+# インシデント事例: Issue #343 で #xxx 未置換、Issue #344 で具体名未記載
+CONTENT_ISSUES=""
+
+if echo "$command" | grep -qiE '#[xX]{2,3}\b'; then
+  CONTENT_ISSUES="${CONTENT_ISSUES}  - 未解決のIssue/PR参照 (#xxx) が含まれています\n"
+fi
+
+if echo "$command" | grep -qiE '\bTBD\b'; then
+  CONTENT_ISSUES="${CONTENT_ISSUES}  - 未確定マーカー (TBD) が含まれています\n"
+fi
+
+if echo "$command" | grep -qiE '\bTODO\b|\bFIXME\b|\bPLACEHOLDER\b'; then
+  CONTENT_ISSUES="${CONTENT_ISSUES}  - 未解決マーカー (TODO/FIXME/PLACEHOLDER) が含まれています\n"
+fi
+
+if echo "$command" | grep -qE '（未検証）|〇〇|××'; then
+  CONTENT_ISSUES="${CONTENT_ISSUES}  - 未検証マーカー（（未検証）/〇〇/××）が含まれています\n"
+fi
+
+if [[ -n "$CONTENT_ISSUES" ]]; then
+  echo "🚫 [BLOCK] Issue/PR本文に未解決のプレースホルダーが検出されました。" >&2
+  echo "" >&2
+  echo "  検出された問題:" >&2
+  echo -e "$CONTENT_ISSUES" >&2
+  echo "  コマンド: $(echo "$command" | head -c 100)..." >&2
+  echo "" >&2
+  echo "  対処: プレースホルダーを実際の値に置き換えてください。" >&2
+  echo "  📋 インシデント事例: Issue #343 で Dependencies に #xxx が残存" >&2
+  exit 2
+fi
+
 exit 0
