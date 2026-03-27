@@ -176,6 +176,7 @@ if [[ "$COUNT" -ge 4 ]]; then
   echo "  → bash ~/.claude/scripts/codex-parallel.sh <repo> <branch> \"<prompt>\"" >&2
   echo "  読み込み済みファイル: ${FILES//|/, }" >&2
   echo "  例外: mode=planning に変更可（bash ~/.claude/hooks/context-budget-set-mode.sh planning）" >&2
+  echo "  ℹ️ サブエージェント (CLAUDE_AGENT_DEPTH>=1) はこのゲートを免除されています。Agent tool で委任してください。" >&2
   exit 2
 elif [[ "$COUNT" -ge 3 ]]; then
   echo "⚠️ [CONTEXT BUDGET WARNING] ソースコード${COUNT}ファイル読み込み済み。次のEditでブロックされます。" >&2
@@ -188,6 +189,7 @@ if [[ "$EDIT_COUNT" -ge 8 ]]; then
   echo "🚫 [BULK EDIT BLOCK] ${EDIT_COUNT}回のEdit/Write実行済み。機械的な一括変更はCodexに委任してください。" >&2
   echo "  → bash ~/.claude/scripts/codex-parallel.sh <repo> <branch> \"<prompt>\"" >&2
   echo "  2+ 独立タスクの場合は Agent Team (TeamCreate) を使用。" >&2
+  echo "  ℹ️ サブエージェント (CLAUDE_AGENT_DEPTH>=1) はこのゲートを免除されています。Agent tool で委任してください。" >&2
   exit 2
 elif [[ "$EDIT_COUNT" -ge 5 ]]; then
   echo "⚠️ [BULK EDIT WARNING] ${EDIT_COUNT}回のEdit/Write実行済み。同じパターンの繰り返しならCodex委任を検討。" >&2

@@ -23,6 +23,22 @@ fi
 mkdir -p "$STATE_DIR"
 PENDING_FILE="$STATE_DIR/pending-review-comments.json"
 
+# Issue #169: Shared severity reader — replaces duplicated python3 one-liners
+_read_severity() {
+  local file="$1"
+  _PENDING_FILE="$file" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+ai = d.get('ai_classification') or {}
+method = d.get('classification_method', 'regex')
+if method == 'ai':
+    c, h = ai.get('critical', d.get('critical', 0)), ai.get('high', d.get('high', 0))
+else:
+    c, h = d.get('critical', 0), d.get('high', 0)
+print(f'{c}|{h}|{d.get(\"pr\", \"\")}|{d.get(\"head_sha\", \"\")}|{d.get(\"total\", 0)}|{method}')
+" 2>/dev/null || echo "0|0|||0|regex"
+}
+
 input=""
 [[ ! -t 0 ]] && input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
@@ -69,47 +85,8 @@ fi
 if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   if [[ -f "$PENDING_FILE" ]]; then
     REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
-    # Issue #165: Check classification_method — prefer AI classification if available
-    CLASSIFICATION_METHOD=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-print(d.get('classification_method', 'regex'))
-" 2>/dev/null || echo "regex")
-    if [[ "$CLASSIFICATION_METHOD" == "ai" ]]; then
-      CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-ai = d.get('ai_classification') or {}
-print(ai.get('critical', d.get('critical', 0)))
-" 2>/dev/null || echo "0")
-      HIGH=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-ai = d.get('ai_classification') or {}
-print(ai.get('high', d.get('high', 0)))
-" 2>/dev/null || echo "0")
-    else
-      CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-print(d.get('critical', 0))
-" 2>/dev/null || echo "0")
-      HIGH=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-print(d.get('high', 0))
-" 2>/dev/null || echo "0")
-    fi
-    PR=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-print(d.get('pr', ''))
-" 2>/dev/null || echo "")
-    PENDING_HEAD_SHA=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-print(d.get('head_sha', ''))
-" 2>/dev/null || echo "")
+    # Issue #169: Use shared severity reader instead of duplicated python3 one-liners
+    IFS='|' read -r CRITICAL HIGH PR PENDING_HEAD_SHA _TOTAL _METHOD <<< "$(_read_severity "$PENDING_FILE")"
 
     if [[ -n "$REPO" ]] && [[ -n "$PR" ]] && [[ -n "$PENDING_HEAD_SHA" ]]; then
       CURRENT_HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha' 2>/dev/null || echo "")
@@ -140,38 +117,11 @@ if echo "$(echo "$cmd" | head -1)" | grep -qE '^(git |ls |cat |echo |python3 |he
 fi
 
 if [[ -f "$PENDING_FILE" ]]; then
-  TOTAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-print(d.get('total', 0))
-" 2>/dev/null || echo "0")
-  CLASSIFICATION_METHOD=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-print(d.get('classification_method', 'regex'))
-" 2>/dev/null || echo "regex")
-  if [[ "$CLASSIFICATION_METHOD" == "ai" ]]; then
-    CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-ai = d.get('ai_classification') or {}
-print(ai.get('critical', d.get('critical', 0)))
-" 2>/dev/null || echo "0")
-  else
-    CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-print(d.get('critical', 0))
-" 2>/dev/null || echo "0")
-  fi
+  # Issue #169: Use shared severity reader instead of duplicated python3 one-liners
+  IFS='|' read -r CRITICAL _HIGH _PR _SHA TOTAL _METHOD <<< "$(_read_severity "$PENDING_FILE")"
 
   if [[ "$TOTAL" -gt 0 ]] && [[ "$CRITICAL" -gt 0 ]]; then
-    PR=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
-import json, os
-with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
-print(d.get('pr', ''))
-" 2>/dev/null || echo "")
-    echo "[REMINDER] PR #${PR}: ${TOTAL}件のレビューコメント（CRITICAL=${CRITICAL}）が未対応です。" >&2
+    echo "[REMINDER] PR #${_PR}: ${TOTAL}件のレビューコメント（CRITICAL=${CRITICAL}）が未対応です。" >&2
   fi
 fi
 
