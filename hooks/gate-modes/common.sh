@@ -150,6 +150,23 @@ classify_review_tier() {
 # Issue #60 Bug C: Check BOTH project-scoped AND global state (OR logic)
 # to prevent path mismatch causing permanent blocks.
 # =========================================================================
+# =========================================================================
+# Non-CI check run exclusion pattern (#187)
+# These check runs are NOT CI jobs and should be excluded from CI status checks.
+# Case-insensitive match against check run name.
+# =========================================================================
+NON_CI_CHECK_PATTERN="^(Agent|copilot|dependabot|CodeRabbit)"
+
+# jq filter to exclude non-CI check runs from CI status counting
+# Usage: gh api .../check-runs --jq "$(jq_ci_failures_filter)"
+jq_ci_failures_filter() {
+  echo "[.check_runs[] | select(.conclusion==\"failure\") | select(.name | test(\"${NON_CI_CHECK_PATTERN}\"; \"i\") | not)] | length"
+}
+
+jq_ci_pending_filter() {
+  echo "[.check_runs[] | select(.status!=\"completed\") | select(.name | test(\"${NON_CI_CHECK_PATTERN}\"; \"i\") | not)] | length"
+}
+
 read_review() {
   local branch="$1"
   local field="$2"

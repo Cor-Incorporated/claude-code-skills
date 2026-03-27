@@ -67,16 +67,26 @@ fi
 # CI status check (non-EXEMPT tiers only)
 if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
   CI_FAILURES=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
-    --jq '[.check_runs[] | select(.conclusion=="failure")] | length' 2>/dev/null || echo "0")
+    --jq "$(jq_ci_failures_filter)" 2>/dev/null || echo "0")
   CI_PENDING=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
-    --jq '[.check_runs[] | select(.status!="completed")] | length' 2>/dev/null || echo "0")
+    --jq "$(jq_ci_pending_filter)" 2>/dev/null || echo "0")
 
   if [[ "$CI_FAILURES" -gt 0 ]]; then
-    echo "🚫 [BLOCKED] CI に失敗ジョブあり ($CI_FAILURES 件)。修正してからマージしてください。" >&2
+    echo "" >&2
+    echo "🚫 [BLOCKED] CI に失敗ジョブあり ($CI_FAILURES 件)" >&2
+    echo "  WHY: マージ前にCI全ジョブの成功を確認する必要があります (Epic #130)" >&2
+    echo "  FIX: gh pr checks ${PR_NUMBER} で失敗ジョブを特定し、修正してください" >&2
+    echo "  NOTE: Agent/copilot/dependabot/CodeRabbit は自動除外済み" >&2
+    echo "" >&2
     exit 2
   fi
   if [[ "$CI_PENDING" -gt 0 ]]; then
-    echo "🚫 [BLOCKED] CI に実行中ジョブあり ($CI_PENDING 件)。完了を待ってください。" >&2
+    echo "" >&2
+    echo "🚫 [BLOCKED] CI に実行中ジョブあり ($CI_PENDING 件)" >&2
+    echo "  WHY: マージ前にCI全ジョブの完了を確認する必要があります (Epic #130)" >&2
+    echo "  FIX: gh pr checks ${PR_NUMBER} --watch で完了を待ってください" >&2
+    echo "  NOTE: Agent/copilot/dependabot/CodeRabbit は自動除外済み" >&2
+    echo "" >&2
     exit 2
   fi
 fi
