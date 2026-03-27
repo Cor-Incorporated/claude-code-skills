@@ -71,8 +71,7 @@ echo ""
 H1="${HOOK_DIR}/enforce-factcheck-github-ops.sh"
 
 set_factcheck "True"
-ecN "
-(factcheck=true)"
+echo "(factcheck=true)"
 
 mk_json 'gh issue create --title "Fix" --body "Depends on #xxx"' | bash "$H1" >/dev/null 2>&1
 check_exit 2 $? "T8: body with #xxx -> BLOCK"

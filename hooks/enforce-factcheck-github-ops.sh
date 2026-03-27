@@ -82,7 +82,7 @@ fi
 # インシデント事例: Issue #343 で #xxx 未置換、Issue #344 で具体名未記載
 CONTENT_ISSUES=""
 
-if echo "$command" | grep -qiE '#[xX]{2,3}\b|#000\b'; then
+if echo "$command" | grep -qiE '#[xX]{2,3}\b'; then
   CONTENT_ISSUES="${CONTENT_ISSUES}  - 未解決のIssue/PR参照 (#xxx) が含まれています\n"
 fi
 

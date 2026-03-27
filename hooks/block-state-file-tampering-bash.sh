@@ -32,9 +32,13 @@ PROTECTED="review-status\.json|pr-review-lock\.json|pr-review-read\.json|context
 # --- gh CLI 免除 (Issue #179) ---
 # gh コマンドはGitHub API操作であり、ローカルファイルへの書き込みではない
 # --body/--title や HEREDOC 本文内で保護ファイル名が言及されても改ざんではない
-# ただし compound operator (&&, ||, ;) でチェインされている場合は免除しない
+# 免除条件: 単一行 + ghで開始 + compound operator なし
+# 多行コマンドは免除しない（2行目に書込みを隠せるため）
+# 注意: クォート内の ; や && も検出される（fail-closed設計）
+GH_LINE_COUNT=$(echo "$CMD" | wc -l | tr -d ' ')
 GH_FIRST_LINE=$(echo "$CMD" | head -1)
-if echo "$GH_FIRST_LINE" | grep -qE '^\s*gh\s' && \
+if [[ "$GH_LINE_COUNT" -eq 1 ]] && \
+   echo "$GH_FIRST_LINE" | grep -qE '^\s*gh\s' && \
    ! echo "$GH_FIRST_LINE" | grep -qE ';\s|&&|\|\|'; then
   exit 0
 fi
