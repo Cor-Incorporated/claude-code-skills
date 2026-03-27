@@ -159,11 +159,12 @@ PATCHED_STOP="${TMPDIR_BASE}/patched-stop.sh"
 {
   echo '#!/bin/bash'
   echo 'set -euo pipefail'
+  echo "trap 'exit 0' ERR"
   echo "GATE_MODES_DIR=\"${HOOK_DIR}/gate-modes\""
-  echo "source \"\${GATE_MODES_DIR}/common.sh\""
+  echo "source \"\${GATE_MODES_DIR}/common.sh\" || true"
   echo "LOCK_STATE=\"${FAKE_LOCK_STATE}\""
-  # Append the rest of stop.sh starting after the source line (line 18+)
-  tail -n +18 "$H3"
+  # Append the rest of stop.sh starting after the source line (line 33+)
+  tail -n +33 "$H3"
 } > "$PATCHED_STOP"
 chmod +x "$PATCHED_STOP"
 

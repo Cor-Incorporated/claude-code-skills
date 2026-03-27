@@ -22,6 +22,14 @@ set -uo pipefail
 # Note: -e is intentionally omitted because timeout returns non-zero
 
 # =========================================================================
+# CRITICAL: Redirect ALL stdout to stderr.
+# Claude Code Stop hooks MUST produce valid JSON or empty stdout.
+# Any non-JSON text on stdout causes "JSON validation failed" errors.
+# $() captures still work correctly (they create their own pipe for fd 1).
+# =========================================================================
+exec 1>&2
+
+# =========================================================================
 # Read stdin and check stop_hook_active (MUST be first check)
 # Ref: "To prevent Claude Code from running indefinitely,
 #       check stop_hook_active or analyze the transcript."
