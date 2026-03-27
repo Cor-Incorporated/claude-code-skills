@@ -80,6 +80,31 @@ else:
     fi
 fi
 
+# =========================================================================
+# Review Hierarchy: Tier 1 PRIMARY_LGTM override (#175)
+# =========================================================================
+# Read review state to check for Tier 1 LGTM
+_rvw_state_path="$_STATE_BASE/review-status.json"
+PRIMARY_LGTM="false"
+if [[ -f "$_rvw_state_path" ]] && command -v jq &>/dev/null; then
+  if [[ -n "$PR_BRANCH" ]]; then
+    _cr=$(jq -r --arg b "$PR_BRANCH" '.[$b].code_review // false' "$_rvw_state_path" 2>/dev/null || echo "false")
+    _cx=$(jq -r --arg b "$PR_BRANCH" '.[$b].codex_review // false' "$_rvw_state_path" 2>/dev/null || echo "false")
+    if [[ "$_cr" == "true" ]] && [[ "$_cx" == "true" ]]; then
+      PRIMARY_LGTM="true"
+    fi
+  fi
+fi
+
+if [[ "$PRIMARY_LGTM" == "true" ]]; then
+  echo "" >&2
+  echo "[block-merge-without-review] Tier 1 LGTM (code-reviewer + Codex CLI)" >&2
+  echo "  CRITICAL/HIGH findings が存在しますが、Tier 1 レビュアーが確認済みのためマージを許可します。" >&2
+  echo "" >&2
+  exit 0
+fi
+
+
 # --- CRITICAL/HIGH/BUG check (ALL tiers — the only hard blocker) ---
 PR_COMMENTS=$(gh api "repos/${REPO}/pulls/${PR_NUM}/comments" 2>/dev/null || echo "[]")
 ISSUE_COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" 2>/dev/null || echo "[]")

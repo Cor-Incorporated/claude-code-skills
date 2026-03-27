@@ -28,9 +28,9 @@ case "$tool" in
         source_name="VercelDocs"
         ;;
     Read)
-        # Readは公式ドキュメント/READMEの場合のみカウント
+        # Readは公式ドキュメント/README/ソースコードの場合にカウント
         file_path=$(echo "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
-        if echo "$file_path" | grep -qEi 'README|CLAUDE\.md|docs/|\.md$'; then
+        if echo "$file_path" | grep -qEi 'README|CLAUDE\.md|docs/|\.md$|\.sh$|\.py$|\.ts$|\.js$|\.json$|hooks/|scripts/|src/'; then
             source_name="DocRead"
         fi
         ;;

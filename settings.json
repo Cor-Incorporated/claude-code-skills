@@ -415,6 +415,15 @@
         ]
       },
       {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Agent",
         "hooks": [
           {
@@ -426,6 +435,12 @@
             "command": "bash ~/.claude/hooks/record-code-review.sh",
             "timeout": 10,
             "statusMessage": "Recording code review completion..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/verify-agent-output.sh",
+            "timeout": 5,
+            "statusMessage": "Verifying agent output..."
           }
         ]
       },
@@ -435,6 +450,12 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/codex-task-release.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/verify-codex-output.sh",
+            "timeout": 5,
+            "statusMessage": "Verifying Codex CLI output..."
           },
           {
             "type": "command",
