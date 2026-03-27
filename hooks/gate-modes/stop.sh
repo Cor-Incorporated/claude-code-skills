@@ -13,6 +13,13 @@
 set -euo pipefail
 
 # =========================================================================
+# CRITICAL: STOP mode MUST exit 0 under ALL circumstances.
+# Even if python3 is missing, lock files don't exist, git fails, etc.
+# This trap catches ANY error and forces exit 0.
+# =========================================================================
+trap 'exit 0' ERR
+
+# =========================================================================
 # CRITICAL: Redirect ALL stdout to stderr.
 # Claude Code Stop hooks MUST produce valid JSON or empty stdout.
 # Any non-JSON text on stdout causes "JSON validation failed" errors.
@@ -22,7 +29,7 @@ exec 1>&2
 
 # Resolve script directory and source common functions
 GATE_MODES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${GATE_MODES_DIR}/common.sh"
+source "${GATE_MODES_DIR}/common.sh" || true
 
 # =========================================================================
 # Issue #66 Fix #3: stop_hook_active check (official docs compliance)
