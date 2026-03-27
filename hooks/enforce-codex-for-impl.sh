@@ -54,10 +54,14 @@ if [[ "$subagent" != "general-purpose" ]]; then
 fi
 
 # --- Check for implementation keywords in prompt and description ---
-IMPL_PATTERN='(実装|作成|Edit|Write|変更|implement|create|modify|追加|削除|更新|リファクタ|refactor|build|add|remove|update|delete|fix)'
+# Japanese keywords (no word boundary needed - multi-byte chars don't partial-match)
+JP_IMPL='(実装|作成|変更|追加|削除|更新|修正|リファクタ)'
+# English keywords (word boundary \b prevents "add" matching "address", etc.)
+EN_IMPL='\b(Edit|Write|implement|create|modify|refactor|build|add|remove|update|delete|fix)\b'
 check_text="${prompt} ${description}"
 
-if echo "$check_text" | grep -qiE "$IMPL_PATTERN"; then
+if echo "$check_text" | grep -qiE "$JP_IMPL|$EN_IMPL"; then
+
   # Check if investigation keywords are present WITHOUT implementation keywords
   # → If both exist, still warn (mixed intent should favor Codex)
   echo "" >&2

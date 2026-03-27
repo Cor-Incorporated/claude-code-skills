@@ -303,6 +303,54 @@ else
 fi
 
 # =========================================================================
+# Test 23: 'address' does NOT trigger warning (word boundary check)
+# =========================================================================
+echo "--- Test 23: 'address' → no WARNING (word boundary) ---"
+MOCK='{"tool_input":{"subagent_type":"general-purpose","prompt":"Please address the failing test"}}'
+OUTPUT=$(run_hook_stderr "$MOCK")
+if echo "$OUTPUT" | grep -q "WARNING"; then
+  fail "'address' should not trigger warning (word boundary)"
+else
+  pass "'address' does not false-positive trigger"
+fi
+
+# =========================================================================
+# Test 24: 'additional' does NOT trigger warning (word boundary for 'add')
+# =========================================================================
+echo "--- Test 24: 'additional' → no WARNING (word boundary) ---"
+MOCK='{"tool_input":{"subagent_type":"general-purpose","prompt":"The additional context would help us understand"}}'
+OUTPUT=$(run_hook_stderr "$MOCK")
+if echo "$OUTPUT" | grep -q "WARNING"; then
+  fail "'additional' should not trigger warning (word boundary)"
+else
+  pass "'additional' does not false-positive trigger"
+fi
+# =========================================================================
+# Test 25: Japanese '修正' → WARNING
+# =========================================================================
+echo "--- Test 25: Japanese '修正' → WARNING ---"
+MOCK='{"tool_input":{"subagent_type":"general-purpose","prompt":"バグを修正してください"}}'
+OUTPUT=$(run_hook_stderr "$MOCK")
+if echo "$OUTPUT" | grep -q "WARNING"; then
+  pass "Japanese 修正 triggers WARNING"
+else
+  fail "Expected WARNING for 修正 keyword"
+fi
+
+# =========================================================================
+# Test 26: 'add' as standalone word → WARNING
+# =========================================================================
+echo "--- Test 26: 'add' standalone → WARNING ---"
+MOCK='{"tool_input":{"subagent_type":"general-purpose","prompt":"Add the new endpoint to the API"}}'
+OUTPUT=$(run_hook_stderr "$MOCK")
+if echo "$OUTPUT" | grep -q "WARNING"; then
+  pass "Standalone 'add' triggers WARNING"
+else
+  fail "Expected WARNING for standalone 'add'"
+fi
+
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
