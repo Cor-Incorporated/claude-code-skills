@@ -5,13 +5,13 @@
 # exclude non-CI check runs (Agent, copilot, dependabot, CodeRabbit)
 # while still counting actual CI check runs.
 # =========================================================================
-set -euo pipefail
+set -uo pipefail
 
 PASS=0
 FAIL=0
 
-pass() { echo "  PASS: $1"; ((PASS++)); }
-fail() { echo "  FAIL: $1"; ((FAIL++)); }
+pass() { echo "  PASS: $1"; PASS=$((PASS+1)); }
+fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 # Source common.sh to get the filter functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
