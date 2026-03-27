@@ -9,6 +9,7 @@
 # 2026-03-21: 初版（AI自己バイパス防止）
 # 2026-03-25: インシデント — CMD_FIRST_LINE のみチェックで多行python3 -c バイパス
 # 2026-03-26: Issue #157 修正 — CMD全体スキャン + fail-closed化
+# 2026-03-27: Issue #179 修正 — gh CLI 免除（API操作はローカルFS書き込みではない）
 #
 # バイパス防止の構造:
 #   1. CMD全体（多行）をスキャン → 1行目だけでは逃げられない
@@ -27,6 +28,16 @@ fi
 
 # 保護対象のファイル名パターン
 PROTECTED="review-status\.json|pr-review-lock\.json|pr-review-read\.json|context-budget\.json|factcheck-status\.json|rebase-session\.json|pr-gate-diagnostic\.log"
+
+# --- gh CLI 免除 (Issue #179) ---
+# gh コマンドはGitHub API操作であり、ローカルファイルへの書き込みではない
+# --body/--title や HEREDOC 本文内で保護ファイル名が言及されても改ざんではない
+# ただし compound operator (&&, ||, ;) でチェインされている場合は免除しない
+GH_FIRST_LINE=$(echo "$CMD" | head -1)
+if echo "$GH_FIRST_LINE" | grep -qE '^\s*gh\s' && \
+   ! echo "$GH_FIRST_LINE" | grep -qE ';\s|&&|\|\|'; then
+  exit 0
+fi
 
 # コマンド全体（多行含む）で保護対象ファイルを検出
 if echo "$CMD" | grep -qE "$PROTECTED"; then
