@@ -17,6 +17,12 @@ SIGNAL_FILE="$STATE_DIR/parallel-team.json"
 
 mkdir -p "$STATE_DIR"
 
+# Save stdin for later use (agent metadata)
+_HOOK_INPUT=""
+if [[ ! -t 0 ]]; then
+  _HOOK_INPUT=$(cat 2>/dev/null || echo "")
+fi
+
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 if [[ ! -f "$SIGNAL_FILE" ]]; then
@@ -61,9 +67,31 @@ with open(f_path, 'r+') as f:
 
 
 # Issue #176: Release fg_impl_agent_count in context-budget.json
+# Only decrement for agent types that were incremented by context-budget-agent-gate.sh
+# Research types and background/team agents are exempt from the gate, so skip them
 BUDGET_FILE="$HOME/.claude/state/context-budget.json"
 if [[ -f "$BUDGET_FILE" ]]; then
-  _BUDGET_FILE="$BUDGET_FILE" python3 -c "
+  # Read saved stdin for agent metadata (PostToolUse provides tool_input)
+  _subtype=""
+  _is_bg="false"
+  _has_team=""
+  if [[ -n "${_HOOK_INPUT:-}" ]]; then
+    _subtype=$(echo "$_HOOK_INPUT" | jq -r '.tool_input.subagent_type // ""' 2>/dev/null || echo "")
+    _is_bg=$(echo "$_HOOK_INPUT" | jq -r '.tool_input.run_in_background // false' 2>/dev/null || echo "false")
+    _has_team=$(echo "$_HOOK_INPUT" | jq -r '.tool_input.team_name // ""' 2>/dev/null || echo "")
+  fi
+
+  # Research types that are never gated (same set as context-budget-agent-gate.sh)
+  _is_research="false"
+  case "$_subtype" in
+    Explore|architect|planner|Plan|code-reviewer|security-reviewer) _is_research="true" ;;
+    feature-dev:code-reviewer|feature-dev:code-explorer|feature-dev:code-architect) _is_research="true" ;;
+    claude-code-guide|general-purpose) _is_research="true" ;;
+  esac
+
+  # Only decrement if this was a foreground impl agent (not research, not background, not team)
+  if [[ "$_is_research" != "true" ]] && [[ "$_is_bg" != "true" ]] && [[ -z "$_has_team" ]]; then
+    _BUDGET_FILE="$BUDGET_FILE" python3 -c "
 import fcntl
 import json
 import os
@@ -89,5 +117,6 @@ with open(f_path, 'r+') as f:
     json.dump(data, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null || true
+  fi
 fi
 exit 0

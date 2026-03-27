@@ -87,10 +87,9 @@ fi
 _rvw_state_path="$_STATE_BASE/review-status.json"
 PRIMARY_LGTM="false"
 if [[ -f "$_rvw_state_path" ]] && command -v jq &>/dev/null; then
-  _branch=$(git branch --show-current 2>/dev/null || echo "")
-  if [[ -n "$_branch" ]]; then
-    _cr=$(jq -r --arg b "$_branch" '.[$b].code_review // false' "$_rvw_state_path" 2>/dev/null || echo "false")
-    _cx=$(jq -r --arg b "$_branch" '.[$b].codex_review // false' "$_rvw_state_path" 2>/dev/null || echo "false")
+  if [[ -n "$PR_BRANCH" ]]; then
+    _cr=$(jq -r --arg b "$PR_BRANCH" '.[$b].code_review // false' "$_rvw_state_path" 2>/dev/null || echo "false")
+    _cx=$(jq -r --arg b "$PR_BRANCH" '.[$b].codex_review // false' "$_rvw_state_path" 2>/dev/null || echo "false")
     if [[ "$_cr" == "true" ]] && [[ "$_cx" == "true" ]]; then
       PRIMARY_LGTM="true"
     fi

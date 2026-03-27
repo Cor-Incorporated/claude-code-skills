@@ -176,8 +176,14 @@ PENDING_FILE="$STATE_DIR/pending-review-comments.json"
 if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
   _pr_match=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
   if [[ "$_pr_match" == "$PR_NUMBER" ]]; then
-    CRITICAL=$(jq -r '.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
-    HIGH=$(jq -r '.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+    _method=$(jq -r '.classification_method // "regex"' "$PENDING_FILE" 2>/dev/null || echo "regex")
+    if [[ "$_method" == "ai" ]]; then
+      CRITICAL=$(jq -r '.ai_classification.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+      HIGH=$(jq -r '.ai_classification.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+    else
+      CRITICAL=$(jq -r '.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+      HIGH=$(jq -r '.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+    fi
     if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
       echo "" >&2
       echo "[task-completion-gate] タスク完了をブロック: PR #${PR_NUMBER} 未対応レビュー" >&2
