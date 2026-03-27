@@ -217,9 +217,21 @@ else
 fi
 
 # =========================================================================
-# Test 16: Empty JSON → no WARNING, exit 0 (graceful degradation)
+# Test 16: description field with implementation keyword → WARNING
 # =========================================================================
-echo "--- Test 16: Empty JSON {} → no WARNING ---"
+echo "--- Test 16: description has 'implement' → WARNING ---"
+MOCK='{"tool_input":{"subagent_type":"general-purpose","prompt":"handle the task","description":"Implement auth middleware"}}'
+OUTPUT=$(run_hook_stderr "$MOCK")
+if echo "$OUTPUT" | grep -q "WARNING"; then
+  pass "Implementation keyword in description triggers WARNING"
+else
+  fail "Expected WARNING from description field"
+fi
+
+# =========================================================================
+# Test 17: Empty JSON → no WARNING, exit 0 (graceful degradation)
+# =========================================================================
+echo "--- Test 17: Empty JSON {} → no WARNING ---"
 MOCK='{}'
 OUTPUT=$(run_hook_stderr "$MOCK")
 EXIT_CODE=$(run_hook_exit "$MOCK")
@@ -230,9 +242,9 @@ else
 fi
 
 # =========================================================================
-# Test 17: Malformed input → no WARNING, exit 0 (graceful degradation)
+# Test 18: Malformed input → no WARNING, exit 0 (graceful degradation)
 # =========================================================================
-echo "--- Test 17: Malformed input → no WARNING ---"
+echo "--- Test 18: Malformed input → no WARNING ---"
 MOCK='not-json-at-all'
 OUTPUT=$(run_hook_stderr "$MOCK")
 EXIT_CODE=$(run_hook_exit "$MOCK")

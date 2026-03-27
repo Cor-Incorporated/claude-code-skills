@@ -32,6 +32,7 @@ input=$(cat)
 
 subagent=$(echo "$input" | jq -r '.tool_input.subagent_type // "general-purpose"' 2>/dev/null || echo "general-purpose")
 prompt=$(echo "$input" | jq -r '.tool_input.prompt // ""' 2>/dev/null || echo "")
+description=$(echo "$input" | jq -r '.tool_input.description // ""' 2>/dev/null || echo "")
 
 # --- Always allow specialized subagent types ---
 case "$subagent" in
@@ -45,10 +46,11 @@ if [[ "$subagent" != "general-purpose" ]]; then
   exit 0
 fi
 
-# --- Check for implementation keywords in prompt ---
+# --- Check for implementation keywords in prompt and description ---
 IMPL_PATTERN='(実装|作成|Edit|Write|変更|implement|create|modify|追加|削除|更新|リファクタ|refactor|build)'
+check_text="${prompt} ${description}"
 
-if echo "$prompt" | grep -qiE "$IMPL_PATTERN"; then
+if echo "$check_text" | grep -qiE "$IMPL_PATTERN"; then
   # Check if investigation keywords are present WITHOUT implementation keywords
   # → If both exist, still warn (mixed intent should favor Codex)
   echo "" >&2
