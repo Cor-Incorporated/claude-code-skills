@@ -30,9 +30,16 @@ set -euo pipefail
 # Read tool input from stdin
 input=$(cat)
 
-subagent=$(echo "$input" | jq -r '.tool_input.subagent_type // "general-purpose"' 2>/dev/null || echo "general-purpose")
-prompt=$(echo "$input" | jq -r '.tool_input.prompt // ""' 2>/dev/null || echo "")
-description=$(echo "$input" | jq -r '.tool_input.description // ""' 2>/dev/null || echo "")
+# Handle both object and stringified tool_input
+tool_input=$(echo "$input" | jq -r '
+  if (.tool_input | type) == "string" then .tool_input | fromjson
+  else .tool_input // {}
+  end
+' 2>/dev/null || echo '{}')
+
+subagent=$(echo "$tool_input" | jq -r '.subagent_type // "general-purpose"' 2>/dev/null || echo "general-purpose")
+prompt=$(echo "$tool_input" | jq -r '.prompt // ""' 2>/dev/null || echo "")
+description=$(echo "$tool_input" | jq -r '.description // ""' 2>/dev/null || echo "")
 
 # --- Always allow specialized subagent types ---
 case "$subagent" in
@@ -47,7 +54,7 @@ if [[ "$subagent" != "general-purpose" ]]; then
 fi
 
 # --- Check for implementation keywords in prompt and description ---
-IMPL_PATTERN='(実装|作成|Edit|Write|変更|implement|create|modify|追加|削除|更新|リファクタ|refactor|build)'
+IMPL_PATTERN='(実装|作成|Edit|Write|変更|implement|create|modify|追加|削除|更新|リファクタ|refactor|build|add|remove|update|delete|fix)'
 check_text="${prompt} ${description}"
 
 if echo "$check_text" | grep -qiE "$IMPL_PATTERN"; then

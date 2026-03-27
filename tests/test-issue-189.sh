@@ -255,6 +255,54 @@ else
 fi
 
 # =========================================================================
+# Test 19: Stringified tool_input → WARNING still detected
+# =========================================================================
+echo "--- Test 19: Stringified tool_input → WARNING ---"
+MOCK='{"tool_input":"{\"subagent_type\":\"general-purpose\",\"prompt\":\"Implement auth middleware\"}"}'
+OUTPUT=$(run_hook_stderr "$MOCK")
+if echo "$OUTPUT" | grep -q "WARNING"; then
+  pass "Stringified tool_input parsed correctly, WARNING detected"
+else
+  fail "Expected WARNING from stringified tool_input"
+fi
+
+# =========================================================================
+# Test 20: English 'Add' keyword → WARNING
+# =========================================================================
+echo "--- Test 20: English 'Add' keyword → WARNING ---"
+MOCK='{"tool_input":{"subagent_type":"general-purpose","prompt":"Add auth middleware to the service"}}'
+OUTPUT=$(run_hook_stderr "$MOCK")
+if echo "$OUTPUT" | grep -q "WARNING"; then
+  pass "English 'Add' keyword triggers WARNING"
+else
+  fail "Expected WARNING for 'Add' keyword"
+fi
+
+# =========================================================================
+# Test 21: English 'fix' keyword → WARNING
+# =========================================================================
+echo "--- Test 21: English 'fix' keyword → WARNING ---"
+MOCK='{"tool_input":{"subagent_type":"general-purpose","prompt":"Fix the authentication bug in login"}}'
+OUTPUT=$(run_hook_stderr "$MOCK")
+if echo "$OUTPUT" | grep -q "WARNING"; then
+  pass "English 'fix' keyword triggers WARNING"
+else
+  fail "Expected WARNING for 'fix' keyword"
+fi
+
+# =========================================================================
+# Test 22: English 'remove' keyword → WARNING
+# =========================================================================
+echo "--- Test 22: English 'remove' keyword → WARNING ---"
+MOCK='{"tool_input":{"subagent_type":"general-purpose","prompt":"Remove dead code from the service"}}'
+OUTPUT=$(run_hook_stderr "$MOCK")
+if echo "$OUTPUT" | grep -q "WARNING"; then
+  pass "English 'remove' keyword triggers WARNING"
+else
+  fail "Expected WARNING for 'remove' keyword"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
@@ -263,3 +311,4 @@ if [[ "$FAIL" -gt 0 ]]; then
   exit 1
 fi
 exit 0
+
