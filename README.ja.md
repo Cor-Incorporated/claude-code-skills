@@ -2,7 +2,7 @@
 
 [Claude Code](https://claude.com/claude-code)（Anthropic 公式 CLI）のためのスキル・ルール・フック集です。
 
-26 のカスタムスキル、59 の hook スクリプト（+ 7 ゲートモードモジュール）、5 つのルールセット、6 つのユーティリティスクリプトを含む、本番環境レベルの Claude Code 設定を提供します。
+27 のカスタムスキル、72 の hook スクリプト（64 シェル + 7 ゲートモードモジュール + 1 Python）、6 つのルールセット、6 つのユーティリティスクリプトを含む、本番環境レベルの Claude Code 設定を提供します。
 
 [English](README.md) | **日本語**
 
@@ -21,9 +21,9 @@ chmod +x setup.sh
 
 ```
 claude-code-skills/
-├── skills/           # 26 カスタムスキル定義 (SKILL.md + scripts + references)
-├── rules/            # 5 グローバルルール (コーディング規約, Git, 品質, テスト, 委任)
-├── hooks/            # 59 hook スクリプト + 7 ゲートモードモジュール (品質ゲート, 安全ガード, ワークフロー強制)
+├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
+├── rules/            # 6 グローバルルール (コーディング規約, Git, 品質, テスト, 委任, hookデプロイ)
+├── hooks/            # 72 hook スクリプト (64 シェル + 7 ゲートモードモジュール + 1 Python) (品質ゲート, 安全ガード, ワークフロー強制)
 ├── scripts/          # 6 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
@@ -82,6 +82,7 @@ Reflect (gstack)
 | スキル | 機能 | トリガー |
 |-------|------|---------|
 | `code-reviewer` | OWASP セキュリティチェック付き PR レビュー | "review this PR", "code review" |
+| `classify-review` | AI による PR レビュー severity 再分類（偽陽性フィルター） | /classify-review [PR番号] |
 | `review-loop` | CI グリーン + レビュー LGTM まで自動ループ | /review-loop |
 | `bugfix` | 根本原因分析 + 全インスタンス修正 | /bugfix [説明] |
 | `tdd-workflow` | RED-GREEN-REFACTOR サイクル強制 | "write tests first", "TDD" |
