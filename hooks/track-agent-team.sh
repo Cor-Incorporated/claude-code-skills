@@ -59,4 +59,35 @@ with open(f_path, 'r+') as f:
     fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null || true
 
+
+# Issue #176: Release fg_impl_agent_count in context-budget.json
+BUDGET_FILE="$HOME/.claude/state/context-budget.json"
+if [[ -f "$BUDGET_FILE" ]]; then
+  _BUDGET_FILE="$BUDGET_FILE" python3 -c "
+import fcntl
+import json
+import os
+
+f_path = os.environ['_BUDGET_FILE']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    try:
+        data = json.load(f)
+    except json.JSONDecodeError:
+        data = {}
+
+    fg = data.get('fg_impl_agent_count', 0)
+    if fg > 0:
+        data['fg_impl_agent_count'] = fg - 1
+
+    impl = data.get('impl_agent_count', 0)
+    if impl > 0:
+        data['impl_agent_count'] = impl - 1
+
+    f.seek(0)
+    f.truncate()
+    json.dump(data, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
+" 2>/dev/null || true
+fi
 exit 0

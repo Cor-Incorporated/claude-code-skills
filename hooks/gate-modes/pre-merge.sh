@@ -82,6 +82,34 @@ if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
 fi
 
 # =========================================================================
+# Review Hierarchy: Tier 1 PRIMARY_LGTM check (#175)
+# =========================================================================
+PRIMARY_LGTM="false"
+_code_rev=$(read_review "$BRANCH" "code_review")
+_codex_rev=$(read_review "$BRANCH" "codex_review")
+if [[ "$_code_rev" == "yes" ]] && [[ "$_codex_rev" == "yes" ]]; then
+  PRIMARY_LGTM="true"
+  echo "  ✅ [pre-merge] Tier 1 LGTM: code-reviewer + Codex CLI 確認済み" >&2
+fi
+
+# Tier 2 LGTM check from pending-review-comments.json
+TIER2_LGTM="false"
+PENDING_FILE="$STATE_DIR/pending-review-comments.json"
+if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
+  _t2=$(jq -r '.tier2_lgtm // false' "$PENDING_FILE" 2>/dev/null || echo "false")
+  if [[ "$_t2" == "true" ]]; then
+    TIER2_LGTM="true"
+  fi
+fi
+
+# PRIMARY_LGTM override: Tier 1 trust bypasses Tier 2 severity
+if [[ "$PRIMARY_LGTM" == "true" ]]; then
+  echo "  ℹ️ [pre-merge] Tier 1 LGTM により Tier 2 findings を許可。マージ可。" >&2
+  # Still record the review status
+  exit 0
+fi
+
+# =========================================================================
 # 3-pass OR judgment (LIGHT) / AND judgment (FULL)
 # Pass A: review-status.json has code_review: true (code-reviewer agent done)
 # Pass B: pending-review-comments.json CRITICAL=0 AND HIGH=0

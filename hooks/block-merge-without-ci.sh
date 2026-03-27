@@ -54,6 +54,9 @@ fi
 # Exclude known non-CI review bots (CodeRabbit only).
 # Claude Review (GitHub Actions) is NOT excluded — it is a real CI check.
 # Pattern: case-insensitive match on "coderabbit" in check run name.
+# Review Hierarchy (#175):
+#   CodeRabbit (Tier 3) → excluded from CI count (informational only)
+#   Claude Review, Copilot (Tier 2) → counted as CI (wait for completion)
 EXCLUDED_PATTERN="coderabbit"
 
 CI_TOTAL=$(echo "$CHECK_RUNS" | jq --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select(.name | test($ex; "i") | not)] | length' 2>/dev/null || echo "0")
