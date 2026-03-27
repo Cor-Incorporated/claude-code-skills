@@ -64,8 +64,15 @@ else
       if [[ -f "$pf" ]] && command -v jq &>/dev/null; then
         PR_MATCH=$(jq -r --arg p "$PR" '.pr // ""' "$pf" 2>/dev/null)
         PENDING_HEAD_SHA=$(jq -r '.head_sha // ""' "$pf" 2>/dev/null)
-        CR=$(jq -r '.critical // 0' "$pf" 2>/dev/null)
-        HI=$(jq -r '.high // 0' "$pf" 2>/dev/null)
+        # Issue #165: Check classification_method — prefer AI classification
+        _vmethod=$(jq -r '.classification_method // "regex"' "$pf" 2>/dev/null || echo "regex")
+        if [[ "$_vmethod" == "ai" ]]; then
+          CR=$(jq -r '.ai_classification.critical // 0' "$pf" 2>/dev/null)
+          HI=$(jq -r '.ai_classification.high // 0' "$pf" 2>/dev/null)
+        else
+          CR=$(jq -r '.critical // 0' "$pf" 2>/dev/null)
+          HI=$(jq -r '.high // 0' "$pf" 2>/dev/null)
+        fi
         if [[ "$PR_MATCH" == "$PR" ]] && [[ -n "$HEAD_SHA" ]] && [[ "$PENDING_HEAD_SHA" == "$HEAD_SHA" ]] && [[ "$CR" == "0" ]] && [[ "$HI" == "0" ]]; then
           CODE_REVIEW="yes"
           echo "  ℹ️ claude-review CRITICAL/HIGH=0 → code_review=yes として扱う" >&2

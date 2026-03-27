@@ -30,6 +30,9 @@ class ReviewSummary:
     issue_comments: list = field(default_factory=list)
     has_claude_review: bool = False
     has_any_review: bool = False
+    raw_comments: list = field(
+        default_factory=list
+    )  # Issue #165: raw data for AI classification
     head_sha: str = ""  # Issue #66 Fix #5: track HEAD SHA for scope validation
 
 
@@ -60,24 +63,85 @@ def gh_api_list(path: str) -> list:
     return result if isinstance(result, list) else []
 
 
-def count_severity(text: str) -> tuple[int, int, int, int]:
-    """Count severity markers in text.
+def _strip_negation_lines(text: str) -> str:
+    """Remove lines/phrases that mention severity keywords in negation context.
 
-    Detects both traditional keywords (CRITICAL, HIGH, etc.) and
-    claude-review header format (### Bug:, ### Security:, etc.).
+    Issue #165: "No CRITICAL/HIGH issues" was counted as CRITICAL=1 HIGH=1.
+    This function strips negation-context lines BEFORE severity counting.
+    """
+    negation_patterns = [
+        r"(?i)no\s+critical",
+        r"(?i)no\s+high",
+        r"(?i)no\s+critical/high",
+        r"(?i)critical[=/]high\s*(?:issues?|findings?|指摘)?\s*(?::|=|なし|ゼロ|0)",
+        r"(?i)critical\s*=\s*0",
+        r"(?i)high\s*=\s*0",
+        r"(?i)0\s+critical",
+        r"(?i)0\s+high",
+        r"(?i)critical.*(?:free|なし|ありません|ゼロ|0件)",
+        r"(?i)high.*(?:free|なし|ありません|ゼロ|0件)",
+        r"(?i)no\s+(?:bug|warning|suggestion)",
+    ]
+    lines = text.split("\n")
+    filtered = []
+    for line in lines:
+        if any(re.search(p, line) for p in negation_patterns):
+            continue
+        filtered.append(line)
+    return "\n".join(filtered)
+
+
+def count_severity(text: str) -> tuple[int, int, int, int]:
+    """Count severity markers in text using structured patterns.
+
+    Issue #165: Replaced bare keyword matching (\\bcritical\\b) with
+    structured severity-prefix patterns to eliminate false positives.
+    Aligned with block-merge-without-review.sh patterns (PR #166).
+
+    Detects:
+    - Structured patterns: [CRITICAL], severity: CRITICAL, **CRITICAL**, etc.
+    - claude-review header format: ### Bug:, ### Security:, etc.
     Issue #57: claude-review uses header format that was previously undetected.
-    Issue #84: Strip HTML details/summary and bot metadata before counting
-    to prevent false positives from CodeRabbit template text.
+    Issue #84: Strip HTML details/summary and bot metadata before counting.
     """
     # Strip HTML blocks and comments to avoid false positives from bot metadata
     cleaned = re.sub(r"<details>.*?</details>", "", text, flags=re.DOTALL)
     cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.DOTALL)
     cleaned = re.sub(r"<[^>]+>", "", cleaned)
 
-    critical = len(re.findall(r"(?i)\bcritical\b", cleaned))
-    high = len(re.findall(r"(?i)\b(?:P1|high)\b", cleaned))
-    warning = len(re.findall(r"(?i)\bwarning\b", cleaned))
-    suggestion = len(re.findall(r"(?i)\bsuggestion\b", cleaned))
+    # Issue #165: Strip negation-context lines before counting
+    cleaned = _strip_negation_lines(cleaned)
+
+    # Issue #165: Use structured severity-prefix patterns instead of bare keywords
+    # Aligned with block-merge-without-review.sh L100 (PR #166)
+    critical = len(
+        re.findall(
+            r"(?i)\[CRITICAL\]|severity:\s*CRITICAL|\*\*CRITICAL\*\*|^\s*CRITICAL:|>\s*CRITICAL",
+            cleaned,
+            re.MULTILINE,
+        )
+    )
+    high = len(
+        re.findall(
+            r"(?i)\[HIGH\]|severity:\s*HIGH|\*\*HIGH\*\*|^\s*HIGH[:\s-]|>\s*HIGH|\bP1\b",
+            cleaned,
+            re.MULTILINE,
+        )
+    )
+    warning = len(
+        re.findall(
+            r"(?i)\[WARNING\]|severity:\s*WARNING|\*\*WARNING\*\*|^\s*WARNING:",
+            cleaned,
+            re.MULTILINE,
+        )
+    )
+    suggestion = len(
+        re.findall(
+            r"(?i)\[SUGGESTION\]|severity:\s*SUGGESTION|\*\*SUGGESTION\*\*|^\s*SUGGESTION:",
+            cleaned,
+            re.MULTILINE,
+        )
+    )
 
     # claude-review (Claude Sonnet 4.6) header format
     high += len(re.findall(r"###\s*Bug:", text))
@@ -172,6 +236,24 @@ def fetch_reviews(repo: str, pr: str) -> ReviewSummary:
         count_severity(all_text)
     )
 
+    # Issue #165: Store raw comments for AI classification skill
+    for c in summary.inline_comments:
+        summary.raw_comments.append(
+            {
+                "user": c.get("user", "?"),
+                "body_preview": c.get("body", "")[:500],
+                "source": "inline",
+            }
+        )
+    for c in summary.issue_comments:
+        summary.raw_comments.append(
+            {
+                "user": c.get("user", "?"),
+                "body_preview": c.get("body", "")[:500],
+                "source": "issue_comment",
+            }
+        )
+
     if summary.total > 0:
         summary.has_any_review = True
 
@@ -232,10 +314,18 @@ def format_output(repo: str, pr: str, summary: ReviewSummary) -> str:
         lines.append("")
 
     if summary.critical > 0 or summary.high > 0:
+        lines.append("")
+        lines.append("⚠️ REGEX分類による検出です（偽陽性の可能性あり）。")
+        lines.append(
+            f"/classify-review {pr} を実行して Haiku AI による偽陽性チェックを行ってください。"
+        )
+        lines.append("AI が全て偽陽性と判定した場合のみ、マージゲートは解除されます。")
+        lines.append("本物の指摘が1つでもあればブロックは維持されます。")
+        lines.append("")
         lines.append("次のアクション:")
-        lines.append("  1. 上記CRITICAL/HIGH指摘を全て修正")
-        lines.append("  2. 修正push後、再度 gh pr checks で確認")
-        lines.append(f"  3. 全コメント再確認: gh api repos/{repo}/pulls/{pr}/comments")
+        lines.append(f"  1. /classify-review {pr} を実行（AI偽陽性チェック）")
+        lines.append("  2. 本物の指摘があれば修正")
+        lines.append("  3. 修正push後、再度 gh pr checks で確認")
     else:
         lines.append("CRITICAL/HIGH指摘なし。MEDIUM以下はfollow-up可。")
 
@@ -274,6 +364,7 @@ def main() -> None:
     pending_file = os.path.join(state_dir, "pending-review-comments.json")
 
     # Issue #66 Fix #5: Include head_sha for scope validation
+    # Issue #165: Include raw_comments + classification_method for AI skill
     # Consumers validate that state matches current PR/SHA before trusting it.
     with open(pending_file, "w") as f:
         json.dump(
@@ -285,6 +376,9 @@ def main() -> None:
                 "critical": summary.critical,
                 "high": summary.high,
                 "output": output,
+                "classification_method": "regex",
+                "raw_comments": summary.raw_comments,
+                "ai_classification": None,
             },
             f,
             indent=2,

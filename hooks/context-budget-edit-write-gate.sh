@@ -91,7 +91,7 @@ transcript_path = os.environ.get("TRANSCRIPT_PATH", "")
 
 source_exts = {'.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.swift',
                '.kt', '.java', '.rb', '.php', '.vue', '.svelte', '.css',
-               '.scss', '.sql', '.prisma', '.graphql'}
+               '.scss', '.sql', '.prisma', '.graphql', '.sh'}  # Issue #167: added .sh
 
 exempt_patterns = [
     '/.claude/', '/node_modules/', '/memory/', 'CLAUDE.md', 'MEMORY.md',
