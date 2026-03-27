@@ -33,8 +33,14 @@ print(json.dumps(d))
 " 2>/dev/null || echo "{}")
 
 TOTAL=$(echo "$REVIEW_DATA" | jq -r '.total // 0' 2>/dev/null || echo "0")
-CRITICAL=$(echo "$REVIEW_DATA" | jq -r '.critical // 0' 2>/dev/null || echo "0")
-HIGH=$(echo "$REVIEW_DATA" | jq -r '.high // 0' 2>/dev/null || echo "0")
+CLASSIFICATION_METHOD=$(echo "$REVIEW_DATA" | jq -r '.classification_method // "regex"' 2>/dev/null || echo "regex")
+if [[ "$CLASSIFICATION_METHOD" == "ai" ]]; then
+  CRITICAL=$(echo "$REVIEW_DATA" | jq -r '.ai_classification.critical // 0' 2>/dev/null || echo "0")
+  HIGH=$(echo "$REVIEW_DATA" | jq -r '.ai_classification.high // 0' 2>/dev/null || echo "0")
+else
+  CRITICAL=$(echo "$REVIEW_DATA" | jq -r '.critical // 0' 2>/dev/null || echo "0")
+  HIGH=$(echo "$REVIEW_DATA" | jq -r '.high // 0' 2>/dev/null || echo "0")
+fi
 PR=$(echo "$REVIEW_DATA" | jq -r '.pr // ""' 2>/dev/null || echo "")
 
 [[ "$TOTAL" -eq 0 ]] && exit 0

@@ -21,6 +21,9 @@ case "$tool" in
     WebFetch)
         source_name="WebFetch"
         ;;
+    Grep)
+        source_name="CodeGrep"
+        ;;
     mcp__claude_ai_Vercel__search_vercel_documentation)
         source_name="VercelDocs"
         ;;

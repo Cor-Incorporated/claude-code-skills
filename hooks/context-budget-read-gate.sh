@@ -115,7 +115,7 @@ file_path = os.environ['_FILE']
 now = os.environ['_NOW']
 
 # Only track source code files
-source_exts = {'.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.swift', '.kt', '.java', '.rb', '.php', '.vue', '.svelte', '.css', '.scss', '.sql', '.prisma', '.graphql'}
+source_exts = {'.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.swift', '.kt', '.java', '.rb', '.php', '.vue', '.svelte', '.css', '.scss', '.sql', '.prisma', '.graphql', '.sh'}  # Issue #167: added .sh
 ext = os.path.splitext(file_path)[1].lower()
 if ext not in source_exts:
     sys.exit(0)

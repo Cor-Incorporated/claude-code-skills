@@ -69,16 +69,37 @@ fi
 if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   if [[ -f "$PENDING_FILE" ]]; then
     REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
-    CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+    # Issue #165: Check classification_method — prefer AI classification if available
+    CLASSIFICATION_METHOD=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+print(d.get('classification_method', 'regex'))
+" 2>/dev/null || echo "regex")
+    if [[ "$CLASSIFICATION_METHOD" == "ai" ]]; then
+      CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+ai = d.get('ai_classification') or {}
+print(ai.get('critical', d.get('critical', 0)))
+" 2>/dev/null || echo "0")
+      HIGH=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+ai = d.get('ai_classification') or {}
+print(ai.get('high', d.get('high', 0)))
+" 2>/dev/null || echo "0")
+    else
+      CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
 import json, os
 with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('critical', 0))
 " 2>/dev/null || echo "0")
-    HIGH=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+      HIGH=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
 import json, os
 with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('high', 0))
 " 2>/dev/null || echo "0")
+    fi
     PR=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
 import json, os
 with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
@@ -124,11 +145,25 @@ import json, os
 with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('total', 0))
 " 2>/dev/null || echo "0")
-  CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+  CLASSIFICATION_METHOD=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+print(d.get('classification_method', 'regex'))
+" 2>/dev/null || echo "regex")
+  if [[ "$CLASSIFICATION_METHOD" == "ai" ]]; then
+    CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
+import json, os
+with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
+ai = d.get('ai_classification') or {}
+print(ai.get('critical', d.get('critical', 0)))
+" 2>/dev/null || echo "0")
+  else
+    CRITICAL=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
 import json, os
 with open(os.environ['_PENDING_FILE']) as f: d = json.load(f)
 print(d.get('critical', 0))
 " 2>/dev/null || echo "0")
+  fi
 
   if [[ "$TOTAL" -gt 0 ]] && [[ "$CRITICAL" -gt 0 ]]; then
     PR=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
