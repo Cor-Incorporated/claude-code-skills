@@ -10,6 +10,11 @@
 # Exit: always 0 (PostToolUse hooks must not block)
 set -uo pipefail
 
+# --- Dependency check: jq required ---
+if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
@@ -20,7 +25,7 @@ if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then
 fi
 
 # --- Extract PR number ---
-PR_NUM=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
+PR_NUM=$(echo "$cmd_first_line" | grep -oE 'pr\s+merge(\s+--[a-z-]+)*\s+[0-9]+' | grep -oE '[0-9]+$' || echo "")
 if [ -z "$PR_NUM" ]; then
   exit 0
 fi
@@ -57,7 +62,9 @@ fi
 mkdir -p "$HOOKS_DEST"
 
 # Pull latest to ensure local hooks/ matches merged state
-git pull --ff-only 2>/dev/null || true
+if ! git pull --ff-only 2>/dev/null; then
+  echo "[hook-deploy] WARNING: git pull --ff-only failed. Deployed hooks may be stale." >&2
+fi
 
 DEPLOYED=0
 FAILED=0
@@ -65,9 +72,10 @@ RESULTS=""
 
 while IFS= read -r hook_path; do
   [ -z "$hook_path" ] && continue
-  hook_file=$(basename "$hook_path")
-  src="${HOOKS_SRC}/${hook_file}"
-  dst="${HOOKS_DEST}/${hook_file}"
+  hook_rel="${hook_path#hooks/}"
+  src="${HOOKS_SRC}/${hook_rel}"
+  dst="${HOOKS_DEST}/${hook_rel}"
+  mkdir -p "$(dirname "$dst")"
 
   if [ ! -f "$src" ]; then
     # File was deleted in PR, skip
@@ -91,10 +99,10 @@ while IFS= read -r hook_path; do
 
   if [ "$src_md5" = "$dst_md5" ]; then
     DEPLOYED=$((DEPLOYED + 1))
-    RESULTS="${RESULTS}  OK  ${hook_file} (md5: ${src_md5})\n"
+    RESULTS="${RESULTS}  OK  ${hook_rel} (md5: ${src_md5})\n"
   else
     FAILED=$((FAILED + 1))
-    RESULTS="${RESULTS}  FAIL ${hook_file} (src: ${src_md5} != dst: ${dst_md5})\n"
+    RESULTS="${RESULTS}  FAIL ${hook_rel} (src: ${src_md5} != dst: ${dst_md5})\n"
   fi
 done <<< "$HOOK_FILES"
 

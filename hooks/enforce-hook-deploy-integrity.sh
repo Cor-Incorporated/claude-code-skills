@@ -86,20 +86,22 @@ synced=()
 # --- Phase 1: Collect project hook files ---
 project_files=()
 while IFS= read -r -d '' filepath; do
-  filename=$(basename "$filepath")
-  project_files+=("$filename")
-done < <(find "$PROJECT_HOOKS_DIR" -maxdepth 1 \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
+  # Preserve relative path from PROJECT_HOOKS_DIR (e.g. gate-modes/stop.sh)
+  rel_path="${filepath#$PROJECT_HOOKS_DIR/}"
+  project_files+=("$rel_path")
+done < <(find "$PROJECT_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 
 # --- Phase 2: MD5 compare + auto-sync ---
-for filename in "${project_files[@]}"; do
-  repo_file="$PROJECT_HOOKS_DIR/$filename"
-  deployed_file="$INSTALLED_HOOKS_DIR/$filename"
+for rel_path in "${project_files[@]}"; do
+  repo_file="$PROJECT_HOOKS_DIR/$rel_path"
+  deployed_file="$INSTALLED_HOOKS_DIR/$rel_path"
 
   if [[ ! -f "$deployed_file" ]]; then
-    # Not installed at all — copy it
-    issues+=("NOT INSTALLED: $filename (auto-synced)")
+    # Not installed at all — create parent dir and copy it
+    issues+=("NOT INSTALLED: $rel_path (auto-synced)")
+    mkdir -p "$(dirname "$deployed_file")"
     cp "$repo_file" "$deployed_file" 2>/dev/null && chmod +x "$deployed_file" 2>/dev/null
-    synced+=("$filename")
+    synced+=("$rel_path")
     continue
   fi
 
@@ -108,15 +110,17 @@ for filename in "${project_files[@]}"; do
   deployed_md5=$(compute_md5 "$deployed_file")
 
   if [[ "$repo_md5" != "$deployed_md5" ]]; then
-    issues+=("MD5 MISMATCH: $filename (repo=${repo_md5} deployed=${deployed_md5}, auto-synced)")
+    issues+=("MD5 MISMATCH: $rel_path (repo=${repo_md5} deployed=${deployed_md5}, auto-synced)")
+    mkdir -p "$(dirname "$deployed_file")"
     cp "$repo_file" "$deployed_file" 2>/dev/null && chmod +x "$deployed_file" 2>/dev/null
-    synced+=("$filename")
+    synced+=("$rel_path")
   fi
 done
 
 # --- Phase 3: Detect orphan deployed hooks ---
 if [[ -d "$INSTALLED_HOOKS_DIR" ]]; then
   while IFS= read -r -d '' filepath; do
+    rel_path="${filepath#$INSTALLED_HOOKS_DIR/}"
     filename=$(basename "$filepath")
 
     # Skip non-script files
@@ -125,14 +129,14 @@ if [[ -d "$INSTALLED_HOOKS_DIR" ]]; then
     esac
 
     # Check if this deployed file exists in project hooks
-    if [[ ! -f "$PROJECT_HOOKS_DIR/$filename" ]]; then
+    if [[ ! -f "$PROJECT_HOOKS_DIR/$rel_path" ]]; then
       if is_known_orphan "$filename"; then
-        issues+=("KNOWN ORPHAN: $filename (in ~/.claude/hooks/ but not in hooks/)")
+        issues+=("KNOWN ORPHAN: $rel_path (in ~/.claude/hooks/ but not in hooks/)")
       else
-        issues+=("UNKNOWN ORPHAN: $filename (in ~/.claude/hooks/ but not in hooks/)")
+        issues+=("UNKNOWN ORPHAN: $rel_path (in ~/.claude/hooks/ but not in hooks/)")
       fi
     fi
-  done < <(find "$INSTALLED_HOOKS_DIR" -maxdepth 1 \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
+  done < <(find "$INSTALLED_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 fi
 
 # --- Phase 4: Check settings.json registration ---
@@ -140,6 +144,7 @@ if [[ -f "$SETTINGS_FILE" ]]; then
   settings_content=$(cat "$SETTINGS_FILE")
 
   while IFS= read -r -d '' filepath; do
+    rel_path="${filepath#$INSTALLED_HOOKS_DIR/}"
     filename=$(basename "$filepath")
 
     # Skip non-script files
@@ -153,10 +158,10 @@ if [[ -f "$SETTINGS_FILE" ]]; then
     fi
 
     # Check if registered in settings.json
-    if ! echo "$settings_content" | grep -q "~/.claude/hooks/$filename"; then
-      issues+=("NOT REGISTERED: $filename (not in settings.json)")
+    if ! echo "$settings_content" | grep -q "~/.claude/hooks/$rel_path"; then
+      issues+=("NOT REGISTERED: $rel_path (not in settings.json)")
     fi
-  done < <(find "$INSTALLED_HOOKS_DIR" -maxdepth 1 \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
+  done < <(find "$INSTALLED_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 fi
 
 # --- Phase 5: Output results ---
