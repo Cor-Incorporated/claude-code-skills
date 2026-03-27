@@ -4,7 +4,7 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 26 custom skills, 59 hook scripts (+ 7 gate-mode modules), 5 rule sets, 6 utility scripts, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 27 custom skills, 72 hook scripts (64 shell + 7 gate-mode modules + 1 Python), 6 rule sets, 6 utility scripts, and integration with third-party skill frameworks.
 
 > **Design Philosophy**: This project implements the principles from [Harness Engineering Best Practices 2026](https://nyosegawa.com/posts/harness-engineering-best-practices-2026/) — deterministic quality gates via hooks, pointer-based documentation (ADR-002), and the feedback speed hierarchy (PostToolUse > pre-commit > CI > human review).
 
@@ -23,9 +23,9 @@ Restart Claude Code after installation.
 
 ```
 claude-code-skills/
-├── skills/           # 26 custom skill definitions (SKILL.md + scripts + references)
-├── rules/            # 5 global rule files (coding-style, git-workflow, quality, testing, delegation)
-├── hooks/            # 59 hook scripts + 7 gate-mode modules (quality gates, safety guards, workflow enforcement)
+├── skills/           # 27 custom skill definitions (SKILL.md + scripts + references)
+├── rules/            # 6 global rule files (coding-style, git-workflow, quality, testing, delegation, hook-deployment)
+├── hooks/            # 72 hook scripts (64 shell + 7 gate-mode modules + 1 Python) (quality gates, safety guards, workflow enforcement)
 ├── scripts/          # 6 utility scripts (Codex orchestration, PR review, context monitoring)
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
@@ -83,6 +83,7 @@ Reflect (gstack)
 | Skill | Purpose | Trigger |
 |-------|---------|---------|
 | `code-reviewer` | PR review with OWASP security checks | "review this PR", "code review" |
+| `classify-review` | AI-based PR review severity re-classification (false positive filter) | /classify-review [PR#] |
 | `review-loop` | CI green + review LGTM auto-loop | /review-loop |
 | `bugfix` | Root cause analysis + fix all instances | /bugfix [description] |
 | `tdd-workflow` | RED-GREEN-REFACTOR cycle enforcement | "write tests first", "TDD" |
