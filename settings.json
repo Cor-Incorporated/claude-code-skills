@@ -83,9 +83,9 @@
           },
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/validate-hook-deployment.sh",
-            "timeout": 10,
-            "statusMessage": "Validating hook deployment integrity..."
+            "command": "bash ~/.claude/hooks/enforce-hook-deploy-integrity.sh",
+            "timeout": 15,
+            "statusMessage": "Checking hook deployment integrity + auto-sync..."
           }
         ]
       }
@@ -464,6 +464,12 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/post-deploy-verify.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-hook-deploy-after-merge.sh",
+            "timeout": 30,
+            "statusMessage": "Auto-deploying hooks after PR merge..."
           },
           {
             "type": "command",
