@@ -103,8 +103,15 @@ if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
   _head_sha_in_file=$(jq -r '.head_sha // ""' "$PENDING_FILE" 2>/dev/null || echo "")
   # Validate scope: pending-review-comments must match current PR
   if [[ "$_pr_in_file" == "$PR_NUMBER" ]] && [[ -n "$HEAD_SHA" ]] && [[ "$_head_sha_in_file" == "$HEAD_SHA" ]]; then
-    _critical=$(jq -r '.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
-    _high=$(jq -r '.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+    # Issue #165: Check classification_method — prefer AI classification if available
+    _method=$(jq -r '.classification_method // "regex"' "$PENDING_FILE" 2>/dev/null || echo "regex")
+    if [[ "$_method" == "ai" ]]; then
+      _critical=$(jq -r '.ai_classification.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+      _high=$(jq -r '.ai_classification.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+    else
+      _critical=$(jq -r '.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+      _high=$(jq -r '.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+    fi
     _total=$(jq -r '.total // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
     if [[ "$_critical" -eq 0 ]] && [[ "$_high" -eq 0 ]] && [[ "$_total" -gt 0 ]]; then
       PASS_B="yes"
