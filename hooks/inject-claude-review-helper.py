@@ -81,6 +81,8 @@ def _strip_negation_lines(text: str) -> str:
         r"(?i)critical.*(?:free|なし|ありません|ゼロ|0件)",
         r"(?i)high.*(?:free|なし|ありません|ゼロ|0件)",
         r"(?i)no\s+(?:bug|warning|suggestion)",
+        r"(?i)critical\s+\w+.*:\s*0\s*$",
+        r"(?i)high\s+\w+.*:\s*0\s*$",
     ]
     lines = text.split("\n")
     filtered = []

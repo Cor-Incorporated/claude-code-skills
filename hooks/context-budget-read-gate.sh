@@ -147,6 +147,7 @@ if count == 3:
 elif count >= 4:
     print("🚫 [BLOCK] ソースコード{}ファイル読み込み。強制停止。Codex CLI 経路C に委任してください。".format(count), file=sys.stderr)
     print("  → 対話的判断が必要な場合のみ mode=planning に変更可", file=sys.stderr)
+    print("  ℹ️ サブエージェント (CLAUDE_AGENT_DEPTH>=1) はこのゲートを免除されています。Agent tool で委任してください。", file=sys.stderr)
     sys.exit(2)
 
 PYEOF
