@@ -49,8 +49,10 @@ git rev-parse --git-dir &>/dev/null || exit 0
 DIFF_UNSTAGED=$(git diff --name-only HEAD 2>/dev/null || echo "")
 DIFF_STAGED=$(git diff --cached --name-only 2>/dev/null || echo "")
 UNTRACKED=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
+# Also detect changes committed by Codex (clean working tree after commit)
+DIFF_COMMITTED=$(git diff --name-only HEAD~1..HEAD 2>/dev/null || echo "")
 
-ALL_CHANGES=$(printf '%s\n%s\n%s' "$DIFF_UNSTAGED" "$DIFF_STAGED" "$UNTRACKED" | sort -u | grep -v '^$' || echo "")
+ALL_CHANGES=$(printf '%s\n%s\n%s\n%s' "$DIFF_UNSTAGED" "$DIFF_STAGED" "$UNTRACKED" "$DIFF_COMMITTED" | sort -u | grep -v '^$' || echo "")
 
 # --- Warn if implementation mode but no changes ---
 if [[ -z "$ALL_CHANGES" ]]; then

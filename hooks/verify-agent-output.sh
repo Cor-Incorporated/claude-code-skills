@@ -12,7 +12,7 @@
 #   1. Skip research/review agents (no file changes expected)
 #   2. Skip worktree-isolated agents (changes in separate worktree)
 #   3. Run git diff to detect actual file changes
-#   4. Extract expected files from prompt + claimed files from response
+#   4. Parse claimed files from agent response
 #   5. Compare expected/claimed vs actual → warn via additionalContext
 #
 # Performance: <200ms (ADR-003 PostToolUse ms-level requirement)
@@ -84,22 +84,11 @@ git rev-parse --git-dir &>/dev/null || exit 0
 DIFF_UNSTAGED=$(git diff --name-only HEAD 2>/dev/null || echo "")
 DIFF_STAGED=$(git diff --cached --name-only 2>/dev/null || echo "")
 UNTRACKED=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
+# Also detect changes committed by the agent (clean working tree after commit)
+DIFF_COMMITTED=$(git diff --name-only HEAD~1..HEAD 2>/dev/null || echo "")
 
 # Combine all changes (deduplicated)
-ALL_CHANGES=$(printf '%s\n%s\n%s' "$DIFF_UNSTAGED" "$DIFF_STAGED" "$UNTRACKED" | sort -u | grep -v '^$' || echo "")
-
-# =========================================================================
-# Extract expected files from prompt
-# =========================================================================
-
-EXPECTED_FILES=""
-if [[ -n "$prompt" ]]; then
-  EXPECTED_FILES=$(echo "$prompt" \
-    | grep -oE '[a-zA-Z0-9_./-]+\.(ts|tsx|js|jsx|py|go|sh|json|md|yaml|yml|css|html|vue|svelte|rs|rb|toml)' \
-    | grep -v '^http' \
-    | grep -v '^@' \
-    | sort -u 2>/dev/null || echo "")
-fi
+ALL_CHANGES=$(printf '%s\n%s\n%s\n%s' "$DIFF_UNSTAGED" "$DIFF_STAGED" "$UNTRACKED" "$DIFF_COMMITTED" | sort -u | grep -v '^$' || echo "")
 
 # =========================================================================
 # Parse agent response for edit claims
