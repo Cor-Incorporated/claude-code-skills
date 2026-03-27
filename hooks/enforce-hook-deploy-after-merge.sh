@@ -51,7 +51,7 @@ HOOKS_DEST="${HOME}/.claude/hooks"
 
 # --- Check if merged PR contained hooks/ changes ---
 CHANGED_FILES=$(gh pr diff "$PR_NUM" --name-only 2>/dev/null || echo "")
-HOOK_FILES=$(echo "$CHANGED_FILES" | grep '^hooks/.*\.sh$' || true)
+HOOK_FILES=$(echo "$CHANGED_FILES" | grep '^hooks/' || true)
 
 if [ -z "$HOOK_FILES" ]; then
   # No hooks/ changes in this PR

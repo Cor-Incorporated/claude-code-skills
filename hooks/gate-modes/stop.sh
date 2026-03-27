@@ -54,7 +54,7 @@ with open(lock_path, 'r+') as f:
     f.seek(0); f.truncate()
     json.dump(s, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
-" 2>/dev/null
+" 2>/dev/null || true
 fi
 
 # =========================================================================
@@ -88,7 +88,7 @@ $(echo "$UNVERIFIED" | tr '|' '\n' | sed 's/^/  - /')
 MSG
 fi
 if [[ -n "$CI_PENDING" ]]; then
-  echo "[INFO] CI実行中/未完了のPR（自動的に完了します）:" >&2
+  echo "[INFO] CI未完了/未検証のPR:" >&2
   echo "$CI_PENDING" | tr '|' '\n' | sed 's/^/  - /' >&2
 fi
 exit 0

@@ -92,16 +92,20 @@ while IFS= read -r -d '' filepath; do
 done < <(find "$PROJECT_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 
 # --- Phase 2: MD5 compare + auto-sync ---
+mkdir -p "$INSTALLED_HOOKS_DIR"
 for rel_path in "${project_files[@]}"; do
   repo_file="$PROJECT_HOOKS_DIR/$rel_path"
   deployed_file="$INSTALLED_HOOKS_DIR/$rel_path"
 
   if [[ ! -f "$deployed_file" ]]; then
     # Not installed at all — create parent dir and copy it
-    issues+=("NOT INSTALLED: $rel_path (auto-synced)")
     mkdir -p "$(dirname "$deployed_file")"
-    cp "$repo_file" "$deployed_file" 2>/dev/null && chmod +x "$deployed_file" 2>/dev/null
-    synced+=("$rel_path")
+    if cp "$repo_file" "$deployed_file" 2>/dev/null && chmod +x "$deployed_file" 2>/dev/null; then
+      issues+=("NOT INSTALLED: $rel_path (auto-synced)")
+      synced+=("$rel_path")
+    else
+      issues+=("NOT INSTALLED: $rel_path (SYNC FAILED)")
+    fi
     continue
   fi
 
@@ -110,10 +114,13 @@ for rel_path in "${project_files[@]}"; do
   deployed_md5=$(compute_md5 "$deployed_file")
 
   if [[ "$repo_md5" != "$deployed_md5" ]]; then
-    issues+=("MD5 MISMATCH: $rel_path (repo=${repo_md5} deployed=${deployed_md5}, auto-synced)")
     mkdir -p "$(dirname "$deployed_file")"
-    cp "$repo_file" "$deployed_file" 2>/dev/null && chmod +x "$deployed_file" 2>/dev/null
-    synced+=("$rel_path")
+    if cp "$repo_file" "$deployed_file" 2>/dev/null && chmod +x "$deployed_file" 2>/dev/null; then
+      issues+=("MD5 MISMATCH: $rel_path (repo=${repo_md5} deployed=${deployed_md5}, auto-synced)")
+      synced+=("$rel_path")
+    else
+      issues+=("MD5 MISMATCH: $rel_path (repo=${repo_md5} deployed=${deployed_md5}, SYNC FAILED)")
+    fi
   fi
 done
 
