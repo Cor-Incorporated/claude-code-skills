@@ -12,6 +12,14 @@
 # =========================================================================
 set -euo pipefail
 
+# =========================================================================
+# CRITICAL: Redirect ALL stdout to stderr.
+# Claude Code Stop hooks MUST produce valid JSON or empty stdout.
+# Any non-JSON text on stdout causes "JSON validation failed" errors.
+# $() captures still work correctly (they create their own pipe for fd 1).
+# =========================================================================
+exec 1>&2
+
 # Resolve script directory and source common functions
 GATE_MODES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${GATE_MODES_DIR}/common.sh"
