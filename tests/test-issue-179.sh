@@ -3,7 +3,8 @@
 set -uo pipefail
 
 PASS=0; FAIL=0
-HOOK_DIR="${HOME}/.claude/hooks"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOOK_DIR="${SCRIPT_DIR}/../hooks"
 
 check_exit() {
   local expected=$1 actual=$2 label="$3"

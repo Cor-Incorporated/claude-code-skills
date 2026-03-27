@@ -36,10 +36,9 @@ PROTECTED="review-status\.json|pr-review-lock\.json|pr-review-read\.json|context
 # 多行コマンドは免除しない（2行目に書込みを隠せるため）
 # 注意: クォート内の ; や && も検出される（fail-closed設計）
 GH_LINE_COUNT=$(echo "$CMD" | wc -l | tr -d ' ')
-GH_FIRST_LINE=$(echo "$CMD" | head -1)
 if [[ "$GH_LINE_COUNT" -eq 1 ]] && \
-   echo "$GH_FIRST_LINE" | grep -qE '^\s*gh\s' && \
-   ! echo "$GH_FIRST_LINE" | grep -qE ';\s|&&|\|\|'; then
+   echo "$CMD" | grep -qE '^\s*gh\s' && \
+   ! echo "$CMD" | grep -qE ';|&&|\|\|'; then
   exit 0
 fi
 

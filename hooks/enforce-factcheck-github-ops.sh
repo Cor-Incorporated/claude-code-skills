@@ -90,8 +90,8 @@ if echo "$command" | grep -qiE '\bTBD\b'; then
   CONTENT_ISSUES="${CONTENT_ISSUES}  - 未確定マーカー (TBD) が含まれています\n"
 fi
 
-if echo "$command" | grep -qiE '\bFIXME\b|\bPLACEHOLDER\b'; then
-  CONTENT_ISSUES="${CONTENT_ISSUES}  - 未解決マーカー (FIXME/PLACEHOLDER) が含まれています\n"
+if echo "$command" | grep -qiE '\bTODO\b|\bFIXME\b|\bPLACEHOLDER\b'; then
+  CONTENT_ISSUES="${CONTENT_ISSUES}  - 未解決マーカー (TODO/FIXME/PLACEHOLDER) が含まれています\n"
 fi
 
 if echo "$command" | grep -qE '（未検証）|〇〇|××'; then
