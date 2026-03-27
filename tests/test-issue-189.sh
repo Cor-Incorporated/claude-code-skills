@@ -217,6 +217,32 @@ else
 fi
 
 # =========================================================================
+# Test 16: Empty JSON → no WARNING, exit 0 (graceful degradation)
+# =========================================================================
+echo "--- Test 16: Empty JSON {} → no WARNING ---"
+MOCK='{}'
+OUTPUT=$(run_hook_stderr "$MOCK")
+EXIT_CODE=$(run_hook_exit "$MOCK")
+if ! echo "$OUTPUT" | grep -q "WARNING" && [[ "$EXIT_CODE" -eq 0 ]]; then
+  pass "Empty JSON handled gracefully, no warning, exit 0"
+else
+  fail "Empty JSON should pass silently, got: $OUTPUT (exit=$EXIT_CODE)"
+fi
+
+# =========================================================================
+# Test 17: Malformed input → no WARNING, exit 0 (graceful degradation)
+# =========================================================================
+echo "--- Test 17: Malformed input → no WARNING ---"
+MOCK='not-json-at-all'
+OUTPUT=$(run_hook_stderr "$MOCK")
+EXIT_CODE=$(run_hook_exit "$MOCK")
+if ! echo "$OUTPUT" | grep -q "WARNING" && [[ "$EXIT_CODE" -eq 0 ]]; then
+  pass "Malformed input handled gracefully, no warning, exit 0"
+else
+  fail "Malformed input should pass silently, got: $OUTPUT (exit=$EXIT_CODE)"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
