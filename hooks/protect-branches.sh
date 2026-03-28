@@ -8,6 +8,11 @@
 #   - git push origin --delete <protected>
 #   - git push origin :<protected>
 #
+# Fork-aware features (#191, #192):
+#   - Force push detection: blocks to origin, warns to fork remote
+#   - Dynamic protected branches: adds upstream default branch
+#   - Fork detection via: git remote get-url upstream
+#
 # Usage: PreToolUse hook in ~/.claude/settings.json
 # Input: JSON on stdin with tool_input.command
 # Exit codes:
@@ -21,6 +26,93 @@ input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
 PROTECTED_BRANCHES="develop main master"
+
+# --- Fork detection (#191) ---
+is_fork_workflow() {
+  git remote get-url upstream >/dev/null 2>&1
+}
+
+# --- Dynamic branch protection (#191) ---
+extend_protected_branches() {
+  if ! is_fork_workflow; then
+    return
+  fi
+  local upstream_url upstream_repo upstream_default
+  upstream_url=$(git remote get-url upstream 2>/dev/null || echo "")
+  [ -z "$upstream_url" ] && return
+  upstream_repo=$(echo "$upstream_url" \
+    | sed -E 's#.*github\.com[:/]##;s/\.git$//')
+  upstream_default=$(timeout 5 gh api "repos/${upstream_repo}" \
+    --jq '.default_branch' 2>/dev/null || echo "")
+  if [ -n "$upstream_default" ]; then
+    if ! echo "$PROTECTED_BRANCHES" | grep -qw "$upstream_default"; then
+      PROTECTED_BRANCHES="$PROTECTED_BRANCHES $upstream_default"
+    fi
+  fi
+}
+
+extend_protected_branches
+
+# --- Force push detection (#192) ---
+is_force_push() {
+  local push_cmd="$1"
+  if echo "$push_cmd" | grep -qE '(--(force|force-with-lease)\b|-f\b)'; then
+    return 0
+  fi
+  if echo "$push_cmd" | grep -qE 'push\s+-[a-zA-Z]*f'; then
+    return 0
+  fi
+  return 1
+}
+
+extract_push_remote() {
+  local push_cmd="$1"
+  # Strip 'git push', then remove all flags, take first positional arg
+  echo "$push_cmd" | sed 's/git[[:space:]]*push[[:space:]]*//' \
+    | sed 's/[[:space:]]*--[a-zA-Z-]*//g; s/[[:space:]]*-[a-zA-Z]//g' \
+    | awk '{print $1}'
+}
+
+extract_push_branch() {
+  local push_cmd="$1"
+  echo "$push_cmd" | sed 's/git[[:space:]]*push[[:space:]]*//' \
+    | sed 's/[[:space:]]*--[a-zA-Z-]*//g; s/[[:space:]]*-[a-zA-Z]//g' \
+    | awk '{print $2}'
+}
+
+# --- Check 0: Force push guard (fork-aware) (#192) ---
+if echo "$cmd" | grep -qE '\bgit\s+push\b' && is_force_push "$cmd"; then
+  push_remote=$(extract_push_remote "$cmd")
+  push_remote="${push_remote:-origin}"
+
+  if is_fork_workflow; then
+    # Fork workflow: block to origin (upstream), warn to fork remote
+    if [ "$push_remote" = "origin" ]; then
+      echo "[BLOCK] origin (upstream) への force push を検出。" >&2
+      echo "  fork ワークフローでは origin への force push は禁止です。" >&2
+      echo "  WHY: upstream の履歴を書き換えると他の contributor に影響します。" >&2
+      echo "  FIX: force push が必要な場合は fork リモートを指定してください。" >&2
+      exit 2
+    else
+      echo "[WARN] fork リモート '${push_remote}' への force push を検出。" >&2
+      echo "  自分の fork への force push は許可しますが、注意してください。" >&2
+    fi
+  else
+    # Non-fork: block force push to protected branches
+    target_branch=$(extract_push_branch "$cmd")
+    if [ -z "$target_branch" ]; then
+      target_branch=$(git branch --show-current 2>/dev/null || echo "")
+    fi
+    for branch in $PROTECTED_BRANCHES; do
+      if [ "$target_branch" = "$branch" ]; then
+        echo "[BLOCK] 保護ブランチ '${branch}' への force push を検出。" >&2
+        echo "  WHY: 共有ブランチの履歴書き換えは禁止です。" >&2
+        echo "  FIX: feature ブランチで作業し、PR 経由でマージしてください。" >&2
+        exit 2
+      fi
+    done
+  fi
+fi
 
 # --- Check 1: Direct branch deletion (git branch -d/-D) ---
 for branch in $PROTECTED_BRANCHES; do
