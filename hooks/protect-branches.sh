@@ -9,7 +9,7 @@
 #   - git push origin :<protected>
 #
 # Fork-aware features (#191, #192):
-#   - Force push detection: blocks to origin, warns to fork remote
+#   - Force push detection: blocks to upstream, warns to fork remote
 #   - Dynamic protected branches: adds upstream default branch
 #   - Fork detection via: git remote get-url upstream
 #
@@ -42,7 +42,14 @@ extend_protected_branches() {
   [ -z "$upstream_url" ] && return
   upstream_repo=$(echo "$upstream_url" \
     | sed -E 's#.*github\.com[:/]##;s/\.git$//')
-  upstream_default=$(timeout 5 gh api "repos/${upstream_repo}" \
+  # Portable timeout: prefer timeout, fallback to gtimeout, then no timeout
+  local timeout_cmd=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd="timeout 5"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd="gtimeout 5"
+  fi
+  upstream_default=$($timeout_cmd gh api "repos/${upstream_repo}" \
     --jq '.default_branch' 2>/dev/null || echo "")
   if [ -n "$upstream_default" ]; then
     if ! echo "$PROTECTED_BRANCHES" | grep -qw "$upstream_default"; then
@@ -75,9 +82,27 @@ extract_push_remote() {
 
 extract_push_branch() {
   local push_cmd="$1"
-  echo "$push_cmd" | sed 's/git[[:space:]]*push[[:space:]]*//' \
-    | sed 's/[[:space:]]*--[a-zA-Z-]*//g; s/[[:space:]]*-[a-zA-Z]//g' \
-    | awk '{print $2}'
+  # Strip 'git push', remove all --flag and -x options (including -o value pairs)
+  local args
+  args=$(echo "$push_cmd" | sed 's/git[[:space:]]*push[[:space:]]*//')
+  # Remove --key=value flags
+  args=$(echo "$args" | sed 's/[[:space:]]*--[a-zA-Z-]*=[^[:space:]]*//g')
+  # Remove --key flags (--force-with-lease, --repo, etc)
+  args=$(echo "$args" | sed 's/[[:space:]]*--[a-zA-Z-]*//g')
+  # Remove -o <value> pairs (push option)
+  args=$(echo "$args" | sed 's/[[:space:]]*-o[[:space:]][^[:space:]]*//g')
+  # Remove remaining single-char flags (-f, -u, etc)
+  args=$(echo "$args" | sed 's/[[:space:]]*-[a-zA-Z]//g')
+  # Now: <remote> <refspec-or-branch>
+  local branch
+  branch=$(echo "$args" | awk '{print $2}')
+  # Handle refspec: src:dst -> extract dst
+  if [[ "$branch" == *:* ]]; then
+    branch="${branch##*:}"
+  fi
+  # Strip refs/heads/ prefix
+  branch="${branch#refs/heads/}"
+  echo "$branch"
 }
 
 # --- Check 0: Force push guard (fork-aware) (#192) ---
@@ -86,14 +111,16 @@ if echo "$cmd" | grep -qE '\bgit\s+push\b' && is_force_push "$cmd"; then
   push_remote="${push_remote:-origin}"
 
   if is_fork_workflow; then
-    # Fork workflow: block to origin (upstream), warn to fork remote
-    if [ "$push_remote" = "origin" ]; then
-      echo "[BLOCK] origin (upstream) への force push を検出。" >&2
-      echo "  fork ワークフローでは origin への force push は禁止です。" >&2
-      echo "  WHY: upstream の履歴を書き換えると他の contributor に影響します。" >&2
-      echo "  FIX: force push が必要な場合は fork リモートを指定してください。" >&2
+    # Standard fork layout: origin=fork, upstream=parent
+    # Block force push to upstream (parent repo)
+    if [ "$push_remote" = "upstream" ]; then
+      echo "[BLOCK] upstream (親リポジトリ) への force push を検出。" >&2
+      echo "  fork ワークフローでは upstream への force push は禁止です。" >&2
+      echo "  WHY: 親リポジトリの履歴を書き換えると他の contributor に影響します。" >&2
+      echo "  FIX: PR 経由でマージしてください。" >&2
       exit 2
     else
+      # origin = fork, allow with warning
       echo "[WARN] fork リモート '${push_remote}' への force push を検出。" >&2
       echo "  自分の fork への force push は許可しますが、注意してください。" >&2
     fi
