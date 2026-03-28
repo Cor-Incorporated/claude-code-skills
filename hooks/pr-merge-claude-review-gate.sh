@@ -47,8 +47,10 @@ if [[ -z "$PR_NUMBER" ]]; then
 fi
 [[ -z "$PR_NUMBER" ]] && exit 0
 
-# Get repo
-REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+# Get repo (fork-aware: resolve_repo from common.sh)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/gate-modes/common.sh"
+REPO=$(resolve_repo "$cmd")
 [[ -z "$REPO" ]] && exit 0
 
 # State file

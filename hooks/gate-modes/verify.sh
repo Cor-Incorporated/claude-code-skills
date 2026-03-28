@@ -13,7 +13,7 @@ source "${GATE_MODES_DIR}/common.sh"
 PR="${VERIFY_PR_NUMBER:-${2:-${PR_NUMBER:-}}}"
 [ -z "$PR" ] && { echo "Usage: $0 VERIFY <PR_NUMBER>" >&2; exit 1; }
 
-REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+REPO=$(resolve_repo "")
 HEAD_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha' 2>/dev/null || echo "")
 if [[ -z "$REPO" ]] || [[ -z "$HEAD_SHA" ]]; then
   echo "⚠️ PR #${PR}: リポジトリ/SHA取得失敗。手動確認してください。" >&2

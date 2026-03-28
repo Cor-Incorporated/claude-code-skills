@@ -12,7 +12,7 @@ set -euo pipefail
 GATE_MODES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${GATE_MODES_DIR}/common.sh"
 
-REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+REPO=$(resolve_repo "")
 if [[ -z "$REPO" ]]; then
   echo "⚠️ リポジトリ情報取得失敗。git repoディレクトリで実行してください。" >&2
   exit 1
