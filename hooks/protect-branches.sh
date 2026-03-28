@@ -105,8 +105,16 @@ extract_push_branch() {
   echo "$branch"
 }
 
-# --- Check 0: Force push guard (fork-aware) (#192) ---
+# --- Check 0: Force push guard (fork-aware) (#192, #195) ---
 if echo "$cmd" | grep -qE '\bgit\s+push\b' && is_force_push "$cmd"; then
+  # Block --all/--mirror: these push ALL branches, always block (#195)
+  if echo "$cmd" | grep -qE '\s--(all|mirror)\b'; then
+    echo "[BLOCK] --all/--mirror 付き force push を検出。" >&2
+    echo "  WHY: 全ブランチ(保護ブランチ含む)の履歴が書き換えられます。" >&2
+    echo "  FIX: 個別のブランチを指定して push してください。" >&2
+    exit 2
+  fi
+
   push_remote=$(extract_push_remote "$cmd")
   push_remote="${push_remote:-origin}"
 
@@ -129,6 +137,11 @@ if echo "$cmd" | grep -qE '\bgit\s+push\b' && is_force_push "$cmd"; then
     target_branch=$(extract_push_branch "$cmd")
     if [ -z "$target_branch" ]; then
       target_branch=$(git branch --show-current 2>/dev/null || echo "")
+    fi
+    # If no explicit remote, check tracking remote (#195)
+    push_remote_explicit=$(extract_push_remote "$cmd")
+    if [ -z "$push_remote_explicit" ]; then
+      push_remote=$(git config "branch.${target_branch}.remote" 2>/dev/null || echo "origin")
     fi
     for branch in $PROTECTED_BRANCHES; do
       if [ "$target_branch" = "$branch" ]; then
