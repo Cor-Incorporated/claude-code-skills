@@ -21,7 +21,20 @@ echo "=== protect-branches.sh tests ==="
 echo "--- Force push bypass fixes (#195) ---"
 test_case "--all force push blocked" 2 "git push --force --all origin"
 test_case "--mirror force push blocked" 2 "git push --force --mirror origin"
-test_case "implicit force push on feature" 0 "git push --force"
+test_case "--all without force blocked" 2 "git push --all origin"
+test_case "--mirror without force blocked" 2 "git push --mirror origin"
+
+# Implicit force push: expected exit depends on current branch
+current_branch=$(git branch --show-current 2>/dev/null || echo "")
+is_protected=0
+for b in develop main master; do
+  [ "$current_branch" = "$b" ] && is_protected=1
+done
+if [ "$is_protected" -eq 1 ]; then
+  test_case "implicit force push on protected ($current_branch)" 2 "git push --force"
+else
+  test_case "implicit force push on feature ($current_branch)" 0 "git push --force"
+fi
 
 echo "--- Existing force push guards (#192) ---"
 test_case "explicit force push to develop" 2 "git push --force origin develop"
