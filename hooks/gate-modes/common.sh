@@ -74,14 +74,30 @@ resolve_repo() {
     return
   fi
 
-  # Priority 2: --repo flag in command
+  # Priority 2: --repo / -R flag in command
   if [[ -n "$cmd" ]]; then
-    local repo_flag
-    repo_flag=$(echo "$cmd" | grep -oE '\-\-repo[= ]\S+' | sed 's/--repo[= ]//' || echo "")
-    if [[ -n "$repo_flag" ]]; then
-      echo "$repo_flag"
-      return
-    fi
+    local expect_repo=0
+    local arg
+    for arg in $cmd; do
+      if [[ "$expect_repo" -eq 1 ]]; then
+        if [[ -n "$arg" ]]; then
+          echo "$arg"
+          return
+        fi
+      fi
+      case "$arg" in
+        --repo=*)
+          echo "${arg#--repo=}"
+          return
+          ;;
+        --repo|-R)
+          expect_repo=1
+          ;;
+        *)
+          expect_repo=0
+          ;;
+      esac
+    done
   fi
 
   # Priority 3: upstream remote (fork workflow)
