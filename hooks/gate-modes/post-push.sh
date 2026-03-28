@@ -78,7 +78,7 @@ if [[ "$review_was_set" == "true" ]]; then
   echo "  → PR作成/マージ前に code-reviewer + Codex CLI を再実行してください。" >&2
 fi
 
-REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+REPO=$(resolve_repo "")
 # Classify tier to show appropriate requirements
 TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
 echo "" >&2

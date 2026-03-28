@@ -49,7 +49,7 @@ if ! git diff --quiet HEAD 2>/dev/null; then
 fi
 
 # Auto-cleanup: remove merged/closed PRs from lock state (housekeeping)
-REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+REPO=$(resolve_repo "")
 if [[ -n "$REPO" ]]; then
   _LOCK="$LOCK_STATE" _REPO="$REPO" python3 -c "
 import json, subprocess, os, fcntl

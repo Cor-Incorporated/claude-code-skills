@@ -6,6 +6,12 @@
 # =========================================================================
 set -euo pipefail
 
+# Source guard: prevent double-initialization when sourced from standalone hooks
+if [[ "${_COMMON_SH_LOADED:-}" == "1" ]]; then
+  return 0 2>/dev/null || true
+fi
+_COMMON_SH_LOADED=1
+
 # Prevent gh CLI TTY hangs
 export GH_FORCE_TTY=0
 export GH_NO_UPDATE_NOTIFIER=1
@@ -55,6 +61,39 @@ extract_cmd() {
     echo ""
   fi
 }
+# =========================================================================
+# Helper: resolve repository (fork-aware)
+# Priority: CLAUDE_FORK_REPO env > --repo flag > upstream remote > origin
+# =========================================================================
+resolve_repo() {
+  local cmd="${1:-}"
+
+  # Priority 1: CLAUDE_FORK_REPO env var
+  if [[ -n "${CLAUDE_FORK_REPO:-}" ]]; then
+    echo "$CLAUDE_FORK_REPO"
+    return
+  fi
+
+  # Priority 2: --repo flag in command
+  if [[ -n "$cmd" ]]; then
+    local repo_flag
+    repo_flag=$(echo "$cmd" | grep -oE '\-\-repo[= ]\S+' | sed 's/--repo[= ]//' || echo "")
+    if [[ -n "$repo_flag" ]]; then
+      echo "$repo_flag"
+      return
+    fi
+  fi
+
+  # Priority 3: upstream remote (fork workflow)
+  if git remote get-url upstream &>/dev/null; then
+    git remote get-url upstream 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||'
+    return
+  fi
+
+  # Priority 4: origin (default)
+  git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo ""
+}
+
 
 # =========================================================================
 # Helper: get current branch

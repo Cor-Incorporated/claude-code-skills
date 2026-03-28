@@ -40,7 +40,7 @@ fi
 # BUG FIX: Get the PR's HEAD branch from GitHub API, NOT local current_branch()
 # current_branch() returns 'develop' when merging from develop, but we need
 # the PR's source branch to check review-status.json correctly.
-REPO_FOR_BRANCH=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+REPO_FOR_BRANCH=$(resolve_repo "$cmd")
 if [[ -n "$REPO_FOR_BRANCH" ]]; then
   BRANCH=$(_timeout 10 gh api "repos/${REPO_FOR_BRANCH}/pulls/${PR_NUMBER}" --jq '.head.ref' 2>/dev/null || echo "")
 fi
@@ -55,7 +55,7 @@ fi
 # (e.g., ci/* branch fixing a broken workflow can't merge if that
 # workflow's CI failure blocks tier detection)
 # =========================================================================
-REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+REPO=$(resolve_repo "$cmd")
 HEAD_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null || echo "")
 TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
 

@@ -32,8 +32,10 @@ if [ -z "$PR_NUM" ]; then
     exit 0
 fi
 
-# Get repo info
-REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+# Get repo info (fork-aware: resolve_repo from common.sh)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/gate-modes/common.sh"
+REPO=$(resolve_repo "$cmd")
 if [ -z "$REPO" ]; then
     echo "[BLOCK] リポジトリ情報を取得できません。" >&2
     exit 2
