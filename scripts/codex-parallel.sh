@@ -66,23 +66,36 @@ if [[ "${1:-}" == "--review" ]]; then
     OUTPUT_FILE="${CODEX_OUTPUT:-/tmp/codex-review-${REPO_NAME}.md}"
 
     log "Review mode: ${REPO_NAME} (base: ${BASE_BRANCH})"
+
+    # Capture output and exit code (Issue #203)
+    CODEX_OUTPUT_FILE=$(mktemp)
+    CODEX_EXIT=0
     codex exec \
         -C "$REPO_PATH" \
         ${CODEX_MODEL:+-m "$CODEX_MODEL"} \
         -o "$OUTPUT_FILE" \
         review \
         --base "$BASE_BRANCH" \
-        ${CUSTOM_PROMPT:+"$CUSTOM_PROMPT"}
+        ${CUSTOM_PROMPT:+"$CUSTOM_PROMPT"} 2>&1 | tee "$CODEX_OUTPUT_FILE" || CODEX_EXIT=$?
+    CODEX_EXIT=${CODEX_EXIT:-0}
+
+    # Parse severity from Codex output (#203)
+    _CRIT=$(grep -ciE '\bCRITICAL\b' "$CODEX_OUTPUT_FILE" 2>/dev/null || echo "0")
+    _HIGH=$(grep -ciE '\bHIGH\b' "$CODEX_OUTPUT_FILE" 2>/dev/null || echo "0")
+    _MED=$(grep -ciE '\bMEDIUM\b' "$CODEX_OUTPUT_FILE" 2>/dev/null || echo "0")
+    _LOW=$(grep -ciE '\bLOW\b' "$CODEX_OUTPUT_FILE" 2>/dev/null || echo "0")
+    rm -f "$CODEX_OUTPUT_FILE"
 
     success "Review complete: ${OUTPUT_FILE}"
     cat "$OUTPUT_FILE"
 
-    # Record Codex review completion in review-status.json
+    # Record Codex review completion in state file
     CURRENT_BRANCH=$(cd "$REPO_PATH" && git branch --show-current 2>/dev/null || echo "")
     if [[ -n "$CURRENT_BRANCH" ]]; then
         RECORD_SCRIPT="$(dirname "$0")/../hooks/record-codex-review.sh"
         if [[ -x "$RECORD_SCRIPT" ]]; then
-            bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH"
+            bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH" \
+              --critical "$_CRIT" --high "$_HIGH" --medium "$_MED" --low "$_LOW"
         fi
     fi
     exit 0
