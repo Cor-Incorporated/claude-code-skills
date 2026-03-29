@@ -205,7 +205,6 @@ classify_review_tier() {
 # Issue #60 Bug C: Check BOTH project-scoped AND global state (OR logic)
 # to prevent path mismatch causing permanent blocks.
 # =========================================================================
-# =========================================================================
 # Non-CI check run exclusion pattern (#187)
 # These check runs are NOT CI jobs and should be excluded from CI status checks.
 # Case-insensitive match against check run name.
@@ -251,4 +250,49 @@ read_review() {
     fi
   done
   echo "no"
+}
+
+# =========================================================================
+# Helper: read Codex severity count from state file (#203)
+# Returns numeric count for the specified field, or -1 if not available.
+# Fields: codex_critical, codex_high, codex_medium, codex_low
+# =========================================================================
+read_codex_severity() {
+  local branch="$1"
+  local field="$2"
+  local global_state="$HOME/.claude/state/$(basename "$REVIEW_STATE")"
+
+  local files_to_check=("$REVIEW_STATE")
+  if [[ "$global_state" != "$REVIEW_STATE" ]]; then
+    files_to_check+=("$global_state")
+  fi
+
+  for state_file in "${files_to_check[@]}"; do
+    [[ ! -f "$state_file" ]] && continue
+    if command -v jq &>/dev/null; then
+      local val
+      val=$(jq -r --arg b "$branch" --arg f "$field" '.[$b][$f] // -1' "$state_file" 2>/dev/null)
+      if [[ "$val" != "-1" ]] && [[ "$val" != "null" ]] && [[ "$val" =~ ^[0-9]+$ ]]; then
+        echo "$val"
+        return
+      fi
+    elif command -v python3 &>/dev/null; then
+      local val
+      val=$(_BR="$branch" _FLD="$field" python3 -c "
+import json, os
+try:
+    with open('$state_file') as f:
+        data = json.load(f)
+    v = data.get(os.environ['_BR'], {}).get(os.environ['_FLD'], -1)
+    print(int(v) if isinstance(v, (int, float)) and v >= 0 else -1)
+except Exception:
+    print(-1)
+" 2>/dev/null)
+      if [[ "$val" != "-1" ]] && [[ "$val" =~ ^[0-9]+$ ]]; then
+        echo "$val"
+        return
+      fi
+    fi
+  done
+  echo "-1"
 }

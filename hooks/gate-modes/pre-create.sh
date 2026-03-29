@@ -44,7 +44,21 @@ MISSING=""
 [[ "$CODE_REVIEW" != "yes" ]] && MISSING="${MISSING}code-reviewer, "
 # Tier 1 (FULL): require Codex CLI too. Tier 2 (LIGHT): code-reviewer only.
 if [[ "$TIER" == "FULL" ]]; then
-  [[ "$CODEX_REVIEW" != "yes" ]] && MISSING="${MISSING}Codex CLI, "
+  if [[ "$CODEX_REVIEW" != "yes" ]]; then
+    # Issue #203: Severity-aware Codex gate
+    # Policy: CRITICAL/HIGH -> block, MEDIUM/LOW -> follow-up Issue (not a blocker)
+    _codex_ran=$(read_review "$BRANCH" "codex_review_ran")
+    _codex_critical=$(read_codex_severity "$BRANCH" "codex_critical")
+    _codex_high=$(read_codex_severity "$BRANCH" "codex_high")
+    if [[ "$_codex_ran" == "yes" ]] && \
+       [[ "$_codex_critical" != "-1" ]] && [[ "$_codex_critical" -eq 0 ]] 2>/dev/null && \
+       [[ "$_codex_high" != "-1" ]] && [[ "$_codex_high" -eq 0 ]] 2>/dev/null; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CODEX SEVERITY OVERRIDE: ran=yes C=$_codex_critical H=$_codex_high -> MEDIUM-only, auto-approve (#203)" >> "$LOG_FILE" 2>/dev/null
+      CODEX_REVIEW="yes"
+    else
+      MISSING="${MISSING}Codex CLI, "
+    fi
+  fi
 fi
 
 if [[ -n "$MISSING" ]]; then

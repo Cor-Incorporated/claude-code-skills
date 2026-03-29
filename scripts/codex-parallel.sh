@@ -66,23 +66,56 @@ if [[ "${1:-}" == "--review" ]]; then
     OUTPUT_FILE="${CODEX_OUTPUT:-/tmp/codex-review-${REPO_NAME}.md}"
 
     log "Review mode: ${REPO_NAME} (base: ${BASE_BRANCH})"
+
+    # Capture output and exit code (Issue #203)
+    CODEX_OUTPUT_FILE=$(mktemp)
+    trap 'rm -f "$CODEX_OUTPUT_FILE"' EXIT
     codex exec \
         -C "$REPO_PATH" \
         ${CODEX_MODEL:+-m "$CODEX_MODEL"} \
         -o "$OUTPUT_FILE" \
         review \
         --base "$BASE_BRANCH" \
-        ${CUSTOM_PROMPT:+"$CUSTOM_PROMPT"}
+        ${CUSTOM_PROMPT:+"$CUSTOM_PROMPT"} 2>&1 | tee "$CODEX_OUTPUT_FILE"
+    CODEX_EXIT=${PIPESTATUS[0]}
+
+    # Parse severity from structured review output (#203)
+    # Use OUTPUT_FILE (structured -o output) instead of raw stdout/stderr
+    # Match severity labels at line start or after bullet/bracket markers
+    # to avoid false positives from prose like "No CRITICAL issues found"
+    _SEV_SRC="$OUTPUT_FILE"
+    if [[ ! -s "$_SEV_SRC" ]]; then
+      _SEV_SRC="$CODEX_OUTPUT_FILE"  # Fallback if -o file is empty
+    fi
+    _CRIT=$(grep -cE '^\s*[-*]?\s*\[?\bCRITICAL\b\]?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _HIGH=$(grep -cE '^\s*[-*]?\s*\[?\bHIGH\b\]?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _MED=$(grep -cE '^\s*[-*]?\s*\[?\bMEDIUM\b\]?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _LOW=$(grep -cE '^\s*[-*]?\s*\[?\bLOW\b\]?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    rm -f "$CODEX_OUTPUT_FILE"
+
+    if [[ "$CODEX_EXIT" -ne 0 ]] && [[ "$_CRIT" -eq 0 ]] && [[ "$_HIGH" -eq 0 ]] && [[ "$_MED" -eq 0 ]] && [[ "$_LOW" -eq 0 ]]; then
+      # Codex crashed with no parseable findings — fail-closed
+      warn "Codex exec failed with exit code $CODEX_EXIT and no parseable severity data."
+      CURRENT_BRANCH=$(cd "$REPO_PATH" && git branch --show-current 2>/dev/null || echo "")
+      if [[ -n "$CURRENT_BRANCH" ]]; then
+        RECORD_SCRIPT="$(dirname "$0")/../hooks/record-codex-review.sh"
+        if [[ -x "$RECORD_SCRIPT" ]]; then
+          bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH"
+        fi
+      fi
+      exit "$CODEX_EXIT"
+    fi
 
     success "Review complete: ${OUTPUT_FILE}"
     cat "$OUTPUT_FILE"
 
-    # Record Codex review completion in review-status.json
+    # Record Codex review completion in state file
     CURRENT_BRANCH=$(cd "$REPO_PATH" && git branch --show-current 2>/dev/null || echo "")
     if [[ -n "$CURRENT_BRANCH" ]]; then
         RECORD_SCRIPT="$(dirname "$0")/../hooks/record-codex-review.sh"
         if [[ -x "$RECORD_SCRIPT" ]]; then
-            bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH"
+            bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH" \
+              --critical "$_CRIT" --high "$_HIGH" --medium "$_MED" --low "$_LOW"
         fi
     fi
     exit 0
