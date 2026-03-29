@@ -70,6 +70,7 @@ if [[ "${1:-}" == "--review" ]]; then
     # Capture output and exit code (Issue #203)
     CODEX_OUTPUT_FILE=$(mktemp)
     trap 'rm -f "$CODEX_OUTPUT_FILE"' EXIT
+    set +e
     codex exec \
         -C "$REPO_PATH" \
         ${CODEX_MODEL:+-m "$CODEX_MODEL"} \
@@ -78,6 +79,7 @@ if [[ "${1:-}" == "--review" ]]; then
         --base "$BASE_BRANCH" \
         ${CUSTOM_PROMPT:+"$CUSTOM_PROMPT"} 2>&1 | tee "$CODEX_OUTPUT_FILE"
     CODEX_EXIT=${PIPESTATUS[0]}
+    set -e
 
     # Parse severity from structured review output (#203)
     # Use OUTPUT_FILE (structured -o output) instead of raw stdout/stderr
@@ -249,6 +251,7 @@ log "Output: ${OUTPUT_FILE}"
 # When sandbox != workspace-write, --full-auto conflicts. Use --sandbox directly instead.
 # `codex exec` runs non-interactively, so --sandbox alone is sufficient for auto execution.
 if [[ "$SANDBOX" == "workspace-write" ]]; then
+    set +e
     codex exec \
         -C "$WORKTREE_PATH" \
         --full-auto \
@@ -256,6 +259,7 @@ if [[ "$SANDBOX" == "workspace-write" ]]; then
         ${CODEX_MODEL:+-m "$CODEX_MODEL"} \
         "$FULL_PROMPT"
 else
+    set +e
     codex exec \
         -C "$WORKTREE_PATH" \
         --sandbox "$SANDBOX" \
