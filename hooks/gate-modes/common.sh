@@ -276,6 +276,22 @@ read_codex_severity() {
         echo "$val"
         return
       fi
+    elif command -v python3 &>/dev/null; then
+      local val
+      val=$(_BR="$branch" _FLD="$field" python3 -c "
+import json, os
+try:
+    with open('$state_file') as f:
+        data = json.load(f)
+    v = data.get(os.environ['_BR'], {}).get(os.environ['_FLD'], -1)
+    print(int(v) if isinstance(v, (int, float)) and v >= 0 else -1)
+except Exception:
+    print(-1)
+" 2>/dev/null)
+      if [[ "$val" != "-1" ]] && [[ "$val" =~ ^[0-9]+$ ]]; then
+        echo "$val"
+        return
+      fi
     fi
   done
   echo "-1"

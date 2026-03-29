@@ -166,6 +166,19 @@ fi
 # --- Tier-aware judgment ---
 CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
 
+# Issue #203: Severity-aware Codex override (consistent with pre-create.sh)
+# Policy: CRITICAL/HIGH → block, MEDIUM/LOW → follow-up Issue (not a blocker)
+if [[ "$CODEX_REVIEW" != "yes" ]]; then
+  _codex_ran=$(read_review "$BRANCH" "codex_review_ran")
+  _codex_critical=$(read_codex_severity "$BRANCH" "codex_critical")
+  _codex_high=$(read_codex_severity "$BRANCH" "codex_high")
+  if [[ "$_codex_ran" == "yes" ]] && \
+     [[ "$_codex_critical" != "-1" ]] && [[ "$_codex_critical" -eq 0 ]] 2>/dev/null && \
+     [[ "$_codex_high" != "-1" ]] && [[ "$_codex_high" -eq 0 ]] 2>/dev/null; then
+    CODEX_REVIEW="yes"
+  fi
+fi
+
 if [[ "$TIER" == "FULL" ]]; then
   # FULL tier: code-reviewer (A/B/C) AND Codex CLI required
   PASS_ANY="no"

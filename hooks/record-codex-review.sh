@@ -22,7 +22,14 @@ if ! command -v python3 &>/dev/null; then
 fi
 
 BRANCH="${1:?branch required}"
-REPO_PATH="${2:-$(pwd)}"
+# Issue #203: Detect if $2 is a flag (--) rather than a repo path
+if [[ "${2:-}" == --* ]] || [[ -z "${2:-}" ]]; then
+  REPO_PATH="$(pwd)"
+  shift 1 2>/dev/null || true
+else
+  REPO_PATH="${2}"
+  shift 2 2>/dev/null || true
+fi
 
 # Issue #203: Optional severity params for severity-aware gating
 # Usage: record-codex-review.sh <branch> [repo-path] [--critical N] [--high N] [--medium N] [--low N]
@@ -31,7 +38,6 @@ CODEX_HIGH=-1
 CODEX_MEDIUM=-1
 CODEX_LOW=-1
 HAS_SEVERITY="false"
-shift 2 2>/dev/null || true
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --critical) CODEX_CRITICAL="${2:-0}"; HAS_SEVERITY="true"; shift 2 ;;
@@ -115,6 +121,6 @@ fi
 if [[ "$CODEX_REVIEW_PASS" == "true" ]]; then
   echo "✅ [review-gate] Codex CLI レビュー完了を記録: branch=$BRANCH (PASS)" >&2
 else
-  echo "⚠️ [review-gate] Codex CLI レビュー記録: branch=$BRANCH (CRITICAL=$CODEX_CRITICAL HIGH=$CODEX_HIGH -> FAIL, PR作成はMEDIUM-onlyなら許可)" >&2
+  echo "⚠️ [review-gate] Codex CLI レビュー記録: branch=$BRANCH (CRITICAL=$CODEX_CRITICAL HIGH=$CODEX_HIGH → FAIL, codex_review=false)" >&2
 fi
 exit 0
