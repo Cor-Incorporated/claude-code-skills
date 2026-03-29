@@ -21,10 +21,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 # --- Issue #205: Severity regex matches Markdown heading/bold formats ---
 
 # The regex pattern used in codex-parallel.sh (extracted for testing)
-REGEX_CRIT='^\s*(#{1,3}\s+|[-*]\s+|\*\*)?CRITICAL(\*\*)?\s*[:-]'
-REGEX_HIGH='^\s*(#{1,3}\s+|[-*]\s+|\*\*)?HIGH(\*\*)?\s*[:-]'
-REGEX_MED='^\s*(#{1,3}\s+|[-*]\s+|\*\*)?MEDIUM(\*\*)?\s*[:-]'
-REGEX_LOW='^\s*(#{1,3}\s+|[-*]\s+|\*\*)?LOW(\*\*)?\s*[:-]'
+REGEX_CRIT='^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?CRITICAL(\]|\*\*)?\s*[:-]'
+REGEX_HIGH='^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?HIGH(\]|\*\*)?\s*[:-]'
+REGEX_MED='^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?MEDIUM(\]|\*\*)?\s*[:-]'
+REGEX_LOW='^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?LOW(\]|\*\*)?\s*[:-]'
 
 # Helper: test that a pattern matches a given line
 assert_match() {
@@ -68,6 +68,19 @@ assert_match "T4d: - LOW: desc"      "$REGEX_LOW"  "- LOW: finding"
 assert_match "T5a: CRITICAL: desc" "$REGEX_CRIT" "CRITICAL: bare line"
 assert_match "T5b: HIGH: desc"     "$REGEX_HIGH" "HIGH: bare line"
 
+
+# T5b: Bracketed format
+assert_match "T5c: [CRITICAL]: desc"     "$REGEX_CRIT" "[CRITICAL]: bare bracket"
+assert_match "T5d: [HIGH]: desc"         "$REGEX_HIGH" "[HIGH]: finding"
+assert_match "T5e: [MEDIUM]: desc"       "$REGEX_MED"  "[MEDIUM]: finding"
+assert_match "T5f: [LOW]: desc"          "$REGEX_LOW"  "[LOW]: finding"
+
+# T5c: Bullet + bracketed format
+assert_match "T5g: - [CRITICAL]: desc"   "$REGEX_CRIT" "- [CRITICAL]: finding"
+assert_match "T5h: - [HIGH]: desc"       "$REGEX_HIGH" "- [HIGH]: finding"
+assert_match "T5i: * [MEDIUM]: desc"     "$REGEX_MED"  "* [MEDIUM]: finding"
+assert_match "T5j: - [LOW]: desc"        "$REGEX_LOW"  "- [LOW]: finding"
+
 # T6: False positive rejection -- prose containing severity keywords
 assert_no_match "T6a: 'No CRITICAL issues found'" "$REGEX_CRIT" "No CRITICAL issues found"
 assert_no_match "T6b: 'All HIGH severity items resolved'" "$REGEX_HIGH" "All HIGH severity items resolved"
@@ -97,6 +110,12 @@ Stack traces are returned to the client.
 - LOW: Variable naming inconsistency
 Some variables use camelCase, others use snake_case.
 
+[CRITICAL]: Hardcoded API key in config
+The config file contains a plaintext API key.
+
+- [HIGH]: Missing rate limiting
+No rate limiter on public endpoints.
+
 All HIGH severity items from previous review have been resolved.
 REVIEW
 
@@ -105,8 +124,8 @@ HIGH_COUNT=$(grep -cE "$REGEX_HIGH" "$REVIEW_FILE" 2>/dev/null || echo "0")
 MED_COUNT=$(grep -cE "$REGEX_MED" "$REVIEW_FILE" 2>/dev/null || echo "0")
 LOW_COUNT=$(grep -cE "$REGEX_LOW" "$REVIEW_FILE" 2>/dev/null || echo "0")
 
-[[ "$CRIT_COUNT" -eq 1 ]] && pass "T7a: CRITICAL count=1 (not 2)" || fail "T7a: Expected CRITICAL=1, got $CRIT_COUNT"
-[[ "$HIGH_COUNT" -eq 1 ]] && pass "T7b: HIGH count=1 (not 2)" || fail "T7b: Expected HIGH=1, got $HIGH_COUNT"
+[[ "$CRIT_COUNT" -eq 2 ]] && pass "T7a: CRITICAL count=2" || fail "T7a: Expected CRITICAL=2, got $CRIT_COUNT"
+[[ "$HIGH_COUNT" -eq 2 ]] && pass "T7b: HIGH count=2" || fail "T7b: Expected HIGH=2, got $HIGH_COUNT"
 [[ "$MED_COUNT" -eq 1 ]] && pass "T7c: MEDIUM count=1" || fail "T7c: Expected MEDIUM=1, got $MED_COUNT"
 [[ "$LOW_COUNT" -eq 1 ]] && pass "T7d: LOW count=1" || fail "T7d: Expected LOW=1, got $LOW_COUNT"
 
