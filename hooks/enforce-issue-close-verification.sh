@@ -34,7 +34,12 @@ CLOSE_REASON=$(echo "$CMD_FOR_REASON" | sed -En 's/.*(--reason|-r)[= ]"([^"]*)".
 if [ -z "$CLOSE_REASON" ]; then
   CLOSE_REASON=$(echo "$CMD_FOR_REASON" | sed -En "s/.*(--reason|-r)[= ]'([^']*)'.*/\2/p")
 fi
-if [ "$CLOSE_REASON" = "not planned" ]; then
+if [ "$CLOSE_REASON" = "not planned" ] || [ "$CLOSE_REASON" = "duplicate" ]; then
+  exit 0
+fi
+
+# --duplicate-of フラグは重複クローズを意味する（証拠不要）
+if echo "$CMD_NO_QUOTES" | grep -qE '\-\-duplicate-of'; then
   exit 0
 fi
 
