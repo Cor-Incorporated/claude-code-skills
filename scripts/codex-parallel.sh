@@ -69,6 +69,7 @@ if [[ "${1:-}" == "--review" ]]; then
 
     # Capture output and exit code (Issue #203)
     CODEX_OUTPUT_FILE=$(mktemp)
+    trap 'rm -f "$CODEX_OUTPUT_FILE"' EXIT
     CODEX_EXIT=0
     codex exec \
         -C "$REPO_PATH" \
@@ -77,13 +78,19 @@ if [[ "${1:-}" == "--review" ]]; then
         review \
         --base "$BASE_BRANCH" \
         ${CUSTOM_PROMPT:+"$CUSTOM_PROMPT"} 2>&1 | tee "$CODEX_OUTPUT_FILE" || CODEX_EXIT=$?
-    CODEX_EXIT=${CODEX_EXIT:-0}
 
-    # Parse severity from Codex output (#203)
-    _CRIT=$(grep -ciE '\bCRITICAL\b' "$CODEX_OUTPUT_FILE" 2>/dev/null || echo "0")
-    _HIGH=$(grep -ciE '\bHIGH\b' "$CODEX_OUTPUT_FILE" 2>/dev/null || echo "0")
-    _MED=$(grep -ciE '\bMEDIUM\b' "$CODEX_OUTPUT_FILE" 2>/dev/null || echo "0")
-    _LOW=$(grep -ciE '\bLOW\b' "$CODEX_OUTPUT_FILE" 2>/dev/null || echo "0")
+    # Parse severity from structured review output (#203)
+    # Use OUTPUT_FILE (structured -o output) instead of raw stdout/stderr
+    # Match severity labels at line start or after bullet/bracket markers
+    # to avoid false positives from prose like "No CRITICAL issues found"
+    _SEV_SRC="$OUTPUT_FILE"
+    if [[ ! -s "$_SEV_SRC" ]]; then
+      _SEV_SRC="$CODEX_OUTPUT_FILE"  # Fallback if -o file is empty
+    fi
+    _CRIT=$(grep -cE '^\s*[-*]?\s*\[?\bCRITICAL\b\]?\s*:' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _HIGH=$(grep -cE '^\s*[-*]?\s*\[?\bHIGH\b\]?\s*:' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _MED=$(grep -cE '^\s*[-*]?\s*\[?\bMEDIUM\b\]?\s*:' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _LOW=$(grep -cE '^\s*[-*]?\s*\[?\bLOW\b\]?\s*:' "$_SEV_SRC" 2>/dev/null || echo "0")
     rm -f "$CODEX_OUTPUT_FILE"
 
     success "Review complete: ${OUTPUT_FILE}"
@@ -94,8 +101,15 @@ if [[ "${1:-}" == "--review" ]]; then
     if [[ -n "$CURRENT_BRANCH" ]]; then
         RECORD_SCRIPT="$(dirname "$0")/../hooks/record-codex-review.sh"
         if [[ -x "$RECORD_SCRIPT" ]]; then
-            bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH" \
-              --critical "$_CRIT" --high "$_HIGH" --medium "$_MED" --low "$_LOW"
+            if [[ "$CODEX_EXIT" -eq 0 ]] || [[ "$_CRIT" -gt 0 ]] || [[ "$_HIGH" -gt 0 ]] || [[ "$_MED" -gt 0 ]] || [[ "$_LOW" -gt 0 ]]; then
+              # Codex ran successfully or produced findings — record with severity
+              bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH" \
+                --critical "$_CRIT" --high "$_HIGH" --medium "$_MED" --low "$_LOW"
+            else
+              # Codex crashed with no parseable output — record without severity (fail-closed)
+              warn "Codex exited with code $CODEX_EXIT and no severity data. Recording without severity (fail-closed)."
+              bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH"
+            fi
         fi
     fi
     exit 0

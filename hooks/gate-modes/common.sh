@@ -272,7 +272,7 @@ read_codex_severity() {
     if command -v jq &>/dev/null; then
       local val
       val=$(jq -r --arg b "$branch" --arg f "$field" '.[$b][$f] // -1' "$state_file" 2>/dev/null)
-      if [[ "$val" != "-1" ]] && [[ "$val" != "null" ]]; then
+      if [[ "$val" != "-1" ]] && [[ "$val" != "null" ]] && [[ "$val" =~ ^[0-9]+$ ]]; then
         echo "$val"
         return
       fi

@@ -83,10 +83,11 @@ with open(f_path, 'r+') as f:
     data[br]['codex_review_ran'] = True
     data[br]['codex_review_at'] = now
     if has_sev:
-        data[br]['codex_critical'] = int(os.environ['_CRIT'])
-        data[br]['codex_high'] = int(os.environ['_HIGH'])
-        data[br]['codex_medium'] = int(os.environ['_MED'])
-        data[br]['codex_low'] = int(os.environ['_LOW'])
+        for key, env in [('codex_critical','_CRIT'),('codex_high','_HIGH'),('codex_medium','_MED'),('codex_low','_LOW')]:
+            try:
+                data[br][key] = int(os.environ[env])
+            except (ValueError, KeyError):
+                data[br][key] = -1
     f.seek(0)
     f.truncate()
     json.dump(data, f, indent=2)
