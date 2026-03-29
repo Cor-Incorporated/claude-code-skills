@@ -83,6 +83,7 @@ Reflect (gstack)
 | Skill | Purpose | Trigger |
 |-------|---------|---------|
 | `code-reviewer` | PR review with OWASP security checks | "review this PR", "code review" |
+| `codex-review` | Codex CLI second opinion review (parallel experts via `codex exec`) | "Codex レビュー", "セカンドオピニオン" |
 | `classify-review` | AI-based PR review severity re-classification (false positive filter) | /classify-review [PR#] |
 | `review-loop` | CI green + review LGTM auto-loop | /review-loop |
 | `bugfix` | Root cause analysis + fix all instances | /bugfix [description] |
@@ -152,7 +153,7 @@ The `agent-orchestrator` skill manages team composition, wave-based execution, a
 
 | Route | Purpose | Command |
 |-------|---------|---------|
-| **A: Review** | Code review, second opinion | `codex exec review --base <branch>` |
+| **A: Review** | Code review, second opinion (parallel experts) | `codex exec --sandbox read-only` / `codex-review` skill |
 | **B: Handover** | Large implementation (requires user judgment) | Create handover doc → user passes to Codex |
 | **C: Parallel** | Independent tasks in isolated worktrees | `codex-parallel.sh` or `codex-orchestrate.sh` |
 

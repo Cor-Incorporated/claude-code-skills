@@ -82,6 +82,7 @@ Reflect (gstack)
 | スキル | 機能 | トリガー |
 |-------|------|---------|
 | `code-reviewer` | OWASP セキュリティチェック付き PR レビュー | "review this PR", "code review" |
+| `codex-review` | Codex CLI セカンドオピニオンレビュー（`codex exec` 並列エキスパート） | "Codex レビュー", "セカンドオピニオン" |
 | `classify-review` | AI による PR レビュー severity 再分類（偽陽性フィルター） | /classify-review [PR番号] |
 | `review-loop` | CI グリーン + レビュー LGTM まで自動ループ | /review-loop |
 | `bugfix` | 根本原因分析 + 全インスタンス修正 | /bugfix [説明] |
@@ -151,7 +152,7 @@ Codex CLI (40%) — 直列実装、運用、品質監査
 
 | 経路 | 用途 | コマンド |
 |------|------|---------|
-| **A: レビュー** | コードレビュー、セカンドオピニオン | `codex exec review --base <branch>` |
+| **A: レビュー** | コードレビュー、セカンドオピニオン（並列エキスパート） | `codex exec --sandbox read-only` / `codex-review` スキル |
 | **B: ハンドオーバー** | 大規模実装（ユーザー判断が必要） | ハンドオーバードキュメント作成 → ユーザーが Codex に渡す |
 | **C: 並列実行** | 独立タスクを分離 worktree で実行 | `codex-parallel.sh` または `codex-orchestrate.sh` |
 
