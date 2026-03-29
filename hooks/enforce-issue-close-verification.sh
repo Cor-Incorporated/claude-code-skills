@@ -26,10 +26,13 @@ if [ -z "$ISSUE_NUM" ]; then
   exit 0
 fi
 
-# Bug 1 fix: --reason "not planned" は証拠不要（重複/統合クローズ）
-CLOSE_REASON=$(echo "$CMD_FLAT" | sed -En 's/.*--reason[= ]"([^"]*)".*/\1/p')
+# Bug 1 fix: --reason/-r "not planned" は証拠不要（重複/統合クローズ）
+# P1: --comment内の偽--reasonパターンを除外するため、--comment/-c引数を先に除去
+# P2: -r (短縮形) もサポート
+CMD_FOR_REASON=$(echo "$CMD_FLAT" | sed 's/--comment "[^"]*"//g; s/-c "[^"]*"//g' | sed "s/--comment '[^']*'//g; s/-c '[^']*'//g")
+CLOSE_REASON=$(echo "$CMD_FOR_REASON" | sed -En 's/.*(--reason|-r)[= ]"([^"]*)".*/\2/p')
 if [ -z "$CLOSE_REASON" ]; then
-  CLOSE_REASON=$(echo "$CMD_FLAT" | sed -En "s/.*--reason[= ]'([^']*)'.*/\1/p")
+  CLOSE_REASON=$(echo "$CMD_FOR_REASON" | sed -En "s/.*(--reason|-r)[= ]'([^']*)'.*/\2/p")
 fi
 if [ "$CLOSE_REASON" = "not planned" ]; then
   exit 0
