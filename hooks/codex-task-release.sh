@@ -33,7 +33,10 @@ is_codex_exec=false
 if echo "$first_line" | grep -qE '^\s*(\S+=\S+\s+)*bash\s+\S*codex-(parallel|orchestrate)'; then
     is_codex_exec=true
 elif echo "$first_line" | grep -qE '^\s*(\S+=\S+\s+)*codex\s+exec\b'; then
-    is_codex_exec=true
+    # 経路A (codex exec review) はバジェットカウント対象外 (codex-task-gate.sh と対称)
+    if ! echo "$first_line" | grep -qE 'codex\s+exec\s+review\b'; then
+        is_codex_exec=true
+    fi
 fi
 
 [[ "$is_codex_exec" != "true" ]] && exit 0
