@@ -5,28 +5,53 @@
 # 根本原因 (2026-03-07):
 #   「関連コードが存在する ≠ 受入基準を満たしている」
 #   7件中6件を誤クローズした事故の再発防止
+#
+# Bug fix (#199, 2026-03-29):
+#   Bug 1: --reason "not planned" (重複/統合クローズ) を検出してスキップ
+#   Bug 2: 引用文字列を除去してから issue close パターンをマッチし誤検出を防止
 
 set -euo pipefail
 
 # Extract command from stdin JSON
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
-ISSUE_NUM=$(echo "$COMMAND" | grep -oE 'issue close [0-9]+' | grep -oE '[0-9]+' || true)
+
+# Bug 2 fix: flag引数の値のみを除去してissue番号を抽出
+# --body/--comment/-c の引数を除去し、positional引数（issue番号）は保持
+CMD_FLAT=$(echo "$COMMAND" | tr '\n' ' ')
+CMD_STRIPPED=$(echo "$CMD_FLAT" | sed 's/--body "[^"]*"//g; s/--comment "[^"]*"//g; s/-c "[^"]*"//g; s/--body-file [^ ]*//g' | sed "s/--body '[^']*'//g; s/--comment '[^']*'//g; s/-c '[^']*'//g")
+# Issue番号を抽出（引用符付き "123" も対応）
+ISSUE_NUM=$(echo "$CMD_STRIPPED" | sed "s/[\"']//g" | grep -oE 'issue close [0-9]+' | grep -oE '[0-9]+' || true)
 
 if [ -z "$ISSUE_NUM" ]; then
   exit 0
 fi
 
+# Bug 1 fix: --reason/-r "not planned" は証拠不要（重複/統合クローズ）
+# CMD_STRIPPEDから--comment/-c/--bodyは除去済みなので--reason誤検出なし
+CLOSE_REASON=$(echo "$CMD_STRIPPED" | sed -En 's/.*(--reason|-r)[= ]"([^"]*)".*/\2/p')
+if [ -z "$CLOSE_REASON" ]; then
+  CLOSE_REASON=$(echo "$CMD_STRIPPED" | sed -En "s/.*(--reason|-r)[= ]'([^']*)'.*/\2/p")
+fi
+if [ "$CLOSE_REASON" = "not planned" ] || [ "$CLOSE_REASON" = "duplicate" ]; then
+  exit 0
+fi
+
+# --duplicate-of フラグは重複クローズを意味する（証拠不要）
+if echo "$CMD_STRIPPED" | grep -qE '\-\-duplicate-of'; then
+  exit 0
+fi
+
 # Check if the close comment contains verification evidence
 # Extract comment from -c "..." or --comment "..." (BSD compatible, no grep -P)
-COMMENT=$(echo "$COMMAND" | sed -En 's/.*(--comment|-c) "([^"]*)".*/\2/p')
+COMMENT=$(echo "$CMD_FLAT" | sed -En 's/.*(--comment|-c) "([^"]*)".*/\2/p')
 if [ -z "$COMMENT" ]; then
   # Try single-quoted variant: -c '...'
-  COMMENT=$(echo "$COMMAND" | sed -En "s/.*(--comment|-c) '([^']*)'.*/\2/p")
+  COMMENT=$(echo "$CMD_FLAT" | sed -En "s/.*(--comment|-c) '([^']*)'.*/\2/p")
 fi
 if [ -z "$COMMENT" ]; then
   # No explicit comment flag found — use entire command for pattern matching
-  COMMENT="$COMMAND"
+  COMMENT="$CMD_FLAT"
 fi
 
 # Required patterns in the close comment
