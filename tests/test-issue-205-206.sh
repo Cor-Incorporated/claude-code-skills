@@ -21,10 +21,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 # --- Issue #205: Severity regex matches Markdown heading/bold formats ---
 
 # The regex pattern used in codex-parallel.sh (extracted for testing)
-REGEX_CRIT='^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?CRITICAL(\]|\*\*)?\s*[:-]'
-REGEX_HIGH='^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?HIGH(\]|\*\*)?\s*[:-]'
-REGEX_MED='^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?MEDIUM(\]|\*\*)?\s*[:-]'
-REGEX_LOW='^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?LOW(\]|\*\*)?\s*[:-]'
+REGEX_CRIT='^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?CRITICAL(\]|\*\*)?\s*[:(-]'
+REGEX_HIGH='^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?HIGH(\]|\*\*)?\s*[:(-]'
+REGEX_MED='^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?MEDIUM(\]|\*\*)?\s*[:(-]'
+REGEX_LOW='^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?LOW(\]|\*\*)?\s*[:(-]'
 
 # Helper: test that a pattern matches a given line
 assert_match() {
@@ -51,6 +51,12 @@ assert_match "T1d: ## LOW: desc"      "$REGEX_LOW"  "## LOW: naming convention"
 # T2: Markdown H3 heading
 assert_match "T2a: ### CRITICAL - desc" "$REGEX_CRIT" "### CRITICAL - injection risk"
 assert_match "T2b: ### HIGH - desc"     "$REGEX_HIGH" "### HIGH - auth bypass"
+
+# T2c: Markdown H4 heading with parenthetical (code-reviewer documented format)
+assert_match "T2c: #### CRITICAL (block merge)" "$REGEX_CRIT" "#### CRITICAL (block merge)"
+assert_match "T2d: #### HIGH (fix before merge)" "$REGEX_HIGH" "#### HIGH (fix before merge)"
+assert_match "T2e: ##### MEDIUM (consider)"      "$REGEX_MED"  "##### MEDIUM (consider)"
+assert_match "T2f: ###### LOW (optional)"         "$REGEX_LOW"  "###### LOW (optional)"
 
 # T3: Bold format
 assert_match "T3a: **CRITICAL**: desc" "$REGEX_CRIT" "**CRITICAL**: SQL injection"
@@ -116,6 +122,15 @@ The config file contains a plaintext API key.
 - [HIGH]: Missing rate limiting
 No rate limiter on public endpoints.
 
+#### HIGH (fix before merge)
+Missing input validation on the upload endpoint.
+
+#### CRITICAL (block merge)
+Unauthenticated access to admin API.
+
+##### MEDIUM (consider)
+Logging could include request IDs for traceability.
+
 All HIGH severity items from previous review have been resolved.
 REVIEW
 
@@ -124,9 +139,9 @@ HIGH_COUNT=$(grep -cE "$REGEX_HIGH" "$REVIEW_FILE" 2>/dev/null || echo "0")
 MED_COUNT=$(grep -cE "$REGEX_MED" "$REVIEW_FILE" 2>/dev/null || echo "0")
 LOW_COUNT=$(grep -cE "$REGEX_LOW" "$REVIEW_FILE" 2>/dev/null || echo "0")
 
-[[ "$CRIT_COUNT" -eq 2 ]] && pass "T7a: CRITICAL count=2" || fail "T7a: Expected CRITICAL=2, got $CRIT_COUNT"
-[[ "$HIGH_COUNT" -eq 2 ]] && pass "T7b: HIGH count=2" || fail "T7b: Expected HIGH=2, got $HIGH_COUNT"
-[[ "$MED_COUNT" -eq 1 ]] && pass "T7c: MEDIUM count=1" || fail "T7c: Expected MEDIUM=1, got $MED_COUNT"
+[[ "$CRIT_COUNT" -eq 3 ]] && pass "T7a: CRITICAL count=3" || fail "T7a: Expected CRITICAL=3, got $CRIT_COUNT"
+[[ "$HIGH_COUNT" -eq 3 ]] && pass "T7b: HIGH count=3" || fail "T7b: Expected HIGH=3, got $HIGH_COUNT"
+[[ "$MED_COUNT" -eq 2 ]] && pass "T7c: MEDIUM count=2" || fail "T7c: Expected MEDIUM=2, got $MED_COUNT"
 [[ "$LOW_COUNT" -eq 1 ]] && pass "T7d: LOW count=1" || fail "T7d: Expected LOW=1, got $LOW_COUNT"
 
 # --- Issue #206: set +e wrapper exists in codex-parallel.sh ---
@@ -153,6 +168,21 @@ if [[ -n "$SET_PLUS_E_LINE" ]] && [[ -n "$CODEX_EXEC_LINE" ]] && [[ "$SET_PLUS_E
     pass "T10a: set +e (line $SET_PLUS_E_LINE) before codex exec (line $CODEX_EXEC_LINE)"
 else
     fail "T10a: set +e should appear before codex exec"
+fi
+
+# T11: Verify set -e is restored after EXIT_CODE=$? in implementation mode
+# Implementation mode codex exec is the second occurrence (after review mode)
+IMPL_EXIT_LINE=$(grep -n 'EXIT_CODE=\$?' "$SCRIPT_FILE" | head -1 | cut -d: -f1)
+if [[ -n "$IMPL_EXIT_LINE" ]]; then
+    NEXT_LINE=$(( IMPL_EXIT_LINE + 1 ))
+    NEXT_CONTENT=$(sed -n "${NEXT_LINE}p" "$SCRIPT_FILE")
+    if [[ "$NEXT_CONTENT" == "set -e" ]]; then
+        pass "T11a: set -e immediately after EXIT_CODE=\$? (line $IMPL_EXIT_LINE)"
+    else
+        fail "T11a: Expected 'set -e' on line $NEXT_LINE after EXIT_CODE=\$?, got '$NEXT_CONTENT'"
+    fi
+else
+    fail "T11a: EXIT_CODE=\$? not found in implementation mode"
 fi
 
 echo ""

@@ -89,10 +89,10 @@ if [[ "${1:-}" == "--review" ]]; then
     if [[ ! -s "$_SEV_SRC" ]]; then
       _SEV_SRC="$CODEX_OUTPUT_FILE"  # Fallback if -o file is empty
     fi
-    _CRIT=$(grep -cE '^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?CRITICAL(\]|\*\*)?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
-    _HIGH=$(grep -cE '^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?HIGH(\]|\*\*)?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
-    _MED=$(grep -cE '^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?MEDIUM(\]|\*\*)?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
-    _LOW=$(grep -cE '^\s*(#{1,3}\s+|[-*]\s+)?(\[|\*\*)?LOW(\]|\*\*)?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _CRIT=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?CRITICAL(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _HIGH=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?HIGH(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _MED=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?MEDIUM(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _LOW=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?LOW(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
     rm -f "$CODEX_OUTPUT_FILE"
 
     if [[ "$CODEX_EXIT" -ne 0 ]] && [[ "$_CRIT" -eq 0 ]] && [[ "$_HIGH" -eq 0 ]] && [[ "$_MED" -eq 0 ]] && [[ "$_LOW" -eq 0 ]]; then
@@ -269,6 +269,7 @@ else
 fi
 
 EXIT_CODE=$?
+set -e
 
 if [[ $EXIT_CODE -eq 0 ]]; then
     success "Codex completed: ${BRANCH_NAME}"
