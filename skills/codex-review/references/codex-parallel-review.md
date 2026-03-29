@@ -127,7 +127,7 @@ git diff --name-only HEAD~1
 差分コンテキストを注入:
 
 ```bash
-for file in $(git diff --name-only HEAD~1); do
+git diff -z --name-only HEAD~1 | while IFS= read -r -d '' file; do
   echo "=== $file ==="
   git diff HEAD~1 -- "$file" | head -200
 done

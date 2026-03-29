@@ -1,7 +1,7 @@
 ---
 name: codex-review
 description: "Codexにセカンドオピニオンを求める。AI同士の忖度なしガチレビュー。Use when user mentions 'Codex レビュー', 'セカンドオピニオン', 'Codex の意見', 'Codex でレビュー'. Do NOT load for: 'Codex に実装させて', 'Codex Worker', 'Codex に作らせて', '実装を依頼'."
-allowed-tools: ["Bash", "Read", "Write", "Edit"]
+allowed-tools: ["Bash", "Read"]
 argument-hint: "[code|plan|scope]"
 ---
 
