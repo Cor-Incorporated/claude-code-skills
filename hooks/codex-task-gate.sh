@@ -80,7 +80,11 @@ is_codex_exec=false
 if echo "$first_line" | grep -qE '^\s*(\S+=\S+\s+)*bash\s+\S*codex-(parallel|orchestrate)'; then
     is_codex_exec=true
 elif echo "$first_line" | grep -qE '^\s*(\S+=\S+\s+)*codex\s+exec\b'; then
-    is_codex_exec=true
+    # 経路A (codex exec review) はレビュー専用 — バジェットカウント対象外
+    # 経路C (codex exec <implementation>) のみカウントする
+    if ! echo "$first_line" | grep -qE 'codex\s+exec\s+review\b'; then
+        is_codex_exec=true
+    fi
 fi
 
 if [[ "$tool_name" == "Bash" ]] && [[ "$is_codex_exec" == "true" ]]; then
