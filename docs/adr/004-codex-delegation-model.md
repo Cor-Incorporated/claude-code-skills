@@ -59,6 +59,18 @@ Exclude: specific split instructions (let Codex decide)
 | 2+ independent but small | Agent Team | Not worth Codex startup |
 | Quality-critical path | Claude Code + Agent Team | Quality Loop runs real-time |
 
+### Quantitative Selection Criteria (#208)
+
+| 特性 | サブエージェント (Agent) | Codex CLI 経路C | Agent Team (TeamCreate) |
+|------|------------------------|----------------|------------------------|
+| 変更ファイル数 | 1-2 | 3+ | 2+独立 |
+| 必要コンテキスト | <500行 | 1000+行 | 各タスク独立 |
+| 反復サイクル | 1-shot | impl→test→lint loop | 並行1-shot |
+| 実行時間目安 | <5分 | 5分+ | 各<5分 |
+| 例 | バグ修正, テスト追加, 調査 | リファクタ, 統合変更, 大規模実装 | 独立feature並行開発 |
+
+Enforced by: `hooks/enforce-codex-delegation.sh` (PreToolUse, Agent matcher, advisory warning)
+
 ## Alternatives
 
 | Option | Rejection Reason |
