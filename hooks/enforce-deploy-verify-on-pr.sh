@@ -16,7 +16,7 @@ echo "$COMMAND" | grep -qE '\bgh\s+pr\s+create\b' || exit 0
 PROJECT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 [[ -n "$PROJECT_DIR" ]] || exit 0
 
-BASE_BRANCH="develop"
+BASE_BRANCH="${DEPLOY_VERIFY_BASE_BRANCH:-$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo "develop")}"
 CHANGED_FILES=$(git diff --name-only "$BASE_BRANCH"...HEAD 2>/dev/null || git diff --name-only "$BASE_BRANCH" HEAD 2>/dev/null || echo "")
 [[ -n "$CHANGED_FILES" ]] || exit 0
 
@@ -26,34 +26,31 @@ SCRIPT_CHANGES=$(echo "$CHANGED_FILES" | grep -E '^scripts/[^/]+\.sh$' || true)
 
 ERRORS=""
 
-while IFS= read -r file; do
-  [[ -z "$file" ]] && continue
-  SOURCE="$PROJECT_DIR/$file"
-  DEPLOYED="$HOME/.claude/hooks/$(basename "$file")"
-  if [[ ! -f "$DEPLOYED" ]]; then
-    ERRORS="${ERRORS}\n  ❌ $file → $DEPLOYED (未デプロイ)"
+# Common function to check deployment status
+check_deploy() {
+  local file="$1" deploy_dir="$2"
+  [[ -z "$file" ]] && return
+  local source="$PROJECT_DIR/$file"
+  local deployed
+  deployed="$deploy_dir/$(basename "$file")"
+  if [[ ! -f "$deployed" ]]; then
+    ERRORS="${ERRORS}\n  ❌ $file → $deployed (未デプロイ)"
   else
-    SRC_MD5=$(md5 -q "$SOURCE" 2>/dev/null || md5sum "$SOURCE" 2>/dev/null | awk '{print $1}')
-    DEP_MD5=$(md5 -q "$DEPLOYED" 2>/dev/null || md5sum "$DEPLOYED" 2>/dev/null | awk '{print $1}')
-    if [[ "$SRC_MD5" != "$DEP_MD5" ]]; then
-      ERRORS="${ERRORS}\n  ❌ $file — MD5不一致 (src:${SRC_MD5:0:8} != dep:${DEP_MD5:0:8})"
+    local src_md5 dep_md5
+    src_md5=$(md5 -q "$source" 2>/dev/null || md5sum "$source" 2>/dev/null | awk '{print $1}')
+    dep_md5=$(md5 -q "$deployed" 2>/dev/null || md5sum "$deployed" 2>/dev/null | awk '{print $1}')
+    if [[ "$src_md5" != "$dep_md5" ]]; then
+      ERRORS="${ERRORS}\n  ❌ $file — MD5不一致 (src:${src_md5:0:8} != dep:${dep_md5:0:8})"
     fi
   fi
+}
+
+while IFS= read -r file; do
+  check_deploy "$file" "$HOME/.claude/hooks"
 done <<< "$HOOK_CHANGES"
 
 while IFS= read -r file; do
-  [[ -z "$file" ]] && continue
-  SOURCE="$PROJECT_DIR/$file"
-  DEPLOYED="$HOME/.claude/scripts/$(basename "$file")"
-  if [[ ! -f "$DEPLOYED" ]]; then
-    ERRORS="${ERRORS}\n  ❌ $file → $DEPLOYED (未デプロイ)"
-  else
-    SRC_MD5=$(md5 -q "$SOURCE" 2>/dev/null || md5sum "$SOURCE" 2>/dev/null | awk '{print $1}')
-    DEP_MD5=$(md5 -q "$DEPLOYED" 2>/dev/null || md5sum "$DEPLOYED" 2>/dev/null | awk '{print $1}')
-    if [[ "$SRC_MD5" != "$DEP_MD5" ]]; then
-      ERRORS="${ERRORS}\n  ❌ $file — MD5不一致 (src:${SRC_MD5:0:8} != dep:${DEP_MD5:0:8})"
-    fi
-  fi
+  check_deploy "$file" "$HOME/.claude/scripts"
 done <<< "$SCRIPT_CHANGES"
 
 [[ -n "$ERRORS" ]] || exit 0

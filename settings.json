@@ -135,6 +135,12 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/context-budget-agent-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-codex-delegation.sh",
+            "timeout": 10,
+            "statusMessage": "Checking Codex delegation criteria..."
           }
         ]
       },
@@ -456,6 +462,12 @@
             "command": "bash ~/.claude/hooks/verify-codex-output.sh",
             "timeout": 5,
             "statusMessage": "Verifying Codex CLI output..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/record-codex-review.sh",
+            "timeout": 10,
+            "statusMessage": "Recording Codex review completion..."
           },
           {
             "type": "command",

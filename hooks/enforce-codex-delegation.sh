@@ -9,8 +9,24 @@ INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
 [[ "$TOOL_NAME" == "Agent" ]] || exit 0
 
-PROMPT=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('prompt',''))" 2>/dev/null || echo "")
-SUBAGENT_TYPE=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('subagent_type',''))" 2>/dev/null || echo "")
+PROMPT=$(echo "$INPUT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+ti=d.get('tool_input',{})
+if isinstance(ti,str):
+    try: ti=json.loads(ti)
+    except: ti={}
+print(ti.get('prompt',''))
+" 2>/dev/null || echo "")
+SUBAGENT_TYPE=$(echo "$INPUT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+ti=d.get('tool_input',{})
+if isinstance(ti,str):
+    try: ti=json.loads(ti)
+    except: ti={}
+print(ti.get('subagent_type',''))
+" 2>/dev/null || echo "")
 
 case "$SUBAGENT_TYPE" in
   code-reviewer|security-reviewer|feature-dev:code-reviewer|feature-dev:code-explorer|feature-dev:code-architect|claude-code-harness:*|Explore|Plan)
@@ -25,7 +41,9 @@ fi
 REASON=""
 
 REFACTOR_KW=$(echo "$PROMPT" | grep -ciE '(refactor|unif|migrat|全体|一貫|統合|横断|リファクタ|移行)' || true)
-FILE_IND=$(echo "$PROMPT" | { grep -oE '([a-zA-Z0-9_/-]+\.(sh|ts|tsx|js|jsx|py|go|rs|md)|[0-9]+\s*files?|[0-9]+\s*ファイル)' || true; } | wc -l | tr -d ' ')
+FILE_IND=$(echo "$PROMPT" | { grep -oE '[a-zA-Z0-9_/-]+\.(sh|ts|tsx|js|jsx|py|go|rs|md)' || true; } | wc -l | tr -d ' ')
+NUMERIC_FILES=$(echo "$PROMPT" | { grep -oE '[0-9]+\s*(files?|ファイル)' || true; } | { grep -oE '[0-9]+' || true; } | awk '{s+=$1} END {print s+0}')
+FILE_IND=$((FILE_IND + NUMERIC_FILES))
 if [[ "$REFACTOR_KW" -gt 0 ]] && [[ "$FILE_IND" -ge 3 ]]; then
   REASON="横断的リファクタリング (${FILE_IND}ファイル参照 + refactorキーワード)"
 fi
