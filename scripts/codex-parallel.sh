@@ -84,15 +84,15 @@ if [[ "${1:-}" == "--review" ]]; then
     # Parse severity from structured review output (#203)
     # Use OUTPUT_FILE (structured -o output) instead of raw stdout/stderr
     # Match severity labels at line start or after bullet/bracket markers
-    # to avoid false positives from prose like "No CRITICAL issues found"
+    # Paired delimiters prevent mismatch (e.g. **CRITICAL]: won't match)
     _SEV_SRC="$OUTPUT_FILE"
     if [[ ! -s "$_SEV_SRC" ]]; then
       _SEV_SRC="$CODEX_OUTPUT_FILE"  # Fallback if -o file is empty
     fi
-    _CRIT=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?CRITICAL(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
-    _HIGH=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?HIGH(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
-    _MED=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?MEDIUM(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
-    _LOW=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?LOW(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _CRIT=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\*\*CRITICAL\*\*|\[CRITICAL\]|CRITICAL)\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _HIGH=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\*\*HIGH\*\*|\[HIGH\]|HIGH)\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _MED=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\*\*MEDIUM\*\*|\[MEDIUM\]|MEDIUM)\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _LOW=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\*\*LOW\*\*|\[LOW\]|LOW)\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
     rm -f "$CODEX_OUTPUT_FILE"
 
     if [[ "$CODEX_EXIT" -ne 0 ]] && [[ "$_CRIT" -eq 0 ]] && [[ "$_HIGH" -eq 0 ]] && [[ "$_MED" -eq 0 ]] && [[ "$_LOW" -eq 0 ]]; then
