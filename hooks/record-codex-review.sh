@@ -25,9 +25,8 @@ import json,sys
 d=json.load(sys.stdin)
 ti=d.get('tool_input',{})
 if isinstance(ti,str):
-    import json as j2
-    try: ti=j2.loads(ti)
-    except: ti={}
+    try: ti=json.loads(ti)
+    except (json.JSONDecodeError, ValueError, TypeError): ti={}
 print(ti.get('command',''))
 " 2>/dev/null || echo "")
 

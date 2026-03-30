@@ -15,7 +15,7 @@ d=json.load(sys.stdin)
 ti=d.get('tool_input',{})
 if isinstance(ti,str):
     try: ti=json.loads(ti)
-    except: ti={}
+    except (json.JSONDecodeError, ValueError, TypeError): ti={}
 print(ti.get('prompt',''))
 " 2>/dev/null || echo "")
 SUBAGENT_TYPE=$(echo "$INPUT" | python3 -c "
@@ -24,7 +24,7 @@ d=json.load(sys.stdin)
 ti=d.get('tool_input',{})
 if isinstance(ti,str):
     try: ti=json.loads(ti)
-    except: ti={}
+    except (json.JSONDecodeError, ValueError, TypeError): ti={}
 print(ti.get('subagent_type',''))
 " 2>/dev/null || echo "")
 

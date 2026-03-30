@@ -37,7 +37,7 @@ fi
 # T4: Hook mode — codex exec review → records state
 TMPSTATE=$(mktemp -d)
 ec=0
-out=$(HOME="$TMPSTATE" echo '{"tool_name":"Bash","tool_input":{"command":"codex exec review --base develop"}}' | bash "$HOOK" 2>&1) || ec=$?
+out=$(echo '{"tool_name":"Bash","tool_input":{"command":"codex exec review --base develop"}}' | HOME="$TMPSTATE" bash "$HOOK" 2>&1) || ec=$?
 if [[ "$ec" -eq 0 ]]; then
   pass "T4: codex exec review exits 0"
 else
