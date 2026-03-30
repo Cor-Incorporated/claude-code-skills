@@ -70,6 +70,7 @@ if [[ "${1:-}" == "--review" ]]; then
     # Capture output and exit code (Issue #203)
     CODEX_OUTPUT_FILE=$(mktemp)
     trap 'rm -f "$CODEX_OUTPUT_FILE"' EXIT
+    set +e
     codex exec \
         -C "$REPO_PATH" \
         ${CODEX_MODEL:+-m "$CODEX_MODEL"} \
@@ -78,6 +79,7 @@ if [[ "${1:-}" == "--review" ]]; then
         --base "$BASE_BRANCH" \
         ${CUSTOM_PROMPT:+"$CUSTOM_PROMPT"} 2>&1 | tee "$CODEX_OUTPUT_FILE"
     CODEX_EXIT=${PIPESTATUS[0]}
+    set -e
 
     # Parse severity from structured review output (#203)
     # Use OUTPUT_FILE (structured -o output) instead of raw stdout/stderr
@@ -87,10 +89,10 @@ if [[ "${1:-}" == "--review" ]]; then
     if [[ ! -s "$_SEV_SRC" ]]; then
       _SEV_SRC="$CODEX_OUTPUT_FILE"  # Fallback if -o file is empty
     fi
-    _CRIT=$(grep -cE '^\s*[-*]?\s*\[?\bCRITICAL\b\]?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
-    _HIGH=$(grep -cE '^\s*[-*]?\s*\[?\bHIGH\b\]?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
-    _MED=$(grep -cE '^\s*[-*]?\s*\[?\bMEDIUM\b\]?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
-    _LOW=$(grep -cE '^\s*[-*]?\s*\[?\bLOW\b\]?\s*[:-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _CRIT=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?CRITICAL(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _HIGH=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?HIGH(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _MED=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?MEDIUM(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
+    _LOW=$(grep -cE '^\s*(#{1,6}\s+|[-*]\s+)?(\[|\*\*)?LOW(\]|\*\*)?\s*[:(-]' "$_SEV_SRC" 2>/dev/null || echo "0")
     rm -f "$CODEX_OUTPUT_FILE"
 
     if [[ "$CODEX_EXIT" -ne 0 ]] && [[ "$_CRIT" -eq 0 ]] && [[ "$_HIGH" -eq 0 ]] && [[ "$_MED" -eq 0 ]] && [[ "$_LOW" -eq 0 ]]; then
@@ -249,6 +251,7 @@ log "Output: ${OUTPUT_FILE}"
 # When sandbox != workspace-write, --full-auto conflicts. Use --sandbox directly instead.
 # `codex exec` runs non-interactively, so --sandbox alone is sufficient for auto execution.
 if [[ "$SANDBOX" == "workspace-write" ]]; then
+    set +e
     codex exec \
         -C "$WORKTREE_PATH" \
         --full-auto \
@@ -256,6 +259,7 @@ if [[ "$SANDBOX" == "workspace-write" ]]; then
         ${CODEX_MODEL:+-m "$CODEX_MODEL"} \
         "$FULL_PROMPT"
 else
+    set +e
     codex exec \
         -C "$WORKTREE_PATH" \
         --sandbox "$SANDBOX" \
@@ -265,6 +269,7 @@ else
 fi
 
 EXIT_CODE=$?
+set -e
 
 if [[ $EXIT_CODE -eq 0 ]]; then
     success "Codex completed: ${BRANCH_NAME}"
