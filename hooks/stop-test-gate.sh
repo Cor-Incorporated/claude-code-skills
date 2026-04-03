@@ -206,22 +206,38 @@ if [[ -n "$TEST_CMD" ]] && [[ -f "$PROJECT_DIR/package.json" ]] && command -v jq
       echo "[stop-test-gate] monorepo root test guard 検出: 代替テストランナー検索。" >&2
       TEST_CMD=""
 
-      # Priority 1: Turbo (runs test in workspace packages, skips root)
-      if [[ -f "$PROJECT_DIR/turbo.json" ]] && command -v turbo &>/dev/null; then
-        TEST_CMD="cd \"$PROJECT_DIR\" && turbo test"
+      # Priority 1: Turbo (local devDep or global)
+      _turbo_bin=$(resolve_runner_bin turbo)
+      if [[ -f "$PROJECT_DIR/turbo.json" ]] && [[ -n "$_turbo_bin" ]]; then
+        TEST_CMD="cd \"$PROJECT_DIR\" && \"$_turbo_bin\" test"
         echo "[stop-test-gate] turbo test を使用。" >&2
-      # Priority 2: Nx
-      elif [[ -f "$PROJECT_DIR/nx.json" ]] && command -v nx &>/dev/null; then
-        TEST_CMD="cd \"$PROJECT_DIR\" && nx run-many --target=test"
-        echo "[stop-test-gate] nx run-many --target=test を使用。" >&2
-      # Priority 3: pnpm recursive
-      elif [[ -f "$PROJECT_DIR/pnpm-workspace.yaml" ]] && command -v pnpm &>/dev/null; then
-        TEST_CMD="cd \"$PROJECT_DIR\" && pnpm -r test"
-        echo "[stop-test-gate] pnpm -r test を使用。" >&2
-      # Priority 4: lerna
-      elif [[ -f "$PROJECT_DIR/lerna.json" ]] && command -v lerna &>/dev/null; then
-        TEST_CMD="cd \"$PROJECT_DIR\" && lerna run test"
-        echo "[stop-test-gate] lerna run test を使用。" >&2
+      # Priority 2: Nx (local devDep or global)
+      else
+        _nx_bin=$(resolve_runner_bin nx)
+        if [[ -f "$PROJECT_DIR/nx.json" ]] && [[ -n "$_nx_bin" ]]; then
+          TEST_CMD="cd \"$PROJECT_DIR\" && \"$_nx_bin\" run-many --target=test"
+          echo "[stop-test-gate] nx run-many --target=test を使用。" >&2
+        # Priority 3: pnpm recursive
+        elif [[ -f "$PROJECT_DIR/pnpm-workspace.yaml" ]] && command -v pnpm &>/dev/null; then
+          TEST_CMD="cd \"$PROJECT_DIR\" && pnpm -r test"
+          echo "[stop-test-gate] pnpm -r test を使用。" >&2
+        # Priority 4: lerna (local devDep or global)
+        else
+          _lerna_bin=$(resolve_runner_bin lerna)
+          if [[ -f "$PROJECT_DIR/lerna.json" ]] && [[ -n "$_lerna_bin" ]]; then
+            TEST_CMD="cd \"$PROJECT_DIR\" && \"$_lerna_bin\" run test"
+            echo "[stop-test-gate] lerna run test を使用。" >&2
+          # Priority 5: npm/yarn workspaces fallback (no dedicated runner)
+          elif jq -e '.workspaces' "$PROJECT_DIR/package.json" &>/dev/null 2>&1; then
+            if [[ -f "$PROJECT_DIR/yarn.lock" ]]; then
+              TEST_CMD="cd \"$PROJECT_DIR\" && yarn workspaces run test"
+              echo "[stop-test-gate] yarn workspaces run test を使用。" >&2
+            else
+              TEST_CMD="cd \"$PROJECT_DIR\" && npm test --workspaces --if-present"
+              echo "[stop-test-gate] npm test --workspaces を使用。" >&2
+            fi
+          fi
+        fi
       fi
 
       if [[ -z "$TEST_CMD" ]]; then
