@@ -180,7 +180,7 @@ if [[ -n "$TEST_CMD" ]] && [[ -f "$PROJECT_DIR/package.json" ]] && command -v jq
      [[ -f "$PROJECT_DIR/pnpm-workspace.yaml" ]] || \
      [[ -f "$PROJECT_DIR/lerna.json" ]] || \
      [[ -f "$PROJECT_DIR/nx.json" ]] || \
-     jq -e '.workspaces' "$PROJECT_DIR/package.json" &>/dev/null 2>&1; then
+     jq -e '.workspaces' "$PROJECT_DIR/package.json" &>/dev/null; then
     _is_monorepo=true
   fi
 
@@ -188,10 +188,10 @@ if [[ -n "$TEST_CMD" ]] && [[ -f "$PROJECT_DIR/package.json" ]] && command -v jq
     _test_script=$(jq -r '.scripts.test // ""' "$PROJECT_DIR/package.json" 2>/dev/null)
     _root_guard=false
 
-    # Guard pattern: explicit exit 1/2 without a known test runner invocation
+    # Guard pattern: explicit exit 1/2 or && false, without a known test runner
     if [[ -n "$_test_script" ]]; then
-      if echo "$_test_script" | grep -qE 'exit[[:space:]]+[12]'; then
-        if ! echo "$_test_script" | grep -qiE '(jest|vitest|mocha|ava|tap|nyc|c8|playwright|cypress|bun[[:space:]]+test)'; then
+      if printf '%s\n' "$_test_script" | grep -qE '(exit[[:space:]]+[12]|&&[[:space:]]*false([[:space:]]|$))'; then
+        if ! printf '%s\n' "$_test_script" | grep -qiE '(jest|vitest|mocha|ava|tap|nyc|c8|playwright|cypress|bun[[:space:]]+test)'; then
           _root_guard=true
         fi
       fi
@@ -204,6 +204,7 @@ if [[ -n "$TEST_CMD" ]] && [[ -f "$PROJECT_DIR/package.json" ]] && command -v jq
 
     if [[ "$_root_guard" == "true" ]]; then
       echo "[stop-test-gate] monorepo root test guard 検出: 代替テストランナー検索。" >&2
+      _MONOREPO_GUARD_ACTIVE=true
       TEST_CMD=""
 
       # Priority 1: Turbo (local devDep or global)
@@ -228,7 +229,7 @@ if [[ -n "$TEST_CMD" ]] && [[ -f "$PROJECT_DIR/package.json" ]] && command -v jq
             TEST_CMD="cd \"$PROJECT_DIR\" && \"$_lerna_bin\" run test"
             echo "[stop-test-gate] lerna run test を使用。" >&2
           # Priority 5: npm/yarn workspaces fallback (no dedicated runner)
-          elif jq -e '.workspaces' "$PROJECT_DIR/package.json" &>/dev/null 2>&1; then
+          elif jq -e '.workspaces' "$PROJECT_DIR/package.json" &>/dev/null; then
             if [[ -f "$PROJECT_DIR/yarn.lock" ]]; then
               TEST_CMD="cd \"$PROJECT_DIR\" && yarn workspaces run test"
               echo "[stop-test-gate] yarn workspaces run test を使用。" >&2
@@ -292,11 +293,14 @@ fi
 
 # =========================================================================
 # Phase 2: runner-specific targeted test command
+# Skip when monorepo guard is active — the monorepo runner (turbo/nx/etc.)
+# already handles per-package test routing; root-level vitest/jest binaries
+# would override it incorrectly.
 # =========================================================================
 TARGETED_CMD=""
 FULL_SUITE_CMD="$TEST_CMD"
 
-if [[ "$_detect_exit" -eq 0 ]] && [[ "${#SOURCE_FILES[@]}" -gt 0 || "${#TEST_FILES[@]}" -gt 0 ]]; then
+if [[ "${_MONOREPO_GUARD_ACTIVE:-false}" != "true" ]] && [[ "$_detect_exit" -eq 0 ]] && [[ "${#SOURCE_FILES[@]}" -gt 0 || "${#TEST_FILES[@]}" -gt 0 ]]; then
   SOURCE_FILES_STR="$(shell_join_args "${SOURCE_FILES[@]}")"
   TEST_FILES_STR="$(shell_join_args "${TEST_FILES[@]}")"
 
