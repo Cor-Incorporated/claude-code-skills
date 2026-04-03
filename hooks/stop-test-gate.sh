@@ -168,6 +168,87 @@ elif [ -f "$PROJECT_DIR/Makefile" ] && grep -q '^test:' "$PROJECT_DIR/Makefile";
   TEST_CMD="cd \"$PROJECT_DIR\" && make test"
 fi
 
+# =========================================================================
+# Issue #217: Monorepo root test guard detection
+# Monorepos may intentionally block root-level test execution with a guard
+# script (e.g., "echo 'do not run tests from root' && exit 1").
+# Detect this pattern and use monorepo-aware test runners instead.
+# =========================================================================
+if [[ -n "$TEST_CMD" ]] && [[ -f "$PROJECT_DIR/package.json" ]] && command -v jq &>/dev/null; then
+  _is_monorepo=false
+  if [[ -f "$PROJECT_DIR/turbo.json" ]] || \
+     [[ -f "$PROJECT_DIR/pnpm-workspace.yaml" ]] || \
+     [[ -f "$PROJECT_DIR/lerna.json" ]] || \
+     [[ -f "$PROJECT_DIR/nx.json" ]] || \
+     jq -e '.workspaces' "$PROJECT_DIR/package.json" &>/dev/null; then
+    _is_monorepo=true
+  fi
+
+  if [[ "$_is_monorepo" == "true" ]]; then
+    _test_script=$(jq -r '.scripts.test // ""' "$PROJECT_DIR/package.json" 2>/dev/null)
+    _root_guard=false
+
+    # Guard pattern: explicit exit 1/2 or && false, without a known test runner
+    if [[ -n "$_test_script" ]]; then
+      if printf '%s\n' "$_test_script" | grep -qE '(exit[[:space:]]+[12]|&&[[:space:]]*false([[:space:]]|$))'; then
+        if ! printf '%s\n' "$_test_script" | grep -qiE '(jest|vitest|mocha|ava|tap|nyc|c8|playwright|cypress|bun[[:space:]]+test)'; then
+          _root_guard=true
+        fi
+      fi
+    fi
+
+    # Also check bunfig.toml for explicit test root guard
+    if [[ -f "$PROJECT_DIR/bunfig.toml" ]] && grep -q 'do-not-run-tests-from-root' "$PROJECT_DIR/bunfig.toml" 2>/dev/null; then
+      _root_guard=true
+    fi
+
+    if [[ "$_root_guard" == "true" ]]; then
+      echo "[stop-test-gate] monorepo root test guard 検出: 代替テストランナー検索。" >&2
+      _MONOREPO_GUARD_ACTIVE=true
+      TEST_CMD=""
+
+      # Priority 1: Turbo (local devDep or global)
+      _turbo_bin=$(resolve_runner_bin turbo)
+      if [[ -f "$PROJECT_DIR/turbo.json" ]] && [[ -n "$_turbo_bin" ]]; then
+        TEST_CMD="cd \"$PROJECT_DIR\" && \"$_turbo_bin\" test"
+        echo "[stop-test-gate] turbo test を使用。" >&2
+      # Priority 2: Nx (local devDep or global)
+      else
+        _nx_bin=$(resolve_runner_bin nx)
+        if [[ -f "$PROJECT_DIR/nx.json" ]] && [[ -n "$_nx_bin" ]]; then
+          TEST_CMD="cd \"$PROJECT_DIR\" && \"$_nx_bin\" run-many --target=test"
+          echo "[stop-test-gate] nx run-many --target=test を使用。" >&2
+        # Priority 3: pnpm recursive
+        elif [[ -f "$PROJECT_DIR/pnpm-workspace.yaml" ]] && command -v pnpm &>/dev/null; then
+          TEST_CMD="cd \"$PROJECT_DIR\" && pnpm -r test"
+          echo "[stop-test-gate] pnpm -r test を使用。" >&2
+        # Priority 4: lerna (local devDep or global)
+        else
+          _lerna_bin=$(resolve_runner_bin lerna)
+          if [[ -f "$PROJECT_DIR/lerna.json" ]] && [[ -n "$_lerna_bin" ]]; then
+            TEST_CMD="cd \"$PROJECT_DIR\" && \"$_lerna_bin\" run test"
+            echo "[stop-test-gate] lerna run test を使用。" >&2
+          # Priority 5: npm/yarn workspaces fallback (no dedicated runner)
+          elif jq -e '.workspaces' "$PROJECT_DIR/package.json" &>/dev/null; then
+            if [[ -f "$PROJECT_DIR/yarn.lock" ]]; then
+              TEST_CMD="cd \"$PROJECT_DIR\" && yarn workspaces run test"
+              echo "[stop-test-gate] yarn workspaces run test を使用。" >&2
+            else
+              TEST_CMD="cd \"$PROJECT_DIR\" && npm test --workspaces --if-present"
+              echo "[stop-test-gate] npm test --workspaces を使用。" >&2
+            fi
+          fi
+        fi
+      fi
+
+      if [[ -z "$TEST_CMD" ]]; then
+        echo "[stop-test-gate] monorepo test runner 未検出: テストスキップ。" >&2
+        exit 0
+      fi
+    fi
+  fi
+fi
+
 # No test framework detected — allow stop
 if [ -z "$TEST_CMD" ]; then
   exit 0
@@ -212,11 +293,14 @@ fi
 
 # =========================================================================
 # Phase 2: runner-specific targeted test command
+# Skip when monorepo guard is active — the monorepo runner (turbo/nx/etc.)
+# already handles per-package test routing; root-level vitest/jest binaries
+# would override it incorrectly.
 # =========================================================================
 TARGETED_CMD=""
 FULL_SUITE_CMD="$TEST_CMD"
 
-if [[ "$_detect_exit" -eq 0 ]] && [[ "${#SOURCE_FILES[@]}" -gt 0 || "${#TEST_FILES[@]}" -gt 0 ]]; then
+if [[ "${_MONOREPO_GUARD_ACTIVE:-false}" != "true" ]] && [[ "$_detect_exit" -eq 0 ]] && [[ "${#SOURCE_FILES[@]}" -gt 0 || "${#TEST_FILES[@]}" -gt 0 ]]; then
   SOURCE_FILES_STR="$(shell_join_args "${SOURCE_FILES[@]}")"
   TEST_FILES_STR="$(shell_join_args "${TEST_FILES[@]}")"
 
