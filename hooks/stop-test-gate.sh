@@ -168,6 +168,70 @@ elif [ -f "$PROJECT_DIR/Makefile" ] && grep -q '^test:' "$PROJECT_DIR/Makefile";
   TEST_CMD="cd \"$PROJECT_DIR\" && make test"
 fi
 
+# =========================================================================
+# Issue #217: Monorepo root test guard detection
+# Monorepos may intentionally block root-level test execution with a guard
+# script (e.g., "echo 'do not run tests from root' && exit 1").
+# Detect this pattern and use monorepo-aware test runners instead.
+# =========================================================================
+if [[ -n "$TEST_CMD" ]] && [[ -f "$PROJECT_DIR/package.json" ]] && command -v jq &>/dev/null; then
+  _is_monorepo=false
+  if [[ -f "$PROJECT_DIR/turbo.json" ]] || \
+     [[ -f "$PROJECT_DIR/pnpm-workspace.yaml" ]] || \
+     [[ -f "$PROJECT_DIR/lerna.json" ]] || \
+     [[ -f "$PROJECT_DIR/nx.json" ]] || \
+     jq -e '.workspaces' "$PROJECT_DIR/package.json" &>/dev/null 2>&1; then
+    _is_monorepo=true
+  fi
+
+  if [[ "$_is_monorepo" == "true" ]]; then
+    _test_script=$(jq -r '.scripts.test // ""' "$PROJECT_DIR/package.json" 2>/dev/null)
+    _root_guard=false
+
+    # Guard pattern: explicit exit 1/2 without a known test runner invocation
+    if [[ -n "$_test_script" ]]; then
+      if echo "$_test_script" | grep -qE 'exit[[:space:]]+[12]'; then
+        if ! echo "$_test_script" | grep -qiE '(jest|vitest|mocha|ava|tap|nyc|c8|playwright|cypress|bun[[:space:]]+test)'; then
+          _root_guard=true
+        fi
+      fi
+    fi
+
+    # Also check bunfig.toml for explicit test root guard
+    if [[ -f "$PROJECT_DIR/bunfig.toml" ]] && grep -q 'do-not-run-tests-from-root' "$PROJECT_DIR/bunfig.toml" 2>/dev/null; then
+      _root_guard=true
+    fi
+
+    if [[ "$_root_guard" == "true" ]]; then
+      echo "[stop-test-gate] monorepo root test guard 検出: 代替テストランナー検索。" >&2
+      TEST_CMD=""
+
+      # Priority 1: Turbo (runs test in workspace packages, skips root)
+      if [[ -f "$PROJECT_DIR/turbo.json" ]] && command -v turbo &>/dev/null; then
+        TEST_CMD="cd \"$PROJECT_DIR\" && turbo test"
+        echo "[stop-test-gate] turbo test を使用。" >&2
+      # Priority 2: Nx
+      elif [[ -f "$PROJECT_DIR/nx.json" ]] && command -v nx &>/dev/null; then
+        TEST_CMD="cd \"$PROJECT_DIR\" && nx run-many --target=test"
+        echo "[stop-test-gate] nx run-many --target=test を使用。" >&2
+      # Priority 3: pnpm recursive
+      elif [[ -f "$PROJECT_DIR/pnpm-workspace.yaml" ]] && command -v pnpm &>/dev/null; then
+        TEST_CMD="cd \"$PROJECT_DIR\" && pnpm -r test"
+        echo "[stop-test-gate] pnpm -r test を使用。" >&2
+      # Priority 4: lerna
+      elif [[ -f "$PROJECT_DIR/lerna.json" ]] && command -v lerna &>/dev/null; then
+        TEST_CMD="cd \"$PROJECT_DIR\" && lerna run test"
+        echo "[stop-test-gate] lerna run test を使用。" >&2
+      fi
+
+      if [[ -z "$TEST_CMD" ]]; then
+        echo "[stop-test-gate] monorepo test runner 未検出: テストスキップ。" >&2
+        exit 0
+      fi
+    fi
+  fi
+fi
+
 # No test framework detected — allow stop
 if [ -z "$TEST_CMD" ]; then
   exit 0
