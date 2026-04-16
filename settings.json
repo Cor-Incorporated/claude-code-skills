@@ -53,6 +53,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/validate-no-local-permissions.sh",
+            "timeout": 5,
+            "statusMessage": "Validating settings.local.json has no permissions overrides..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/auto-init-permissions.sh"
           },
           {
@@ -105,6 +111,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/block-local-permissions-write.sh",
+            "timeout": 5,
+            "statusMessage": "Blocking settings.local.json permission overrides..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/block-state-file-tampering.sh",
             "timeout": 5,
             "statusMessage": "Checking state file integrity..."
@@ -147,6 +159,12 @@
       {
         "matcher": "Edit",
         "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-local-permissions-write.sh",
+            "timeout": 5,
+            "statusMessage": "Blocking settings.local.json permission overrides..."
+          },
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/block-state-file-tampering.sh",
