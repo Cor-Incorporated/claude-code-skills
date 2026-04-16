@@ -321,6 +321,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/block-subagent-github-write.sh",
+            "timeout": 10,
+            "statusMessage": "Checking subagent GitHub write safety..."
+          },
+          {
+            "type": "command",
             "command": "GATE_MODE=PRE_CREATE bash ~/.claude/hooks/pr-ci-review-gate.sh",
             "timeout": 30,
             "statusMessage": "Checking review pipeline (code-reviewer + Codex)..."
@@ -589,6 +595,17 @@
       }
     ],
     "PostToolUseFailure": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/notify-agent-failure.sh",
+            "timeout": 5,
+            "statusMessage": "Propagating agent failure context..."
+          }
+        ]
+      },
       {
         "matcher": "Bash|Edit|Write|Grep|WebFetch|WebSearch",
         "hooks": [
