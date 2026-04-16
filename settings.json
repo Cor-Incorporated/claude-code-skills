@@ -447,6 +447,12 @@
             "command": "bash ~/.claude/hooks/verify-agent-output.sh",
             "timeout": 5,
             "statusMessage": "Verifying agent output..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/auto-commit-worktree-changes.sh",
+            "timeout": 15,
+            "statusMessage": "Auto-committing worktree agent changes..."
           }
         ]
       },

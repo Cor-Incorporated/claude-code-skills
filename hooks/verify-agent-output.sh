@@ -70,6 +70,7 @@ case "$_desc_lower" in
 esac
 
 # 2. Worktree isolation: changes won't appear in main git diff
+# Issue #220: worktree agents now auto-commit via auto-commit-worktree-changes.sh
 if [[ "$isolation" == "worktree" ]]; then
   exit 0
 fi
