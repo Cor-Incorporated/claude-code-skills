@@ -53,6 +53,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/validate-no-local-permissions.sh",
+            "timeout": 5,
+            "statusMessage": "Validating settings.local.json has no permissions overrides..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/auto-init-permissions.sh"
           },
           {
@@ -105,6 +111,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/block-local-permissions-write.sh",
+            "timeout": 5,
+            "statusMessage": "Blocking settings.local.json permission overrides..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/block-state-file-tampering.sh",
             "timeout": 5,
             "statusMessage": "Checking state file integrity..."
@@ -147,6 +159,12 @@
       {
         "matcher": "Edit",
         "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/block-local-permissions-write.sh",
+            "timeout": 5,
+            "statusMessage": "Blocking settings.local.json permission overrides..."
+          },
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/block-state-file-tampering.sh",
@@ -321,6 +339,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/block-subagent-github-write.sh",
+            "timeout": 10,
+            "statusMessage": "Checking subagent GitHub write safety..."
+          },
+          {
+            "type": "command",
             "command": "GATE_MODE=PRE_CREATE bash ~/.claude/hooks/pr-ci-review-gate.sh",
             "timeout": 30,
             "statusMessage": "Checking review pipeline (code-reviewer + Codex)..."
@@ -447,6 +471,12 @@
             "command": "bash ~/.claude/hooks/verify-agent-output.sh",
             "timeout": 5,
             "statusMessage": "Verifying agent output..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/auto-commit-worktree-changes.sh",
+            "timeout": 15,
+            "statusMessage": "Auto-committing worktree agent changes..."
           }
         ]
       },
@@ -583,6 +613,17 @@
       }
     ],
     "PostToolUseFailure": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/notify-agent-failure.sh",
+            "timeout": 5,
+            "statusMessage": "Propagating agent failure context..."
+          }
+        ]
+      },
       {
         "matcher": "Bash|Edit|Write|Grep|WebFetch|WebSearch",
         "hooks": [

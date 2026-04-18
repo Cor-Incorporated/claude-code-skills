@@ -2,17 +2,31 @@
 # setup.sh — Install claude-code-skills + third-party dependencies
 set -euo pipefail
 
+CLAUDE_DIR="$HOME/.claude"
 SKILLS_DIR="$HOME/.claude/skills"
 RULES_DIR="$HOME/.claude/rules"
 HOOKS_DIR="$HOME/.claude/hooks"
 SCRIPTS_DIR="$HOME/.claude/scripts"
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+OPENCODE_CONFIG="$HOME/.config/opencode/opencode.jsonc"
 
 echo "=== Claude Code Skills Setup ==="
 echo ""
 
-# 1. Copy skills
-echo "[1/5] Installing skills..."
+# 1. Copy settings
+echo "[1/8] Installing settings..."
+mkdir -p "$CLAUDE_DIR"
+cp "$REPO_DIR/settings.json" "$CLAUDE_DIR/settings.json"
+echo "  Copied settings.json to $CLAUDE_DIR/settings.json"
+
+# 2. Sanitize local settings overrides
+echo "[2/8] Sanitizing local settings overrides..."
+bash "$REPO_DIR/scripts/sanitize-local-permissions.sh" \
+  "$CLAUDE_DIR/settings.local.json" \
+  "$REPO_DIR/.claude/settings.local.json"
+
+# 3. Copy skills
+echo "[3/8] Installing skills..."
 for d in "$REPO_DIR"/skills/*/; do
   skill_name=$(basename "$d")
   if [ -d "$SKILLS_DIR/$skill_name" ]; then
@@ -23,14 +37,14 @@ for d in "$REPO_DIR"/skills/*/; do
   cp -r "$d" "$SKILLS_DIR/$skill_name"
 done
 
-# 2. Copy rules
-echo "[2/5] Installing rules..."
+# 4. Copy rules
+echo "[4/8] Installing rules..."
 mkdir -p "$RULES_DIR"
 cp "$REPO_DIR"/rules/*.md "$RULES_DIR/"
 echo "  Copied $(ls "$REPO_DIR"/rules/*.md | wc -l | tr -d ' ') rule files"
 
-# 3. Copy hooks
-echo "[3/5] Installing hooks..."
+# 5. Copy hooks
+echo "[5/8] Installing hooks..."
 mkdir -p "$HOOKS_DIR"
 cp "$REPO_DIR"/hooks/*.sh "$HOOKS_DIR/"
 cp "$REPO_DIR"/hooks/*.py "$HOOKS_DIR/" 2>/dev/null || true
@@ -39,8 +53,8 @@ SH_COUNT=$(ls "$REPO_DIR"/hooks/*.sh 2>/dev/null | wc -l | tr -d ' ')
 PY_COUNT=$(ls "$REPO_DIR"/hooks/*.py 2>/dev/null | wc -l | tr -d ' ')
 echo "  Copied ${SH_COUNT} shell + ${PY_COUNT} python hook scripts"
 
-# 4. Copy scripts
-echo "[4/5] Installing scripts..."
+# 6. Copy scripts
+echo "[6/8] Installing scripts..."
 mkdir -p "$SCRIPTS_DIR"
 for f in "$REPO_DIR"/scripts/*; do
   [ -f "$f" ] && cp "$f" "$SCRIPTS_DIR/"
@@ -48,8 +62,16 @@ done
 chmod +x "$SCRIPTS_DIR"/*.sh 2>/dev/null || true
 echo "  Copied $(ls "$REPO_DIR"/scripts/* 2>/dev/null | wc -l | tr -d ' ') script files"
 
-# 5. Install third-party skills
-echo "[5/5] Installing third-party dependencies..."
+# 7. Sync OpenCode permissions
+echo "[7/8] Syncing OpenCode background-safe permissions..."
+if [ -f "$OPENCODE_CONFIG" ]; then
+  bash "$REPO_DIR/scripts/sync-opencode-background-permissions.sh" "$OPENCODE_CONFIG"
+else
+  echo "  ↻ OpenCode config not found, skipping sync"
+fi
+
+# 8. Install third-party skills
+echo "[8/8] Installing third-party dependencies..."
 
 # gstack
 # --- ctx7 (Context7 CLI) ---
