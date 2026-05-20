@@ -15,6 +15,7 @@ set -uo pipefail
 
 # --- Known exclusions (not directly registered in settings.json) ---
 EXCLUDED_FROM_REGISTRATION=(
+  "context-budget-set-mode.sh"
   "inject-claude-review-helper.py"
   "record-codex-review.sh"
   "README.md"
