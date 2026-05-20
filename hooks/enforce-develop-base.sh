@@ -66,12 +66,21 @@ if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+create'; then
   pr_base=$(echo "$cmd" | grep -oE '\-\-base\s+\S+' | awk '{print $2}' || echo "")
 
   if [[ "$pr_base" == "main" ]] || [[ "$pr_base" == "master" ]]; then
+    # Release PR exception: develop → main is the intended release path.
+    # Allow when:
+    #   (a) the current branch IS develop, or
+    #   (b) --head develop is explicitly specified.
+    pr_head=$(echo "$cmd" | grep -oE '\-\-head\s+\S+' | awk '{print $2}' || echo "")
+    if [[ "$CURRENT_BRANCH" == "develop" ]] || [[ "$pr_head" == "develop" ]]; then
+      exit 0
+    fi
     echo "" >&2
     echo "[BLOCKED] enforce-develop-base: PRのターゲットが${pr_base}になっています。" >&2
     echo "  developブランチが存在するため、PRはdevelopに向けてください。" >&2
     echo "" >&2
     echo "解決方法:" >&2
     echo "  gh pr create --base develop ..." >&2
+    echo "  ※ リリースPR (develop→main) は例外的に許可されます。" >&2
     echo "" >&2
     exit 2
   fi
