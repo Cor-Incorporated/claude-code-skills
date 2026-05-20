@@ -113,6 +113,20 @@ else
   echo "  FAIL (orphan not reported)"
 fi
 
+# --- T7b: gate-mode modules are dispatcher-sourced, not directly registered ---
+mkdir -p "${FAKE_PROJECT_HOOKS}/gate-modes" "${FAKE_INSTALLED_HOOKS}/gate-modes"
+echo '#!/bin/bash' > "${FAKE_PROJECT_HOOKS}/gate-modes/module.sh"
+cp "${FAKE_PROJECT_HOOKS}/gate-modes/module.sh" "${FAKE_INSTALLED_HOOKS}/gate-modes/module.sh"
+
+STDERR_OUT=$(CLAUDE_PROJECT_DIR="${TMPDIR_BASE}/project" bash "$PATCHED_H1" 2>&1 >/dev/null)
+if ! echo "$STDERR_OUT" | grep -q "NOT REGISTERED: gate-modes/module.sh"; then
+  PASS=$((PASS+1)); echo "--- T7b: gate-mode module registration check skipped ---"
+  echo "  PASS"
+else
+  FAIL=$((FAIL+1)); echo "--- T7b: gate-mode module registration check skipped ---"
+  echo "  FAIL (gate-mode module reported as unregistered)"
+fi
+
 echo ""
 echo "==================================="
 echo "Hook 2: enforce-hook-deploy-after-merge.sh"

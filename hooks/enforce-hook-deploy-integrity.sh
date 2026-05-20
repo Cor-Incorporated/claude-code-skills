@@ -20,6 +20,7 @@ set -uo pipefail
 EXCLUDED_FROM_REGISTRATION=(
   "inject-claude-review-helper.py"
   "record-codex-review.sh"
+  "validate-hook-deployment.sh"
   "README.md"
 )
 
@@ -49,6 +50,9 @@ SETTINGS_FILE="$HOME/.claude/settings.json"
 # --- Helper: check if a filename is in the exclusion list ---
 is_excluded() {
   local filename="$1"
+  case "$filename" in
+    gate-modes/*) return 0 ;;
+  esac
   for excluded in "${EXCLUDED_FROM_REGISTRATION[@]}"; do
     if [[ "$filename" == "$excluded" ]]; then
       return 0
@@ -160,7 +164,7 @@ if [[ -f "$SETTINGS_FILE" ]]; then
     esac
 
     # Skip known exclusions
-    if is_excluded "$filename"; then
+    if is_excluded "$rel_path" || is_excluded "$filename"; then
       continue
     fi
 

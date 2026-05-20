@@ -101,22 +101,128 @@ resolve_repo() {
   fi
 
   # Priority 3: upstream remote (fork workflow)
-  if git remote get-url upstream &>/dev/null; then
-    git remote get-url upstream 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||'
+  if git_ctx remote get-url upstream &>/dev/null; then
+    git_ctx remote get-url upstream 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||'
     return
   fi
 
   # Priority 4: origin (default)
-  git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo ""
+  git_ctx remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo ""
 }
 
+
+# =========================================================================
+# Helper: run git in the command's repository context when known
+# =========================================================================
+GIT_CONTEXT_DIR="${GIT_CONTEXT_DIR:-}"
+
+git_ctx() {
+  if [[ -n "${GIT_CONTEXT_DIR:-}" ]]; then
+    git -C "$GIT_CONTEXT_DIR" "$@"
+  else
+    git "$@"
+  fi
+}
+
+# Extract --head from a gh pr create command. Supports:
+#   gh pr create --head branch
+#   gh pr create --head=branch
+#   gh pr create --head owner:branch
+extract_pr_head_branch() {
+  local cmd="${1:-}"
+  [[ -z "$cmd" ]] && return 0
+  _CMD="$cmd" python3 - <<'PY'
+import os, shlex, sys
+
+cmd = os.environ.get("_CMD", "")
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    sys.exit(0)
+
+for i in range(len(tokens) - 2):
+    if tokens[i:i+3] != ["gh", "pr", "create"]:
+        continue
+    j = i + 3
+    while j < len(tokens):
+        token = tokens[j]
+        if token in {"&&", "||", ";", "|"}:
+            break
+        if token == "--head" and j + 1 < len(tokens):
+            value = tokens[j + 1]
+            print(value.split(":", 1)[-1])
+            sys.exit(0)
+        if token.startswith("--head="):
+            value = token.split("=", 1)[1]
+            print(value.split(":", 1)[-1])
+            sys.exit(0)
+        j += 1
+PY
+}
+
+# Resolve a leading `cd <path> && gh pr create ...` context from the raw
+# Bash command without executing it. Claude hooks run before Bash, so the
+# hook process cannot observe subshell cd effects directly.
+command_git_context_dir() {
+  local cmd="${1:-}"
+  [[ -z "$cmd" ]] && return 0
+  _CMD="$cmd" python3 - <<'PY'
+import os, shlex, subprocess, sys
+
+cmd = os.environ.get("_CMD", "")
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    sys.exit(0)
+
+gh_index = -1
+for i in range(len(tokens) - 2):
+    if tokens[i:i+3] == ["gh", "pr", "create"]:
+        gh_index = i
+        break
+if gh_index < 0:
+    sys.exit(0)
+
+candidate = ""
+for i in range(gh_index):
+    if tokens[i] == "cd" and i + 1 < gh_index:
+        candidate = tokens[i + 1]
+
+if not candidate or candidate == "-":
+    sys.exit(0)
+
+path = os.path.abspath(os.path.expanduser(candidate))
+try:
+    top = subprocess.check_output(
+        ["git", "-C", path, "rev-parse", "--show-toplevel"],
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).strip()
+except Exception:
+    sys.exit(0)
+
+if top:
+    print(top)
+PY
+}
 
 # =========================================================================
 # Helper: get current branch
 # =========================================================================
 current_branch() {
+  local cmd="${1:-}"
   local b
-  b=$(git branch --show-current 2>/dev/null || echo "")
+  b=$(extract_pr_head_branch "$cmd")
+  if [[ -n "$b" ]]; then
+    echo "$b"
+    return
+  fi
+
+  b=$(git_ctx branch --show-current 2>/dev/null || echo "")
   # GitHub Actions PR builds checkout a detached HEAD; GITHUB_HEAD_REF
   # carries the actual source branch name in that context.
   if [[ -z "$b" ]]; then
@@ -155,14 +261,19 @@ classify_review_tier() {
   # Fallback to local git diff if API failed
   if [[ -z "$changed_files" ]]; then
     local base_branch="main"
-    if git rev-parse --verify develop &>/dev/null; then
+    if git_ctx rev-parse --verify develop &>/dev/null; then
       base_branch="develop"
-    elif git rev-parse --verify main &>/dev/null; then
+    elif git_ctx rev-parse --verify main &>/dev/null; then
       base_branch="main"
-    elif git rev-parse --verify master &>/dev/null; then
+    elif git_ctx rev-parse --verify master &>/dev/null; then
       base_branch="master"
     fi
-    changed_files=$(git diff --name-only "${base_branch}...HEAD" 2>/dev/null || git diff --name-only "${base_branch}" 2>/dev/null || echo "")
+
+    local head_ref="HEAD"
+    if [[ -n "$branch" ]] && git_ctx rev-parse --verify "$branch" &>/dev/null; then
+      head_ref="$branch"
+    fi
+    changed_files=$(git_ctx diff --name-only "${base_branch}...${head_ref}" 2>/dev/null || git_ctx diff --name-only "$base_branch" "$head_ref" 2>/dev/null || echo "")
   fi
 
   if [[ -z "$changed_files" ]]; then
