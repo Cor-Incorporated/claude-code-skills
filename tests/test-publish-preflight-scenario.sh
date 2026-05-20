@@ -40,12 +40,16 @@ mkdir -p "$TMP_HOME/.claude/hooks" "$TMP_HOME/.claude/scripts" "$TMP_HOME/.claud
 cp "$ROOT"/hooks/*.sh "$TMP_HOME/.claude/hooks/"
 cp "$ROOT"/scripts/*.sh "$TMP_HOME/.claude/scripts/"
 
-BRANCH="$(git -C "$ROOT" branch --show-current)"
+BRANCH="$(git -C "$ROOT" branch --show-current 2>/dev/null || true)"
+# CI (GitHub Actions) checks out a detached HEAD for PR builds.
+# GITHUB_HEAD_REF carries the PR source branch name in that context.
 if [[ -z "$BRANCH" ]]; then
-  fail "could not determine current branch"
-  echo ""
-  echo "Results: $PASS passed, $FAIL failed (total $TOTAL)"
-  exit 1
+  BRANCH="${GITHUB_HEAD_REF:-}"
+fi
+# Final fallback: any non-empty name is fine since this test only needs
+# a branch key to seed review-status.json and exercise hook logic.
+if [[ -z "$BRANCH" ]]; then
+  BRANCH="ci-test-branch"
 fi
 
 cat > "$TMP_HOME/.claude/state/factcheck-status.json" <<EOF

@@ -123,8 +123,17 @@ if echo "$file_path" | grep -qE '(_test\.(go|py|ts|tsx|js)|\.test\.(ts|tsx|js)|\
 fi
 
 # Detect doc file creation
+# Exemption: design/architecture artifacts are planning outputs from a single
+# interactive design session — NOT bulk mechanical doc updates.
+# ADR files, DESIGN.md, ARCHITECTURE.md etc. are explicitly excluded.
 is_doc=false
-if echo "$file_path" | grep -qE '\.(md|rst|txt)$' && echo "$file_path" | grep -qiE '(docs?/|readme|changelog|guide)'; then
+is_design_artifact=false
+if echo "$file_path" | grep -qiE '(\/adr[-_/]|[/\_-]ADR[-_][0-9]|ADR\.md$|^ADR-|DESIGN\.md$|ARCHITECTURE\.md$|SYSTEM-DESIGN\.md$|design[-_]requirements|architecture[-_]decision)'; then
+    is_design_artifact=true
+fi
+if [ "$is_design_artifact" = false ] && \
+   echo "$file_path" | grep -qE '\.(md|rst|txt)$' && \
+   echo "$file_path" | grep -qiE '(docs?/|readme|changelog|guide)'; then
     is_doc=true
 fi
 
@@ -150,11 +159,14 @@ fi
 if [ "$is_doc" = true ]; then
     new_count=$(increment_json_counter "$STATE_FILE" "doc_files_created")
 
-    if [ "$new_count" -ge 2 ]; then
+    # Threshold 5: a coherent doc-writing task (e.g., updating API reference) is fine;
+    # only flag when the count suggests repeated unfocused bulk writes.
+    if [ "$new_count" -ge 5 ]; then
         echo "" >&2
         echo "⚠️  [CODEX DELEGATION RECOMMENDED]" >&2
         echo "You have created/modified ${new_count} doc files in this session." >&2
         echo "Bulk documentation updates should go to Codex CLI (経路C)." >&2
+        echo "Note: design artifacts (ADR, DESIGN.md, ARCHITECTURE.md) are exempt." >&2
         echo "" >&2
     fi
 fi

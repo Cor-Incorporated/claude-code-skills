@@ -115,7 +115,14 @@ resolve_repo() {
 # Helper: get current branch
 # =========================================================================
 current_branch() {
-  git branch --show-current 2>/dev/null || echo ""
+  local b
+  b=$(git branch --show-current 2>/dev/null || echo "")
+  # GitHub Actions PR builds checkout a detached HEAD; GITHUB_HEAD_REF
+  # carries the actual source branch name in that context.
+  if [[ -z "$b" ]]; then
+    b="${GITHUB_HEAD_REF:-}"
+  fi
+  echo "$b"
 }
 
 # =========================================================================
