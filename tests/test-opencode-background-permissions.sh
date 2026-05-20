@@ -21,7 +21,11 @@ SETUP_FILE="$ROOT/setup.sh"
 
 # Temporary config directory for CI or machines without OpenCode installed.
 TMP_CONF_DIR=""
-cleanup() { [[ -n "$TMP_CONF_DIR" ]] && rm -rf "$TMP_CONF_DIR"; }
+cleanup() {
+  if [[ -n "$TMP_CONF_DIR" ]]; then
+    rm -rf "$TMP_CONF_DIR"
+  fi
+}
 trap cleanup EXIT
 
 echo "=== OpenCode background-safe permissions tests ==="

@@ -351,6 +351,12 @@
           },
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-deploy-verify-on-pr.sh",
+            "timeout": 15,
+            "statusMessage": "Verifying changed hooks/scripts are deployed..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/enforce-follow-up-limit.sh",
             "timeout": 15,
             "statusMessage": "Checking follow-up fix limit..."

@@ -67,6 +67,13 @@ else
   fail "T7: BASE_BRANCH=main override unexpected exit $ec"
 fi
 
+# T8: Hook is registered in settings.json for PR creation preflight
+if grep -q 'enforce-deploy-verify-on-pr.sh' "$(cd "$(dirname "$0")/.." && pwd)/settings.json"; then
+  pass "T8: settings.json registers deploy verification hook"
+else
+  fail "T8: settings.json does not register deploy verification hook"
+fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed (total $TOTAL)"
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1

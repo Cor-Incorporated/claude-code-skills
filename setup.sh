@@ -49,9 +49,15 @@ mkdir -p "$HOOKS_DIR"
 cp "$REPO_DIR"/hooks/*.sh "$HOOKS_DIR/"
 cp "$REPO_DIR"/hooks/*.py "$HOOKS_DIR/" 2>/dev/null || true
 chmod +x "$HOOKS_DIR"/*.sh
+if [ -d "$REPO_DIR/hooks/gate-modes" ]; then
+  mkdir -p "$HOOKS_DIR/gate-modes"
+  cp "$REPO_DIR"/hooks/gate-modes/*.sh "$HOOKS_DIR/gate-modes/"
+  chmod +x "$HOOKS_DIR"/gate-modes/*.sh
+fi
 SH_COUNT=$(ls "$REPO_DIR"/hooks/*.sh 2>/dev/null | wc -l | tr -d ' ')
 PY_COUNT=$(ls "$REPO_DIR"/hooks/*.py 2>/dev/null | wc -l | tr -d ' ')
-echo "  Copied ${SH_COUNT} shell + ${PY_COUNT} python hook scripts"
+GATE_COUNT=$(ls "$REPO_DIR"/hooks/gate-modes/*.sh 2>/dev/null | wc -l | tr -d ' ')
+echo "  Copied ${SH_COUNT} shell + ${PY_COUNT} python hook scripts + ${GATE_COUNT} gate-mode modules"
 
 # 6. Copy scripts
 echo "[6/8] Installing scripts..."

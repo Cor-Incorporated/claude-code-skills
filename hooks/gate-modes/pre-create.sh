@@ -17,13 +17,18 @@ echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) PRE_CREATE invoked. CWD=$(pwd) STATE=$REVIE
 cmd=$(extract_cmd)
 
 # Verify this is a gh pr create command
-if [[ -n "$cmd" ]] && ! echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+create'; then
+if [[ -n "$cmd" ]] && ! printf '%s\n' "$cmd" | grep -qE 'gh[[:space:]]+pr[[:space:]]+create'; then
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) SKIP: cmd='$cmd' not gh pr create" >> "$LOG_FILE" 2>/dev/null
   exit 0
 fi
 
-BRANCH=$(current_branch)
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) BRANCH=$BRANCH" >> "$LOG_FILE" 2>/dev/null
+_cmd_context=$(command_git_context_dir "$cmd")
+if [[ -n "$_cmd_context" ]]; then
+  export GIT_CONTEXT_DIR="$_cmd_context"
+fi
+
+BRANCH=$(current_branch "$cmd")
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) BRANCH=$BRANCH GIT_CONTEXT=${GIT_CONTEXT_DIR:-}" >> "$LOG_FILE" 2>/dev/null
 [[ -z "$BRANCH" ]] && { echo "[WARN] Cannot determine branch. Blocking PR creation." >&2; exit 2; }
 
 # Classify review tier based on branch name + changed files

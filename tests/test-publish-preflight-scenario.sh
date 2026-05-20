@@ -38,6 +38,8 @@ mkdir -p "$TMP_HOME/.claude/hooks" "$TMP_HOME/.claude/scripts" "$TMP_HOME/.claud
 
 # Deploy current hooks/scripts into temp HOME to satisfy deploy verification.
 cp "$ROOT"/hooks/*.sh "$TMP_HOME/.claude/hooks/"
+mkdir -p "$TMP_HOME/.claude/hooks/gate-modes"
+cp "$ROOT"/hooks/gate-modes/*.sh "$TMP_HOME/.claude/hooks/gate-modes/"
 cp "$ROOT"/scripts/*.sh "$TMP_HOME/.claude/scripts/"
 
 BRANCH="$(git -C "$ROOT" branch --show-current 2>/dev/null || true)"
@@ -70,16 +72,23 @@ payload='{"tool_name":"Bash","tool_input":{"command":"gh pr create --base develo
 run_hook() {
   local hook="$1"
   local label="$2"
-  local extra_env=("${@:3}")
+  local -a extra_env=()
+  if [[ $# -gt 2 ]]; then
+    extra_env=("${@:3}")
+  fi
   local ec=0
-  if out=$(cd "$ROOT" && env HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_PROJECT" "${extra_env[@]}" bash "$hook" <<<"$payload" 2>&1); then
+  if [[ ${#extra_env[@]} -gt 0 ]]; then
+    out=$(cd "$ROOT" && env HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_PROJECT" "${extra_env[@]}" bash "$hook" <<<"$payload" 2>&1) || ec=$?
+  else
+    out=$(cd "$ROOT" && env HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_PROJECT" bash "$hook" <<<"$payload" 2>&1) || ec=$?
+  fi
+  if [[ "$ec" -eq 0 ]]; then
     if [[ -z "$out" || "$out" == *"[PR Guard] 確認事項:"* ]]; then
       pass "$label"
     else
       fail "$label (unexpected output: $out)"
     fi
   else
-    ec=$?
     fail "$label (exit $ec: $out)"
   fi
 }

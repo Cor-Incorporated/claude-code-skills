@@ -19,9 +19,11 @@ echo "=== Local permissions guard tests ==="
 
 tmpdirs=()
 cleanup() {
+  set +u
   for dir in "${tmpdirs[@]}"; do
     rm -rf "$dir"
   done
+  set -u
 }
 trap cleanup EXIT
 
