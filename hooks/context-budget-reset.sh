@@ -19,6 +19,8 @@ NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 cat > "$STATE_FILE" << EOF
 {
   "session_id": "$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')",
+  "mode": "auto",
+  "contexts": {},
   "read_files": [],
   "read_count": 0,
   "write_test_doc_count": 0,

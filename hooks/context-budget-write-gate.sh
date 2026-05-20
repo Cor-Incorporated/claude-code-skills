@@ -10,6 +10,7 @@
 #
 # Trigger: Before Write tool use
 # State file: ~/.claude/state/context-budget.json
+# Primary count source: current transcript_path (session-local)
 # Rule ref: delegation.md > テスト作成は原則Codex委任
 # ========================================================================
 
@@ -30,6 +31,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
 {
   "session_id": "",
   "mode": "auto",
+  "contexts": {},
   "read_files": [],
   "read_count": 0,
   "write_test_doc_count": 0,
@@ -38,6 +40,37 @@ if [[ ! -f "$STATE_FILE" ]]; then
   "started_at": ""
 }
 EOF
+fi
+
+INPUT_JSON=""
+if [[ ! -t 0 ]]; then
+  INPUT_JSON=$(cat)
+fi
+
+FILE_PATH=""
+TRANSCRIPT_PATH=""
+SESSION_ID=""
+HOOK_CWD=""
+if [[ -n "$INPUT_JSON" ]]; then
+  PARSED=$(echo "$INPUT_JSON" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    fp = data.get('tool_input', {}).get('file_path', '')
+    print(fp)
+    print(data.get('transcript_path', ''))
+    print(data.get('session_id', ''))
+    print(data.get('cwd', ''))
+except Exception:
+    print('')
+    print('')
+    print('')
+    print('')
+" 2>/dev/null || echo "")
+  FILE_PATH=$(printf '%s\n' "$PARSED" | sed -n '1p')
+  TRANSCRIPT_PATH=$(printf '%s\n' "$PARSED" | sed -n '2p')
+  SESSION_ID=$(printf '%s\n' "$PARSED" | sed -n '3p')
+  HOOK_CWD=$(printf '%s\n' "$PARSED" | sed -n '4p')
 fi
 
 # --- Planning mode exemption ---
@@ -51,24 +84,6 @@ if [[ "$MODE" == "planning" ]] || [[ "$MODE" == "research" ]]; then
   exit 0
 fi
 
-INPUT_JSON=""
-if [[ ! -t 0 ]]; then
-  INPUT_JSON=$(cat)
-fi
-
-FILE_PATH=""
-if [[ -n "$INPUT_JSON" ]]; then
-  FILE_PATH=$(echo "$INPUT_JSON" | python3 -c "
-import json, os, sys
-try:
-    data = json.load(sys.stdin)
-    fp = data.get('tool_input', {}).get('file_path', '')
-    print(fp)
-except:
-    print('')
-" 2>/dev/null || echo "")
-fi
-
 # Skip non-project files (hooks, memory, settings, state, tmp)
 if [[ "$FILE_PATH" == *"/.claude/"* ]] || [[ "$FILE_PATH" == *"/memory/"* ]] || [[ "$FILE_PATH" == /tmp/* ]]; then
   exit 0
@@ -77,40 +92,123 @@ fi
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 [[ ! -f "$STATE_FILE" ]] && echo '{}' > "$STATE_FILE"
-_STATE_FILE="$STATE_FILE" _FILE_PATH="$FILE_PATH" _NOW="$NOW" python3 << PYEOF
-import json, sys, os, re, fcntl
+_STATE_FILE="$STATE_FILE" _FILE_PATH="$FILE_PATH" _NOW="$NOW" _TRANSCRIPT_PATH="$TRANSCRIPT_PATH" _SESSION_ID="$SESSION_ID" _HOOK_CWD="$HOOK_CWD" python3 << 'PYEOF'
+import hashlib
+import json
+import os
+import re
+import sys
+import fcntl
 
 state_file = os.environ['_STATE_FILE']
 file_path = os.environ['_FILE_PATH']
 now = os.environ['_NOW']
 basename = os.path.basename(file_path)
+transcript_path = os.environ.get('_TRANSCRIPT_PATH', '')
+session_id = os.environ.get('_SESSION_ID', '')
+hook_cwd = os.environ.get('_HOOK_CWD', '')
 
-# Detect test file patterns
-is_test = bool(re.search(r'(test_|\.test\.|\.spec\.|__tests__|_test\.)', file_path, re.IGNORECASE))
+def classify(path):
+    if not path:
+        return False, False
+    is_test_file = bool(re.search(r'(test_|\.test\.|\.spec\.|__tests__|_test\.)', path, re.IGNORECASE))
+    is_doc_file = bool(re.search(r'(\.md$|/docs/|README|CHANGELOG|\.rst$)', path, re.IGNORECASE))
+    if re.search(r'(CLAUDE\.md|Plans\.md|MEMORY\.md|AGENTS\.md)', path):
+        is_doc_file = False
+    return is_test_file, is_doc_file
 
-# Detect documentation file patterns
-is_doc = bool(re.search(r'(\.md$|/docs/|README|CHANGELOG|\.rst$)', file_path, re.IGNORECASE))
-# Exclude project config docs that are typically small edits
-if re.search(r'(CLAUDE\.md|Plans\.md|MEMORY\.md|AGENTS\.md)', file_path):
-    is_doc = False
-
+is_test, is_doc = classify(file_path)
 if not is_test and not is_doc:
     sys.exit(0)
 
-with open(state_file, "r+") as f:
-    fcntl.flock(f, fcntl.LOCK_EX)
-    state = json.load(f)
+def iter_tool_uses(record):
+    message = record.get("message", {})
+    content = message.get("content", [])
+    if isinstance(content, dict):
+        content = [content]
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                yield block.get("name", ""), block.get("input", {}) or {}
 
-    if not state.get("started_at"):
-        state["started_at"] = now
+    # Lightweight fallback for synthetic transcripts and future format changes.
+    tool_name = record.get("tool_name", "")
+    tool_input = record.get("tool_input", {})
+    if tool_name:
+        yield tool_name, tool_input if isinstance(tool_input, dict) else {}
 
-    state["write_test_doc_count"] = state.get("write_test_doc_count", 0) + 1
-    count = state["write_test_doc_count"]
+def count_from_transcript(transcript_path):
+    if not transcript_path or not os.path.isfile(transcript_path):
+        return None
 
-    f.seek(0)
-    f.truncate()
-    json.dump(state, f, indent=2)
-    fcntl.flock(f, fcntl.LOCK_UN)
+    files = []
+    try:
+        with open(transcript_path, encoding="utf-8") as transcript:
+            for line in transcript:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                for name, tool_input in iter_tool_uses(record):
+                    if name != "Write":
+                        continue
+                    prior_path = tool_input.get("file_path", "")
+                    prior_is_test, prior_is_doc = classify(prior_path)
+                    if prior_is_test or prior_is_doc:
+                        files.append(prior_path)
+    except OSError:
+        return None
+
+    unique = []
+    seen = set()
+    for prior_path in files:
+        if prior_path and prior_path not in seen:
+            unique.append(prior_path)
+            seen.add(prior_path)
+    if file_path and file_path not in seen:
+        unique.append(file_path)
+    return len(unique)
+
+def fallback_context_key():
+    raw = (
+        session_id
+        or transcript_path
+        or hook_cwd
+        or os.environ.get("CLAUDE_PROJECT_DIR", "")
+        or os.getcwd()
+    )
+    return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:16]
+
+def count_from_context_state():
+    key = fallback_context_key()
+    with open(state_file, "r+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            state = json.load(f)
+        except json.JSONDecodeError:
+            state = {}
+
+        if not state.get("started_at"):
+            state["started_at"] = now
+        contexts = state.setdefault("contexts", {})
+        context = contexts.setdefault(key, {})
+        files = context.setdefault("write_test_doc_files", [])
+        if file_path and file_path not in files:
+            files.append(file_path)
+        context["write_test_doc_count"] = len(files)
+        context["updated_at"] = now
+
+        f.seek(0)
+        f.truncate()
+        json.dump(state, f, indent=2)
+        fcntl.flock(f, fcntl.LOCK_UN)
+    return len(files)
+
+transcript_count = count_from_transcript(transcript_path)
+count = transcript_count if transcript_count is not None else count_from_context_state()
 
 file_type = "テスト" if is_test else "ドキュメント"
 

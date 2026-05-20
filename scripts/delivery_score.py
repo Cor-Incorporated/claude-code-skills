@@ -60,12 +60,21 @@ def score_hook_coverage(project_root: Path) -> dict:
                     if script_name.endswith(".sh"):
                         registered_hooks.add(script_name)
 
-    # Expected hooks: all .sh files in hooks/ directory
+    # Expected hooks: event hooks in hooks/ directory. Hook-side helpers are
+    # deployed with hooks but are intentionally invoked manually/by other hooks.
+    excluded_from_registration = {
+        "context-budget-set-mode.sh",
+        "inject-claude-review-helper.py",
+        "record-codex-review.sh",
+        "validate-hook-deployment.sh",
+    }
+
+    # Expected hooks: all .sh files in hooks/ directory minus helpers.
     hooks_dir = project_root / "hooks"
     expected_hooks = set()
     if hooks_dir.exists():
         for f in hooks_dir.iterdir():
-            if f.suffix == ".sh" and not f.name.startswith("_"):
+            if f.suffix == ".sh" and not f.name.startswith("_") and f.name not in excluded_from_registration:
                 expected_hooks.add(f.name)
 
     # Exclude _unused directory
