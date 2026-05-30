@@ -18,12 +18,26 @@
 
 set -euo pipefail
 
-# --- Subagent exemption ---
-# Agent tool spawns subprocesses with depth tracking.
-# Subagents should NOT be warned to delegate to Codex — they ARE the delegated work.
-if [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] || [[ -n "${CLAUDE_AGENT_ID:-}" ]]; then
-  exit 0
+# --- Capture stdin (hook input JSON) EARLY so the subagent exemption can read agent_id ---
+input=""
+if [[ ! -t 0 ]]; then
+  input=$(cat)
 fi
+
+# --- Subagent exemption ---
+# Agent tool spawns subprocesses; subagents ARE the delegated work and must not be
+# warned/blocked. CLAUDE_AGENT_DEPTH may NOT propagate to the hook subprocess, so we
+# ALSO honor the stdin JSON .agent_id field (official Claude Code hook spec).
+# Mirrors git-commit-guard.sh.
+_is_subagent="false"
+if [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] || [[ -n "${CLAUDE_AGENT_ID:-}" ]]; then
+  _is_subagent="true"
+fi
+if command -v jq &>/dev/null && [[ -n "${input:-}" ]]; then
+  _aid=$(printf '%s' "$input" | jq -r '.agent_id // ""' 2>/dev/null || echo "")
+  [[ -n "$_aid" ]] && _is_subagent="true"
+fi
+[[ "$_is_subagent" == "true" ]] && exit 0
 
 STATE_DIR="$HOME/.claude/state"
 STATE_FILE="$STATE_DIR/context-budget.json"
@@ -58,11 +72,8 @@ if [[ "$MODE" == "planning" ]] || [[ "$MODE" == "research" ]]; then
   exit 0
 fi
 
-# Get the file being read from tool_input (passed via stdin in hook context)
-INPUT_JSON=""
-if [[ ! -t 0 ]]; then
-  INPUT_JSON=$(cat)
-fi
+# Get the file being read from tool_input (stdin already captured into $input above)
+INPUT_JSON="$input"
 
 FILE_PATH=""
 if [[ -n "$INPUT_JSON" ]]; then

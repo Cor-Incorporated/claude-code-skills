@@ -49,15 +49,21 @@ if ! git diff --quiet HEAD 2>/dev/null; then
 fi
 
 # Auto-cleanup: remove merged/closed PRs from lock state (housekeeping)
+# Fix8: clean BOTH project-scoped AND global lock files.
 REPO=$(resolve_repo "")
 if [[ -n "$REPO" ]]; then
-  _LOCK="$LOCK_STATE" _REPO="$REPO" python3 -c "
+  while IFS= read -r _lf; do
+    [[ -z "$_lf" || ! -f "$_lf" ]] && continue
+    _LOCK="$_lf" _REPO="$REPO" python3 -c "
 import json, subprocess, os, fcntl
 lock_path = os.environ['_LOCK']
 repo = os.environ['_REPO']
 with open(lock_path, 'r+') as f:
     fcntl.flock(f, fcntl.LOCK_EX)
-    s = json.load(f)
+    try:
+        s = json.load(f)
+    except Exception:
+        s = {}
     for pr in list(s.keys()):
         try:
             r = subprocess.run(['gh','api','repos/'+repo+'/pulls/'+pr,'--jq','.state'],
@@ -70,23 +76,57 @@ with open(lock_path, 'r+') as f:
     json.dump(s, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null || true
+  done < <(lock_files)
 fi
 
 # =========================================================================
 # Gather PR status — informational warnings only (never block)
 # =========================================================================
-UNVERIFIED=$(_LOCK="$LOCK_STATE" python3 -c "
+# Fix8: gather warnings across BOTH lock files; a PR verified in EITHER file is
+# treated as verified (OR-logic), so only genuinely-unverified PRs are warned.
+LOCK_PATHS_STOP=$(lock_files)
+UNVERIFIED=$(_LOCK_PATHS="$LOCK_PATHS_STOP" python3 -c "
 import json, os
-with open(os.environ['_LOCK']) as f: s = json.load(f)
-unverified = [f'PR #{pr} ({d.get(\"branch\",\"?\")})' for pr, d in s.items()
-              if isinstance(d, dict) and d.get('ci_green', False) and not d.get('verified', False)]
+paths = [p for p in os.environ['_LOCK_PATHS'].splitlines() if p.strip()]
+merged = {}
+for p in paths:
+    if not os.path.exists(p):
+        continue
+    try:
+        with open(p) as f: s = json.load(f)
+    except Exception:
+        continue
+    for pr, d in s.items():
+        if not isinstance(d, dict):
+            continue
+        cur = merged.setdefault(pr, {'branch': d.get('branch', '?'), 'ci_green': False, 'verified': False})
+        cur['ci_green'] = cur['ci_green'] or d.get('ci_green', False)
+        cur['verified'] = cur['verified'] or d.get('verified', False)
+        if d.get('branch'): cur['branch'] = d.get('branch')
+unverified = [f'PR #{pr} ({d[\"branch\"]})' for pr, d in merged.items()
+              if d['ci_green'] and not d['verified']]
 print('|'.join(unverified) if unverified else '')
 " 2>/dev/null || echo "")
-CI_PENDING=$(_LOCK="$LOCK_STATE" python3 -c "
+CI_PENDING=$(_LOCK_PATHS="$LOCK_PATHS_STOP" python3 -c "
 import json, os
-with open(os.environ['_LOCK']) as f: s = json.load(f)
-pending = [f'PR #{pr} ({d.get(\"branch\",\"?\")})' for pr, d in s.items()
-           if isinstance(d, dict) and not d.get('ci_green', False) and not d.get('verified', False)]
+paths = [p for p in os.environ['_LOCK_PATHS'].splitlines() if p.strip()]
+merged = {}
+for p in paths:
+    if not os.path.exists(p):
+        continue
+    try:
+        with open(p) as f: s = json.load(f)
+    except Exception:
+        continue
+    for pr, d in s.items():
+        if not isinstance(d, dict):
+            continue
+        cur = merged.setdefault(pr, {'branch': d.get('branch', '?'), 'ci_green': False, 'verified': False})
+        cur['ci_green'] = cur['ci_green'] or d.get('ci_green', False)
+        cur['verified'] = cur['verified'] or d.get('verified', False)
+        if d.get('branch'): cur['branch'] = d.get('branch')
+pending = [f'PR #{pr} ({d[\"branch\"]})' for pr, d in merged.items()
+           if not d['ci_green'] and not d['verified']]
 print('|'.join(pending) if pending else '')
 " 2>/dev/null || echo "")
 

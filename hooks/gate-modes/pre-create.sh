@@ -15,6 +15,16 @@ LOG_FILE="${STATE_DIR}/pr-gate-diagnostic.log"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) PRE_CREATE invoked. CWD=$(pwd) STATE=$REVIEW_STATE" >> "$LOG_FILE" 2>/dev/null
 
 cmd=$(extract_cmd)
+# Skip ONLY a single read-only inspection command that merely MENTIONS the operation
+# (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
+# so a real operation cannot be chained after a benign first token (prevents
+# `echo x && git push --force` style bypass). Executor tools excluded.
+if [[ -n "$cmd" ]] \
+   && [[ "$cmd" != *$'\n'* ]] \
+   && ! printf '%s' "$cmd" | grep -qE '[;&|`<>]|\$\(' \
+   && printf '%s' "$cmd" | grep -qE '^[[:space:]]*(grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|echo|printf)\b'; then
+  exit 0
+fi
 
 # Verify this is a gh pr create command
 if [[ -n "$cmd" ]] && ! printf '%s\n' "$cmd" | grep -qE 'gh[[:space:]]+pr[[:space:]]+create'; then
