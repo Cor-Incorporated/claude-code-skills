@@ -72,6 +72,14 @@ is_force_push() {
   return 1
 }
 
+# mentions_protected_ref <cmd> <branch>: position-independent protected-branch
+# detection (mirror of git-push-guard.sh). Catches force push hidden in process
+# substitution `<(...)`, command chains, or redirects where token-position
+# extraction fails.
+mentions_protected_ref() {
+  printf '%s' "$1" | grep -qE "(^|[^A-Za-z0-9._/-])(refs/heads/)?$2([^A-Za-z0-9._/-]|$)"
+}
+
 extract_push_remote() {
   local push_cmd="$1"
   # Strip 'git push', then remove all flags, take first positional arg
@@ -114,39 +122,56 @@ if echo "$cmd" | grep -qE '\bgit\s+push\b' && echo "$cmd" | grep -qE '\s--(all|m
   exit 2
 fi
 
-# --- Check 0b: Force push guard (fork-aware) (#192, #195) ---
+# --- Check 0b: Force push guard (fork-aware) (#192, #195, parser-gap fix) ---
 if echo "$cmd" | grep -qE '\bgit\s+push\b' && is_force_push "$cmd"; then
-  push_remote=$(extract_push_remote "$cmd")
-  push_remote="${push_remote:-origin}"
+  # Position-independent protected-branch detection: a protected branch ref
+  # appearing anywhere in a force-push command is caught, even when hidden in
+  # process substitution `cat <(git push --force origin main)`, command chains
+  # `echo x && git push --force origin main`, or redirects. The previous
+  # token-position extraction assumed `git push` led the command and mis-read
+  # the branch (e.g. `main)`), allowing the push through.
+  matched_protected=""
+  for pb in $PROTECTED_BRANCHES; do
+    if mentions_protected_ref "$cmd" "$pb"; then
+      matched_protected="$pb"
+      break
+    fi
+  done
 
   if is_fork_workflow; then
-    # Standard fork layout: origin=fork, upstream=parent
-    # Block force push to upstream (parent repo)
-    if [ "$push_remote" = "upstream" ]; then
-      echo "[BLOCK] upstream (親リポジトリ) への force push を検出。" >&2
-      echo "  fork ワークフローでは upstream への force push は禁止です。" >&2
-      echo "  WHY: 親リポジトリの履歴を書き換えると他の contributor に影響します。" >&2
+    push_remote=$(extract_push_remote "$cmd")
+    push_remote="${push_remote:-origin}"
+    # Standard fork layout: origin=fork, upstream=parent.
+    # Block force push to the parent (upstream remote or upstream token), and
+    # block any protected branch ref as a safety net against obfuscated targets.
+    if [ "$push_remote" = "upstream" ] \
+       || printf '%s' "$cmd" | grep -qE '(^|[^A-Za-z0-9._/-])upstream([^A-Za-z0-9._/-]|$)' \
+       || [ -n "$matched_protected" ]; then
+      echo "[BLOCK] upstream (親リポジトリ) / 保護ブランチ への force push を検出。" >&2
+      echo "  fork ワークフローでは upstream・保護ブランチへの force push は禁止です。" >&2
+      echo "  WHY: 親リポジトリ/共有ブランチの履歴を書き換えると他の contributor に影響します。" >&2
       echo "  FIX: PR 経由でマージしてください。" >&2
       exit 2
-    else
-      # origin = fork, allow with warning
-      echo "[WARN] fork リモート '${push_remote}' への force push を検出。" >&2
-      echo "  自分の fork への force push は許可しますが、注意してください。" >&2
     fi
+    # origin = fork, allow with warning
+    echo "[WARN] fork リモート '${push_remote}' への force push を検出。" >&2
+    echo "  自分の fork への force push は許可しますが、注意してください。" >&2
   else
-    # Non-fork: block force push to protected branches
+    # Non-fork: explicit protected branch ref anywhere -> block.
+    if [ -n "$matched_protected" ]; then
+      echo "[BLOCK] 保護ブランチ '${matched_protected}' への force push を検出。" >&2
+      echo "  WHY: 共有ブランチの履歴書き換えは禁止です。" >&2
+      echo "  FIX: feature ブランチで作業し、PR 経由でマージしてください。" >&2
+      exit 2
+    fi
+    # No explicit protected ref: fall back to current branch (implicit push).
     target_branch=$(extract_push_branch "$cmd")
     if [ -z "$target_branch" ]; then
       target_branch=$(git branch --show-current 2>/dev/null || echo "")
     fi
-    # If no explicit remote, check tracking remote (#195)
-    push_remote_explicit=$(extract_push_remote "$cmd")
-    if [ -z "$push_remote_explicit" ]; then
-      push_remote=$(git config "branch.${target_branch}.remote" 2>/dev/null || echo "origin")
-    fi
     for branch in $PROTECTED_BRANCHES; do
       if [ "$target_branch" = "$branch" ]; then
-        echo "[BLOCK] 保護ブランチ '${branch}' への force push を検出。" >&2
+        echo "[BLOCK] 保護ブランチ '${branch}' への force push を検出（暗黙的ブランチ）。" >&2
         echo "  WHY: 共有ブランチの履歴書き換えは禁止です。" >&2
         echo "  FIX: feature ブランチで作業し、PR 経由でマージしてください。" >&2
         exit 2
@@ -175,7 +200,7 @@ done
 
 # --- Check 3: Remote branch deletion (git push origin :branch) ---
 for branch in $PROTECTED_BRANCHES; do
-    if echo "$cmd" | grep -qE "push\s+\S+\s+:${branch}(\s|$)"; then
+    if echo "$cmd" | grep -qE "push\s+\S+\s+:${branch}([^A-Za-z0-9._/-]|$)"; then
         echo "[Hook] BLOCKED: Protected branch '${branch}' cannot be deleted from remote." >&2
         echo "[Hook] develop/main/master branches are tied to CI/CD and must NEVER be deleted." >&2
         exit 2
