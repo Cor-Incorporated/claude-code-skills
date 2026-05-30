@@ -69,17 +69,28 @@ mkdir -p "$STATE_DIR"
 
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 
-# Write review-pending state
-LOCK_STATE="$STATE_DIR/pr-review-lock.json"
-[[ ! -f "$LOCK_STATE" ]] && echo '{}' > "$LOCK_STATE"
+# Write review-pending state to BOTH project-scoped AND global lock files (Fix8).
+# block-merge-without-review.sh (CLAUDE_PROJECT_DIR unset) reads the global file,
+# so the lock must be present there too. Build a deduped list of targets.
+GLOBAL_STATE_DIR="$HOME/.claude/state"
+mkdir -p "$GLOBAL_STATE_DIR" 2>/dev/null || true
+LOCK_TARGETS=("$STATE_DIR/pr-review-lock.json")
+if [[ "$GLOBAL_STATE_DIR/pr-review-lock.json" != "$STATE_DIR/pr-review-lock.json" ]]; then
+  LOCK_TARGETS+=("$GLOBAL_STATE_DIR/pr-review-lock.json")
+fi
 
 if command -v python3 &>/dev/null; then
-  _PR="$PR_NUMBER" _BRANCH="$BRANCH" _LOCK="$LOCK_STATE" python3 -c "
+  for _lock_file in "${LOCK_TARGETS[@]}"; do
+    [[ ! -f "$_lock_file" ]] && echo '{}' > "$_lock_file"
+    _PR="$PR_NUMBER" _BRANCH="$BRANCH" _LOCK="$_lock_file" python3 -c "
 import json, os, fcntl
 lock_file = os.environ['_LOCK']
 with open(lock_file, 'r+') as f:
     fcntl.flock(f, fcntl.LOCK_EX)
-    s = json.load(f)
+    try:
+        s = json.load(f)
+    except Exception:
+        s = {}
     s[os.environ['_PR']] = {
         'status': 'review_pending',
         'branch': os.environ['_BRANCH'],
@@ -92,6 +103,7 @@ with open(lock_file, 'r+') as f:
     json.dump(s, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
+  done
 fi
 
 # Inject review instructions via additionalContext

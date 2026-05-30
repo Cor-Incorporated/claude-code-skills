@@ -41,6 +41,118 @@ REVIEW_STATE="$STATE_DIR/review-status.json"
 LOCK_STATE="$STATE_DIR/pr-review-lock.json"
 mkdir -p "$STATE_DIR"
 
+# =========================================================================
+# Dual-location lock files — project-scoped AND global (Issue #19 / Fix8)
+# The pessimistic lock (pr-review-lock.json) was written and read from
+# INCONSISTENT directories: writers land in the repo-scoped state when run
+# inside a repo, but block-merge-without-review.sh (with CLAUDE_PROJECT_DIR
+# unset) reads $HOME/.claude/state — so clearing the lock never satisfied the
+# merge gate. Mirror the read_review() dual-location pattern: every lock
+# read/write must consider BOTH the project-scoped file AND the global one.
+# =========================================================================
+GLOBAL_STATE_DIR="$HOME/.claude/state"
+mkdir -p "$GLOBAL_STATE_DIR" 2>/dev/null || true
+
+# lock_files — echo the deduped list of lock file paths (project, then global)
+lock_files() {
+  echo "$LOCK_STATE"
+  if [[ "$GLOBAL_STATE_DIR/pr-review-lock.json" != "$LOCK_STATE" ]]; then
+    echo "$GLOBAL_STATE_DIR/pr-review-lock.json"
+  fi
+}
+
+# lock_pr_verified <pr> — "yes" if ANY lock file has verified=true for the PR
+lock_pr_verified() {
+  local pr="$1" lf
+  while IFS= read -r lf; do
+    [[ -z "$lf" || ! -f "$lf" ]] && continue
+    local val
+    val=$(_LOCK="$lf" _PR="$pr" python3 -c "
+import json, os
+try:
+    with open(os.environ['_LOCK']) as f:
+        s = json.load(f)
+    print('yes' if s.get(os.environ['_PR'], {}).get('verified', False) else 'no')
+except Exception:
+    print('no')
+" 2>/dev/null || echo "no")
+    [[ "$val" == "yes" ]] && { echo "yes"; return; }
+  done < <(lock_files)
+  echo "no"
+}
+
+# lock_pr_locked <pr> — "yes" if a lock entry exists in ANY file AND no file
+# has verified=true (i.e. still review_pending somewhere, verified nowhere).
+lock_pr_locked() {
+  local pr="$1"
+  [[ "$(lock_pr_verified "$pr")" == "yes" ]] && { echo "no"; return; }
+  local lf
+  while IFS= read -r lf; do
+    [[ -z "$lf" || ! -f "$lf" ]] && continue
+    local has
+    has=$(_LOCK="$lf" _PR="$pr" python3 -c "
+import json, os
+try:
+    with open(os.environ['_LOCK']) as f:
+        s = json.load(f)
+    print('yes' if os.environ['_PR'] in s else 'no')
+except Exception:
+    print('no')
+" 2>/dev/null || echo "no")
+    [[ "$has" == "yes" ]] && { echo "yes"; return; }
+  done < <(lock_files)
+  echo "no"
+}
+
+# lock_apply <pr> <python-mutator> — run the same python mutation against EVERY
+# lock file (dual-write). The mutator (passed via env, dedented + exec'd so its
+# indentation is independent of this heredoc) operates on the loaded dict `s`
+# with `PR` and `os` in scope; file lock + atomic rewrite handled here.
+# SECURITY: <python-mutator> MUST be a static literal. Never interpolate
+# shell variables into it (RCE risk via untrusted PR/branch data). Pass
+# dynamic values via env (e.g. _BR="$BRANCH" lock_apply ...) and read them
+# inside the mutator with os.environ[...].
+lock_apply() {
+  local pr="$1" mutator="$2" lf rc
+  # Fix C: do NOT swallow python failures. A silent failure here means a lock may
+  # never be SET (a review-required PR is left unlocked) or never CLEARED (VERIFY
+  # reports success but verified=true is never persisted). Capture the python exit
+  # status per file; on nonzero, warn to stderr identifying the lock + PR and mark
+  # the whole call failed so the caller can react. Callers that tolerate partial
+  # failure may ignore the return; happy path (rc 0) is unchanged.
+  local failed=0
+  while IFS= read -r lf; do
+    [[ -z "$lf" ]] && continue
+    mkdir -p "$(dirname "$lf")" 2>/dev/null || true
+    [[ ! -f "$lf" ]] && echo '{}' > "$lf"
+    _LOCK="$lf" _PR="$pr" _MUTATOR="$mutator" python3 -c "
+import json, os, fcntl, textwrap
+f_path = os.environ['_LOCK']
+PR = os.environ['_PR']
+mutator = textwrap.dedent(os.environ['_MUTATOR'])
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    try:
+        s = json.load(f)
+    except Exception:
+        s = {}
+    _ns = {'s': s, 'PR': PR, 'os': os, 'json': json}
+    exec(mutator, _ns)
+    s = _ns['s']
+    f.seek(0); f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
+"
+    rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      echo "[lock_apply] WARNING: lock write FAILED (exit $rc) for PR #${pr} on '${lf}'." >&2
+      echo "[lock_apply]   Lock state may be inconsistent (not set/cleared). Investigate before merging." >&2
+      failed=1
+    fi
+  done < <(lock_files)
+  return "$failed"
+}
+
 # Fail-closed: python3 is required for state file operations
 if ! command -v python3 &>/dev/null; then
   echo "[pr-ci-review-gate] python3 not found. Blocking for safety." >&2
@@ -277,8 +389,11 @@ classify_review_tier() {
   fi
 
   if [[ -z "$changed_files" ]]; then
-    # Cannot determine changes — default to FULL for safety
-    echo "FULL"
+    # Detection failure (API timeout / run-from-develop / pre-push) must NOT
+    # escalate docs/small PRs to 2-reviewer FULL. Default to LIGHT (code-reviewer
+    # only, warn-only at create). Genuine source PRs classify FULL once files are
+    # detected at merge time (GitHub API reliable).
+    echo "LIGHT"
     return
   fi
 
@@ -316,6 +431,43 @@ classify_review_tier() {
   else
     echo "LIGHT"
   fi
+}
+
+# =========================================================================
+# Helper: low-risk (non-source) path test — mirrors classify_review_tier globs.
+# Returns 0 if the path is low-risk (docs/config), 1 if it is source code.
+# =========================================================================
+is_low_risk_path() {
+  case "$1" in
+    .github/*) return 0 ;;
+    Dockerfile|Dockerfile.*|.dockerignore|docker-compose*.yml|docker-compose*.yaml) return 0 ;;
+    *.md|docs/*|LICENSE|CHANGELOG*|CONTRIBUTING*) return 0 ;;
+    .claude/*|CLAUDE.md|.cursor/*|.vscode/*|.editorconfig) return 0 ;;
+    .eslintrc*|.prettierrc*|.stylelintrc*|biome.json|.biomeignore) return 0 ;;
+    .gitignore|.gitattributes) return 0 ;;
+    renovate.json|.renovaterc*) return 0 ;;
+    tsconfig*.json) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# =========================================================================
+# Helper: did any SOURCE file change between two git refs?
+# Returns 0 (true) if a non-low-risk file changed OR the diff cannot be computed
+# / baseline unknown (fail-closed); 1 (false) if only low-risk files changed.
+# =========================================================================
+source_changed_between() {
+  local from_ref="$1" to_ref="${2:-HEAD}"
+  [[ -z "$from_ref" ]] && return 0
+  local files
+  files=$(git_ctx diff --name-only "${from_ref}..${to_ref}" 2>/dev/null) || return 0
+  [[ -z "$files" ]] && return 1
+  local f
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    is_low_risk_path "$f" || return 0
+  done <<< "$files"
+  return 1
 }
 
 # =========================================================================

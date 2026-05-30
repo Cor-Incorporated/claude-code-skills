@@ -28,6 +28,17 @@ input=""
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 [[ -z "$cmd" ]] && exit 0
 
+# Skip ONLY a single read-only inspection command that merely MENTIONS the operation
+# (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
+# so a real operation cannot be chained after a benign first token (prevents
+# `echo x && git push --force` style bypass). Executor tools excluded.
+if [[ -n "$cmd" ]] \
+   && [[ "$cmd" != *$'\n'* ]] \
+   && ! printf '%s' "$cmd" | grep -qE '[;&|`<>]|\$\(' \
+   && printf '%s' "$cmd" | grep -qE '^[[:space:]]*(grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|echo|printf)\b'; then
+  exit 0
+fi
+
 # Check if develop branch exists (local or remote)
 has_develop="no"
 git rev-parse --verify develop >/dev/null 2>&1 && has_develop="yes"

@@ -31,6 +31,17 @@ fi
 input=$(cat)
 command=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 
+# Skip ONLY a single read-only inspection command that merely MENTIONS the operation
+# (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
+# so a real operation cannot be chained after a benign first token (prevents
+# `echo x && git push --force` style bypass). Executor tools excluded.
+if [[ -n "$command" ]] \
+   && [[ "$command" != *$'\n'* ]] \
+   && ! printf '%s' "$command" | grep -qE '[;&|`<>]|\$\(' \
+   && printf '%s' "$command" | grep -qE '^[[:space:]]*(grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|echo|printf)\b'; then
+  exit 0
+fi
+
 # Extract first command from chain (before &&, ||, ;, |)
 # This prevents bypass via "gh issue create && gh issue view"
 first_cmd=$(echo "$command" | sed 's/[&|;].*//' | xargs 2>/dev/null || echo "$command")

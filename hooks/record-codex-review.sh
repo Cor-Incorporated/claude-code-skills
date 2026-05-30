@@ -77,6 +77,38 @@ def git_branch(repo):
         return ""
 
 
+def git_branch_exists(repo, branch):
+    """Return True if branch is a real ref in repo (local or remote)."""
+    if not repo or not branch:
+        return False
+    for ref in (
+        "refs/heads/%s" % branch,
+        "refs/remotes/origin/%s" % branch,
+    ):
+        try:
+            subprocess.check_call(
+                ["git", "-C", repo, "rev-parse", "--verify", "--quiet", ref],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception:
+            continue
+    return False
+
+
+# Trailing punctuation that natural-language prompts append to a branch token
+# (e.g. "branch: fix/x. Review now."). The `.` is a legal git ref char, so the
+# greedy regex captures it; strip it here. A real branch never ends in these.
+_TRAILING_PUNCT = ".,:;]})\"'`"
+
+
+def clean_branch_token(value):
+    if not isinstance(value, str):
+        return ""
+    return value.strip().split(":", 1)[-1].strip().rstrip(_TRAILING_PUNCT)
+
+
 tool_input = load_tool_input(os.environ.get("_HOOK_INPUT", ""))
 command = tool_input.get("command", "")
 if not isinstance(command, str):
@@ -89,24 +121,7 @@ for key in ("prompt", "description", "message", "task", "instructions"):
         text_fields.append(value)
 text = "\n".join(text_fields)
 
-branch = ""
-for key in ("branch", "head_branch", "head", "target_branch", "review_branch"):
-    value = tool_input.get(key)
-    if isinstance(value, str) and value.strip():
-        branch = value.strip().split(":", 1)[-1]
-        break
-
-if not branch:
-    patterns = [
-        r"(?:^|[\s,;])--head(?:=|\s+)([A-Za-z0-9._/-]+)",
-        r"(?:^|[\s,;])(?:branch|head|review_branch|target_branch)\s*[:=]\s*`?([A-Za-z0-9._/-]+)`?",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            branch = match.group(1).split(":", 1)[-1]
-            break
-
+# --- Resolve repo FIRST so branch resolution can use it authoritatively ---
 repo = ""
 for key in (
     "cwd",
@@ -129,11 +144,47 @@ if not repo:
         if repo:
             break
 
+if not repo and os.environ.get("CLAUDE_PROJECT_DIR"):
+    repo = git_root(os.environ["CLAUDE_PROJECT_DIR"])
+
 if not repo:
     repo = git_root(os.getcwd())
 
+# --- Resolve branch: explicit token (cleaned) is authoritative ---
+explicit_branch = ""
+for key in ("branch", "head_branch", "head", "target_branch", "review_branch"):
+    value = tool_input.get(key)
+    if isinstance(value, str) and value.strip():
+        explicit_branch = clean_branch_token(value)
+        break
+
+if not explicit_branch:
+    patterns = [
+        r"(?:^|[\s,;])--head(?:=|\s+)([A-Za-z0-9._/-]+)",
+        r"(?:^|[\s,;])(?:branch|head|review_branch|target_branch)\s*[:=]\s*`?([A-Za-z0-9._/-]+)`?",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            explicit_branch = clean_branch_token(match.group(1))
+            break
+
+repo_branch = git_branch(repo)
+
+# An explicit, punctuation-cleaned token from the prompt/command is AUTHORITATIVE.
+# The regex char class [A-Za-z0-9._/-] greedily captured a trailing sentence period
+# (e.g. "branch: fix/x." -> "fix/x."), landing the record on a key the gate never
+# reads. clean_branch_token() strips it. Only snap to a punctuation-equivalent ref
+# when the cleaned token still does not resolve; a brand-new branch is kept as-is.
+branch = explicit_branch
+if explicit_branch and repo and not git_branch_exists(repo, explicit_branch):
+    stripped = explicit_branch.rstrip(_TRAILING_PUNCT)
+    if stripped != explicit_branch and git_branch_exists(repo, stripped):
+        branch = stripped
+
+# No explicit token at all -> fall back to the resolved repo's checked-out branch.
 if not branch:
-    branch = git_branch(repo)
+    branch = repo_branch
 
 print(json.dumps({"repo": repo, "branch": branch, "command": command}))
 PY
@@ -158,13 +209,16 @@ if [[ $# -eq 0 ]]; then
   # Record codex_review_ran=true with pass=true (no severity data)
   # codex-parallel.sh path provides severity data when available
   NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  REVIEW_SHA=$(git -C "${REPO_PATH:-.}" rev-parse --verify --quiet "refs/heads/${BRANCH}" 2>/dev/null \
+  || git -C "${REPO_PATH:-.}" rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" 2>/dev/null \
+  || git -C "${REPO_PATH:-.}" rev-parse HEAD 2>/dev/null || echo "")
 
   write_codex_review_hook() {
     local target="$1"
     mkdir -p "$(dirname "$target")"
     [ ! -f "$target" ] && echo '{}' > "$target"
 
-    _STATE="$target" _BR="$BRANCH" _NOW="$NOW" \
+    _STATE="$target" _BR="$BRANCH" _NOW="$NOW" _SHA="$REVIEW_SHA" \
     python3 -c "
 import json, os, fcntl
 f_path = os.environ['_STATE']
@@ -180,6 +234,8 @@ with open(f_path, 'r+') as f:
         data[br] = {}
     data[br]['codex_review_ran'] = True
     data[br]['codex_review_at'] = now
+    if os.environ.get('_SHA'):
+        data[br]['codex_review_sha'] = os.environ['_SHA']
     if 'codex_review' not in data[br]:
         data[br]['codex_review'] = True
     f.seek(0)
@@ -250,6 +306,9 @@ if [[ "$HAS_SEVERITY" == "true" ]]; then
 fi
 
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+REVIEW_SHA=$(git -C "${REPO_PATH:-.}" rev-parse --verify --quiet "refs/heads/${BRANCH}" 2>/dev/null \
+  || git -C "${REPO_PATH:-.}" rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" 2>/dev/null \
+  || git -C "${REPO_PATH:-.}" rev-parse HEAD 2>/dev/null || echo "")
 
 # --- Helper: write codex_review to a single state file ---
 write_codex_review() {
@@ -257,7 +316,7 @@ write_codex_review() {
   mkdir -p "$(dirname "$target")"
   [ ! -f "$target" ] && echo '{}' > "$target"
 
-  _STATE="$target" _BR="$BRANCH" _NOW="$NOW" \
+  _STATE="$target" _BR="$BRANCH" _NOW="$NOW" _SHA="$REVIEW_SHA" \
   _PASS="$CODEX_REVIEW_PASS" _HAS_SEV="$HAS_SEVERITY" \
   _CRIT="$CODEX_CRITICAL" _HIGH="$CODEX_HIGH" \
   _MED="$CODEX_MEDIUM" _LOW="$CODEX_LOW" \
@@ -279,6 +338,8 @@ with open(f_path, 'r+') as f:
     data[br]['codex_review'] = review_pass
     data[br]['codex_review_ran'] = True
     data[br]['codex_review_at'] = now
+    if os.environ.get('_SHA'):
+        data[br]['codex_review_sha'] = os.environ['_SHA']
     if has_sev:
         for key, env in [('codex_critical','_CRIT'),('codex_high','_HIGH'),('codex_medium','_MED'),('codex_low','_LOW')]:
             try:

@@ -35,6 +35,17 @@ input=""
 
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 
+# Skip ONLY a single read-only inspection command that merely MENTIONS the operation
+# (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
+# so a real operation cannot be chained after a benign first token (prevents
+# `echo x && git push --force` style bypass). Executor tools excluded.
+if [[ -n "$cmd" ]] \
+   && [[ "$cmd" != *$'\n'* ]] \
+   && ! printf '%s' "$cmd" | grep -qE '[;&|`<>]|\$\(' \
+   && printf '%s' "$cmd" | grep -qE '^[[:space:]]*(grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|echo|printf)\b'; then
+  exit 0
+fi
+
 # Only apply to gh pr merge
 if ! echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   exit 0
