@@ -6,6 +6,16 @@ set -euo pipefail
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
+# mentions_protected_ref <cmd> <branch>
+# Returns 0 if <branch> appears as a push ref token anywhere in <cmd>, tolerant
+# of process substitution `<(...)`, command chains, redirects and refspec forms
+# (origin main / :main / refs/heads/main). Position-independent so a force push
+# wrapped as `cat <(git push --force origin main)` can no longer hide the
+# protected branch from extraction (parser-gap fix).
+mentions_protected_ref() {
+  printf '%s' "$1" | grep -qE "(^|[^A-Za-z0-9._/-])(refs/heads/)?$2([^A-Za-z0-9._/-]|$)"
+}
+
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
 # so a real operation cannot be chained after a benign first token (prevents
@@ -31,7 +41,7 @@ if echo "$cmd" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b)' ||
    echo "$cmd" | grep -qE 'git\s+push\s+-[a-zA-Z]*f'; then
     # Check explicit branch names in the command
     for branch in develop main master; do
-        if echo "$cmd" | grep -qE "(^|[[:space:]])${branch}([[:space:]]|$|:)"; then
+        if mentions_protected_ref "$cmd" "$branch"; then
             cat >&2 <<ERRMSG
 [BLOCK] 共有ブランチ '${branch}' への force push を検出
 
@@ -74,7 +84,7 @@ fi
 for branch in develop main master; do
     if echo "$cmd" | grep -qE "git\s+push\s+.*\b${branch}\b" && \
        ! echo "$cmd" | grep -qE "(--delete|:${branch})"; then
-        push_target=$(echo "$cmd" | grep -oE "push\s+[^|;&]*" | sed 's/push\s*//' | sed 's/\s*-[a-zA-Z-]*//g' | xargs)
+        push_target=$(echo "$cmd" | grep -oE "push\s+[^|;&)<>]*" | sed 's/push\s*//' | sed 's/\s*-[a-zA-Z-]*//g' | xargs)
         refspec=$(echo "$push_target" | awk '{print $NF}')
         if [ "$refspec" = "$branch" ] || echo "$refspec" | grep -qE ":${branch}$"; then
             echo "[BLOCKED] Direct push to '${branch}'. Use PR instead." >&2
