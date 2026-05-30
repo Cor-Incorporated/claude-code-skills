@@ -13,6 +13,16 @@ source "${GATE_MODES_DIR}/common.sh"
 # DIAGNOSTIC: Log hook invocation
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) PRE_MERGE invoked. cmd=$(extract_cmd)" >> "${STATE_DIR}/pr-gate-diagnostic.log" 2>/dev/null
 cmd=$(extract_cmd)
+# Skip ONLY a single read-only inspection command that merely MENTIONS the operation
+# (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
+# so a real operation cannot be chained after a benign first token (prevents
+# `echo x && git push --force` style bypass). Executor tools excluded.
+if [[ -n "$cmd" ]] \
+   && [[ "$cmd" != *$'\n'* ]] \
+   && ! printf '%s' "$cmd" | grep -qE '[;&|`<>]|\$\(' \
+   && printf '%s' "$cmd" | grep -qE '^[[:space:]]*(grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|echo|printf)\b'; then
+  exit 0
+fi
 
 # Verify this is a gh pr merge command
 if [[ -n "$cmd" ]] && ! echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
@@ -157,11 +167,10 @@ if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
   fi
 fi
 
-# --- Pass C: Manual verification via pr-review-lock.json ---
-if [[ -f "$LOCK_STATE" ]] && command -v jq &>/dev/null; then
-  _verified=$(jq -r --arg pr "$PR_NUMBER" '.[$pr].verified // false' "$LOCK_STATE" 2>/dev/null || echo "false")
-  [[ "$_verified" == "true" ]] && PASS_C="yes"
-fi
+# --- Pass C: Manual verification via pr-review-lock.json (Fix8 dual-location) ---
+# Check BOTH project-scoped AND global lock files (OR-logic) so a verified=true
+# written to either location releases the gate.
+[[ "$(lock_pr_verified "$PR_NUMBER")" == "yes" ]] && PASS_C="yes"
 
 # --- Tier-aware judgment ---
 CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")

@@ -38,19 +38,17 @@ if [[ "$IS_SUBAGENT" == "false" ]]; then
         case "$current_branch" in
             develop|main|master) ;; # allowed base branches
             "")
-                echo "🚫 [Delegation Required] detached HEAD状態でのcommitはsubagentに委任してください。" >&2
+                echo "🚫 [Claude Code hook: git-commit-guard.sh] Delegation Required" >&2
+                echo "  detached HEAD 状態での commit は subagent に委任してください。" >&2
+                echo "  NOTE: これは Claude Code 側の PreToolUse hook です（Cursor / pre-commit のリポジトリフックではありません）。" >&2
+                echo "  Source: ~/.claude/hooks/git-commit-guard.sh / settings.json (PreToolUse: Bash)" >&2
                 exit 2
                 ;;
             *)
-                echo "🚫 [Delegation Required] メインエージェントは非ベースブランチに直接commitできません。" >&2
-                echo "" >&2
-                echo "ブランチ: $current_branch" >&2
-                echo "" >&2
-                echo "対応方法:" >&2
-                echo "  1. Agent tool (subagent_type=general-purpose) でcommitを委任" >&2
-                echo "  2. TeamCreate でワーカーに委任する" >&2
-                echo "" >&2
-                exit 2
+                # Relaxed (2026-05-30): main agent may commit directly on feature
+                # branches. Review is enforced at PR create/merge, so commit-level
+                # delegation (Issue #10) is redundant friction. Detached HEAD still
+                # requires delegation; format/issue-ref/lint checks below still apply.
                 ;;
         esac
     fi

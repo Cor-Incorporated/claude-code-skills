@@ -66,6 +66,18 @@ TOOL_NAME=$(echo "$INPUT" | python3 -c "import json,sys; print(json.load(sys.std
 [[ "$TOOL_NAME" == "Bash" ]] || exit 0
 
 COMMAND=$(echo "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
+
+# Skip ONLY a single read-only inspection command that merely MENTIONS the operation
+# (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
+# so a real operation cannot be chained after a benign first token (prevents
+# `echo x && git push --force` style bypass). Executor tools excluded.
+if [[ -n "$COMMAND" ]] \
+   && [[ "$COMMAND" != *$'\n'* ]] \
+   && ! printf '%s' "$COMMAND" | grep -qE '[;&|`<>]|\$\(' \
+   && printf '%s' "$COMMAND" | grep -qE '^[[:space:]]*(grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|echo|printf)\b'; then
+  exit 0
+fi
+
 echo "$COMMAND" | grep -qE '\bgh\s+pr\s+create\b' || exit 0
 
 _cmd_context=$(command_git_context_dir "$COMMAND")

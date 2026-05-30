@@ -18,32 +18,49 @@ if [[ -z "$REPO" ]]; then
   exit 1
 fi
 
-CLEANED=$(_LOCK="$LOCK_STATE" _REVIEW="$REVIEW_STATE" _REPO="$REPO" python3 -c "
+# Fix8: clean the lock entry from BOTH project-scoped AND global lock files.
+# Pass a newline-separated, deduped list so a merged PR is purged everywhere.
+LOCK_PATHS=$(lock_files)
+
+CLEANED=$(_LOCK_PATHS="$LOCK_PATHS" _REVIEW="$REVIEW_STATE" _REPO="$REPO" python3 -c "
 import json, subprocess, os, fcntl
 
-lock_path = os.environ['_LOCK']
+lock_paths = [p for p in os.environ['_LOCK_PATHS'].splitlines() if p.strip()]
 review_path = os.environ['_REVIEW']
 repo = os.environ['_REPO']
 lock_cleaned = []
 review_cleaned = []
 
-# Clean lock state (with file lock)
-with open(lock_path, 'r+') as f:
-    fcntl.flock(f, fcntl.LOCK_EX)
-    lock = json.load(f)
-    for pr in list(lock.keys()):
+# Cache PR state lookups so we don't re-query the same PR across files
+_state_cache = {}
+def pr_state(pr):
+    if pr not in _state_cache:
         try:
             r = subprocess.run(['gh','api','repos/'+repo+'/pulls/'+pr,'--jq','.state'],
                 capture_output=True, text=True, timeout=10)
-            if r.stdout.strip() in ('closed','merged'):
+            _state_cache[pr] = r.stdout.strip()
+        except Exception:
+            _state_cache[pr] = ''
+    return _state_cache[pr]
+
+# Clean lock state in every location (with file lock)
+for lock_path in lock_paths:
+    if not os.path.exists(lock_path):
+        continue
+    with open(lock_path, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            lock = json.load(f)
+        except Exception:
+            lock = {}
+        for pr in list(lock.keys()):
+            if pr_state(pr) in ('closed','merged'):
                 branch = lock[pr].get('branch', '?')
                 del lock[pr]
-                lock_cleaned.append(f'PR #{pr} ({branch})')
-        except Exception:
-            pass
-    f.seek(0); f.truncate()
-    json.dump(lock, f, indent=2)
-    fcntl.flock(f, fcntl.LOCK_UN)
+                lock_cleaned.append(f'PR #{pr} ({branch}) [{os.path.basename(os.path.dirname(lock_path))}]')
+        f.seek(0); f.truncate()
+        json.dump(lock, f, indent=2)
+        fcntl.flock(f, fcntl.LOCK_UN)
 
 # Clean review state (with file lock)
 with open(review_path, 'r+') as f:

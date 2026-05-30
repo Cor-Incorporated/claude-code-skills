@@ -44,11 +44,20 @@ if [[ "$CI_PENDING" -gt 0 ]]; then
   exit 1
 fi
 
-BRANCH=$(_LOCK="$LOCK_STATE" _PR="$PR" python3 -c "
+# Read branch from ANY lock file (project or global) — Fix8 dual-location
+BRANCH=""
+while IFS= read -r _lf; do
+  [[ -z "$_lf" || ! -f "$_lf" ]] && continue
+  BRANCH=$(_LOCK="$_lf" _PR="$PR" python3 -c "
 import json, os
-with open(os.environ['_LOCK']) as f: s = json.load(f)
-print(s.get(os.environ['_PR'], {}).get('branch', ''))
+try:
+    with open(os.environ['_LOCK']) as f: s = json.load(f)
+    print(s.get(os.environ['_PR'], {}).get('branch', ''))
+except Exception:
+    print('')
 " 2>/dev/null || echo "")
+  [[ -n "$BRANCH" ]] && break
+done < <(lock_files)
 
 # If branch not in lock state, try GitHub API
 if [[ -z "$BRANCH" ]]; then
@@ -104,22 +113,26 @@ else
   fi
 fi
 
-# All checks passed — mark as verified
-_LOCK="$LOCK_STATE" _PR="$PR" python3 -c "
-import json, os, fcntl
-f_path = os.environ['_LOCK']
-pr = os.environ['_PR']
-with open(f_path, 'r+') as f:
-    fcntl.flock(f, fcntl.LOCK_EX)
-    s = json.load(f)
-    if pr in s:
-        s[pr]['ci_green'] = True
-        s[pr]['review_lgtm'] = True
-        s[pr]['verified'] = True
-    f.seek(0); f.truncate()
-    json.dump(s, f, indent=2)
-    fcntl.flock(f, fcntl.LOCK_UN)
-" 2>/dev/null
+# All checks passed — mark as verified in BOTH project + global state (Fix8).
+# Use setdefault so the global file (which may lack the entry) also gets
+# verified=true, satisfying block-merge-without-review.sh's global read.
+# Fix C: capture lock_apply's status so a silent write failure cannot make VERIFY
+# falsely report success while verified=true was never persisted. lock_apply emits
+# its own stderr warning; `|| _lock_rc=$?` prevents set -e from aborting before we
+# decide. On failure, do NOT print the success line — exit non-zero so the operator
+# knows the lock is still pending.
+_lock_rc=0
+_BR="$BRANCH" lock_apply "$PR" "
+e = s.setdefault(PR, {'status': 'review_pending', 'branch': os.environ['_BR']})
+e['ci_green'] = True
+e['review_lgtm'] = True
+e['verified'] = True
+" || _lock_rc=$?
+
+if [[ "$_lock_rc" -ne 0 ]]; then
+  echo "❌ PR #${PR}: 検証は通りましたがロック解除の保存に失敗しました。再実行してください。" >&2
+  exit 1
+fi
 
 echo "✅ PR #${PR}: CI green + レビュー LGTM 確認完了。ロック解除。" >&2
 exit 0

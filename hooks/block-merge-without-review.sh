@@ -22,8 +22,19 @@ mkdir -p "$_STATE_BASE"
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
+# Skip ONLY a single read-only inspection command that merely MENTIONS the operation
+# (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
+# so a real operation cannot be chained after a benign first token (prevents
+# `echo x && git push --force` style bypass). Executor tools excluded.
+if [[ -n "$cmd" ]] \
+   && [[ "$cmd" != *$'\n'* ]] \
+   && ! printf '%s' "$cmd" | grep -qE '[;&|`<>]|\$\(' \
+   && printf '%s' "$cmd" | grep -qE '^[[:space:]]*(grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|echo|printf)\b'; then
+  exit 0
+fi
+
 cmd_first_line=$(echo "$cmd" | head -1)
-if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then
+if ! echo "$cmd_first_line" | grep -qE 'gh[[:space:]]+pr[[:space:]]+merge\b'; then
     exit 0
 fi
 
@@ -44,41 +55,28 @@ fi
 # Get PR branch for tier classification
 PR_BRANCH=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.ref' 2>/dev/null || echo "")
 HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
-TIER="FULL"
-case "$PR_BRANCH" in
-    docs/*|chore/*|ci/*) TIER="EXEMPT" ;;
-    *)
-        # Use remote URL for defense-in-depth (aligned with classify_review_tier)
-        ;;
-esac
+# Content-based tier (Fix B): a docs/config-only PR on a feat/*/fix/* branch must
+# resolve LIGHT, not FULL. classify_review_tier inspects the actual changed files
+# via the GitHub API (REPO already resolved above) and only escalates to FULL when
+# a non-low-risk (source) file changed. Branch-prefix EXEMPT is handled inside it.
+TIER=$(classify_review_tier "$PR_BRANCH" "$PR_NUM")
 
 # --- EXEMPT/LIGHT tier: skip pessimistic lock ---
 # LIGHT tier (hook infrastructure) doesn't need pessimistic lock.
 # Safety is enforced by CRITICAL/HIGH/BUG grep check below.
 # Only FULL tier (source code changes) requires pessimistic lock.
 if [[ "$TIER" == "FULL" ]]; then
-    # --- Pessimistic Lock Check (non-EXEMPT only) ---
-    REVIEW_LOCK="$_STATE_BASE/pr-review-lock.json"
-    if [ -f "$REVIEW_LOCK" ]; then
-        LOCK_STATUS=$(_REVIEW_LOCK="$REVIEW_LOCK" _PR="$PR_NUM" python3 -c "
-import json, os
-with open(os.environ['_REVIEW_LOCK']) as f:
-    s = json.load(f)
-pr = s.get(os.environ['_PR'], {})
-if not pr.get('verified', False):
-    print('LOCKED')
-else:
-    print('OK')
-" 2>/dev/null || echo "OK")
-
-        if [ "$LOCK_STATUS" = "LOCKED" ]; then
-            echo "🔒 [Pessimistic Lock] PR #${PR_NUM} は review_pending 状態です。マージ不可。" >&2
-            echo "" >&2
-            echo "push後のclaude-review 3ソース全確認が未完了です。" >&2
-            echo "解除: bash ~/.claude/scripts/verify-pr-review.sh ${PR_NUM}" >&2
-            echo "または /review-loop ${PR_NUM} で自動検証" >&2
-            exit 2
-        fi
+    # --- Pessimistic Lock Check (non-EXEMPT only) — Fix8 dual-location ---
+    # Read BOTH project-scoped AND global lock files (OR-logic via common.sh).
+    # Treat as verified if EITHER file has verified=true; locked only if a lock
+    # entry exists somewhere and NO file has verified=true.
+    if [[ "$(lock_pr_locked "$PR_NUM")" == "yes" ]]; then
+        echo "🔒 [Pessimistic Lock] PR #${PR_NUM} は review_pending 状態です。マージ不可。" >&2
+        echo "" >&2
+        echo "push後のclaude-review 3ソース全確認が未完了です。" >&2
+        echo "解除: bash ~/.claude/scripts/verify-pr-review.sh ${PR_NUM}" >&2
+        echo "または /review-loop ${PR_NUM} で自動検証" >&2
+        exit 2
     fi
 fi
 

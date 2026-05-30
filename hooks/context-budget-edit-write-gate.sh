@@ -22,16 +22,25 @@
 
 set -euo pipefail
 
-# --- Subagent exemption ---
-if [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] || [[ -n "${CLAUDE_AGENT_ID:-}" ]]; then
-  exit 0
-fi
-
 # --- Read stdin (hook input JSON) ---
 INPUT_JSON=""
 if [[ ! -t 0 ]]; then
   INPUT_JSON=$(cat)
 fi
+
+# --- Subagent exemption ---
+# Subagents ARE the delegated work and must not be blocked. CLAUDE_AGENT_DEPTH may
+# NOT propagate to the hook subprocess, so we ALSO honor the stdin JSON .agent_id
+# field (official Claude Code hook spec). Mirrors git-commit-guard.sh.
+_is_subagent="false"
+if [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] || [[ -n "${CLAUDE_AGENT_ID:-}" ]]; then
+  _is_subagent="true"
+fi
+if command -v jq &>/dev/null && [[ -n "${INPUT_JSON:-}" ]]; then
+  _aid=$(printf '%s' "$INPUT_JSON" | jq -r '.agent_id // ""' 2>/dev/null || echo "")
+  [[ -n "$_aid" ]] && _is_subagent="true"
+fi
+[[ "$_is_subagent" == "true" ]] && exit 0
 
 if [[ -z "$INPUT_JSON" ]]; then
   exit 0

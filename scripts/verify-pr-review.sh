@@ -12,13 +12,32 @@ if [ -z "$PR_NUM" ]; then
     exit 1
 fi
 
-REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+# Resolve REPO independent of cwd (Fix8):
+#   1. CLAUDE_FORK_REPO env override
+#   2. explicit 2nd CLI arg (owner/repo)
+#   3. gh repo view from cwd
+#   4. git remote (origin/upstream) of CLAUDE_PROJECT_DIR or git toplevel
+REPO="${CLAUDE_FORK_REPO:-${2:-}}"
+if [ -z "$REPO" ]; then
+    REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+fi
+if [ -z "$REPO" ]; then
+    _repo_dir="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo "")}"
+    if [ -n "$_repo_dir" ]; then
+        REPO=$(git -C "$_repo_dir" remote get-url upstream 2>/dev/null \
+                 | sed 's|.*github.com[:/]||;s|\.git$||')
+        [ -z "$REPO" ] && REPO=$(git -C "$_repo_dir" remote get-url origin 2>/dev/null \
+                 | sed 's|.*github.com[:/]||;s|\.git$||')
+    fi
+fi
 if [ -z "$REPO" ]; then
     echo "❌ リポジトリ情報を取得できません。" >&2
     exit 1
 fi
 
-# Project-scoped state: match block-merge-without-review.sh resolution (Issue #19)
+# Project-scoped state: match block-merge-without-review.sh resolution (Issue #19).
+# Fix8: write the lock to BOTH the project-scoped dir AND the global dir so a
+# later reader with no/other CLAUDE_PROJECT_DIR (block-merge) sees verified=true.
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
   _STATE_BASE="${CLAUDE_PROJECT_DIR}/.claude/state"
 elif git rev-parse --show-toplevel &>/dev/null; then
@@ -26,21 +45,41 @@ elif git rev-parse --show-toplevel &>/dev/null; then
 else
   _STATE_BASE="$HOME/.claude/state"
 fi
+_GLOBAL_STATE_BASE="$HOME/.claude/state"
 REVIEW_LOCK="$_STATE_BASE/pr-review-lock.json"
 mkdir -p "$(dirname "$REVIEW_LOCK")"
 [ ! -f "$REVIEW_LOCK" ] && echo '{}' > "$REVIEW_LOCK"
 
+# Build deduped list of lock targets (project-scoped, then global)
+LOCK_TARGETS=("$REVIEW_LOCK")
+if [[ "$_GLOBAL_STATE_BASE/pr-review-lock.json" != "$REVIEW_LOCK" ]]; then
+  LOCK_TARGETS+=("$_GLOBAL_STATE_BASE/pr-review-lock.json")
+fi
+mkdir -p "$_GLOBAL_STATE_BASE"
+for _lt in "${LOCK_TARGETS[@]}"; do
+  [ ! -f "$_lt" ] && echo '{}' > "$_lt"
+done
+
 echo "🔍 PR #${PR_NUM} claude-review 3ソース検証中..."
 
 # --- Check if auto-review was needed (no claude-review workflow) ---
-AUTO_REVIEW_NEEDED=$(_LOCK="$REVIEW_LOCK" _PR="$PR_NUM" python3 -c "
+# Fix8: OR-logic across ALL lock locations.
+AUTO_REVIEW_NEEDED="no"
+for _lt in "${LOCK_TARGETS[@]}"; do
+  [ ! -f "$_lt" ] && continue
+  _arn=$(_LOCK="$_lt" _PR="$PR_NUM" python3 -c "
 import json, os, fcntl
-with open(os.environ['_LOCK']) as f:
-    fcntl.flock(f, fcntl.LOCK_SH)
-    s = json.load(f)
-    fcntl.flock(f, fcntl.LOCK_UN)
-print('yes' if s.get(os.environ['_PR'], {}).get('auto_review_needed', False) else 'no')
+try:
+    with open(os.environ['_LOCK']) as f:
+        fcntl.flock(f, fcntl.LOCK_SH)
+        s = json.load(f)
+        fcntl.flock(f, fcntl.LOCK_UN)
+    print('yes' if s.get(os.environ['_PR'], {}).get('auto_review_needed', False) else 'no')
+except Exception:
+    print('no')
 " 2>/dev/null || echo "no")
+  [ "$_arn" = "yes" ] && { AUTO_REVIEW_NEEDED="yes"; break; }
+done
 
 # Source 1: Review bodies
 REVIEWS=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" 2>/dev/null || echo "[]")
@@ -206,12 +245,17 @@ fi
 if [ "$BLOCKING" -gt 0 ] || [ "$MUST_FIX" -gt 0 ] || [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ] || [ "$BUG" -gt 0 ]; then
     echo "❌ PR #${PR_NUM} にBlocking/MustFix/Critical/High/Bug指摘が残っています。ロック解除できません。"
 
-    _LOCK="$REVIEW_LOCK" _PR="$PR_NUM" _BLOCKING="$BLOCKING" _MUST_FIX="$MUST_FIX" _CRITICAL="$CRITICAL" _HIGH="$HIGH" _BUG="$BUG" python3 -c "
+    # Fix8: write failure state (verified=False) to ALL lock locations
+    for _lt in "${LOCK_TARGETS[@]}"; do
+      _LOCK="$_lt" _PR="$PR_NUM" _BLOCKING="$BLOCKING" _MUST_FIX="$MUST_FIX" _CRITICAL="$CRITICAL" _HIGH="$HIGH" _BUG="$BUG" python3 -c "
 import json, os, fcntl
 f_path = os.environ['_LOCK']
 with open(f_path, 'r+') as f:
     fcntl.flock(f, fcntl.LOCK_EX)
-    s = json.load(f)
+    try:
+        s = json.load(f)
+    except Exception:
+        s = {}
     s.setdefault(os.environ['_PR'], {})
     s[os.environ['_PR']]['blocking_count'] = int(os.environ['_BLOCKING'])
     s[os.environ['_PR']]['must_fix_count'] = int(os.environ['_MUST_FIX'])
@@ -224,16 +268,23 @@ with open(f_path, 'r+') as f:
     json.dump(s, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
+    done
     exit 1
 fi
 
-# ALL CLEAN — release lock
-_LOCK="$REVIEW_LOCK" _PR="$PR_NUM" _NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 -c "
+# ALL CLEAN — release lock in ALL locations (Fix8 dual-write).
+# block-merge-without-review.sh reads $HOME/.claude/state when CLAUDE_PROJECT_DIR
+# is unset, so verified=true MUST land in the global file too.
+for _lt in "${LOCK_TARGETS[@]}"; do
+  _LOCK="$_lt" _PR="$PR_NUM" _NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 -c "
 import json, os, fcntl
 f_path = os.environ['_LOCK']
 with open(f_path, 'r+') as f:
     fcntl.flock(f, fcntl.LOCK_EX)
-    s = json.load(f)
+    try:
+        s = json.load(f)
+    except Exception:
+        s = {}
     s.setdefault(os.environ['_PR'], {})
     s[os.environ['_PR']]['blocking_count'] = 0
     s[os.environ['_PR']]['must_fix_count'] = 0
@@ -247,6 +298,7 @@ with open(f_path, 'r+') as f:
     json.dump(s, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null
+done
 
 # Also mark review as read (resolves pr-merge-claude-review-gate.sh / block-state-file-tampering-bash.sh design gap — Issue #99)
 # verify-pr-review.sh fetches and displays all review comments above, satisfying the "read" requirement.
