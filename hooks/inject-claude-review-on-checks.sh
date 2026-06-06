@@ -127,7 +127,11 @@ if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
       exit 0
     fi
 
-    if [[ -n "$REPO" ]] && [[ -n "$PR" ]] && [[ -n "$PENDING_HEAD_SHA" ]]; then
+    if [[ -n "$REPO" ]] && [[ -n "$PR" ]]; then
+      if [[ -z "$PENDING_HEAD_SHA" ]]; then
+        echo "[inject-claude-review] pending-review-comments.json has no head SHA for PR #${PR}; rerun gh pr checks ${PR}." >&2
+        exit 2
+      fi
       CURRENT_HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha' 2>/dev/null || echo "")
       if [[ -z "$CURRENT_HEAD_SHA" ]]; then
         echo "[inject-claude-review] could not resolve current head SHA for PR #${PR}; rerun gh pr checks ${PR}." >&2

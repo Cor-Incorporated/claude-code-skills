@@ -98,6 +98,19 @@ with open(os.environ["PENDING_FILE"], "w") as f:
 PY
 }
 
+clear_pending_head_sha() {
+  PENDING_FILE="$PENDING_FILE" python3 - <<'PY'
+import json
+import os
+
+path = os.environ["PENDING_FILE"]
+d = json.load(open(path))
+d["head_sha"] = ""
+with open(path, "w") as f:
+    json.dump(d, f)
+PY
+}
+
 run_hook() {
   local command="$1"
   local payload
@@ -147,6 +160,10 @@ expect_rc "T2: same-head comment drift blocks AI-cleared state" 2 "gh pr merge 1
 
 write_pending "$GOOD_HASH" 1 1
 expect_rc "T3: command PR differs from pending state does not use other PR state" 0 "gh pr merge 456 --merge"
+
+write_pending "$GOOD_HASH"
+clear_pending_head_sha
+expect_rc "T4: missing pending head SHA blocks standalone merge hook" 2 "gh pr merge 123 --merge"
 
 echo "Total: $TOTAL  Passed: $PASSED  Failed: $FAILED"
 rm -f /tmp/inject_merge_hash_test.out /tmp/inject_merge_hash_test.err
