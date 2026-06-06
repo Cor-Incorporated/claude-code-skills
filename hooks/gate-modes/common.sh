@@ -28,6 +28,43 @@ else
 fi
 
 # =========================================================================
+# Helper: verify pending-review-comments.json still matches GitHub comments
+# =========================================================================
+review_comment_set_hash_script() {
+  local common_dir candidate
+  common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for candidate in \
+    "$HOME/.claude/scripts/review-comment-set-hash.sh" \
+    "${common_dir}/../../scripts/review-comment-set-hash.sh"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+pending_comment_set_current() {
+  local pending_file="$1"
+  local repo="$2"
+  local pr_number="$3"
+  local head_sha="$4"
+  local state_hash script current_hash
+
+  [[ -f "$pending_file" ]] || return 1
+  [[ -n "$repo" && -n "$pr_number" && -n "$head_sha" ]] || return 1
+
+  state_hash=$(jq -r '.comment_set_hash // ""' "$pending_file" 2>/dev/null || echo "")
+  [[ -n "$state_hash" && "$state_hash" != "null" ]] || return 1
+
+  script="$(review_comment_set_hash_script || true)"
+  [[ -n "$script" ]] || return 1
+
+  current_hash=$(_timeout 30 bash "$script" "$pr_number" "$repo" "$head_sha" 2>/dev/null || echo "")
+  [[ -n "$current_hash" && "$current_hash" == "$state_hash" ]]
+}
+
+# =========================================================================
 # State directory — project-scoped
 # =========================================================================
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then

@@ -3,7 +3,7 @@ name: classify-review
 description: "PR review severity を Haiku AI で再分類。regex 偽陽性を除外する片方向ゲート。/classify-review [PR番号] で実行。regex が CRITICAL/HIGH 検出した際の偽陽性チェック専用。"
 user-invocable: true
 argument-hint: "[PR番号]"
-allowed-tools: [Read, Write, Bash, Grep, Agent]
+allowed-tools: [Read, Bash, Grep, Agent]
 ---
 
 # /classify-review — AI Severity Re-classification (False Positive Filter)
@@ -24,7 +24,9 @@ regex ベースの severity 検出が CRITICAL/HIGH を報告した際に、Haik
 `.claude/state/pending-review-comments.json` を Read する。
 なければ `~/.claude/state/pending-review-comments.json` を試す。
 
-必須フィールド: `pr`, `critical`, `high`, `raw_comments`, `head_sha`
+必須フィールド: `pr`, `repo`, `critical`, `high`, `raw_comments`, `head_sha`, `comment_set_hash`
+
+`raw_comments[]` は `index`, `comment_hash`, `critical`, `high`, `body_preview` を確認できる形で Haiku に渡す。
 
 ### Step 2: 分類が必要か判定
 
@@ -67,21 +69,37 @@ Agent(
 ## 出力形式
 各コメントに対して以下の JSON を返してください:
 [
-  { "index": 0, "user": "...", "verdict": "real" | "false_positive", "reasoning": "判定理由を1文で" },
+  {
+    "index": 0,
+    "comment_hash": "...",
+    "verdict": "real" | "false_positive" | "unknown",
+    "reasoning": "判定理由を1文で"
+  },
   ...
 ]
 """
 )
 ```
 
-### Step 4: 判定結果で State File 更新
+### Step 4: 判定結果を正規 updater に渡す
 
-Haiku の判定結果に基づいて `pending-review-comments.json` を Write で更新:
+`pending-review-comments.json` を Write/Edit で直接更新してはいけない。
+Haiku の JSON を1つの shell argument として `classify-review-state.sh` に渡す:
+
+```bash
+VERDICTS_JSON='[{"index":0,"comment_hash":"...","verdict":"false_positive","reasoning":"承認メッセージであり、実指摘ではない"}]'
+bash ~/.claude/scripts/classify-review-state.sh <PR番号> "$VERDICTS_JSON" <OWNER/REPO>
+```
+
+updater は以下を検証してから atomic + flock で state file を更新する:
 
 1. `classification_method` を `"ai"` に変更
-2. 偽陽性と判定されたコメントの severity カウントを除外して再計算
-3. 「本物」「不明」のコメントの severity はそのまま維持
-4. `ai_classification` ブロックに詳細を格納:
+2. PR番号、repo、`head_sha` が現在のGitHub PRと一致することを確認
+3. GitHub から現在のレビューコメント集合を再取得し、`comment_set_hash` が一致することを確認
+4. `comment_hash` が `raw_comments[index]` と一致することを確認
+5. 偽陽性判定かつコメント本文が承認/否定文脈として deterministic に安全な場合だけ severity カウントから除外
+6. 「本物」「不明」、または deterministic severity-negation pattern に合わないコメントの severity はそのまま維持
+7. `ai_classification` ブロックに詳細を格納:
 
 ```json
 {
@@ -97,7 +115,13 @@ Haiku の判定結果に基づいて `pending-review-comments.json` を Write �
 }
 ```
 
-5. トップレベルの `critical`/`high` も AI 判定結果で更新（下流 consumer との互換性維持）
+8. トップレベルの `critical`/`high` も AI 判定結果で更新（下流 consumer との互換性維持）
+
+exit code:
+
+- `0`: 分類保存済み。CRITICAL/HIGH は 0。
+- `1`: 入力不正、stale head、hash mismatch、missing verdict 等。state file は未変更。
+- `2`: 分類保存済み。ただし real/unknown の CRITICAL/HIGH が残るためブロック維持。
 
 ### Step 5: 結果報告
 
@@ -111,7 +135,7 @@ Haiku の判定結果に基づいて `pending-review-comments.json` を Write �
 | 1 | @terisuke | CRITICAL | false_positive | 承認メッセージ内の否定文脈 |
 
 Regex: CRITICAL=1 HIGH=1 → AI: CRITICAL=0 HIGH=0
-State file 更新済み。マージゲートは解除されます。
+classify-review-state.sh による検証済み更新完了。マージゲートは解除されます。
 ```
 
 ## 安全性保証
@@ -119,4 +143,8 @@ State file 更新済み。マージゲートは解除されます。
 - Haiku が 1 つでも `"real"` と判定 → その severity はカウント維持 → ブロック維持
 - Haiku が判定不能/エラー → 全て `"real"` 扱い → ブロック維持
 - `head_sha` が変わったら AI 分類は無効（push 後は再分類必要）
+- `comment_set_hash` が変わったら AI 分類は無効（同一headへのレビュー追加/編集後は再分類必要）
+- `comment_hash` が一致しない判定は無効（state file 未変更）
+- `false_positive` 判定でも、コメント本文自体が承認/否定文脈でない場合は severity を下げない
+- AI/Agent は `pending-review-comments.json` を直接 Write しない
 - 全判定に `reasoning` ログ → 事後監査可能

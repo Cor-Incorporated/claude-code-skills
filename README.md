@@ -4,7 +4,7 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 27 custom skills, 72 hook scripts (64 shell + 7 gate-mode modules + 1 Python), 6 rule sets, 6 utility scripts, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 27 custom skills, 72 hook scripts (64 shell + 7 gate-mode modules + 1 Python), 6 rule sets, 8 utility scripts, and integration with third-party skill frameworks.
 
 > **Design Philosophy**: This project implements the principles from [Harness Engineering Best Practices 2026](https://nyosegawa.com/posts/harness-engineering-best-practices-2026/) — deterministic quality gates via hooks, pointer-based documentation (ADR-002), and the feedback speed hierarchy (PostToolUse > pre-commit > CI > human review).
 
@@ -26,7 +26,7 @@ claude-code-skills/
 ├── skills/           # 27 custom skill definitions (SKILL.md + scripts + references)
 ├── rules/            # 6 global rule files (coding-style, git-workflow, quality, testing, delegation, hook-deployment)
 ├── hooks/            # 72 hook scripts (64 shell + 7 gate-mode modules + 1 Python) (quality gates, safety guards, workflow enforcement)
-├── scripts/          # 6 utility scripts (Codex orchestration, PR review, context monitoring)
+├── scripts/          # 8 utility scripts (Codex orchestration, PR review, context monitoring)
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
 └── README.md
@@ -189,6 +189,8 @@ Task received
 | `codex-parallel.sh` | Single-task Codex execution with auto sandbox selection |
 | `codex-orchestrate.sh` | Multi-task parallel execution via worktrees (JSON or CSV input) |
 | `check-pr-reviews.sh` | Verify PR review timestamps against latest push |
+| `classify-review-state.sh` | Verified updater for `/classify-review` false-positive results |
+| `review-comment-set-hash.sh` | Deterministic current GitHub review comment-set hash |
 | `verify-pr-review.sh` | Validate review coverage before merge |
 | `delivery_score.py` | Quantitative delivery quality scoring (hook coverage, CI, reviews) |
 | `context-monitor.py` | Monitor context window usage and token consumption |
@@ -353,8 +355,8 @@ P2-MEDIUM issues #136-#147 resolved in subsequent PRs. Current open items:
 - `audit-docker-build-args.sh` — Check for http:// in Docker build args
 - `block-local-hooks-write.sh` — Prevent settings.local.json from overriding global hooks
 - `block-codex-mcp.sh` — Block Codex MCP usage, enforce CLI-only (PreToolUse)
-- `block-state-file-tampering.sh` — Prevent AI self-bypass of state files (Write/Edit)
-- `block-state-file-tampering-bash.sh` — Prevent AI self-bypass of state files (Bash)
+- `block-state-file-tampering.sh` — Prevent AI self-bypass of gate state files, including `pending-review-comments.json` (Write/Edit)
+- `block-state-file-tampering-bash.sh` — Prevent AI self-bypass of gate state files, including `pending-review-comments.json` (Bash)
 - `protect-linter-config.sh` — Prevent unauthorized linter config modifications
 
 ### Context Budget Management

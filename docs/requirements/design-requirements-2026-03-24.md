@@ -163,8 +163,8 @@ AI駆動開発（Claude Code + Codex CLI）を用いて、**プロダクショ�
 ### 5.1 state file保護
 - block-state-file-tampering.sh (Write/Edit PreToolUse)
 - block-state-file-tampering-bash.sh (Bash PreToolUse)
-- 保護対象: review-status.json, pr-review-lock.json, pr-review-read.json, context-budget.json, factcheck-status.json, rebase-session.json
-- 正規更新ルート: PostToolUse hook スクリプトのみ
+- 保護対象: review-status.json, pending-review-comments.json, pr-review-lock.json, pr-review-read.json, context-budget.json, factcheck-status.json, rebase-session.json, pr-gate-diagnostic.log
+- 正規更新ルート: hook スクリプトまたは検証済み utility script のみ
 
 ### 5.2 hookスキップ禁止
 - --no-verify 等のフラグ禁止

@@ -94,8 +94,14 @@ echo "=== 2. read-only操作 (ALLOW) ==="
 expect_allow "cat review-status.json" \
   "$(make_input "cat .claude/state/review-status.json")"
 
+expect_allow "cat pending-review-comments.json" \
+  "$(make_input "cat .claude/state/pending-review-comments.json")"
+
 expect_allow "jq -r review-status.json" \
   "$(make_input "jq -r '.branch' .claude/state/review-status.json")"
+
+expect_allow "jq -r pending-review-comments.json" \
+  "$(make_input "jq -r '.critical' .claude/state/pending-review-comments.json")"
 
 expect_allow "head review-status.json" \
   "$(make_input "head -5 .claude/state/review-status.json")"
@@ -125,6 +131,18 @@ echo "=== 3. 書き込み操作 — 単行 (BLOCK) ==="
 
 expect_block "echo > review-status.json" \
   "$(make_input "echo '{}' > .claude/state/review-status.json")"
+
+expect_block "echo > pending-review-comments.json" \
+  "$(make_input "echo '{}' > .claude/state/pending-review-comments.json")"
+
+expect_block "gh api redirect > pending-review-comments.json" \
+  "$(make_input "gh api repos/owner/repo/pulls/1 > .claude/state/pending-review-comments.json")"
+
+expect_block "gh api pipe tee pending-review-comments.json" \
+  "$(make_input "gh api repos/owner/repo/pulls/1 | tee .claude/state/pending-review-comments.json")"
+
+expect_block "gh release download to pending-review-comments.json" \
+  "$(make_input "gh release download v1 --pattern pending-review-comments.json --dir .claude/state --clobber")"
 
 expect_block "tee review-status.json" \
   "$(make_input "echo '{}' | tee .claude/state/review-status.json")"
@@ -204,6 +222,12 @@ expect_block "perl -e での書き込み" \
 expect_block "python3 write (NOT exempted by git rule)" \
   "$(make_input "python3 -c 'import json; json.dump({}, open(\\\"review-status.json\\\",\\\"w\\\"))'")"
 
+expect_block "python3 write pending-review-comments.json" \
+  "$(make_input "python3 -c 'import json; json.dump({}, open(\\\"pending-review-comments.json\\\",\\\"w\\\"))'")"
+
+expect_block "split filename write pending-review-comments.json" \
+  "$(make_input 'p=.claude/state/pending-review-comments; printf {} > $p.json')"
+
 # =========================================================================
 echo ""
 echo "=== 7. パイプ/チェイン/複合コマンド (BLOCK) ==="
@@ -263,6 +287,9 @@ echo "=== 9. 他の保護対象ファイル (BLOCK) ==="
 
 expect_block "pr-review-lock.json 書き込み" \
   "$(make_input "echo '{}' > .claude/state/pr-review-lock.json")"
+
+expect_block "pending-review-comments.json 書き込み" \
+  "$(make_input "echo '{}' > .claude/state/pending-review-comments.json")"
 
 expect_block "context-budget.json 書き込み" \
   "$(make_input "echo '{}' > .claude/state/context-budget.json")"

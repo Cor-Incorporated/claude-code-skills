@@ -39,6 +39,40 @@ print(f'{c}|{h}|{d.get(\"pr\", \"\")}|{d.get(\"head_sha\", \"\")}|{d.get(\"total
 " 2>/dev/null || echo "0|0|||0|regex"
 }
 
+_review_comment_set_hash_script() {
+  local hook_dir candidate
+  hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for candidate in \
+    "$HOME/.claude/scripts/review-comment-set-hash.sh" \
+    "${hook_dir}/../scripts/review-comment-set-hash.sh"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_pending_comment_set_current() {
+  local pending_file="$1"
+  local repo="$2"
+  local pr_number="$3"
+  local head_sha="$4"
+  local state_hash script current_hash
+
+  [[ -f "$pending_file" ]] || return 1
+  [[ -n "$repo" && -n "$pr_number" && -n "$head_sha" ]] || return 1
+
+  state_hash=$(jq -r '.comment_set_hash // ""' "$pending_file" 2>/dev/null || echo "")
+  [[ -n "$state_hash" && "$state_hash" != "null" ]] || return 1
+
+  script="$(_review_comment_set_hash_script || true)"
+  [[ -n "$script" ]] || return 1
+
+  current_hash="$(bash "$script" "$pr_number" "$repo" "$head_sha" 2>/dev/null || echo "")"
+  [[ -n "$current_hash" && "$current_hash" == "$state_hash" ]]
+}
+
 input=""
 [[ ! -t 0 ]] && input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
@@ -84,15 +118,28 @@ fi
 # =========================================================================
 if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   if [[ -f "$PENDING_FILE" ]]; then
+    MERGE_PR=$(echo "$(echo "$cmd" | head -1)" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' || echo "")
     REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
     # Issue #169: Use shared severity reader instead of duplicated python3 one-liners
     IFS='|' read -r CRITICAL HIGH PR PENDING_HEAD_SHA _TOTAL _METHOD <<< "$(_read_severity "$PENDING_FILE")"
 
+    if [[ -n "$MERGE_PR" && -n "$PR" && "$MERGE_PR" != "$PR" ]]; then
+      exit 0
+    fi
+
     if [[ -n "$REPO" ]] && [[ -n "$PR" ]] && [[ -n "$PENDING_HEAD_SHA" ]]; then
       CURRENT_HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha' 2>/dev/null || echo "")
+      if [[ -z "$CURRENT_HEAD_SHA" ]]; then
+        echo "[inject-claude-review] could not resolve current head SHA for PR #${PR}; rerun gh pr checks ${PR}." >&2
+        exit 2
+      fi
       if [[ -n "$CURRENT_HEAD_SHA" ]] && [[ "$PENDING_HEAD_SHA" != "$CURRENT_HEAD_SHA" ]]; then
-        echo "[inject-claude-review] pending-review-comments.json is stale for PR #${PR}; skip merge block." >&2
-        exit 0
+        echo "[inject-claude-review] pending-review-comments.json is stale for PR #${PR}; rerun gh pr checks ${PR}." >&2
+        exit 2
+      fi
+      if [[ -n "$CURRENT_HEAD_SHA" ]] && ! _pending_comment_set_current "$PENDING_FILE" "$REPO" "$PR" "$CURRENT_HEAD_SHA"; then
+        echo "[inject-claude-review] pending-review-comments.json does not match current review comments for PR #${PR}; rerun gh pr checks ${PR}." >&2
+        exit 2
       fi
     fi
 

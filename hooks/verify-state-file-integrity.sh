@@ -17,7 +17,7 @@ INTEGRITY_FILE="${STATE_DIR}/.integrity-checksums"
 # 整合性チェックファイルがなければ初期化
 if [[ ! -f "$INTEGRITY_FILE" ]]; then
   # 初回実行: ベースラインを作成して次回から検証開始
-  for f in "${STATE_DIR}/review-status.json" "${STATE_DIR}/pr-review-lock.json" "${STATE_DIR}/pr-review-read.json" "${STATE_DIR}/context-budget.json" "${STATE_DIR}/factcheck-status.json" "${STATE_DIR}/rebase-session.json" "${STATE_DIR}/pr-gate-diagnostic.log"; do
+  for f in "${STATE_DIR}/review-status.json" "${STATE_DIR}/pending-review-comments.json" "${STATE_DIR}/pr-review-lock.json" "${STATE_DIR}/pr-review-read.json" "${STATE_DIR}/context-budget.json" "${STATE_DIR}/factcheck-status.json" "${STATE_DIR}/rebase-session.json" "${STATE_DIR}/pr-gate-diagnostic.log"; do
     if [[ -f "$f" ]]; then
       sha=$(shasum -a 256 "$f" 2>/dev/null | cut -d' ' -f1)
       echo "${f}|${sha}" >> "$INTEGRITY_FILE"
@@ -46,7 +46,7 @@ done < "$INTEGRITY_FILE"
 
 # チェックサムを更新（次回比較用）
 true > "$INTEGRITY_FILE"
-for f in "${STATE_DIR}/review-status.json" "${STATE_DIR}/pr-review-lock.json" "${STATE_DIR}/pr-review-read.json" "${STATE_DIR}/context-budget.json" "${STATE_DIR}/factcheck-status.json" "${STATE_DIR}/rebase-session.json" "${STATE_DIR}/pr-gate-diagnostic.log"; do
+for f in "${STATE_DIR}/review-status.json" "${STATE_DIR}/pending-review-comments.json" "${STATE_DIR}/pr-review-lock.json" "${STATE_DIR}/pr-review-read.json" "${STATE_DIR}/context-budget.json" "${STATE_DIR}/factcheck-status.json" "${STATE_DIR}/rebase-session.json" "${STATE_DIR}/pr-gate-diagnostic.log"; do
   if [[ -f "$f" ]]; then
     sha=$(shasum -a 256 "$f" 2>/dev/null | cut -d' ' -f1)
     echo "${f}|${sha}" >> "$INTEGRITY_FILE"

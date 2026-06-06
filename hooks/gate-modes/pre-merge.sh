@@ -124,6 +124,25 @@ fi
 
 # PRIMARY_LGTM override: Tier 1 trust bypasses Tier 2 severity
 if [[ "$PRIMARY_LGTM" == "true" ]]; then
+  PENDING_FILE="$STATE_DIR/pending-review-comments.json"
+  if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
+    _primary_pr_in_file=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+    _primary_head_sha_in_file=$(jq -r '.head_sha // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+    if [[ "$_primary_pr_in_file" == "$PR_NUMBER" ]]; then
+      if [[ -z "$HEAD_SHA" ]]; then
+        echo "🚫 [BLOCKED] PR #${PR_NUMBER}: HEAD SHA を確認できないため pending-review-comments.json を検証できません。" >&2
+        exit 2
+      fi
+      if [[ "$_primary_head_sha_in_file" != "$HEAD_SHA" ]]; then
+        echo "🚫 [BLOCKED] PR #${PR_NUMBER}: pending-review-comments.json が古い HEAD を参照しています。gh pr checks ${PR_NUMBER} を再実行してください。" >&2
+        exit 2
+      fi
+      if ! pending_comment_set_current "$PENDING_FILE" "$REPO" "$PR_NUMBER" "$HEAD_SHA"; then
+        echo "🚫 [BLOCKED] PR #${PR_NUMBER}: pending-review-comments.json が現在のレビューコメント集合と一致しません。gh pr checks ${PR_NUMBER} を再実行してください。" >&2
+        exit 2
+      fi
+    fi
+  fi
   echo "  ℹ️ [pre-merge] Tier 1 LGTM により Tier 2 findings を許可。マージ可。" >&2
   # Still record the review status
   exit 0
@@ -150,19 +169,32 @@ if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
   _pr_in_file=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
   _head_sha_in_file=$(jq -r '.head_sha // ""' "$PENDING_FILE" 2>/dev/null || echo "")
   # Validate scope: pending-review-comments must match current PR
-  if [[ "$_pr_in_file" == "$PR_NUMBER" ]] && [[ -n "$HEAD_SHA" ]] && [[ "$_head_sha_in_file" == "$HEAD_SHA" ]]; then
-    # Issue #165: Check classification_method — prefer AI classification if available
-    _method=$(jq -r '.classification_method // "regex"' "$PENDING_FILE" 2>/dev/null || echo "regex")
-    if [[ "$_method" == "ai" ]]; then
-      _critical=$(jq -r '.ai_classification.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
-      _high=$(jq -r '.ai_classification.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
-    else
-      _critical=$(jq -r '.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
-      _high=$(jq -r '.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+  if [[ "$_pr_in_file" == "$PR_NUMBER" ]]; then
+    if [[ -z "$HEAD_SHA" ]]; then
+      echo "🚫 [BLOCKED] PR #${PR_NUMBER}: HEAD SHA を確認できないため pending-review-comments.json を検証できません。" >&2
+      exit 2
     fi
-    _total=$(jq -r '.total // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
-    if [[ "$_critical" -eq 0 ]] && [[ "$_high" -eq 0 ]] && [[ "$_total" -gt 0 ]]; then
-      PASS_B="yes"
+    if [[ "$_head_sha_in_file" != "$HEAD_SHA" ]]; then
+      echo "🚫 [BLOCKED] PR #${PR_NUMBER}: pending-review-comments.json が古い HEAD を参照しています。gh pr checks ${PR_NUMBER} を再実行してください。" >&2
+      exit 2
+    fi
+    if ! pending_comment_set_current "$PENDING_FILE" "$REPO" "$PR_NUMBER" "$HEAD_SHA"; then
+      echo "🚫 [BLOCKED] PR #${PR_NUMBER}: pending-review-comments.json が現在のレビューコメント集合と一致しません。gh pr checks ${PR_NUMBER} を再実行してください。" >&2
+      exit 2
+    else
+      # Issue #165: Check classification_method — prefer AI classification if available
+      _method=$(jq -r '.classification_method // "regex"' "$PENDING_FILE" 2>/dev/null || echo "regex")
+      if [[ "$_method" == "ai" ]]; then
+        _critical=$(jq -r '.ai_classification.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+        _high=$(jq -r '.ai_classification.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+      else
+        _critical=$(jq -r '.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+        _high=$(jq -r '.high // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+      fi
+      _total=$(jq -r '.total // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
+      if [[ "$_critical" -eq 0 ]] && [[ "$_high" -eq 0 ]] && [[ "$_total" -gt 0 ]]; then
+        PASS_B="yes"
+      fi
     fi
   fi
 fi
