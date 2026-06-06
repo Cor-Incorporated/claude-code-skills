@@ -2,7 +2,7 @@
 
 [Claude Code](https://claude.com/claude-code)（Anthropic 公式 CLI）のためのスキル・ルール・フック集です。
 
-27 のカスタムスキル、72 の hook スクリプト（64 シェル + 7 ゲートモードモジュール + 1 Python）、6 つのルールセット、6 つのユーティリティスクリプトを含む、本番環境レベルの Claude Code 設定を提供します。
+27 のカスタムスキル、72 の hook スクリプト（64 シェル + 7 ゲートモードモジュール + 1 Python）、6 つのルールセット、8 つのユーティリティスクリプトを含む、本番環境レベルの Claude Code 設定を提供します。
 
 [English](README.md) | **日本語**
 
@@ -24,7 +24,7 @@ claude-code-skills/
 ├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 6 グローバルルール (コーディング規約, Git, 品質, テスト, 委任, hookデプロイ)
 ├── hooks/            # 72 hook スクリプト (64 シェル + 7 ゲートモードモジュール + 1 Python) (品質ゲート, 安全ガード, ワークフロー強制)
-├── scripts/          # 6 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
+├── scripts/          # 8 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
 ├── README.md         # 英語版 README
@@ -188,6 +188,8 @@ hook スクリプトが委任ルールを自動的に強制します:
 | `codex-parallel.sh` | 単一タスク Codex 実行（sandbox 自動選択） |
 | `codex-orchestrate.sh` | マルチタスク並列実行（JSON/CSV 入力、worktree 分離） |
 | `check-pr-reviews.sh` | PR レビュータイムスタンプと最新 push の照合 |
+| `classify-review-state.sh` | `/classify-review` 偽陽性判定結果の検証済み state 更新 |
+| `review-comment-set-hash.sh` | 現在の GitHub レビューコメント集合 hash の決定論的計算 |
 | `verify-pr-review.sh` | マージ前のレビューカバレッジ検証 |
 | `context-monitor.py` | コンテキストウィンドウ使用量とトークン消費の監視 |
 
@@ -347,8 +349,8 @@ P2-MEDIUM Issue #136-#147 も後続 PR で解決済みです。現在のオー�
 - `audit-docker-build-args.sh` — Docker build args の http:// チェック
 - `block-local-hooks-write.sh` — settings.local.json によるグローバル hook 上書きを防止
 - `block-codex-mcp.sh` — Codex MCP 使用をブロック、CLI 経由のみ強制 (PreToolUse)
-- `block-state-file-tampering.sh` — AI による状態ファイル自己改ざん防止 (Write/Edit)
-- `block-state-file-tampering-bash.sh` — AI による状態ファイル自己改ざん防止 (Bash)
+- `block-state-file-tampering.sh` — `pending-review-comments.json` を含む gate state の自己改ざん防止 (Write/Edit)
+- `block-state-file-tampering-bash.sh` — `pending-review-comments.json` を含む gate state の自己改ざん防止 (Bash)
 - `protect-linter-config.sh` — リンター設定の不正変更を防止
 
 ### コンテキスト予算管理

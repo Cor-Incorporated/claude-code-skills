@@ -4,6 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+EXPECTED_ORIGIN="$(git -C "$SCRIPT_DIR" remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||')"
 PASS=0
 FAIL=0
 
@@ -45,10 +46,10 @@ test_case "multiple --repo uses first match" "first/repo" "$result"
 # --- Priority 4: origin fallback ---
 echo "--- Priority 4: origin fallback ---"
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo ''")
-test_case "fallback to origin" "terisuke/claude-code-skills" "$result"
+test_case "fallback to origin" "$EXPECTED_ORIGIN" "$result"
 
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr merge 10 --merge'")
-test_case "no --repo flag falls back to origin" "terisuke/claude-code-skills" "$result"
+test_case "no --repo flag falls back to origin" "$EXPECTED_ORIGIN" "$result"
 
 # --- Summary ---
 echo ""

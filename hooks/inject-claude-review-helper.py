@@ -10,10 +10,14 @@ Handles three scenarios:
 Issue #66 Fix #5: Added head_sha to state file for PR scope validation.
 """
 
+import hashlib
+import fcntl
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 
 
@@ -34,6 +38,7 @@ class ReviewSummary:
         default_factory=list
     )  # Issue #165: raw data for AI classification
     head_sha: str = ""  # Issue #66 Fix #5: track HEAD SHA for scope validation
+    comment_set_hash: str = ""  # Issue #235: detect same-head review changes
 
 
 def gh_api(path: str) -> list | dict:
@@ -154,6 +159,83 @@ def count_severity(text: str) -> tuple[int, int, int, int]:
     return critical, high, warning, suggestion
 
 
+def raw_comment_entry(
+    *,
+    source: str,
+    user: str,
+    body: str,
+    path: str | None = None,
+    line: str | int | None = None,
+    comment_id: str | int | None = None,
+    updated_at: str | None = None,
+) -> dict:
+    """Build a stable raw comment record for downstream AI classification."""
+    critical, high, warning, suggestion = count_severity(body)
+    entry = {
+        "user": user,
+        "body_preview": body[:500],
+        "source": source,
+        "critical": critical,
+        "high": high,
+        "warning": warning,
+        "suggestion": suggestion,
+    }
+    if path is not None:
+        entry["path"] = path
+    if line is not None:
+        entry["line"] = line
+    if comment_id is not None:
+        entry["comment_id"] = comment_id
+    if updated_at is not None:
+        entry["updated_at"] = updated_at
+    digest_src = json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    entry["comment_hash"] = hashlib.sha256(digest_src.encode("utf-8")).hexdigest()
+    return entry
+
+
+def comment_set_hash(raw_comments: list[dict]) -> str:
+    """Hash the review comment set used by severity classification."""
+    digest_src = json.dumps(
+        [
+            {
+                "comment_hash": c.get("comment_hash", ""),
+                "critical": c.get("critical", 0),
+                "high": c.get("high", 0),
+            }
+            for c in raw_comments
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(digest_src.encode("utf-8")).hexdigest()
+
+
+def write_json_atomic(path: str, payload: dict) -> None:
+    """Write pending-review state through a shared lock and atomic replace."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lock_path = f"{path}.lock"
+    with open(lock_path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".pending-review-comments.",
+            suffix=".tmp",
+            dir=os.path.dirname(path),
+            text=True,
+        )
+        try:
+            with os.fdopen(fd, "w") as tmp:
+                json.dump(payload, tmp, indent=2, ensure_ascii=False)
+                tmp.write("\n")
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(tmp_path, path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def fetch_reviews(repo: str, pr: str) -> ReviewSummary:
     """Fetch all review data for a PR."""
     summary = ReviewSummary()
@@ -180,6 +262,8 @@ def fetch_reviews(repo: str, pr: str) -> ReviewSummary:
                 "line": c.get("line") or c.get("original_line") or "?",
                 "body": c.get("body", ""),
                 "user": c.get("user", {}).get("login", "?"),
+                "id": c.get("id"),
+                "updated_at": c.get("updated_at"),
             }
         )
 
@@ -205,10 +289,24 @@ def fetch_reviews(repo: str, pr: str) -> ReviewSummary:
         has_review_keyword = any(kw in body_lower for kw in review_keywords)
 
         if is_bot:
-            bot_comments.append({"user": user, "body": body})
+            bot_comments.append(
+                {
+                    "user": user,
+                    "body": body,
+                    "id": c.get("id"),
+                    "updated_at": c.get("updated_at"),
+                }
+            )
             summary.has_claude_review = True
         elif has_review_keyword:
-            human_review_comments.append({"user": user, "body": body})
+            human_review_comments.append(
+                {
+                    "user": user,
+                    "body": body,
+                    "id": c.get("id"),
+                    "updated_at": c.get("updated_at"),
+                }
+            )
 
     if bot_comments:
         summary.issue_comments.append(bot_comments[-1])
@@ -226,35 +324,44 @@ def fetch_reviews(repo: str, pr: str) -> ReviewSummary:
                     {
                         "user": r.get("user", {}).get("login", "?"),
                         "body": f"[{state}] {body}",
+                        "id": r.get("id"),
+                        "updated_at": r.get("submitted_at"),
                     }
                 )
 
-    # Count totals and severity
+    # Count totals. Severity is derived from per-comment raw entries below so
+    # negation-line stripping cannot accidentally hide another comment's finding.
     summary.total = len(summary.inline_comments) + len(summary.issue_comments)
-    all_text = " ".join(
-        c.get("body", "") for c in summary.inline_comments + summary.issue_comments
-    )
-    (summary.critical, summary.high, summary.warning, summary.suggestion) = (
-        count_severity(all_text)
-    )
 
     # Issue #165: Store raw comments for AI classification skill
     for c in summary.inline_comments:
         summary.raw_comments.append(
-            {
-                "user": c.get("user", "?"),
-                "body_preview": c.get("body", "")[:500],
-                "source": "inline",
-            }
+            raw_comment_entry(
+                source="inline",
+                user=c.get("user", "?"),
+                body=c.get("body", ""),
+                path=c.get("path", "?"),
+                line=c.get("line", "?"),
+                comment_id=c.get("id"),
+                updated_at=c.get("updated_at"),
+            )
         )
     for c in summary.issue_comments:
         summary.raw_comments.append(
-            {
-                "user": c.get("user", "?"),
-                "body_preview": c.get("body", "")[:500],
-                "source": "issue_comment",
-            }
+            raw_comment_entry(
+                source="issue_comment",
+                user=c.get("user", "?"),
+                body=c.get("body", ""),
+                comment_id=c.get("id"),
+                updated_at=c.get("updated_at"),
+            )
         )
+
+    summary.critical = sum(int(c.get("critical", 0) or 0) for c in summary.raw_comments)
+    summary.high = sum(int(c.get("high", 0) or 0) for c in summary.raw_comments)
+    summary.warning = sum(int(c.get("warning", 0) or 0) for c in summary.raw_comments)
+    summary.suggestion = sum(int(c.get("suggestion", 0) or 0) for c in summary.raw_comments)
+    summary.comment_set_hash = comment_set_hash(summary.raw_comments)
 
     if summary.total > 0:
         summary.has_any_review = True
@@ -356,11 +463,7 @@ def main() -> None:
     except Exception:
         pass
     if not state_dir:
-        import os
-
         state_dir = os.path.expanduser("~/.claude/state")
-
-    import os
 
     os.makedirs(state_dir, exist_ok=True)
     pending_file = os.path.join(state_dir, "pending-review-comments.json")
@@ -368,23 +471,22 @@ def main() -> None:
     # Issue #66 Fix #5: Include head_sha for scope validation
     # Issue #165: Include raw_comments + classification_method for AI skill
     # Consumers validate that state matches current PR/SHA before trusting it.
-    with open(pending_file, "w") as f:
-        json.dump(
-            {
-                "pr": pr,
-                "repo": repo,
-                "head_sha": summary.head_sha,
-                "total": summary.total,
-                "critical": summary.critical,
-                "high": summary.high,
-                "output": output,
-                "classification_method": "regex",
-                "raw_comments": summary.raw_comments,
-                "ai_classification": None,
-            },
-            f,
-            indent=2,
-        )
+    write_json_atomic(
+        pending_file,
+        {
+            "pr": pr,
+            "repo": repo,
+            "head_sha": summary.head_sha,
+            "comment_set_hash": summary.comment_set_hash,
+            "total": summary.total,
+            "critical": summary.critical,
+            "high": summary.high,
+            "output": output,
+            "classification_method": "regex",
+            "raw_comments": summary.raw_comments,
+            "ai_classification": None,
+        },
+    )
 
     result = {
         "hookSpecificOutput": {

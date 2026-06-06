@@ -27,7 +27,8 @@ if [[ -z "$CMD" ]]; then
 fi
 
 # 保護対象のファイル名パターン
-PROTECTED="review-status\.json|pr-review-lock\.json|pr-review-read\.json|context-budget\.json|factcheck-status\.json|rebase-session\.json|pr-gate-diagnostic\.log"
+PROTECTED="review-status\.json|pending-review-comments\.json|pr-review-lock\.json|pr-review-read\.json|context-budget\.json|factcheck-status\.json|rebase-session\.json|pr-gate-diagnostic\.log"
+PROTECTED_STEMS="review-status|pending-review-comments|pr-review-lock|pr-review-read|context-budget|factcheck-status|rebase-session|pr-gate-diagnostic"
 
 # --- gh CLI 免除 (Issue #179) ---
 # gh コマンドはGitHub API操作であり、ローカルファイルへの書き込みではない
@@ -36,10 +37,53 @@ PROTECTED="review-status\.json|pr-review-lock\.json|pr-review-read\.json|context
 # 多行コマンドは免除しない（2行目に書込みを隠せるため）
 # 注意: クォート内の ; や && も検出される（fail-closed設計）
 GH_LINE_COUNT=$(echo "$CMD" | wc -l | tr -d ' ')
+GH_LOCAL_WRITE='(release\s+download|run\s+download|repo\s+clone|gist\s+clone|codespace\s+cp|--dir|-D|--output|-o|--clobber)'
 if [[ "$GH_LINE_COUNT" -eq 1 ]] && \
    echo "$CMD" | grep -qE '^\s*gh\s' && \
-   ! echo "$CMD" | grep -qE ';|&&|\|\|'; then
+   echo "$CMD" | grep -qE '(\.claude/state|~/.claude/state|\$HOME/.claude/state)' && \
+   echo "$CMD" | grep -qE "$PROTECTED_STEMS" && \
+   echo "$CMD" | grep -qE "$GH_LOCAL_WRITE"; then
+  cat >&2 <<ERRMSG
+
+⛔ [BLOCKED] gh コマンドによる状態ファイル書き込みの疑い
+
+コマンド（先頭200文字）: $(echo "$CMD" | head -c 200)
+理由: gh のローカル書き込み系サブコマンド/オプションで保護 state path が指定されています。
+
+ERRMSG
+  exit 2
+fi
+
+if [[ "$GH_LINE_COUNT" -eq 1 ]] && \
+   echo "$CMD" | grep -qE '^\s*gh\s' && \
+   ! echo "$CMD" | grep -qE '[<>|;`]|&&|\|\||\$\('; then
   exit 0
+fi
+
+# --- 書き込みパターン（広範に検出） ---
+WRITE_PATTERNS='(>|>>|json\.dump|json\.dumps|echo\s.*>|printf\s.*>|tee\s|sponge\s|sed\s+-i|write_text|open\s*\(.*["\x27]w|open\s*\(.*["\x27]a|\.write\s*\(|Path\s*\(.*write_|truncate|dd\s+of=|cp\s+.*\.(json|log)|mv\s+.*\.(json|log)|ln\s+-[sf]|eval\s|exec\s+[0-9]*>|curl\s.*-o|wget\s.*-O|ruby\s+-e|perl\s+-e|perl\s+-i|node\s+-e|deno\s+(eval|run)|php\s+-r)'
+
+# 書き込み判定用: 既知の安全なリダイレクトのみを除去
+# 除去対象: 2>/dev/null, >/dev/null（stderr/stdout抑制）, 2>&1, 2>&2（fd複製）
+# 注意: 以前の広範パターン s/[0-9]*>[>&\/][^ ]*//g は >/absolute/path も除去し
+# cat file >/path/to/protected.json のバイパスを許していた (Codex P1)
+CMD_FOR_WRITE_CHECK=$(echo "$CMD" | sed -E 's/[0-9]*>\/dev\/null//g; s/[0-9]*>&[0-9]+//g')
+
+# Literal filename splitting bypass guard:
+#   p=.claude/state/pending-review-comments; printf '{}' > "$p".json
+# The full filename never appears, so protect state-dir + protected stem writes too.
+if echo "$CMD" | grep -qE '(\.claude/state|~/.claude/state|\$HOME/.claude/state)' && \
+   echo "$CMD" | grep -qE "$PROTECTED_STEMS" && \
+   echo "$CMD_FOR_WRITE_CHECK" | grep -qE "$WRITE_PATTERNS"; then
+  cat >&2 <<ERRMSG
+
+⛔ [BLOCKED] Bash経由の状態ファイル改ざんを検出
+
+コマンド（先頭200文字）: $(echo "$CMD" | head -c 200)
+理由: 状態ファイル名を変数/連結で分割した書き込みの可能性があります。
+
+ERRMSG
+  exit 2
 fi
 
 # コマンド全体（多行含む）で保護対象ファイルを検出
@@ -48,9 +92,6 @@ if echo "$CMD" | grep -qE "$PROTECTED"; then
   # --- 監査ログ: 保護ファイル参照を全て記録（allow/block問わず） ---
   AUDIT_LOG="${HOME}/.claude/state/tampering-audit.log"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CMD=$(echo "$CMD" | head -c 300 | tr '\n' '\\n')" >> "$AUDIT_LOG" 2>/dev/null || true
-
-  # --- 書き込みパターン（広範に検出） ---
-  WRITE_PATTERNS='(>|>>|json\.dump|json\.dumps|echo\s.*>|printf\s.*>|tee\s|sponge\s|sed\s+-i|write_text|open\s*\(.*["\x27]w|open\s*\(.*["\x27]a|\.write\s*\(|Path\s*\(.*write_|truncate|dd\s+of=|cp\s+.*\.(json|log)|mv\s+.*\.(json|log)|ln\s+-[sf]|eval\s|exec\s+[0-9]*>|curl\s.*-o|wget\s.*-O|ruby\s+-e|perl\s+-e|perl\s+-i|node\s+-e|deno\s+(eval|run)|php\s+-r)'
 
   # --- read-only allowlistパターン ---
   # 単純な読み取りコマンドのみ許可（1行コマンド限定）
@@ -62,12 +103,6 @@ if echo "$CMD" | grep -qE "$PROTECTED"; then
   fi
 
   READ_ONLY_PATTERNS='^\s*(cat|jq(\s+-[re]+)*|less|head|tail|wc|file|stat|md5sum|sha256sum|diff|git\s+(log|show|diff|status|ls-files|rev-parse|branch|remote|tag|describe|shortlog|blame|commit|add|push|pull|fetch|merge|rebase|cherry-pick|stash)|gh|grep|rg|find|which|type|command|test)\s'
-
-  # 書き込み判定用: 既知の安全なリダイレクトのみを除去
-  # 除去対象: 2>/dev/null, >/dev/null（stderr/stdout抑制）, 2>&1, 2>&2（fd複製）
-  # 注意: 以前の広範パターン s/[0-9]*>[>&\/][^ ]*//g は >/absolute/path も除去し
-  # cat file >/path/to/protected.json のバイパスを許していた (Codex P1)
-  CMD_FOR_WRITE_CHECK=$(echo "$CMD" | sed -E 's/[0-9]*>\/dev\/null//g; s/[0-9]*>&[0-9]+//g')
 
   # 判定: read-only AND NOT compound AND NOT multiline AND NOT write → 許可
   # 全てのshell複合演算子 (|, ||, &&, ;) をブロック
@@ -108,6 +143,7 @@ ERRMSG
 
 正しい方法:
   - review-status.json → code-reviewer実行 → record-code-review.sh が自動更新
+  - pending-review-comments.json → inject-claude-review-helper.py / classify-review-state.sh が自動更新
   - pr-review-lock.json → git push → pr-ci-review-gate.sh が自動設定
   - context-budget.json → context-budget-reset.sh がセッション開始時に初期化
 

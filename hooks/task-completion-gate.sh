@@ -24,6 +24,41 @@ set -uo pipefail
 export GH_FORCE_TTY=0
 export GH_NO_UPDATE_NOTIFIER=1
 
+_review_comment_set_hash_script() {
+  local hook_dir candidate
+  hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for candidate in \
+    "$HOME/.claude/scripts/review-comment-set-hash.sh" \
+    "${hook_dir}/../scripts/review-comment-set-hash.sh"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_pending_comment_set_current() {
+  local pending_file="$1"
+  local repo="$2"
+  local pr_number="$3"
+  local head_sha="$4"
+  local state_hash script current_hash
+
+  [[ -f "$pending_file" ]] || return 1
+  [[ -n "$repo" && -n "$pr_number" && -n "$head_sha" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  state_hash=$(jq -r '.comment_set_hash // ""' "$pending_file" 2>/dev/null || echo "")
+  [[ -n "$state_hash" && "$state_hash" != "null" ]] || return 1
+
+  script="$(_review_comment_set_hash_script || true)"
+  [[ -n "$script" ]] || return 1
+
+  current_hash="$(bash "$script" "$pr_number" "$repo" "$head_sha" 2>/dev/null || echo "")"
+  [[ -n "$current_hash" && "$current_hash" == "$state_hash" ]]
+}
+
 # Read stdin
 input=""
 if [[ ! -t 0 ]]; then
@@ -176,6 +211,21 @@ PENDING_FILE="$STATE_DIR/pending-review-comments.json"
 if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
   _pr_match=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
   if [[ "$_pr_match" == "$PR_NUMBER" ]]; then
+    _pending_head_sha=$(jq -r '.head_sha // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+    if [[ "$_pending_head_sha" != "$HEAD_SHA" ]]; then
+      echo "" >&2
+      echo "[task-completion-gate] タスク完了をブロック: PR #${PR_NUMBER} のレビュー状態が古い HEAD を参照しています" >&2
+      echo "  gh pr checks ${PR_NUMBER} を再実行してから完了してください。" >&2
+      echo "" >&2
+      exit 2
+    fi
+    if ! _pending_comment_set_current "$PENDING_FILE" "$REPO" "$PR_NUMBER" "$HEAD_SHA"; then
+      echo "" >&2
+      echo "[task-completion-gate] タスク完了をブロック: PR #${PR_NUMBER} のレビューコメント状態が最新ではありません" >&2
+      echo "  gh pr checks ${PR_NUMBER} を再実行してから完了してください。" >&2
+      echo "" >&2
+      exit 2
+    fi
     _method=$(jq -r '.classification_method // "regex"' "$PENDING_FILE" 2>/dev/null || echo "regex")
     if [[ "$_method" == "ai" ]]; then
       CRITICAL=$(jq -r '.ai_classification.critical // 0' "$PENDING_FILE" 2>/dev/null || echo "0")
