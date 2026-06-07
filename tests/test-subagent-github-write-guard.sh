@@ -52,21 +52,32 @@ else
   fail "T4: read-only gh command should not be blocked"
 fi
 
+payload='{"agent_id":"worker-json-only","tool_name":"Bash","tool_input":{"command":"gh pr create --base develop"}}'
+if out=$(echo "$payload" | bash "$HOOK" 2>&1); then
+  fail "T5: JSON agent_id gh pr create should be blocked"
+else
+  if [[ "$out" == *"Git/GitHub 書き込み"* ]]; then
+    pass "T5: JSON agent_id gh pr create blocked"
+  else
+    fail "T5: JSON agent_id block message missing"
+  fi
+fi
+
 payload='{"tool_name":"Bash","tool_input":{"command":"gh pr create --base develop"}}'
 if out=$(echo "$payload" | bash "$HOOK" 2>&1); then
   if [[ -z "$out" ]]; then
-    pass "T5: parent session bypasses hook"
+    pass "T6: parent session bypasses hook"
   else
-    fail "T5: expected no output for parent session"
+    fail "T6: expected no output for parent session"
   fi
 else
-  fail "T5: parent session should not be blocked"
+  fail "T6: parent session should not be blocked"
 fi
 
 if grep -q 'block-subagent-github-write.sh' "$SETTINGS"; then
-  pass "T6: settings.json registers guard hook"
+  pass "T7: settings.json registers guard hook"
 else
-  fail "T6: settings.json missing guard hook registration"
+  fail "T7: settings.json missing guard hook registration"
 fi
 
 echo ""

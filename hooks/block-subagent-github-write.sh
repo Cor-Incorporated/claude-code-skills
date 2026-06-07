@@ -9,16 +9,24 @@
 
 set -euo pipefail
 
-if [[ "${CLAUDE_AGENT_DEPTH:-0}" -lt 1 ]] && [[ -z "${CLAUDE_AGENT_ID:-}" ]]; then
-  exit 0
-fi
-
 input=""
 if [[ ! -t 0 ]]; then
   input=$(cat 2>/dev/null || echo "")
 fi
-[[ -z "$input" ]] && exit 0
 command -v jq &>/dev/null || exit 0
+
+json_agent_id=""
+if [[ -n "$input" ]]; then
+  json_agent_id=$(echo "$input" | jq -r '.agent_id // ""' 2>/dev/null || echo "")
+fi
+
+if [[ "${CLAUDE_AGENT_DEPTH:-0}" -lt 1 ]] \
+   && [[ -z "${CLAUDE_AGENT_ID:-}" ]] \
+   && [[ -z "$json_agent_id" ]]; then
+  exit 0
+fi
+
+[[ -z "$input" ]] && exit 0
 
 tool_name=$(echo "$input" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 [[ "$tool_name" == "Bash" ]] || exit 0
