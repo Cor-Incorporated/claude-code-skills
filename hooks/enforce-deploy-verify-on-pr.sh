@@ -7,6 +7,7 @@
 set -euo pipefail
 
 GIT_CONTEXT_DIR="${GIT_CONTEXT_DIR:-}"
+DEFAULT_MANAGED_REPO="cor-incorporated/claude-code-skills"
 
 git_ctx() {
   if [[ -n "${GIT_CONTEXT_DIR:-}" ]]; then
@@ -61,6 +62,84 @@ if top:
 PY
 }
 
+normalize_repo_slug() {
+  local ref="${1:-}"
+  [[ -n "$ref" ]] || return 1
+
+  while [[ "$ref" == */ ]]; do
+    ref="${ref%/}"
+  done
+  ref="${ref%.git}"
+  case "$ref" in
+    git@github.com:*) ref="${ref#git@github.com:}" ;;
+    ssh://git@github.com/*) ref="${ref#ssh://git@github.com/}" ;;
+    https://github.com/*) ref="${ref#https://github.com/}" ;;
+    http://github.com/*) ref="${ref#http://github.com/}" ;;
+    github.com/*) ref="${ref#github.com/}" ;;
+  esac
+
+  if [[ "$ref" =~ ^[^/]+/[^/]+$ ]]; then
+    printf '%s' "$ref" | tr '[:upper:]' '[:lower:]'
+  else
+    return 1
+  fi
+}
+
+repo_remote_matches() {
+  local project_dir="$1"
+  local expected_slug="$2"
+  local remote url slug
+
+  for remote in origin upstream; do
+    url=$(git -C "$project_dir" remote get-url "$remote" 2>/dev/null || true)
+    [[ -n "$url" ]] || continue
+    slug=$(normalize_repo_slug "$url" || true)
+    [[ "$slug" == "$expected_slug" ]] && return 0
+  done
+
+  return 1
+}
+
+project_path_matches() {
+  local project_dir="$1"
+  local repo_ref="$2"
+  local ref_top project_real ref_real project_git ref_git
+
+  [[ -d "$repo_ref" ]] || return 1
+  ref_top=$(git -C "$repo_ref" rev-parse --show-toplevel 2>/dev/null || true)
+  [[ -n "$ref_top" ]] || return 1
+
+  project_real=$(cd "$project_dir" && pwd -P)
+  ref_real=$(cd "$ref_top" && pwd -P)
+  [[ "$project_real" == "$ref_real" ]] && return 0
+
+  project_git=$(git -C "$project_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  ref_git=$(git -C "$ref_top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  [[ -n "$project_git" && -n "$ref_git" ]] || return 1
+
+  project_git=$(cd "$project_git" && pwd -P)
+  ref_git=$(cd "$ref_git" && pwd -P)
+  [[ "$project_git" == "$ref_git" ]]
+}
+
+is_managed_repo() {
+  local project_dir="$1"
+  local override="${CLAUDE_CODE_SKILLS_REPO:-}"
+  local override_slug
+
+  if [[ -n "$override" ]]; then
+    if project_path_matches "$project_dir" "$override"; then
+      return 0
+    fi
+    override_slug=$(normalize_repo_slug "$override" || true)
+    if [[ -n "$override_slug" ]] && repo_remote_matches "$project_dir" "$override_slug"; then
+      return 0
+    fi
+  fi
+
+  repo_remote_matches "$project_dir" "$DEFAULT_MANAGED_REPO"
+}
+
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
 [[ "$TOOL_NAME" == "Bash" ]] || exit 0
@@ -87,6 +166,8 @@ fi
 
 PROJECT_DIR=$(git_ctx rev-parse --show-toplevel 2>/dev/null || echo "")
 [[ -n "$PROJECT_DIR" ]] || exit 0
+
+is_managed_repo "$PROJECT_DIR" || exit 0
 
 BASE_BRANCH="${DEPLOY_VERIFY_BASE_BRANCH:-$(git_ctx symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo "develop")}"
 CHANGED_FILES=$(git_ctx diff --name-only "$BASE_BRANCH"...HEAD 2>/dev/null || git_ctx diff --name-only "$BASE_BRANCH" HEAD 2>/dev/null || echo "")

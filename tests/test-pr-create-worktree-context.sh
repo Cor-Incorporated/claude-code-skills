@@ -100,7 +100,7 @@ run_deploy_hook_expect() {
   payload=$(json_payload "$cmd")
 
   local out ec=0
-  out=$(cd "$REPO" && HOME="$HOME_DIR" bash "$DEPLOY_HOOK" <<<"$payload" 2>&1) || ec=$?
+  out=$(cd "$REPO" && HOME="$HOME_DIR" CLAUDE_CODE_SKILLS_REPO="$WT" bash "$DEPLOY_HOOK" <<<"$payload" 2>&1) || ec=$?
   if [[ "$ec" -eq "$expected" ]]; then
     pass "$label"
   else
