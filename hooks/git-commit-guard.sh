@@ -55,28 +55,89 @@ if [[ "$IS_SUBAGENT" == "false" ]]; then
 fi
 
 # --- Extract commit message ---
-commit_msg=""
-if echo "$cmd" | grep -qE "cat\s+<<"; then
-    commit_msg=$(echo "$cmd" | awk '/<<.*EOF/{found=1; next} /EOF/{exit} found && /[a-zA-Z]/{print; exit}' | sed 's/^[[:space:]]*//')
-else
-    commit_msg=$(echo "$cmd" | sed -n 's/.*-m[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-    [ -z "$commit_msg" ] && commit_msg=$(echo "$cmd" | sed -n "s/.*-m[[:space:]]*'\\([^']*\\)'.*/\\1/p" | head -1)
-fi
+# Git allows multiple -m/--message flags and joins them as paragraphs. The
+# guard must validate the first paragraph as the subject while still accepting
+# issue references in later paragraphs.
+commit_msg=$(CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+cmd = os.environ.get("CMD", "")
+
+def heredoc_message(raw: str) -> str:
+    match = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", raw)
+    if not match:
+        return ""
+    marker = match.group(1)
+    lines = raw.splitlines()
+    for i, line in enumerate(lines):
+        if "<<" in line and marker in line:
+            body = []
+            for candidate in lines[i + 1:]:
+                if candidate.strip() == marker:
+                    return "\n".join(body).strip()
+                body.append(candidate)
+            return ""
+    return ""
+
+message = heredoc_message(cmd)
+if message:
+    print(message)
+    sys.exit(0)
+
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    sys.exit(0)
+
+messages = []
+for i in range(len(tokens) - 1):
+    if tokens[i:i + 2] != ["git", "commit"]:
+        continue
+    j = i + 2
+    while j < len(tokens):
+        token = tokens[j]
+        if token in {"&&", "||", ";", "|"}:
+            break
+        if token in {"-m", "--message"} and j + 1 < len(tokens):
+            messages.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--message="):
+            messages.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token.startswith("-m") and token != "-m":
+            messages.append(token[2:])
+            j += 1
+            continue
+        j += 1
+    break
+
+if messages:
+    print("\n\n".join(messages))
+PY
+)
 
 [ -z "$commit_msg" ] && exit 0
 commit_msg=$(echo "$commit_msg" | sed 's/^[[:space:]]*//')
+commit_subject=$(printf '%s\n' "$commit_msg" | sed -n '/[^[:space:]]/{p; q;}')
 
 # --- 1. Conventional Commit format ---
 VALID_TYPES="feat|fix|refactor|docs|test|chore|perf|ci|release"
-if ! echo "$commit_msg" | grep -qE "^(${VALID_TYPES})(\\(.+\\))?: .+"; then
-    echo "[BLOCKED] Invalid commit format: \"${commit_msg}\"" >&2
+if ! echo "$commit_subject" | grep -qE "^(${VALID_TYPES})(\\(.+\\))?: .+"; then
+    echo "[BLOCKED] Invalid commit format: \"${commit_subject}\"" >&2
     echo "Required: <type>: <description> (feat/fix/refactor/docs/test/chore/perf/ci/release)" >&2
     exit 2
 fi
 
 # --- 2. Issue reference (skip chore/docs/ci/release/merge) ---
-if ! echo "$commit_msg" | grep -qEi "^(chore|docs|ci|release|Merge|initial)"; then
-    if ! echo "$cmd" | grep -qE '#[0-9]+'; then
+if ! echo "$commit_subject" | grep -qEi "^(chore|docs|ci|release|Merge|initial)"; then
+    if ! echo "$commit_msg" | grep -qE '#[0-9]+'; then
         echo "[BLOCKED] Issue reference (#XX) required in commit message" >&2
         echo "Exempt types: chore, docs, ci, release" >&2
         exit 2
