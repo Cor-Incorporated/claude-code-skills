@@ -28,6 +28,21 @@ if [ "$PR_STATE" != "MERGED" ]; then
     exit 0
 fi
 
+# Clear leftover review-comment residue for this merged PR so the
+# enforce-review-reading.sh banner does not linger after merge. Removes the
+# state only when its .pr matches THIS PR, in BOTH project-scoped and global
+# state dirs.
+_TOP=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+for _sd in ${_TOP:+"$_TOP/.claude/state"} "$HOME/.claude/state"; do
+    _pf="$_sd/pending-review-comments.json"
+    [ -f "$_pf" ] || continue
+    _pf_pr=$(jq -r '.pr // ""' "$_pf" 2>/dev/null || echo "")
+    if [ "$_pf_pr" = "$PR_NUM" ]; then
+        rm -f "$_pf" "$_sd/pending-review-pr-state.cache" 2>/dev/null || true
+        echo "🧹 [Post-Merge] PR #${PR_NUM} のレビュー残骸 (pending-review-comments.json) を削除しました。" >&2
+    fi
+done
+
 # Extract Issue numbers from PR body (Closes/Fixes/Resolves #XX)
 PR_BODY=$(gh pr view "$PR_NUM" --json body -q '.body' 2>/dev/null || echo "")
 ISSUE_NUMS=$(echo "$PR_BODY" | grep -oiE '(closes?|fixes?|resolves?)\s*#[0-9]+' | grep -oE '[0-9]+' || true)

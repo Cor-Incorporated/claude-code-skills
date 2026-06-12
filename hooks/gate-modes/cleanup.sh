@@ -22,14 +22,22 @@ fi
 # Pass a newline-separated, deduped list so a merged PR is purged everywhere.
 LOCK_PATHS=$(lock_files)
 
-CLEANED=$(_LOCK_PATHS="$LOCK_PATHS" _REVIEW="$REVIEW_STATE" _REPO="$REPO" python3 -c "
+# pending-review-comments.json residue (project + global, deduped). enforce-
+# review-reading.sh reads these; a merged PR left here keeps emitting a banner.
+PENDING_PATHS=$(printf '%s\n%s\n' \
+  "$STATE_DIR/pending-review-comments.json" \
+  "$GLOBAL_STATE_DIR/pending-review-comments.json" | awk 'NF && !seen[$0]++')
+
+CLEANED=$(_LOCK_PATHS="$LOCK_PATHS" _REVIEW="$REVIEW_STATE" _PENDING_PATHS="$PENDING_PATHS" _REPO="$REPO" python3 -c "
 import json, subprocess, os, fcntl
 
 lock_paths = [p for p in os.environ['_LOCK_PATHS'].splitlines() if p.strip()]
+pending_paths = [p for p in os.environ['_PENDING_PATHS'].splitlines() if p.strip()]
 review_path = os.environ['_REVIEW']
 repo = os.environ['_REPO']
 lock_cleaned = []
 review_cleaned = []
+pending_cleaned = []
 
 # Cache PR state lookups so we don't re-query the same PR across files
 _state_cache = {}
@@ -38,7 +46,7 @@ def pr_state(pr):
         try:
             r = subprocess.run(['gh','api','repos/'+repo+'/pulls/'+pr,'--jq','.state'],
                 capture_output=True, text=True, timeout=10)
-            _state_cache[pr] = r.stdout.strip()
+            _state_cache[pr] = r.stdout.strip().lower()
         except Exception:
             _state_cache[pr] = ''
     return _state_cache[pr]
@@ -80,11 +88,33 @@ with open(review_path, 'r+') as f:
     json.dump(review, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
 
-if lock_cleaned or review_cleaned:
+# Clean pending-review-comments.json residue for merged/closed PRs
+for pending_path in pending_paths:
+    if not os.path.exists(pending_path):
+        continue
+    try:
+        with open(pending_path) as f:
+            d = json.load(f)
+        pr = str(d.get('pr','') or '')
+    except Exception:
+        pr = ''
+    if pr and pr_state(pr) in ('closed','merged'):
+        try:
+            os.remove(pending_path)
+            cache = os.path.join(os.path.dirname(pending_path), 'pending-review-pr-state.cache')
+            if os.path.exists(cache):
+                os.remove(cache)
+            pending_cleaned.append(f'PR #{pr} [{os.path.basename(os.path.dirname(pending_path))}]')
+        except Exception:
+            pass
+
+if lock_cleaned or review_cleaned or pending_cleaned:
     for item in lock_cleaned:
         print(f'  lock: {item}')
     for item in review_cleaned:
         print(f'  review: {item}')
+    for item in pending_cleaned:
+        print(f'  pending: {item}')
 else:
     print('  (nothing to clean)')
 " 2>/dev/null || echo "  (cleanup failed)")
