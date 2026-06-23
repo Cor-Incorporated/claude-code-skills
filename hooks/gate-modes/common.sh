@@ -450,6 +450,28 @@ except Exception:
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
 
+target_starts = [
+    i + 3 for i in range(len(tokens) - 2)
+    if tokens[i:i + 3] in (["gh", "pr", "create"], ["gh", "pr", "merge"])
+]
+
+for start in target_starts:
+    i = start
+    while i < len(tokens):
+        token = tokens[i]
+        if token in separators:
+            break
+        if token in redirects:
+            i += 2
+            continue
+        if token in {"--repo", "-R"} and i + 1 < len(tokens):
+            print(tokens[i + 1])
+            sys.exit(0)
+        if token.startswith("--repo="):
+            print(token.split("=", 1)[1])
+            sys.exit(0)
+        i += 1
+
 i = 0
 while i < len(tokens):
     token = tokens[i]
