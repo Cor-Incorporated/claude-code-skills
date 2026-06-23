@@ -34,6 +34,9 @@ assert_eq "repo flag before target" "123" \
 assert_eq "short repo flag before target" "123" \
   "gh pr merge -R owner/repo 123 --merge"
 
+assert_eq "short author email flag before target" "123" \
+  "gh pr merge -A reviewer@example.com 123 --merge --repo owner/repo"
+
 assert_eq "repo equals form before target" "123" \
   "gh pr merge --repo=owner/repo 123 --merge"
 

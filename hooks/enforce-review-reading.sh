@@ -52,6 +52,7 @@ value_flags = {
     "-t",
     "--match-head-commit",
     "--author-email",
+    "-A",
 }
 operators = {"&&", "||", ";", "|"}
 
