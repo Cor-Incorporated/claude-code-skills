@@ -224,6 +224,12 @@
           },
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/enforce-uat-evidence.sh",
+            "timeout": 10,
+            "statusMessage": "Checking UAT/UX/E2E/browser evidence..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/enforce-factcheck-github-ops.sh",
             "timeout": 10,
             "statusMessage": "Checking factcheck before GitHub write operation..."
