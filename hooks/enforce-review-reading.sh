@@ -55,11 +55,16 @@ value_flags = {
     "-A",
 }
 operators = {"&&", "||", ";", "|"}
+merge_positions = [
+    i for i in range(len(tokens) - 2)
+    if tokens[i:i + 3] == ["gh", "pr", "merge"]
+]
 
-for i in range(len(tokens) - 2):
-    if tokens[i:i + 3] != ["gh", "pr", "merge"]:
-        continue
+if len(merge_positions) > 1:
+    print("__MULTIPLE__")
+    sys.exit(0)
 
+for i in merge_positions:
     j = i + 3
     while j < len(tokens):
         token = tokens[j]
@@ -197,6 +202,10 @@ cmd_first_line="$(echo "$cmd" | head -1)"
 if echo "$cmd_first_line" | grep -qE 'gh\s+pr\s+merge'; then
   MERGE_PR=$(extract_gh_pr_merge_target "$cmd_first_line" || echo "")
   if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
+    if [[ "$MERGE_PR" == "__MULTIPLE__" ]]; then
+      echo "[BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。未対応レビュー state があるため、PRごとに個別実行してください。" >&2
+      exit 2
+    fi
     if [[ -z "$MERGE_PR" ]]; then
       MERGE_PR=$(resolve_current_branch_merge_pr "$REPO" || echo "")
     fi

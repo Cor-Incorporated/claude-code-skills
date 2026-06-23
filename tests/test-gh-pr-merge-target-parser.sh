@@ -49,4 +49,7 @@ assert_eq "implicit current-branch target" "" \
 assert_eq "non-numeric target is explicit and unsafe" "__NON_NUMERIC__:feature/foo" \
   "gh pr merge --repo owner/repo feature/foo --merge"
 
+assert_eq "multiple merge invocations are unsafe" "__MULTIPLE__" \
+  "gh pr merge 123 --merge --repo owner/repo && gh pr merge 999 --merge --repo owner/repo"
+
 echo "gh pr merge target parser tests passed."

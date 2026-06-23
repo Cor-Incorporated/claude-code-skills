@@ -349,11 +349,16 @@ value_flags = {
     "-A",
 }
 operators = {"&&", "||", ";", "|"}
+merge_positions = [
+    i for i in range(len(tokens) - 2)
+    if tokens[i:i + 3] == ["gh", "pr", "merge"]
+]
 
-for i in range(len(tokens) - 2):
-    if tokens[i:i + 3] != ["gh", "pr", "merge"]:
-        continue
+if len(merge_positions) > 1:
+    print("__MULTIPLE__")
+    sys.exit(0)
 
+for i in merge_positions:
     j = i + 3
     while j < len(tokens):
         token = tokens[j]

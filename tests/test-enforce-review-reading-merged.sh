@@ -120,24 +120,29 @@ make_gh_with_current_pr open 123; write_pending
 run_hook "gh pr merge --merge --repo owner/repo" >/dev/null; rc=$?
 [ "$rc" -eq 0 ] && ok "implicit other PR not hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[10] OPEN unresolved implicit 'gh pr merge' -> hard-blocked with explicit PR requirement"
+echo "[10] OPEN chained 'gh pr merge' -> hard-blocked"
+make_gh open; write_pending
+run_hook "gh pr merge 123 --merge --repo owner/repo && gh pr merge 999 --merge --repo owner/repo" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "chained merge hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[11] OPEN unresolved implicit 'gh pr merge' -> hard-blocked with explicit PR requirement"
 make_gh_with_current_pr open ""; write_pending
 run_hook "gh pr merge --merge --repo owner/repo" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "unresolved implicit merge hard-blocked" || bad "exit $rc (want 2)"
 
-echo "[11] gh failure -> fail-open (still warns, keeps state)"
+echo "[12] gh failure -> fail-open (still warns, keeps state)"
 make_gh FAIL; write_pending
 out="$(run_hook "git status")"; rc=$?
 printf '%s' "$out" | grep -q additionalContext && ok "fail-open banner" || bad "banner missing on gh failure"
 [ -f "$PENDING" ] && ok "pending kept on gh failure" || bad "pending deleted on gh failure"
 
-echo "[12] fresh open cache honoured -> gh skipped (gh says closed, cache says open)"
+echo "[13] fresh open cache honoured -> gh skipped (gh says closed, cache says open)"
 make_gh closed; write_pending; seed_cache open 5
 out="$(run_hook "git status")"; rc=$?
 [ -f "$PENDING" ] && ok "cache hit: gh not consulted, pending kept" || bad "cache ignored (pending purged)"
 printf '%s' "$out" | grep -q additionalContext && ok "banner from cache" || bad "banner missing"
 
-echo "[13] stale cache refreshed -> purge (gh says closed)"
+echo "[14] stale cache refreshed -> purge (gh says closed)"
 make_gh closed; write_pending; seed_cache open 1000
 run_hook "git status" >/dev/null; rc=$?
 [ ! -f "$PENDING" ] && ok "stale cache refreshed -> purged" || bad "stale cache not refreshed"

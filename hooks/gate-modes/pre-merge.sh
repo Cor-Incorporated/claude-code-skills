@@ -33,6 +33,10 @@ fi
 PR_NUMBER=""
 if [[ -n "$cmd" ]]; then
   PR_NUMBER=$(extract_gh_pr_merge_target "$cmd" || echo "")
+  if [[ "$PR_NUMBER" == "__MULTIPLE__" ]]; then
+    echo "🚫 [BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。PRごとに個別実行してください。" >&2
+    exit 2
+  fi
   if [[ "$PR_NUMBER" == __NON_NUMERIC__:* ]]; then
     echo "🚫 [BLOCKED] PR番号を特定できません。非数値の gh pr merge target は安全に検証できないため、PR番号を指定してください。" >&2
     echo "  target: ${PR_NUMBER#__NON_NUMERIC__:}" >&2
