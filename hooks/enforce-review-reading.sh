@@ -56,6 +56,67 @@ PR=$(echo "$REVIEW_DATA" | jq -r '.pr // ""' 2>/dev/null || echo "")
 
 [[ "$TOTAL" -eq 0 ]] && exit 0
 
+# =========================================================================
+# Self-heal: suppress + purge residue for already merged/closed PRs.
+# pending-review-comments.json is never auto-cleared when a PR is merged
+# (GitHub keeps the comments; nothing deletes the file), so without this the
+# hook keeps emitting a banner for an irrelevant PR on EVERY Bash command.
+# Confirm the PR is still OPEN before warning; if merged/closed, delete the
+# stale state and exit silently. The result is cached (TTL) so `gh` is not
+# called on every command while a PR is legitimately open.
+# Fail-OPEN on unknown state: a real pending review must never be hidden by a
+# transient gh/network failure.
+# =========================================================================
+REPO=$(echo "$REVIEW_DATA" | jq -r '.repo // ""' 2>/dev/null || echo "")
+HEAD_SHA=$(echo "$REVIEW_DATA" | jq -r '.head_sha // ""' 2>/dev/null || echo "")
+if [[ -n "$PR" ]] && [[ -n "$REPO" ]]; then
+  CACHE_FILE="$STATE_DIR/pending-review-pr-state.cache"
+
+  # Cache hit: reuse a fresh (< TTL) state for the same pr+head_sha.
+  PR_STATE=$(_CACHE="$CACHE_FILE" _PR="$PR" _SHA="$HEAD_SHA" python3 -c '
+import json, os, time
+TTL = 300
+try:
+    with open(os.environ["_CACHE"]) as f:
+        c = json.load(f)
+    if (c.get("pr") == os.environ["_PR"]
+            and c.get("head_sha") == os.environ["_SHA"]
+            and (time.time() - float(c.get("checked_at", 0))) < TTL):
+        print(str(c.get("state", "")).lower())
+except Exception:
+    pass
+' 2>/dev/null || echo "")
+
+  # Cache miss/stale: query GitHub once, then refresh the cache.
+  if [[ -z "$PR_STATE" ]]; then
+    if command -v timeout &>/dev/null; then
+      PR_STATE=$(timeout 5 gh api "repos/${REPO}/pulls/${PR}" --jq '.state' 2>/dev/null || echo "")
+    elif command -v gtimeout &>/dev/null; then
+      PR_STATE=$(gtimeout 5 gh api "repos/${REPO}/pulls/${PR}" --jq '.state' 2>/dev/null || echo "")
+    else
+      PR_STATE=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.state' 2>/dev/null || echo "")
+    fi
+    PR_STATE=$(printf '%s' "$PR_STATE" | tr '[:upper:]' '[:lower:]')
+    if [[ -n "$PR_STATE" ]]; then
+      _CACHE="$CACHE_FILE" _PR="$PR" _SHA="$HEAD_SHA" _STATE="$PR_STATE" python3 -c '
+import json, os, time
+try:
+    with open(os.environ["_CACHE"], "w") as f:
+        json.dump({"pr": os.environ["_PR"], "head_sha": os.environ["_SHA"],
+                   "state": os.environ["_STATE"], "checked_at": time.time()}, f)
+except Exception:
+    pass
+' 2>/dev/null || true
+    fi
+  fi
+
+  # gh REST `.state` is "open" or "closed" ("closed" covers merged too).
+  if [[ "$PR_STATE" == "closed" ]] || [[ "$PR_STATE" == "merged" ]]; then
+    rm -f "$PENDING_FILE" "$CACHE_FILE" 2>/dev/null || true
+    exit 0
+  fi
+fi
+
 # HARD BLOCK: gh pr merge with unresolved findings
 if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
   if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then

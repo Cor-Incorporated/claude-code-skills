@@ -16,6 +16,29 @@ mentions_protected_ref() {
   printf '%s' "$1" | grep -qE "(^|[^A-Za-z0-9._/-])(refs/heads/)?$2([^A-Za-z0-9._/-]|$)"
 }
 
+has_explicit_push_ref() {
+  # Detect "git push <remote> <ref>" even when wrapped in a chain or process
+  # substitution. If a ref is explicit, current-branch fallback would be a false
+  # positive when the hook itself runs from develop/main.
+  local segment token after_push non_option_count normalized
+  normalized=$(printf '%s' "$1" | tr '<>();|&' '\n')
+  while IFS= read -r segment || [[ -n "$segment" ]]; do
+    [[ "$segment" == *"git push"* ]] || continue
+    after_push=false
+    non_option_count=0
+    for token in $segment; do
+      if [[ "$after_push" != true ]]; then
+        [[ "$token" == "push" ]] && after_push=true
+        continue
+      fi
+      [[ "$token" == -* ]] && continue
+      non_option_count=$((non_option_count + 1))
+    done
+    [[ "$non_option_count" -ge 2 ]] && return 0
+  done <<< "$normalized"
+  return 1
+}
+
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
 # so a real operation cannot be chained after a benign first token (prevents
@@ -59,12 +82,13 @@ ERRMSG
         fi
     done
 
-    # Fallback: if no explicit branch in command, check current branch
+    # Fallback: if no explicit push ref in command, check current branch
     # Catches: git push --force, git push --force origin (implicit branch)
-    current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    for branch in develop main master; do
-        if [[ "$current_branch" == "$branch" ]]; then
-            cat >&2 <<ERRMSG
+    if ! has_explicit_push_ref "$cmd"; then
+        current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+        for branch in develop main master; do
+            if [[ "$current_branch" == "$branch" ]]; then
+                cat >&2 <<ERRMSG
 [BLOCK] 共有ブランチ '${branch}' への force push を検出（暗黙的ブランチ）
 
 現在のブランチ '${branch}' は共有ブランチです。
@@ -75,9 +99,10 @@ ERRMSG
 
 Ref: Issue #28 — 差分有無にかかわらず共有ブランチへの force push をブロック
 ERRMSG
-            exit 2
-        fi
-    done
+                exit 2
+            fi
+        done
+    fi
 fi
 
 # --- 2. Protected branch direct push check ---
