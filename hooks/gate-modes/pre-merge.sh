@@ -32,7 +32,12 @@ fi
 # Extract PR number from command FIRST (before branch lookup)
 PR_NUMBER=""
 if [[ -n "$cmd" ]]; then
-  PR_NUMBER=$(echo "$cmd" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' || echo "")
+  PR_NUMBER=$(extract_gh_pr_merge_target "$cmd" || echo "")
+  if [[ "$PR_NUMBER" == __NON_NUMERIC__:* ]]; then
+    echo "🚫 [BLOCKED] PR番号を特定できません。非数値の gh pr merge target は安全に検証できないため、PR番号を指定してください。" >&2
+    echo "  target: ${PR_NUMBER#__NON_NUMERIC__:}" >&2
+    exit 2
+  fi
 fi
 if [[ -z "$PR_NUMBER" ]]; then
   # Fallback: try current branch

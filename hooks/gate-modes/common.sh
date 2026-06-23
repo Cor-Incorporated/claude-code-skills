@@ -309,6 +309,75 @@ extract_cmd() {
     echo ""
   fi
 }
+
+# Extract the explicit PR target from a `gh pr merge` command. Supports valid
+# gh forms where flags appear before the positional PR argument, e.g.
+# `gh pr merge --repo owner/repo 123 --merge`.
+#
+# Output:
+#   - numeric PR number when an explicit numeric/URL target is present
+#   - __NON_NUMERIC__:<target> when an explicit non-numeric target is present
+#   - empty when the command relies on the current branch implicit target
+extract_gh_pr_merge_target() {
+  local cmd="${1:-}"
+  [[ -z "$cmd" ]] && return 0
+  _CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+cmd = os.environ.get("_CMD", "")
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    sys.exit(0)
+
+value_flags = {
+    "--repo",
+    "-R",
+    "--body",
+    "-b",
+    "--body-file",
+    "-F",
+    "--subject",
+    "-t",
+    "--match-head-commit",
+    "--author-email",
+}
+operators = {"&&", "||", ";", "|"}
+
+for i in range(len(tokens) - 2):
+    if tokens[i:i + 3] != ["gh", "pr", "merge"]:
+        continue
+
+    j = i + 3
+    while j < len(tokens):
+        token = tokens[j]
+        if token in operators:
+            break
+        if token in value_flags:
+            j += 2
+            continue
+        if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
+            j += 1
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+
+        match = re.search(r"(?:^|/pull/|#)([0-9]+)$", token)
+        if match:
+            print(match.group(1))
+        else:
+            print(f"__NON_NUMERIC__:{token}")
+        sys.exit(0)
+
+print("")
+PY
+}
 # =========================================================================
 # Helper: resolve repository (fork-aware)
 # Priority: CLAUDE_FORK_REPO env > --repo flag > upstream remote > origin

@@ -24,6 +24,80 @@ input=""
 [[ ! -t 0 ]] && input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 
+extract_gh_pr_merge_target() {
+  local merge_cmd="${1:-}"
+  [[ -z "$merge_cmd" ]] && return 0
+  _CMD="$merge_cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+cmd = os.environ.get("_CMD", "")
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    sys.exit(0)
+
+value_flags = {
+    "--repo",
+    "-R",
+    "--body",
+    "-b",
+    "--body-file",
+    "-F",
+    "--subject",
+    "-t",
+    "--match-head-commit",
+    "--author-email",
+}
+operators = {"&&", "||", ";", "|"}
+
+for i in range(len(tokens) - 2):
+    if tokens[i:i + 3] != ["gh", "pr", "merge"]:
+        continue
+
+    j = i + 3
+    while j < len(tokens):
+        token = tokens[j]
+        if token in operators:
+            break
+        if token in value_flags:
+            j += 2
+            continue
+        if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
+            j += 1
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+
+        match = re.search(r"(?:^|/pull/|#)([0-9]+)$", token)
+        if match:
+            print(match.group(1))
+        else:
+            print(f"__NON_NUMERIC__:{token}")
+        sys.exit(0)
+
+print("")
+PY
+}
+
+resolve_current_branch_merge_pr() {
+  local repo="${1:-}"
+  local branch
+  branch=$(git branch --show-current 2>/dev/null || echo "")
+  [[ -z "$branch" ]] && return 0
+
+  if [[ -n "$repo" && "$repo" != "null" ]]; then
+    gh pr list --repo "$repo" --head "$branch" --json number -q '.[0].number' 2>/dev/null || echo ""
+  else
+    gh pr list --head "$branch" --json number -q '.[0].number' 2>/dev/null || echo ""
+  fi
+}
+
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
 # so a real operation cannot be chained after a benign first token (prevents
@@ -120,9 +194,21 @@ fi
 # HARD BLOCK: gh pr merge with unresolved findings
 cmd_first_line="$(echo "$cmd" | head -1)"
 if echo "$cmd_first_line" | grep -qE 'gh\s+pr\s+merge'; then
-  MERGE_PR=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
+  MERGE_PR=$(extract_gh_pr_merge_target "$cmd_first_line" || echo "")
   if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
-    if [[ -n "$MERGE_PR" && -n "$PR" && "$MERGE_PR" != "$PR" ]]; then
+    if [[ -z "$MERGE_PR" ]]; then
+      MERGE_PR=$(resolve_current_branch_merge_pr "$REPO" || echo "")
+    fi
+    if [[ "$MERGE_PR" == __NON_NUMERIC__:* ]]; then
+      echo "[BLOCKED] gh pr merge target をPR番号として特定できません。未対応レビュー state があるため、PR番号を明示してください。" >&2
+      echo "  target: ${MERGE_PR#__NON_NUMERIC__:}" >&2
+      exit 2
+    fi
+    if [[ -z "$MERGE_PR" ]]; then
+      echo "[BLOCKED] gh pr merge の暗黙ターゲットを現在ブランチから解決できません。未対応レビュー state があるため、PR番号を明示してください。" >&2
+      exit 2
+    fi
+    if [[ -n "$PR" && "$MERGE_PR" != "$PR" ]]; then
       echo "[INFO] pending-review-comments.json は PR #${PR} の state です。PR #${MERGE_PR} の merge はこの hook では hard block しません。" >&2
     else
       echo "[BLOCKED] PR #${PR}: 未対応のCRITICAL/HIGH指摘があります（CRITICAL=${CRITICAL}, HIGH=${HIGH}）。" >&2

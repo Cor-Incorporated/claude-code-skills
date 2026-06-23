@@ -48,6 +48,21 @@ if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/123" ]; then
   printf '{"head":{"sha":"abc123","ref":"feature"},"base":{"ref":"develop","sha":"%s"},"state":"open"}\n' "${FAKE_BASE_SHA:-}"
   exit 0
 fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/999" ]; then
+  if [ "${3:-}" = "--jq" ]; then
+    case "${4:-}" in
+      ".head.ref") printf 'other-feature\n' ;;
+      ".head.sha") printf 'def999\n' ;;
+      ".base.ref") printf 'develop\n' ;;
+      ".base.sha") printf '%s\n' "${FAKE_BASE_SHA:-}" ;;
+      ".state") printf 'open\n' ;;
+      *) printf 'def999\n' ;;
+    esac
+    exit 0
+  fi
+  printf '{"head":{"sha":"def999","ref":"other-feature"},"base":{"ref":"develop","sha":"%s"},"state":"open"}\n' "${FAKE_BASE_SHA:-}"
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/git/ref/heads/develop" ]; then
   if [ "${3:-}" = "--jq" ] && [ "${4:-}" = ".object.sha" ]; then
     printf '%s\n' "${FAKE_BASE_SHA:-}"
@@ -72,6 +87,14 @@ if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/commits/abc123/check-runs" ]; 
   fi
   exit 0
 fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/commits/def999/check-runs" ]; then
+  if [ "${3:-}" = "--jq" ]; then
+    printf '1\n'
+  else
+    printf '{"check_runs":[{"name":"unit","status":"completed","conclusion":"failure"}]}\n'
+  fi
+  exit 0
+fi
 exit 1
 FAKEGH
 chmod +x "$TMP_BIN/gh"
@@ -88,7 +111,9 @@ PY
 
 run_pre_merge() {
   local base_sha="$1"
-  local payload='{"tool_name":"Bash","tool_input":{"command":"gh pr merge 123 --merge --repo owner/repo"}}'
+  local merge_cmd="${2:-gh pr merge 123 --merge --repo owner/repo}"
+  local payload
+  printf -v payload '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$merge_cmd"
   (
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" FAKE_BASE_SHA="$base_sha" \
@@ -101,12 +126,12 @@ FAIL=0
 TOTAL=0
 
 expect_rc() {
-  local desc="$1" expected="$2" base_sha="$3"
+  local desc="$1" expected="$2" base_sha="$3" merge_cmd="${4:-gh pr merge 123 --merge --repo owner/repo}"
   TOTAL=$((TOTAL + 1))
   write_review_status
   local rc=0
   set +e
-  run_pre_merge "$base_sha"
+  run_pre_merge "$base_sha" "$merge_cmd"
   rc=$?
   set -e
   if [[ "$rc" -eq "$expected" ]]; then
@@ -131,6 +156,16 @@ if grep -q "LOCAL_GATE_STALE_BASE" "$ERR_FILE"; then
 else
   FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
   echo "  FAIL: stale base message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "flag-before-target validates command PR, not current branch fallback" 2 "$BASE_SHA" "gh pr merge --repo owner/repo 999 --merge"
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: target PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: target PR #999 CI failure message missing" >&2
   cat "$ERR_FILE" >&2 || true
 fi
 
