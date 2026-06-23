@@ -220,6 +220,8 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+expect_rc "heredoc body mentioning gh pr merge is conservatively evaluated" 2 "$BASE_SHA" $'cat <<\'EOF\'\ngh pr merge 999 --merge --repo owner/repo\nEOF'
+
 TOTAL=$((TOTAL + 1))
 write_review_status
 set +e

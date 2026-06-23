@@ -327,6 +327,9 @@ import re
 import shlex
 import sys
 
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
 cmd = os.environ.get("_CMD", "")
 cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
 try:
@@ -353,7 +356,7 @@ separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
 merge_positions = [
     i for i in range(len(tokens) - 2)
-    if tokens[i:i + 3] == ["gh", "pr", "merge"]
+    if is_gh(tokens[i]) and tokens[i + 1:i + 3] == ["pr", "merge"]
 ]
 
 if len(merge_positions) > 1:
@@ -399,6 +402,9 @@ import re
 import shlex
 import sys
 
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
 cmd = os.environ.get("_CMD", "")
 cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
 try:
@@ -411,7 +417,7 @@ except Exception:
 
 count = 0
 for i in range(len(tokens) - 2):
-    if tokens[i:i + 3] == ["gh", "pr", "merge"]:
+    if is_gh(tokens[i]) and tokens[i + 1:i + 3] == ["pr", "merge"]:
         count += 1
 print(count)
 PY
@@ -438,6 +444,9 @@ import re
 import shlex
 import sys
 
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
 cmd = os.environ.get("_CMD", "")
 cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
 try:
@@ -452,7 +461,7 @@ redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
 
 target_starts = [
     i + 3 for i in range(len(tokens) - 2)
-    if tokens[i:i + 3] in (["gh", "pr", "create"], ["gh", "pr", "merge"])
+    if is_gh(tokens[i]) and tokens[i + 1] == "pr" and tokens[i + 2] in {"create", "merge"}
 ]
 
 for start in target_starts:
@@ -538,8 +547,11 @@ try:
 except Exception:
     sys.exit(0)
 
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
 for i in range(len(tokens) - 2):
-    if tokens[i:i+3] != ["gh", "pr", "create"]:
+    if not (is_gh(tokens[i]) and tokens[i + 1:i + 3] == ["pr", "create"]):
         continue
     j = i + 3
     while j < len(tokens):
@@ -575,9 +587,12 @@ try:
 except Exception:
     sys.exit(0)
 
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
 gh_index = -1
 for i in range(len(tokens) - 2):
-    if tokens[i:i+3] in (["gh", "pr", "create"], ["gh", "pr", "merge"]):
+    if is_gh(tokens[i]) and tokens[i + 1] == "pr" and tokens[i + 2] in {"create", "merge"}:
         gh_index = i
         break
 if gh_index < 0:

@@ -73,4 +73,25 @@ assert_eq "multiple multiline merge invocations are unsafe" "__MULTIPLE__" \
 assert_eq "merge after first line is still detected" "999" \
   $'true\ngh pr merge 999 --merge --repo owner/repo'
 
+assert_eq "absolute gh path is detected" "123" \
+  "/opt/homebrew/bin/gh pr merge 123 --merge --repo owner/repo"
+
+assert_eq "quoted heredoc-looking literal before merge stays conservative" "123" \
+  $'echo "<<EOF"\ngh pr merge 123 --merge --repo owner/repo'
+
+assert_eq "here-string-looking literal before merge stays conservative" "123" \
+  $'cat <<< "text"\ngh pr merge 123 --merge --repo owner/repo'
+
+assert_eq "heredoc body literal is conservatively detected" "123" \
+  $'cat <<\'EOF\'\ngh pr merge 123 --merge --repo owner/repo\nEOF'
+
+assert_eq "merge before heredoc body is still detected" "123" \
+  $'gh pr merge 123 --merge --repo owner/repo <<\'EOF\'\nconfirmation text\nEOF'
+
+assert_eq "ordinary heredoc body remains conservative" "123" \
+  $'cat <<\'EOF\'\n\tEOF\ngh pr merge 123 --merge --repo owner/repo\nEOF'
+
+assert_eq "dash heredoc body remains conservative" "123" \
+  $'cat <<-\'EOF\'\n\tEOF\ngh pr merge 123 --merge --repo owner/repo'
+
 echo "gh pr merge target parser tests passed."

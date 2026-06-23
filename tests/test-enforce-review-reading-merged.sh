@@ -142,6 +142,11 @@ make_gh open; write_pending
 run_hook $'gh pr merge 123 --merge --repo owner/repo\ngh pr merge 999 --merge --repo owner/repo' >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "multiline chained merge hard-blocked" || bad "exit $rc (want 2)"
 
+echo "[13b] OPEN heredoc body mentioning 'gh pr merge' -> conservatively hard-blocked"
+make_gh open; write_pending
+run_hook $'cat <<\'EOF\'\ngh pr merge 999 --merge --repo owner/repo\nEOF' >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "heredoc literal hard-blocked" || bad "exit $rc (want 2)"
+
 echo "[14] gh failure -> fail-open (still warns, keeps state)"
 make_gh FAIL; write_pending
 out="$(run_hook "git status")"; rc=$?
