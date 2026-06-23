@@ -655,16 +655,23 @@ except Exception:
     sys.exit(0)
 
 merge_invocations = gh_pr_invocations(tokens, {"merge"})
+for gh_start, _, end in merge_invocations:
+    repo = repo_in_range(tokens, gh_start + 1, end)
+    if repo:
+        print(repo)
+        sys.exit(0)
+
+if merge_invocations:
+    sys.exit(0)
+
 create_invocations = gh_pr_invocations(tokens, {"create"})
+for gh_start, _, end in create_invocations:
+    repo = repo_in_range(tokens, gh_start + 1, end)
+    if repo:
+        print(repo)
+        sys.exit(0)
 
-for invocation_set in (merge_invocations, create_invocations):
-    for gh_start, _, end in invocation_set:
-        repo = repo_in_range(tokens, gh_start + 1, end)
-        if repo:
-            print(repo)
-            sys.exit(0)
-
-if merge_invocations or create_invocations:
+if create_invocations:
     sys.exit(0)
 
 i = 0
