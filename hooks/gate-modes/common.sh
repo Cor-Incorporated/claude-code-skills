@@ -402,7 +402,11 @@ def env_nested_commands(tokens, i, end):
 
 def skip_process_substitution_value(tokens, i):
     end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
-    if end is not None:
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
         return end
     return min(i + 1, len(tokens))
 
@@ -497,7 +501,7 @@ def strip_value_flag_process_substitutions(tokens):
         if token in value_flags and i + 1 < len(tokens):
             out.append(token)
             end = process_substitution_end(tokens, i + 1)
-            if end is not None:
+            if end is not None and is_safe_readonly_process_substitution(tokens, i + 1, end):
                 out.extend([tokens[i + 1], "(", ")"])
                 i = end
                 continue
@@ -507,7 +511,7 @@ def strip_value_flag_process_substitutions(tokens):
             out.append(token)
             if token.endswith("=") and i + 1 < len(tokens):
                 end = process_substitution_end(tokens, i + 1)
-                if end is not None:
+                if end is not None and is_safe_readonly_process_substitution(tokens, i + 1, end):
                     out.extend([tokens[i + 1], "(", ")"])
                     i = end
                     continue
@@ -1807,7 +1811,7 @@ def strip_pr_value_flag_process_substitutions(tokens):
         if token in pr_value_flags and i + 1 < len(tokens):
             out.append(token)
             end = process_substitution_end(tokens, i + 1)
-            if end is not None:
+            if end is not None and is_safe_readonly_process_substitution(tokens, i + 1, end):
                 out.extend([tokens[i + 1], "(", ")"])
                 i = end
                 continue
@@ -1817,7 +1821,7 @@ def strip_pr_value_flag_process_substitutions(tokens):
             out.append(token)
             if token.endswith("=") and i + 1 < len(tokens):
                 end = process_substitution_end(tokens, i + 1)
-                if end is not None:
+                if end is not None and is_safe_readonly_process_substitution(tokens, i + 1, end):
                     out.extend([tokens[i + 1], "(", ")"])
                     i = end
                     continue

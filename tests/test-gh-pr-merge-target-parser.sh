@@ -120,7 +120,7 @@ assert_eq "body-file process substitution before target is skipped" "123" \
 assert_eq "body-file equals process substitution before target is skipped" "123" \
   "gh pr merge --body-file=<(printf ok) 123 --merge --repo owner/repo"
 
-assert_eq "body-file process substitution pipeline before target is skipped" "123" \
+assert_eq "body-file shell-executor pipeline before target is fail-closed" "__NON_NUMERIC__:(" \
   "gh pr merge --body-file <(printf ok|bash|eval) 123 --merge --repo owner/repo"
 
 assert_eq "process substitution command substitution merge is detected" "123" \
@@ -171,11 +171,14 @@ assert_eq "leading process-substitution redirection before merge keeps target" "
 assert_count_eq "leading process-substitution redirection before merge is counted once" "1" \
   "< <(printf x); gh pr merge 999 --merge --repo owner/repo"
 
-assert_eq "body-file direct process substitution keeps visible merge target" "123" \
+assert_eq "body-file direct process substitution hidden merge plus visible merge is unsafe" "__MULTIPLE__" \
   "gh pr merge --body-file <(gh pr merge 999 --merge --repo owner/repo) 123 --merge --repo owner/repo"
 
 assert_count_eq "body-file direct process substitution hidden merge plus visible merge is counted" "2" \
   "gh pr merge --body-file <(gh pr merge 999 --merge --repo owner/repo) 123 --merge --repo owner/repo"
+
+assert_eq "body-file generated shell merge is fail-closed" "__NON_NUMERIC__:(" \
+  "gh pr merge --body-file <(printf 'gh pr merge 999 --merge --repo owner/repo' | bash) 123 --merge --repo owner/repo"
 
 assert_eq "runtime command substitution hidden merge plus visible merge is unsafe" "__MULTIPLE__" \
   'echo "$(gh pr merge 123 --merge --repo owner/repo)"; gh pr merge 999 --merge --repo owner/repo'
@@ -183,7 +186,7 @@ assert_eq "runtime command substitution hidden merge plus visible merge is unsaf
 assert_count_eq "runtime command substitution hidden merge plus visible merge is counted" "2" \
   'echo "$(gh pr merge 123 --merge --repo owner/repo)"; gh pr merge 999 --merge --repo owner/repo'
 
-assert_eq "body-file command substitution keeps visible merge target" "123" \
+assert_eq "body-file command substitution hidden merge plus visible merge is unsafe" "__MULTIPLE__" \
   "gh pr merge --body-file <(printf %s \$(gh pr merge 999 --merge --repo owner/repo)) 123 --merge --repo owner/repo"
 
 assert_count_eq "body-file command substitution hidden merge plus visible merge is counted" "2" \

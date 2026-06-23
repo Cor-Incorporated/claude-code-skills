@@ -352,7 +352,7 @@ fi
 
 expect_rc "body-file readonly process-substitution literal ok is allowed" 0 "$BASE_SHA" "gh pr merge --body-file <(printf ok) 123 --merge --repo owner/repo"
 
-expect_rc "body-file process-substitution pipeline is allowed as body file" 0 "$BASE_SHA" "gh pr merge --body-file <(printf ok|bash|eval) 123 --merge --repo owner/repo"
+expect_rc "body-file shell-executor process-substitution pipeline is fail-closed" 2 "$BASE_SHA" "gh pr merge --body-file <(printf ok|bash|eval) 123 --merge --repo owner/repo"
 
 expect_rc "body-file readonly process-substitution literal bash is allowed" 0 "$BASE_SHA" "gh pr merge --body-file <(printf bash) 123 --merge --repo owner/repo"
 
@@ -367,6 +367,8 @@ else
   echo "  FAIL: body-file direct process-substitution hidden merge plus visible merge message missing" >&2
   cat "$ERR_FILE" >&2 || true
 fi
+
+expect_rc "body-file generated shell merge is fail-closed" 2 "$BASE_SHA" "gh pr merge --body-file <(printf 'gh pr merge 999 --merge --repo owner/repo' | bash) 123 --merge --repo owner/repo"
 
 expect_rc "body-file process-substitution command substitution merge is fail-closed" 2 "$BASE_SHA" "gh pr merge --body-file <(printf %s \$(gh pr merge 999 --merge --repo owner/repo)) 123 --merge --repo owner/repo"
 if grep -q "複数の gh pr merge" "$ERR_FILE"; then
