@@ -183,13 +183,14 @@ expect_hook_blocks_wrapped_url_target() {
 expect_hook_blocks_dynamic_eval_target() {
   local hook="$1"
   local label="$2"
+  local command="${3:-m='gh pr merge 123 --merge --repo owner/repo'; eval \"\\\$m\"}"
   : > "$GH_LOG"
 
   set +e
   (
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
-      bash "$ROOT/hooks/$hook" <<<"$(payload "m='gh pr merge 123 --merge --repo owner/repo'; eval \"\\\$m\"")"
+      bash "$ROOT/hooks/$hook" <<<"$(payload "$command")"
   ) >/tmp/standalone_merge_hook.out 2>/tmp/standalone_merge_hook.err
   local rc=$?
   set -e
@@ -226,6 +227,14 @@ expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks dynamic eval merge"
 expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks dynamic eval merge"
 expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks dynamic eval merge"
+expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks escaped dynamic eval merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\\\$m\""
+expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks escaped dynamic eval merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\\\$m\""
+expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks escaped dynamic eval merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\\\$m\""
+expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks escaped dynamic eval merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\\\$m\""
+expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
+expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
+expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
+expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
 
 rm -f /tmp/standalone_merge_hook.out /tmp/standalone_merge_hook.err
 echo "Results: $PASS passed, $FAIL failed (total $((PASS + FAIL)))"

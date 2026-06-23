@@ -720,7 +720,17 @@ PY
 command_mentions_pr_merge_text() {
   local cmd="${1:-}"
   [[ -n "$cmd" ]] || return 1
-  printf '%s' "$cmd" | grep -Eq '(^|[[:space:];|&"'\''`])([[:alnum:]_./-]*/)?gh([[:space:]][^;&|]*)?[[:space:]]+pr[[:space:]]+merge'
+  _CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import sys
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r"\\\s+", " ", cmd)
+if re.search(r"(^|[\s;|&=\"'`])([\w./-]*/)?gh\b.*\bpr\b.*\bmerge\b", cmd, re.S):
+    sys.exit(0)
+sys.exit(1)
+PY
 }
 
 command_uses_shell_executor() {
