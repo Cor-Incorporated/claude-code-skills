@@ -364,6 +364,41 @@ shell_executors = {"bash", "sh", "zsh"}
 def is_gh(token):
     return os.path.basename(token) == "gh"
 
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
@@ -392,6 +427,8 @@ def nested_command_strings(tokens):
     while i < len(tokens):
         base = os.path.basename(tokens[i])
         end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
         if base in shell_executors:
             j = i + 1
             while j < end:
@@ -508,6 +545,41 @@ shell_executors = {"bash", "sh", "zsh"}
 def is_gh(token):
     return os.path.basename(token) == "gh"
 
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
@@ -536,6 +608,8 @@ def nested_command_strings(tokens):
     while i < len(tokens):
         base = os.path.basename(tokens[i])
         end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
         if base in shell_executors:
             j = i + 1
             while j < end:
@@ -621,6 +695,41 @@ shell_executors = {"bash", "sh", "zsh"}
 def is_gh(token):
     return os.path.basename(token) == "gh"
 
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
@@ -649,6 +758,8 @@ def nested_command_strings(tokens):
     while i < len(tokens):
         base = os.path.basename(tokens[i])
         end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
         if base in shell_executors:
             j = i + 1
             while j < end:
@@ -776,6 +887,42 @@ def skip_wrapper_options(tokens, i, wrapper):
     return i
 
 
+def env_payloads(tokens, wrapper_index):
+    payloads = []
+    j = wrapper_index + 1
+    while j < len(tokens):
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < len(tokens):
+                payloads.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            payloads.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            value = token.split("=", 1)[1]
+            if value:
+                payloads.append(value)
+            j += 1
+            continue
+        break
+    return payloads
+
+
 def skip_value_flag(tokens, i):
     token = tokens[i]
     if token in value_flags:
@@ -828,7 +975,12 @@ def segment_mentions_pr_merge(segment_tokens, depth=0):
         i += 1
 
     while i < len(segment_tokens) and is_wrapper(segment_tokens[i]):
+        wrapper_index = i
         wrapper = os.path.basename(segment_tokens[i])
+        if wrapper == "env":
+            for payload in env_payloads(segment_tokens, wrapper_index):
+                if payload and tokens_mention_pr_merge(parse_tokens(payload), depth + 1):
+                    return True
         i += 1
         i = skip_wrapper_options(segment_tokens, i, wrapper)
 
@@ -907,6 +1059,41 @@ shell_executors = {"bash", "sh", "zsh"}
 def is_gh(token):
     return os.path.basename(token) == "gh"
 
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
@@ -935,6 +1122,8 @@ def nested_command_strings(tokens):
     while i < len(tokens):
         base = os.path.basename(tokens[i])
         end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
         if base in shell_executors:
             j = i + 1
             while j < end:
@@ -1218,6 +1407,51 @@ def skip_wrapper_options(tokens, i, wrapper):
             i += 1
     return i
 
+def env_effects(tokens, wrapper_index):
+    payloads = []
+    chdir = ""
+    j = wrapper_index + 1
+    while j < len(tokens):
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < len(tokens):
+                payloads.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            payloads.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-C", "--chdir"}:
+            if j + 1 < len(tokens):
+                chdir = tokens[j + 1]
+            j += 2
+            continue
+        if token.startswith("--chdir="):
+            chdir = token.split("=", 1)[1]
+            j += 1
+            continue
+        if token in {"-u", "--unset"}:
+            j += 2
+            continue
+        if token.startswith("--unset="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            value = token.split("=", 1)[1]
+            if value:
+                payloads.append(value)
+            j += 1
+            continue
+        break
+    return payloads, chdir
+
 def command_start(segment):
     i = 0
     while i < len(segment) and is_assignment(segment[i]):
@@ -1303,6 +1537,19 @@ def context_for_gh_pr(text, base_dir="", base_is_explicit=False, depth=0):
     for segment in split_segments(tokens):
         if not segment:
             continue
+        pre = 0
+        while pre < len(segment) and is_assignment(segment[pre]):
+            pre += 1
+        if pre < len(segment) and os.path.basename(segment[pre]) == "env":
+            payloads, chdir = env_effects(segment, pre)
+            if chdir:
+                candidate = resolve_cd_path(chdir, candidate or base_dir)
+                base_dir = candidate or base_dir
+                base_is_explicit = bool(candidate)
+            for payload in payloads:
+                nested = context_for_gh_pr(payload, candidate or base_dir, bool(candidate), depth + 1)
+                if nested:
+                    return nested
         start = command_start(segment)
         if start >= len(segment):
             continue

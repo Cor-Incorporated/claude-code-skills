@@ -152,6 +152,51 @@ else
   fi
 fi
 
+if run_hook "pr-merge-claude-review-gate.sh" "cd '$TARGET_REPO' && env -S 'gh pr merge 123 --merge --repo owner/repo'"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: pr-merge-claude-review-gate missed env split-string target state" >&2
+else
+  rc=$?
+  if [[ "$rc" -eq 2 ]] && grep -q "レビューを未読" "$TMP_DIR/err"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: pr-merge-claude-review-gate blocks on env split-string target state"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: pr-merge-claude-review-gate env split-string unexpected exit $rc" >&2
+    cat "$TMP_DIR/err" >&2 || true
+  fi
+fi
+
+if run_hook "pr-merge-claude-review-gate.sh" "cd '$TARGET_REPO' && env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: pr-merge-claude-review-gate missed env assignment target state" >&2
+else
+  rc=$?
+  if [[ "$rc" -eq 2 ]] && grep -Eq "レビューを未読|安全に解析できません" "$TMP_DIR/err"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: pr-merge-claude-review-gate blocks on env assignment target state"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: pr-merge-claude-review-gate env assignment unexpected exit $rc" >&2
+    cat "$TMP_DIR/err" >&2 || true
+  fi
+fi
+
+if run_hook "pr-merge-claude-review-gate.sh" "env -C '$TARGET_REPO' gh pr merge 123 --merge --repo owner/repo"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: pr-merge-claude-review-gate missed env chdir target state" >&2
+else
+  rc=$?
+  if [[ "$rc" -eq 2 ]] && grep -q "レビューを未読" "$TMP_DIR/err"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: pr-merge-claude-review-gate blocks on env chdir target state"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: pr-merge-claude-review-gate env chdir unexpected exit $rc" >&2
+    cat "$TMP_DIR/err" >&2 || true
+  fi
+fi
+
 if run_hook "pr-merge-claude-review-gate.sh" "bash -c 'cd \"$TARGET_REPO\" && gh pr merge 123 --merge --repo owner/repo'"; then
   FAIL=$((FAIL + 1))
   echo "  FAIL: pr-merge-claude-review-gate missed nested shell target state" >&2
@@ -210,6 +255,51 @@ else
   else
     FAIL=$((FAIL + 1))
     echo "  FAIL: block-merge-without-review env-wrapped unexpected exit $rc" >&2
+    cat "$TMP_DIR/err" >&2 || true
+  fi
+fi
+
+if run_hook "block-merge-without-review.sh" "cd '$TARGET_REPO' && env -S 'gh pr merge 123 --merge --repo owner/repo'"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: block-merge-without-review missed env split-string target lock" >&2
+else
+  rc=$?
+  if [[ "$rc" -eq 2 ]] && grep -q "Pessimistic Lock" "$TMP_DIR/err"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: block-merge-without-review blocks on env split-string target lock"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: block-merge-without-review env split-string unexpected exit $rc" >&2
+    cat "$TMP_DIR/err" >&2 || true
+  fi
+fi
+
+if run_hook "block-merge-without-review.sh" "cd '$TARGET_REPO' && env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: block-merge-without-review missed env assignment target lock" >&2
+else
+  rc=$?
+  if [[ "$rc" -eq 2 ]] && grep -Eq "Pessimistic Lock|安全に解析できません" "$TMP_DIR/err"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: block-merge-without-review blocks on env assignment target lock"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: block-merge-without-review env assignment unexpected exit $rc" >&2
+    cat "$TMP_DIR/err" >&2 || true
+  fi
+fi
+
+if run_hook "block-merge-without-review.sh" "env -C '$TARGET_REPO' gh pr merge 123 --merge --repo owner/repo"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: block-merge-without-review missed env chdir target lock" >&2
+else
+  rc=$?
+  if [[ "$rc" -eq 2 ]] && grep -q "Pessimistic Lock" "$TMP_DIR/err"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: block-merge-without-review blocks on env chdir target lock"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: block-merge-without-review env chdir unexpected exit $rc" >&2
     cat "$TMP_DIR/err" >&2 || true
   fi
 fi

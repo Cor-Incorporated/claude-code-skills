@@ -72,6 +72,41 @@ shell_executors = {"bash", "sh", "zsh"}
 def is_gh(token):
     return os.path.basename(token) == "gh"
 
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
@@ -100,6 +135,8 @@ def nested_command_strings(tokens):
     while i < len(tokens):
         base = os.path.basename(tokens[i])
         end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
         if base in shell_executors:
             j = i + 1
             while j < end:
@@ -216,6 +253,41 @@ shell_executors = {"bash", "sh", "zsh"}
 def is_gh(token):
     return os.path.basename(token) == "gh"
 
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
@@ -244,6 +316,8 @@ def nested_command_strings(tokens):
     while i < len(tokens):
         base = os.path.basename(tokens[i])
         end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
         if base in shell_executors:
             j = i + 1
             while j < end:

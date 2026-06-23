@@ -68,6 +68,12 @@ assert_eq "bash -lc PR URL target is explicit and unsafe" "__NON_NUMERIC__:https
 assert_eq "eval numeric target is detected" "123" \
   "eval 'gh pr merge 123 --merge --repo owner/repo'"
 
+assert_eq "env split-string numeric target is detected" "123" \
+  "env -S 'gh pr merge 123 --merge --repo owner/repo'"
+
+assert_eq "env long split-string numeric target is detected" "123" \
+  "env --split-string='gh pr merge 123 --merge --repo owner/repo'"
+
 assert_eq "implicit current-branch target" "" \
   "gh pr merge --merge --repo owner/repo"
 
@@ -147,6 +153,9 @@ assert_guard_eq "env-wrapped escaped dynamic eval merge is fail-closed" "block" 
 
 assert_guard_eq "env unset wrapped escaped dynamic eval merge is fail-closed" "block" \
   "m=env\\ -u\\ GH_TOKEN\\ gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\$m\""
+
+assert_guard_eq "env assignment shell payload merge is fail-closed" "block" \
+  "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'"
 
 assert_guard_eq "command-wrapped escaped dynamic eval merge is fail-closed" "block" \
   "m=command\\ gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\$m\""

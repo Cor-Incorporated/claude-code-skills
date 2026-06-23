@@ -200,6 +200,16 @@ make_gh open; write_pending
 run_hook "m=gh\\ pr\\ merge\\ 999\\ --merge\\ --repo\\ owner/repo; /bin/bash -c \"\$m\"" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "escaped dynamic absolute bash -c hard-blocked" || bad "exit $rc (want 2)"
 
+echo "[13d3] OPEN env split-string merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "env -S 'gh pr merge 999 --merge --repo owner/repo'" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "env split-string merge hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[13d4] OPEN env assignment shell payload merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "env assignment shell payload hard-blocked" || bad "exit $rc (want 2)"
+
 echo "[13e] PR comment body mentioning merge -> no hard block"
 make_gh open; write_pending
 out="$(run_hook "bash -c 'gh pr comment 999 --body merge'")"; rc=$?

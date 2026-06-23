@@ -49,6 +49,9 @@ test_case "global --repo before pr" "user/global-long" "$result"
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo \"bash -c 'gh pr merge 10 --repo nested/repo --merge'\"")
 test_case "nested bash -c merge repo flag" "nested/repo" "$result"
 
+result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo \"env -S 'gh pr merge 10 --repo split/repo --merge'\"")
+test_case "env split-string merge repo flag" "split/repo" "$result"
+
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr merge 10 --repo first/repo --repo second/repo'")
 test_case "multiple --repo uses first match" "first/repo" "$result"
 
