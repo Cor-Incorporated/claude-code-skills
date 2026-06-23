@@ -153,6 +153,33 @@ expect_hook_blocks_url_target() {
   fi
 }
 
+expect_hook_blocks_wrapped_url_target() {
+  local hook="$1"
+  local label="$2"
+  : > "$GH_LOG"
+
+  set +e
+  (
+    cd "$TMP_REPO"
+    HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
+      bash "$ROOT/hooks/$hook" <<<"$(payload "bash -c 'gh pr merge https://github.com/owner/repo/pull/123 --merge'")"
+  ) >/tmp/standalone_merge_hook.out 2>/tmp/standalone_merge_hook.err
+  local rc=$?
+  set -e
+
+  if [[ "$rc" -eq 2 ]] && grep -q "PR番号が特定できません" /tmp/standalone_merge_hook.err; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $label"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $label did not fail closed for wrapped PR URL target (exit $rc)" >&2
+    echo "--- gh log ---" >&2
+    cat "$GH_LOG" >&2 || true
+    echo "--- stderr ---" >&2
+    cat /tmp/standalone_merge_hook.err >&2 || true
+  fi
+}
+
 echo "=== standalone merge hooks with gh global flags ==="
 expect_hook_reaches_pr "block-merge-without-ci.sh" "block-merge-without-ci detects gh -R pr merge"
 expect_hook_reaches_pr "enforce-soak-time.sh" "enforce-soak-time detects gh -R pr merge"
@@ -164,6 +191,10 @@ expect_hook_blocks_url_target "block-merge-without-ci.sh" "block-merge-without-c
 expect_hook_blocks_url_target "enforce-soak-time.sh" "enforce-soak-time blocks PR URL target"
 expect_hook_blocks_url_target "block-merge-without-review.sh" "block-merge-without-review blocks PR URL target"
 expect_hook_blocks_url_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks PR URL target"
+expect_hook_blocks_wrapped_url_target "block-merge-without-ci.sh" "block-merge-without-ci blocks bash -c PR URL target"
+expect_hook_blocks_wrapped_url_target "enforce-soak-time.sh" "enforce-soak-time blocks bash -c PR URL target"
+expect_hook_blocks_wrapped_url_target "block-merge-without-review.sh" "block-merge-without-review blocks bash -c PR URL target"
+expect_hook_blocks_wrapped_url_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks bash -c PR URL target"
 
 rm -f /tmp/standalone_merge_hook.out /tmp/standalone_merge_hook.err
 echo "Results: $PASS passed, $FAIL failed (total $((PASS + FAIL)))"

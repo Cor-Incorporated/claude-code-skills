@@ -43,6 +43,15 @@ assert_eq "repo equals form before target" "123" \
 assert_eq "pull URL target is explicit and unsafe" "__NON_NUMERIC__:https://github.com/owner/repo/pull/123" \
   "gh pr merge https://github.com/owner/repo/pull/123 --merge"
 
+assert_eq "bash -c numeric target is detected" "123" \
+  "bash -c 'gh pr merge 123 --merge --repo owner/repo'"
+
+assert_eq "bash -lc PR URL target is explicit and unsafe" "__NON_NUMERIC__:https://github.com/owner/repo/pull/123" \
+  "bash -lc 'gh pr merge https://github.com/owner/repo/pull/123 --merge'"
+
+assert_eq "eval numeric target is detected" "123" \
+  "eval 'gh pr merge 123 --merge --repo owner/repo'"
+
 assert_eq "implicit current-branch target" "" \
   "gh pr merge --merge --repo owner/repo"
 

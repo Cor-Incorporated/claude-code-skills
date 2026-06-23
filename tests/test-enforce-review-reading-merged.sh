@@ -111,6 +111,15 @@ else
   bad "exit $rc or missing unsafe target message (want exit 2)"
 fi
 
+echo "[5c] OPEN other PR URL target through bash -c -> hard-blocked as unsafe"
+make_gh open; write_pending
+run_hook "bash -c 'gh pr merge https://github.com/owner/repo/pull/123 --merge'" >/dev/null; rc=$?
+if [ "$rc" -eq 2 ] && grep -q "target: https://github.com/owner/repo/pull/123" "$WORK/err"; then
+  ok "wrapped PR URL target hard-blocked"
+else
+  bad "exit $rc or missing wrapped unsafe target message (want exit 2)"
+fi
+
 echo "[6] OPEN other PR + flag-before-target 'gh pr merge' -> not hard-blocked"
 make_gh open; write_pending
 run_hook "gh pr merge --repo owner/repo 123 --merge" >/dev/null; rc=$?

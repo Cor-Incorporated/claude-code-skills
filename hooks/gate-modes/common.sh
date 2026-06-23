@@ -344,6 +344,7 @@ value_flags = {
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+shell_executors = {"bash", "sh", "zsh"}
 
 def is_gh(token):
     return os.path.basename(token) == "gh"
@@ -355,6 +356,54 @@ def skip_value_flag(tokens, i, flags):
     if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
         return i + 1
     return None
+
+def parse_tokens(text):
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
 
 def gh_pr_invocations(tokens, verb):
     positions = []
@@ -387,11 +436,8 @@ def gh_pr_invocations(tokens, verb):
 
 cmd = os.environ.get("_CMD", "")
 cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
-try:
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    tokens = list(lexer)
-except Exception:
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
     sys.exit(0)
 
 merge_positions = gh_pr_invocations(tokens, "merge")
@@ -442,6 +488,7 @@ import sys
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+shell_executors = {"bash", "sh", "zsh"}
 
 def is_gh(token):
     return os.path.basename(token) == "gh"
@@ -453,6 +500,54 @@ def skip_value_flag(tokens, i, flags):
     if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
         return i + 1
     return None
+
+def parse_tokens(text):
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
 
 def count_pr_verb(tokens, verb):
     count = 0
@@ -485,11 +580,8 @@ def count_pr_verb(tokens, verb):
 
 cmd = os.environ.get("_CMD", "")
 cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
-try:
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    tokens = list(lexer)
-except Exception:
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
     print(0)
     sys.exit(0)
 
@@ -509,6 +601,7 @@ import sys
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+shell_executors = {"bash", "sh", "zsh"}
 
 def is_gh(token):
     return os.path.basename(token) == "gh"
@@ -520,6 +613,54 @@ def skip_value_flag(tokens, i, flags):
     if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
         return i + 1
     return None
+
+def parse_tokens(text):
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
 
 def count_pr_verb(tokens, verb):
     count = 0
@@ -552,11 +693,8 @@ def count_pr_verb(tokens, verb):
 
 cmd = os.environ.get("_CMD", "")
 cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
-try:
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    tokens = list(lexer)
-except Exception:
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
     print(0)
     sys.exit(0)
 
@@ -565,18 +703,12 @@ PY
 }
 # =========================================================================
 # Helper: resolve repository (fork-aware)
-# Priority: CLAUDE_FORK_REPO env > --repo flag > upstream remote > origin
+# Priority: --repo flag > CLAUDE_FORK_REPO env > upstream remote > origin
 # =========================================================================
 resolve_repo() {
   local cmd="${1:-}"
 
-  # Priority 1: CLAUDE_FORK_REPO env var
-  if [[ -n "${CLAUDE_FORK_REPO:-}" ]]; then
-    echo "$CLAUDE_FORK_REPO"
-    return
-  fi
-
-  # Priority 2: --repo / -R flag in command
+  # Priority 1: --repo / -R flag in command
   if [[ -n "$cmd" ]]; then
     local parsed_repo
     parsed_repo=$(_CMD="$cmd" python3 - <<'PY'
@@ -588,6 +720,7 @@ import sys
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+shell_executors = {"bash", "sh", "zsh"}
 
 def is_gh(token):
     return os.path.basename(token) == "gh"
@@ -599,6 +732,54 @@ def skip_value_flag(tokens, i, flags):
     if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
         return i + 1
     return None
+
+def parse_tokens(text):
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
 
 def gh_pr_invocations(tokens, verbs):
     invocations = []
@@ -647,11 +828,8 @@ def repo_in_range(tokens, start, end):
 
 cmd = os.environ.get("_CMD", "")
 cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
-try:
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    tokens = list(lexer)
-except Exception:
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
     sys.exit(0)
 
 merge_invocations = gh_pr_invocations(tokens, {"merge"})
@@ -696,6 +874,12 @@ PY
       echo "$parsed_repo"
       return
     fi
+  fi
+
+  # Priority 2: CLAUDE_FORK_REPO env var fallback
+  if [[ -n "${CLAUDE_FORK_REPO:-}" ]]; then
+    echo "$CLAUDE_FORK_REPO"
+    return
   fi
 
   # Priority 3: upstream remote (fork workflow)

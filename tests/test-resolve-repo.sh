@@ -1,6 +1,6 @@
 #!/bin/bash
 # Test suite for resolve_repo() in hooks/gate-modes/common.sh
-# Covers priority order: CLAUDE_FORK_REPO > --repo flag > upstream > origin
+# Covers priority order: --repo flag > CLAUDE_FORK_REPO > upstream > origin
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,16 +21,16 @@ test_case() {
 
 echo "=== resolve_repo() tests ==="
 
-# --- Priority 1: CLAUDE_FORK_REPO env var ---
-echo "--- Priority 1: CLAUDE_FORK_REPO env var ---"
+# --- Priority 1: --repo flag ---
+echo "--- Priority 1: --repo flag parsing ---"
+result=$(CLAUDE_FORK_REPO="org/repo" bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr merge 1 --repo other/repo'")
+test_case "--repo flag takes precedence over env var" "other/repo" "$result"
+
+# --- Priority 2: CLAUDE_FORK_REPO env var ---
+echo "--- Priority 2: CLAUDE_FORK_REPO env var ---"
 result=$(CLAUDE_FORK_REPO="test/fork-repo" bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo ''")
 test_case "env var override" "test/fork-repo" "$result"
 
-result=$(CLAUDE_FORK_REPO="org/repo" bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr merge 1 --repo other/repo'")
-test_case "env var takes precedence over --repo flag" "org/repo" "$result"
-
-# --- Priority 2: --repo flag ---
-echo "--- Priority 2: --repo flag parsing ---"
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr merge 10 --repo user/fork-repo --merge'")
 test_case "--repo with space" "user/fork-repo" "$result"
 
@@ -45,6 +45,9 @@ test_case "global -R before pr" "user/global-short" "$result"
 
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh --repo user/global-long pr merge 10 --merge'")
 test_case "global --repo before pr" "user/global-long" "$result"
+
+result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo \"bash -c 'gh pr merge 10 --repo nested/repo --merge'\"")
+test_case "nested bash -c merge repo flag" "nested/repo" "$result"
 
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr merge 10 --repo first/repo --repo second/repo'")
 test_case "multiple --repo uses first match" "first/repo" "$result"
