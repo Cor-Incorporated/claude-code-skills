@@ -166,6 +166,15 @@ assert_guard_eq "redirected env assignment hidden merge plus visible merge is fa
 assert_guard_eq "sudo redirected env assignment hidden merge plus visible merge is fail-closed" "block" \
   "sudo 2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 456 --merge --repo owner/repo"
 
+assert_guard_eq "nested redirected env assignment hidden merge plus visible merge is fail-closed" "block" \
+  "bash -c \"2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 456 --merge --repo owner/repo\""
+
+assert_guard_eq "here-string redirected env assignment hidden merge plus visible merge is fail-closed" "block" \
+  "<<<x env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 456 --merge --repo owner/repo"
+
+assert_guard_eq "noclobber redirected env assignment hidden merge plus visible merge is fail-closed" "block" \
+  ">|/tmp/out env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 456 --merge --repo owner/repo"
+
 assert_guard_eq "command-wrapped escaped dynamic eval merge is fail-closed" "block" \
   "m=command\\ gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\$m\""
 

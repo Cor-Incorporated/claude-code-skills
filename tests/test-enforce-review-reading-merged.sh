@@ -225,6 +225,21 @@ make_gh open; write_pending
 run_hook "sudo 2>/dev/null env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "sudo redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
 
+echo "[13d8] OPEN nested redirected env assignment hidden merge plus visible merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "bash -c \"2>/dev/null env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo\"" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "nested redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[13d9] OPEN here-string redirected env assignment hidden merge plus visible merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "<<<x env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "here-string redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[13d10] OPEN noclobber redirected env assignment hidden merge plus visible merge -> hard-blocked"
+make_gh open; write_pending
+run_hook ">|/tmp/out env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "noclobber redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+
 echo "[13e] PR comment body mentioning merge -> no hard block"
 make_gh open; write_pending
 out="$(run_hook "bash -c 'gh pr comment 999 --body merge'")"; rc=$?

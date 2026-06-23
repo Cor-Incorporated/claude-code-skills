@@ -358,7 +358,7 @@ value_flags = {
 }
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
-redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
 
 def is_gh(token):
@@ -408,6 +408,7 @@ def skip_value_flag(tokens, i, flags):
     return None
 
 def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -487,7 +488,7 @@ def gh_pr_invocations(tokens, verb):
     return positions
 
 cmd = os.environ.get("_CMD", "")
-cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', cmd)
 tokens = expand_nested_shell(parse_tokens(cmd))
 if not tokens:
     sys.exit(0)
@@ -539,7 +540,7 @@ import sys
 
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
-redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
 
 def is_gh(token):
@@ -589,6 +590,7 @@ def skip_value_flag(tokens, i, flags):
     return None
 
 def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -668,7 +670,7 @@ def count_pr_verb(tokens, verb):
     return count
 
 cmd = os.environ.get("_CMD", "")
-cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', cmd)
 tokens = expand_nested_shell(parse_tokens(cmd))
 if not tokens:
     print(0)
@@ -689,7 +691,7 @@ import sys
 
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
-redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
 
 def is_gh(token):
@@ -739,6 +741,7 @@ def skip_value_flag(tokens, i, flags):
     return None
 
 def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -818,7 +821,7 @@ def count_pr_verb(tokens, verb):
     return count
 
 cmd = os.environ.get("_CMD", "")
-cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', cmd)
 tokens = expand_nested_shell(parse_tokens(cmd))
 if not tokens:
     print(0)
@@ -839,7 +842,7 @@ import sys
 
 value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {";", "&&", "||", "|", "&", "(", ")"}
-redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 command_wrappers = {"env", "command", "sudo"}
 shell_executors = {"bash", "sh", "zsh"}
 wrapper_value_flags = {
@@ -851,6 +854,7 @@ wrapper_value_flags = {
 
 
 def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -1032,7 +1036,7 @@ def count_segment_pr_merge(segment_tokens, depth=0):
 
 
 cmd = os.environ.get("_CMD", "")
-cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', cmd)
 print(count_tokens_pr_merge(parse_tokens(cmd)))
 PY
 }
@@ -1081,7 +1085,7 @@ import sys
 
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
-redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
 
 def is_gh(token):
@@ -1131,6 +1135,7 @@ def skip_value_flag(tokens, i, flags):
     return None
 
 def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -1226,7 +1231,7 @@ def repo_in_range(tokens, start, end):
     return ""
 
 cmd = os.environ.get("_CMD", "")
-cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', cmd)
 tokens = expand_nested_shell(parse_tokens(cmd))
 if not tokens:
     sys.exit(0)
@@ -1328,7 +1333,7 @@ def is_gh(token):
 
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
-redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
@@ -1396,7 +1401,7 @@ import sys
 
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&", "(", ")"}
-redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
 command_wrappers = {"env", "command", "sudo"}
 wrapper_value_flags = {
@@ -1407,6 +1412,7 @@ wrapper_value_flags = {
 }
 
 def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text.replace("\n", ";"), posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
