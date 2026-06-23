@@ -62,6 +62,9 @@ assert_eq "pull URL target is explicit and unsafe" "__NON_NUMERIC__:https://gith
 assert_eq "bash -c numeric target is detected" "123" \
   "bash -c 'gh pr merge 123 --merge --repo owner/repo'"
 
+assert_eq "nested echo mentioning merge is ignored" "" \
+  "bash -c 'echo gh pr merge 123'"
+
 assert_eq "bash -lc PR URL target is explicit and unsafe" "__NON_NUMERIC__:https://github.com/owner/repo/pull/123" \
   "bash -lc 'gh pr merge https://github.com/owner/repo/pull/123 --merge'"
 
@@ -168,6 +171,12 @@ assert_guard_eq "sudo redirected env assignment hidden merge plus visible merge 
 
 assert_guard_eq "nested redirected env assignment hidden merge plus visible merge is fail-closed" "block" \
   "bash -c \"2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 456 --merge --repo owner/repo\""
+
+assert_guard_eq "process-substitution input hidden merge plus visible merge is fail-closed" "block" \
+  "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m' < <(printf x); gh pr merge 456 --merge --repo owner/repo"
+
+assert_guard_eq "process-substitution output hidden merge plus visible merge is fail-closed" "block" \
+  "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m' > >(cat); gh pr merge 456 --merge --repo owner/repo"
 
 assert_guard_eq "here-string redirected env assignment hidden merge plus visible merge is fail-closed" "block" \
   "<<<x env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 456 --merge --repo owner/repo"

@@ -360,6 +360,7 @@ global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
 
 def is_gh(token):
     return os.path.basename(token) == "gh"
@@ -407,12 +408,25 @@ def skip_value_flag(tokens, i, flags):
         return i + 1
     return None
 
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return list(lexer)
+        return split_punctuation_tokens(list(lexer))
     except Exception:
         return []
 
@@ -447,6 +461,21 @@ def nested_command_strings(tokens):
         i += 1
     return nested
 
+def is_single_readonly_command(tokens):
+    if not tokens or any(token in separators for token in tokens):
+        return False
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in redirects:
+            i += 2
+            continue
+        if is_assignment(tokens[i]):
+            i += 1
+            continue
+        break
+    return i < len(tokens) and os.path.basename(tokens[i]) in read_only_commands
+
+
 def expand_nested_shell(tokens, depth=0):
     if depth >= 3:
         return tokens
@@ -454,6 +483,8 @@ def expand_nested_shell(tokens, depth=0):
     for nested in nested_command_strings(tokens):
         nested_tokens = parse_tokens(nested)
         if nested_tokens:
+            if is_single_readonly_command(nested_tokens):
+                continue
             expanded.append(";")
             expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
     return expanded
@@ -542,6 +573,7 @@ global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
 
 def is_gh(token):
     return os.path.basename(token) == "gh"
@@ -589,12 +621,25 @@ def skip_value_flag(tokens, i, flags):
         return i + 1
     return None
 
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return list(lexer)
+        return split_punctuation_tokens(list(lexer))
     except Exception:
         return []
 
@@ -629,6 +674,21 @@ def nested_command_strings(tokens):
         i += 1
     return nested
 
+def is_single_readonly_command(tokens):
+    if not tokens or any(token in separators for token in tokens):
+        return False
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in redirects:
+            i += 2
+            continue
+        if is_assignment(tokens[i]):
+            i += 1
+            continue
+        break
+    return i < len(tokens) and os.path.basename(tokens[i]) in read_only_commands
+
+
 def expand_nested_shell(tokens, depth=0):
     if depth >= 3:
         return tokens
@@ -636,6 +696,8 @@ def expand_nested_shell(tokens, depth=0):
     for nested in nested_command_strings(tokens):
         nested_tokens = parse_tokens(nested)
         if nested_tokens:
+            if is_single_readonly_command(nested_tokens):
+                continue
             expanded.append(";")
             expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
     return expanded
@@ -693,6 +755,7 @@ global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
 
 def is_gh(token):
     return os.path.basename(token) == "gh"
@@ -740,12 +803,25 @@ def skip_value_flag(tokens, i, flags):
         return i + 1
     return None
 
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return list(lexer)
+        return split_punctuation_tokens(list(lexer))
     except Exception:
         return []
 
@@ -780,6 +856,21 @@ def nested_command_strings(tokens):
         i += 1
     return nested
 
+def is_single_readonly_command(tokens):
+    if not tokens or any(token in separators for token in tokens):
+        return False
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in redirects:
+            i += 2
+            continue
+        if is_assignment(tokens[i]):
+            i += 1
+            continue
+        break
+    return i < len(tokens) and os.path.basename(tokens[i]) in read_only_commands
+
+
 def expand_nested_shell(tokens, depth=0):
     if depth >= 3:
         return tokens
@@ -787,6 +878,8 @@ def expand_nested_shell(tokens, depth=0):
     for nested in nested_command_strings(tokens):
         nested_tokens = parse_tokens(nested)
         if nested_tokens:
+            if is_single_readonly_command(nested_tokens):
+                continue
             expanded.append(";")
             expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
     return expanded
@@ -845,6 +938,7 @@ separators = {";", "&&", "||", "|", "&", "(", ")"}
 redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 command_wrappers = {"env", "command", "sudo"}
 shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
 wrapper_value_flags = {
     "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
     "sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt",
@@ -853,14 +947,27 @@ wrapper_value_flags = {
 }
 
 
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return list(lexer)
+        return split_punctuation_tokens(list(lexer))
     except ValueError:
-        return re.findall(r"&&|\|\||[;|&]|[^\s;|&]+", text)
+        return split_punctuation_tokens(re.findall(r"&&|\|\||[;|&]|[^\s;|&]+", text))
 
 
 def is_assignment(token):
@@ -1087,6 +1194,7 @@ global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
 
 def is_gh(token):
     return os.path.basename(token) == "gh"
@@ -1134,12 +1242,25 @@ def skip_value_flag(tokens, i, flags):
         return i + 1
     return None
 
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return list(lexer)
+        return split_punctuation_tokens(list(lexer))
     except Exception:
         return []
 
@@ -1174,6 +1295,21 @@ def nested_command_strings(tokens):
         i += 1
     return nested
 
+def is_single_readonly_command(tokens):
+    if not tokens or any(token in separators for token in tokens):
+        return False
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in redirects:
+            i += 2
+            continue
+        if is_assignment(tokens[i]):
+            i += 1
+            continue
+        break
+    return i < len(tokens) and os.path.basename(tokens[i]) in read_only_commands
+
+
 def expand_nested_shell(tokens, depth=0):
     if depth >= 3:
         return tokens
@@ -1181,6 +1317,8 @@ def expand_nested_shell(tokens, depth=0):
     for nested in nested_command_strings(tokens):
         nested_tokens = parse_tokens(nested)
         if nested_tokens:
+            if is_single_readonly_command(nested_tokens):
+                continue
             expanded.append(";")
             expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
     return expanded
@@ -1403,6 +1541,7 @@ global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&", "(", ")"}
 redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
 command_wrappers = {"env", "command", "sudo"}
 wrapper_value_flags = {
     "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
@@ -1411,12 +1550,25 @@ wrapper_value_flags = {
     "command": set(),
 }
 
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text.replace("\n", ";"), posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return list(lexer)
+        return split_punctuation_tokens(list(lexer))
     except Exception:
         return []
 

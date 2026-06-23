@@ -260,6 +260,26 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+expect_rc "process-substitution input hidden env assignment plus visible merge is fail-closed" 2 "$BASE_SHA" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m' < <(printf x); gh pr merge 456 --merge --repo owner/repo"
+if grep -q "安全に解析できません" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: process-substitution input hidden env plus visible merge fail-closed message is explicit"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: process-substitution input hidden env plus visible merge fail-closed message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "process-substitution output hidden env assignment plus visible merge is fail-closed" 2 "$BASE_SHA" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m' > >(cat); gh pr merge 456 --merge --repo owner/repo"
+if grep -q "安全に解析できません" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: process-substitution output hidden env plus visible merge fail-closed message is explicit"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: process-substitution output hidden env plus visible merge fail-closed message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
 expect_rc "here-string redirected hidden env assignment plus visible merge is fail-closed" 2 "$BASE_SHA" "<<<x env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 456 --merge --repo owner/repo"
 if grep -q "安全に解析できません" "$ERR_FILE"; then
   PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))

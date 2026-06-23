@@ -230,6 +230,16 @@ make_gh open; write_pending
 run_hook "bash -c \"2>/dev/null env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo\"" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "nested redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
 
+echo "[13d8b] OPEN process-substitution input hidden merge plus visible merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m' < <(printf x); gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "process-substitution input hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[13d8c] OPEN process-substitution output hidden merge plus visible merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m' > >(cat); gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "process-substitution output hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+
 echo "[13d9] OPEN here-string redirected env assignment hidden merge plus visible merge -> hard-blocked"
 make_gh open; write_pending
 run_hook "<<<x env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
