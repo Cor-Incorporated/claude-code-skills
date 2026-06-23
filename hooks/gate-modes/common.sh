@@ -969,6 +969,8 @@ def count_segment_pr_merge(segment_tokens, depth=0):
 
     count = 0
     i = 0
+    while i < len(segment_tokens) and segment_tokens[i] in redirects:
+        i += 2
     while i < len(segment_tokens) and is_assignment(segment_tokens[i]):
         value = segment_tokens[i].split("=", 1)[1]
         if value:
@@ -1014,6 +1016,7 @@ def count_segment_pr_merge(segment_tokens, depth=0):
 
 
 cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
 print(count_tokens_pr_merge(parse_tokens(cmd)))
 PY
 }
