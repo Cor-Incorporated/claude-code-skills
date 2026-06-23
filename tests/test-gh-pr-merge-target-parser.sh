@@ -46,10 +46,22 @@ assert_eq "pull URL target" "123" \
 assert_eq "implicit current-branch target" "" \
   "gh pr merge --merge --repo owner/repo"
 
+assert_eq "implicit target with stderr redirect stays implicit" "" \
+  "gh pr merge --merge --repo owner/repo 2>/dev/null"
+
+assert_eq "implicit target with stdout redirect stays implicit" "" \
+  "gh pr merge --merge --repo owner/repo >/tmp/out"
+
 assert_eq "non-numeric target is explicit and unsafe" "__NON_NUMERIC__:feature/foo" \
   "gh pr merge --repo owner/repo feature/foo --merge"
 
 assert_eq "multiple merge invocations are unsafe" "__MULTIPLE__" \
   "gh pr merge 123 --merge --repo owner/repo && gh pr merge 999 --merge --repo owner/repo"
+
+assert_eq "multiple multiline merge invocations are unsafe" "__MULTIPLE__" \
+  $'gh pr merge 123 --merge --repo owner/repo\ngh pr merge 999 --merge --repo owner/repo'
+
+assert_eq "merge after first line is still detected" "999" \
+  $'true\ngh pr merge 999 --merge --repo owner/repo'
 
 echo "gh pr merge target parser tests passed."

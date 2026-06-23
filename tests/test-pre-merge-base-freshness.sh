@@ -112,10 +112,11 @@ PY
 run_pre_merge() {
   local base_sha="$1"
   local merge_cmd="${2:-gh pr merge 123 --merge --repo owner/repo}"
+  local run_cwd="${3:-$TMP_REPO}"
   local payload
-  printf -v payload '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$merge_cmd"
+  payload=$(jq -cn --arg command "$merge_cmd" '{tool_name:"Bash",tool_input:{command:$command}}')
   (
-    cd "$TMP_REPO"
+    cd "$run_cwd"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" FAKE_BASE_SHA="$base_sha" \
       GATE_MODE=PRE_MERGE bash "$ROOT/hooks/pr-ci-review-gate.sh" <<<"$payload"
   ) >/dev/null 2>"$ERR_FILE"
@@ -176,6 +177,41 @@ if grep -q "複数の gh pr merge" "$ERR_FILE"; then
 else
   FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
   echo "  FAIL: chained merge command message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "multiline gh pr merge after first line is evaluated" 2 "$BASE_SHA" $'true\ngh pr merge 999 --merge --repo owner/repo'
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: multiline target PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: multiline target PR #999 CI failure message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "multiline chained gh pr merge commands are blocked" 2 "$BASE_SHA" $'gh pr merge 123 --merge --repo owner/repo\ngh pr merge 999 --merge --repo owner/repo'
+if grep -q "複数の gh pr merge" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: multiline chained merge command message is explicit"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: multiline chained merge command message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+TOTAL=$((TOTAL + 1))
+write_review_status
+set +e
+run_pre_merge "$BASE_SHA" "cd $TMP_REPO && gh pr merge 123 --merge --repo owner/repo" "$TMP_ROOT"
+rc=$?
+set -e
+if [[ "$rc" -eq 0 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: cd-prefixed merge uses command repo context (exit=$rc)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: cd-prefixed merge should use command repo context (got $rc)" >&2
   cat "$ERR_FILE" >&2 || true
 fi
 

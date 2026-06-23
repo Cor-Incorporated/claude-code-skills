@@ -328,6 +328,7 @@ import shlex
 import sys
 
 cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
 try:
     lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
@@ -348,7 +349,7 @@ value_flags = {
     "--author-email",
     "-A",
 }
-operators = {"&&", "||", ";", "|"}
+operators = {"&&", "||", ";", "|", "&", ">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
 merge_positions = [
     i for i in range(len(tokens) - 2)
     if tokens[i:i + 3] == ["gh", "pr", "merge"]
@@ -382,6 +383,33 @@ for i in merge_positions:
         sys.exit(0)
 
 print("")
+PY
+}
+
+count_gh_pr_merge_invocations() {
+  local cmd="${1:-}"
+  [[ -z "$cmd" ]] && { echo 0; return 0; }
+  _CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    print(0)
+    sys.exit(0)
+
+count = 0
+for i in range(len(tokens) - 2):
+    if tokens[i:i + 3] == ["gh", "pr", "merge"]:
+        count += 1
+print(count)
 PY
 }
 # =========================================================================
@@ -485,7 +513,7 @@ for i in range(len(tokens) - 2):
 PY
 }
 
-# Resolve a leading `cd <path> && gh pr create ...` context from the raw
+# Resolve a leading `cd <path> && gh pr create/merge ...` context from the raw
 # Bash command without executing it. Claude hooks run before Bash, so the
 # hook process cannot observe subshell cd effects directly.
 command_git_context_dir() {
@@ -504,7 +532,7 @@ except Exception:
 
 gh_index = -1
 for i in range(len(tokens) - 2):
-    if tokens[i:i+3] == ["gh", "pr", "create"]:
+    if tokens[i:i+3] in (["gh", "pr", "create"], ["gh", "pr", "merge"]):
         gh_index = i
         break
 if gh_index < 0:

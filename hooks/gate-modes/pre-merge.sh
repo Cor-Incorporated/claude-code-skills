@@ -24,16 +24,25 @@ if [[ -n "$cmd" ]] \
   exit 0
 fi
 
-# Verify this is a gh pr merge command
-if [[ -n "$cmd" ]] && ! echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
+# Verify this is a gh pr merge command anywhere in the Bash payload.
+MERGE_COUNT=0
+if [[ -n "$cmd" ]]; then
+  MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+fi
+if [[ "$MERGE_COUNT" -eq 0 ]]; then
   exit 0
+fi
+
+_cmd_context=$(command_git_context_dir "$cmd")
+if [[ -n "$_cmd_context" ]]; then
+  export GIT_CONTEXT_DIR="$_cmd_context"
 fi
 
 # Extract PR number from command FIRST (before branch lookup)
 PR_NUMBER=""
 if [[ -n "$cmd" ]]; then
   PR_NUMBER=$(extract_gh_pr_merge_target "$cmd" || echo "")
-  if [[ "$PR_NUMBER" == "__MULTIPLE__" ]]; then
+  if [[ "$MERGE_COUNT" -gt 1 || "$PR_NUMBER" == "__MULTIPLE__" ]]; then
     echo "🚫 [BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。PRごとに個別実行してください。" >&2
     exit 2
   fi

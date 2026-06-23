@@ -34,6 +34,7 @@ import shlex
 import sys
 
 cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
 try:
     lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
@@ -54,7 +55,7 @@ value_flags = {
     "--author-email",
     "-A",
 }
-operators = {"&&", "||", ";", "|"}
+operators = {"&&", "||", ";", "|", "&", ">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
 merge_positions = [
     i for i in range(len(tokens) - 2)
     if tokens[i:i + 3] == ["gh", "pr", "merge"]
@@ -88,6 +89,33 @@ for i in merge_positions:
         sys.exit(0)
 
 print("")
+PY
+}
+
+count_gh_pr_merge_invocations() {
+  local merge_cmd="${1:-}"
+  [[ -z "$merge_cmd" ]] && { echo 0; return 0; }
+  _CMD="$merge_cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    print(0)
+    sys.exit(0)
+
+count = 0
+for i in range(len(tokens) - 2):
+    if tokens[i:i + 3] == ["gh", "pr", "merge"]:
+        count += 1
+print(count)
 PY
 }
 
@@ -198,11 +226,11 @@ except Exception:
 fi
 
 # HARD BLOCK: gh pr merge with unresolved findings
-cmd_first_line="$(echo "$cmd" | head -1)"
-if echo "$cmd_first_line" | grep -qE 'gh\s+pr\s+merge'; then
-  MERGE_PR=$(extract_gh_pr_merge_target "$cmd_first_line" || echo "")
+MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+if [[ "$MERGE_COUNT" -gt 0 ]]; then
+  MERGE_PR=$(extract_gh_pr_merge_target "$cmd" || echo "")
   if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
-    if [[ "$MERGE_PR" == "__MULTIPLE__" ]]; then
+    if [[ "$MERGE_COUNT" -gt 1 || "$MERGE_PR" == "__MULTIPLE__" ]]; then
       echo "[BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。未対応レビュー state があるため、PRごとに個別実行してください。" >&2
       exit 2
     fi

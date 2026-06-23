@@ -67,7 +67,9 @@ json.dump({"pr":"999","head_sha":"abc123","state":os.environ["_S"],
 }
 
 run_hook() {  # $1 = command; stdout returned, stderr -> $WORK/err
-  ( cd "$WORK" && printf '{"tool_input":{"command":"%s"}}' "$1" \
+  local payload
+  payload=$(jq -cn --arg command "$1" '{tool_input:{command:$command}}')
+  ( cd "$WORK" && printf '%s\n' "$payload" \
       | env CLAUDE_AGENT_DEPTH=0 CLAUDE_AGENT_ID= PATH="$GHBIN:$PATH" bash "$HOOK" ) 2>"$WORK/err"
 }
 
@@ -130,19 +132,29 @@ make_gh_with_current_pr open ""; write_pending
 run_hook "gh pr merge --merge --repo owner/repo" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "unresolved implicit merge hard-blocked" || bad "exit $rc (want 2)"
 
-echo "[12] gh failure -> fail-open (still warns, keeps state)"
+echo "[12] OPEN same PR after first line -> hard-blocked"
+make_gh open; write_pending
+run_hook $'true\ngh pr merge 999 --merge --repo owner/repo' >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "multiline same PR hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[13] OPEN chained multiline 'gh pr merge' -> hard-blocked"
+make_gh open; write_pending
+run_hook $'gh pr merge 123 --merge --repo owner/repo\ngh pr merge 999 --merge --repo owner/repo' >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "multiline chained merge hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[14] gh failure -> fail-open (still warns, keeps state)"
 make_gh FAIL; write_pending
 out="$(run_hook "git status")"; rc=$?
 printf '%s' "$out" | grep -q additionalContext && ok "fail-open banner" || bad "banner missing on gh failure"
 [ -f "$PENDING" ] && ok "pending kept on gh failure" || bad "pending deleted on gh failure"
 
-echo "[13] fresh open cache honoured -> gh skipped (gh says closed, cache says open)"
+echo "[15] fresh open cache honoured -> gh skipped (gh says closed, cache says open)"
 make_gh closed; write_pending; seed_cache open 5
 out="$(run_hook "git status")"; rc=$?
 [ -f "$PENDING" ] && ok "cache hit: gh not consulted, pending kept" || bad "cache ignored (pending purged)"
 printf '%s' "$out" | grep -q additionalContext && ok "banner from cache" || bad "banner missing"
 
-echo "[14] stale cache refreshed -> purge (gh says closed)"
+echo "[16] stale cache refreshed -> purge (gh says closed)"
 make_gh closed; write_pending; seed_cache open 1000
 run_hook "git status" >/dev/null; rc=$?
 [ ! -f "$PENDING" ] && ok "stale cache refreshed -> purged" || bad "stale cache not refreshed"
