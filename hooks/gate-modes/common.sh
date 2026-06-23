@@ -177,6 +177,15 @@ REVIEW_STATE="$STATE_DIR/review-status.json"
 LOCK_STATE="$STATE_DIR/pr-review-lock.json"
 mkdir -p "$STATE_DIR"
 
+rebind_gate_state_dir() {
+  local repo_root="$1"
+  [[ -n "$repo_root" ]] || return 0
+  STATE_DIR="${repo_root}/.claude/state"
+  REVIEW_STATE="$STATE_DIR/review-status.json"
+  LOCK_STATE="$STATE_DIR/pr-review-lock.json"
+  mkdir -p "$STATE_DIR"
+}
+
 # =========================================================================
 # Dual-location lock files — project-scoped AND global (Issue #19 / Fix8)
 # The pessimistic lock (pr-review-lock.json) was written and read from
@@ -188,6 +197,12 @@ mkdir -p "$STATE_DIR"
 # =========================================================================
 GLOBAL_STATE_DIR="$HOME/.claude/state"
 mkdir -p "$GLOBAL_STATE_DIR" 2>/dev/null || true
+
+use_git_context_state_dir() {
+  if [[ -n "${GIT_CONTEXT_DIR:-}" ]]; then
+    rebind_gate_state_dir "$GIT_CONTEXT_DIR"
+  fi
+}
 
 # lock_files — echo the deduped list of lock file paths (project, then global)
 lock_files() {
@@ -701,6 +716,31 @@ if not tokens:
 print(count_pr_verb(tokens, "create"))
 PY
 }
+
+command_mentions_pr_merge_text() {
+  local cmd="${1:-}"
+  [[ -n "$cmd" ]] || return 1
+  printf '%s' "$cmd" | grep -Eq '(^|[[:space:];|&"'\''`])([[:alnum:]_./-]*/)?gh([[:space:]][^;&|]*)?[[:space:]]+pr[[:space:]]+merge'
+}
+
+command_uses_shell_executor() {
+  local cmd="${1:-}"
+  [[ -n "$cmd" ]] || return 1
+  printf '%s' "$cmd" | grep -Eq '(^|[[:space:];|&"'\''`])(bash|sh|zsh|eval)([[:space:];|&"'\''`]|$)'
+}
+
+should_block_unparsed_pr_merge() {
+  local cmd="${1:-}"
+  local merge_count="${2:-0}"
+  [[ "$merge_count" -eq 0 ]] || return 1
+  command_uses_shell_executor "$cmd" || return 1
+  command_mentions_pr_merge_text "$cmd" || return 1
+  return 0
+}
+
+print_unparsed_pr_merge_block() {
+  echo "[BLOCK] gh pr merge を安全に解析できません。shell/eval 経由で隠さず、gh pr merge <number> --repo owner/repo を直接実行してください。" >&2
+}
 # =========================================================================
 # Helper: resolve repository (fork-aware)
 # Priority: --repo flag > CLAUDE_FORK_REPO env > upstream remote > origin
@@ -1013,47 +1053,8 @@ def command_end(tokens, start):
         end += 1
     return end
 
-def nested_command_strings(tokens):
-    nested = []
-    i = 0
-    while i < len(tokens):
-        base = os.path.basename(tokens[i])
-        end = command_end(tokens, i + 1)
-        if base in shell_executors:
-            j = i + 1
-            while j < end:
-                token = tokens[j]
-                if token in redirects:
-                    j += 2
-                    continue
-                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
-                    if j + 1 < end:
-                        nested.append(tokens[j + 1])
-                    break
-                j += 1
-        elif base == "eval" and i + 1 < end:
-            nested.append(" ".join(tokens[i + 1:end]))
-        i += 1
-    return nested
-
-def expand_nested_shell(tokens, depth=0):
-    if depth >= 3:
-        return tokens
-    expanded = list(tokens)
-    for nested in nested_command_strings(tokens):
-        nested_tokens = parse_tokens(nested)
-        if nested_tokens:
-            expanded.append(";")
-            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
-    return expanded
-
 def is_gh(token):
     return os.path.basename(token) == "gh"
-
-cmd = os.environ.get("_CMD", "")
-tokens = expand_nested_shell(parse_tokens(cmd))
-if not tokens:
-    sys.exit(0)
 
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
@@ -1063,15 +1064,9 @@ def skip_value_flag(tokens, i, flags):
         return i + 1
     return None
 
-gh_index = -1
-i = 0
-while i < len(tokens):
+def is_gh_pr_command(tokens, i, end):
     if not is_gh(tokens[i]):
-        i += 1
-        continue
-    end = i + 1
-    while end < len(tokens) and tokens[end] not in separators:
-        end += 1
+        return False
     j = i + 1
     while j < end:
         token = tokens[j]
@@ -1085,12 +1080,51 @@ while i < len(tokens):
         if token.startswith("-"):
             j += 1
             continue
-        if token == "pr" and j + 1 < end and tokens[j + 1] in {"create", "merge"}:
-            gh_index = i
-        break
-    if gh_index >= 0:
-        break
-    i += 1
+        return token == "pr" and j + 1 < end and tokens[j + 1] in {"create", "merge"}
+    return False
+
+def shell_payload(tokens, i, end):
+    base = os.path.basename(tokens[i])
+    if base in shell_executors:
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                return tokens[j + 1] if j + 1 < end else ""
+            j += 1
+    if base == "eval" and i + 1 < end:
+        return " ".join(tokens[i + 1:end])
+    return ""
+
+def command_contains_gh_pr(text, depth=0):
+    if depth >= 3:
+        return False
+    nested_tokens = parse_tokens(text)
+    if not nested_tokens:
+        return False
+    return first_gh_pr_position(nested_tokens, depth + 1) >= 0
+
+def first_gh_pr_position(tokens, depth=0):
+    i = 0
+    while i < len(tokens):
+        end = command_end(tokens, i + 1)
+        if is_gh_pr_command(tokens, i, end):
+            return i
+        payload = shell_payload(tokens, i, end)
+        if payload and command_contains_gh_pr(payload, depth):
+            return i
+        i += 1
+    return -1
+
+cmd = os.environ.get("_CMD", "")
+tokens = parse_tokens(cmd)
+if not tokens:
+    sys.exit(0)
+
+gh_index = first_gh_pr_position(tokens)
 if gh_index < 0:
     sys.exit(0)
 

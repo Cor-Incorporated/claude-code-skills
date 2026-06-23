@@ -190,6 +190,16 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+expect_rc "dynamic eval merge is fail-closed when parser cannot prove target" 2 "$BASE_SHA" "m='gh pr merge 123 --merge --repo owner/repo'; eval \"\$m\""
+if grep -q "安全に解析できません" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: dynamic eval merge fail-closed message is explicit"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: dynamic eval merge fail-closed message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
 expect_rc "chained gh pr merge commands are blocked before first-target approval" 2 "$BASE_SHA" "gh pr merge 123 --merge --repo owner/repo && gh pr merge 999 --merge --repo owner/repo"
 if grep -q "複数の gh pr merge" "$ERR_FILE"; then
   PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
@@ -269,6 +279,40 @@ if [[ "$rc" -eq 0 ]]; then
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: cd-prefixed wrapped merge should use command repo context (got $rc)" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+TOTAL=$((TOTAL + 1))
+write_review_status
+set +e
+run_pre_merge "$BASE_SHA" "bash -c 'gh pr merge 123 --merge --repo owner/repo' && cd $TMP_REPO" "$TMP_ROOT"
+rc=$?
+set -e
+if [[ "$rc" -eq 2 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: wrapped merge does not use a later cd as command context (exit=$rc)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: wrapped merge should not use a later cd as command context (got $rc)" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+TARGET_REPO="$TMP_ROOT/target-repo"
+git clone -q "$TMP_REMOTE" "$TARGET_REPO"
+mkdir -p "$TARGET_REPO/.claude/state"
+printf '{}\n' > "$TARGET_REPO/.claude/state/review-status.json"
+TOTAL=$((TOTAL + 1))
+write_review_status
+set +e
+run_pre_merge "$BASE_SHA" "cd $TARGET_REPO && bash -c 'gh pr merge 123 --merge --repo owner/repo'" "$TMP_REPO"
+rc=$?
+set -e
+if [[ "$rc" -eq 2 ]] && grep -q "レビュー未完了" "$ERR_FILE"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: cd-prefixed wrapped merge uses target repo review state (exit=$rc)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: cd-prefixed wrapped merge should not use source repo review state (got $rc)" >&2
   cat "$ERR_FILE" >&2 || true
 fi
 

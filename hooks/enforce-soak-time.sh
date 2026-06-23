@@ -42,6 +42,10 @@ fi
 # Only act on gh pr merge commands
 MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
 if [[ "$MERGE_COUNT" -eq 0 ]]; then
+  if should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
+    print_unparsed_pr_merge_block
+    exit 2
+  fi
   exit 0
 fi
 

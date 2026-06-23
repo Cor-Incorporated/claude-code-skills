@@ -30,12 +30,17 @@ if [[ -n "$cmd" ]]; then
   MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
 fi
 if [[ "$MERGE_COUNT" -eq 0 ]]; then
+  if should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
+    print_unparsed_pr_merge_block
+    exit 2
+  fi
   exit 0
 fi
 
 _cmd_context=$(command_git_context_dir "$cmd")
 if [[ -n "$_cmd_context" ]]; then
   export GIT_CONTEXT_DIR="$_cmd_context"
+  use_git_context_state_dir
 fi
 
 # Extract PR number from command FIRST (before branch lookup)

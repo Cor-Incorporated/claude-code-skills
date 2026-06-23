@@ -180,6 +180,33 @@ expect_hook_blocks_wrapped_url_target() {
   fi
 }
 
+expect_hook_blocks_dynamic_eval_target() {
+  local hook="$1"
+  local label="$2"
+  : > "$GH_LOG"
+
+  set +e
+  (
+    cd "$TMP_REPO"
+    HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
+      bash "$ROOT/hooks/$hook" <<<"$(payload "m='gh pr merge 123 --merge --repo owner/repo'; eval \"\\\$m\"")"
+  ) >/tmp/standalone_merge_hook.out 2>/tmp/standalone_merge_hook.err
+  local rc=$?
+  set -e
+
+  if [[ "$rc" -eq 2 ]] && grep -q "安全に解析できません" /tmp/standalone_merge_hook.err; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $label"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $label did not fail closed for dynamic eval merge (exit $rc)" >&2
+    echo "--- gh log ---" >&2
+    cat "$GH_LOG" >&2 || true
+    echo "--- stderr ---" >&2
+    cat /tmp/standalone_merge_hook.err >&2 || true
+  fi
+}
+
 echo "=== standalone merge hooks with gh global flags ==="
 expect_hook_reaches_pr "block-merge-without-ci.sh" "block-merge-without-ci detects gh -R pr merge"
 expect_hook_reaches_pr "enforce-soak-time.sh" "enforce-soak-time detects gh -R pr merge"
@@ -195,6 +222,10 @@ expect_hook_blocks_wrapped_url_target "block-merge-without-ci.sh" "block-merge-w
 expect_hook_blocks_wrapped_url_target "enforce-soak-time.sh" "enforce-soak-time blocks bash -c PR URL target"
 expect_hook_blocks_wrapped_url_target "block-merge-without-review.sh" "block-merge-without-review blocks bash -c PR URL target"
 expect_hook_blocks_wrapped_url_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks bash -c PR URL target"
+expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks dynamic eval merge"
+expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks dynamic eval merge"
+expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks dynamic eval merge"
+expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks dynamic eval merge"
 
 rm -f /tmp/standalone_merge_hook.out /tmp/standalone_merge_hook.err
 echo "Results: $PASS passed, $FAIL failed (total $((PASS + FAIL)))"
