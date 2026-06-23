@@ -25,6 +25,8 @@ fi
 
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/gate-modes/common.sh"
 
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
@@ -38,19 +40,25 @@ if [[ -n "$cmd" ]] \
 fi
 
 # Only act on gh pr merge commands
-cmd_first=$(echo "$cmd" | head -1)
-if ! echo "$cmd_first" | grep -qE 'gh\s+pr\s+merge\b'; then
+MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+if [[ "$MERGE_COUNT" -eq 0 ]]; then
   exit 0
 fi
 
 # --- Extract PR number ---
-PR_NUM=$(echo "$cmd" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' || echo "")
+PR_NUM=$(extract_gh_pr_merge_target "$cmd" || echo "")
+if [[ "$MERGE_COUNT" -gt 1 || "$PR_NUM" == "__MULTIPLE__" ]]; then
+  exit 0  # Let the stricter merge gate report multi-merge commands.
+fi
+if [[ "$PR_NUM" == __NON_NUMERIC__:* ]]; then
+  exit 0  # Cannot determine PR, let other hooks handle
+fi
 if [[ -z "$PR_NUM" ]]; then
   exit 0  # Cannot determine PR, let other hooks handle
 fi
 
 # --- Get PR details ---
-REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+REPO=$(resolve_repo "$cmd")
 if [[ -z "$REPO" ]]; then
   exit 0
 fi

@@ -600,7 +600,7 @@ def skip_value_flag(tokens, i, flags):
         return i + 1
     return None
 
-def gh_pr_invocations(tokens):
+def gh_pr_invocations(tokens, verbs):
     invocations = []
     i = 0
     while i < len(tokens):
@@ -623,7 +623,7 @@ def gh_pr_invocations(tokens):
             if token.startswith("-"):
                 j += 1
                 continue
-            if token == "pr" and j + 1 < end and tokens[j + 1] in {"create", "merge"}:
+            if token == "pr" and j + 1 < end and tokens[j + 1] in verbs:
                 invocations.append((i, j + 2, end))
             break
         i += 1
@@ -654,14 +654,17 @@ try:
 except Exception:
     sys.exit(0)
 
-target_invocations = gh_pr_invocations(tokens)
-for gh_start, _, end in target_invocations:
-    repo = repo_in_range(tokens, gh_start + 1, end)
-    if repo:
-        print(repo)
-        sys.exit(0)
+merge_invocations = gh_pr_invocations(tokens, {"merge"})
+create_invocations = gh_pr_invocations(tokens, {"create"})
 
-if target_invocations:
+for invocation_set in (merge_invocations, create_invocations):
+    for gh_start, _, end in invocation_set:
+        repo = repo_in_range(tokens, gh_start + 1, end)
+        if repo:
+            print(repo)
+            sys.exit(0)
+
+if merge_invocations or create_invocations:
     sys.exit(0)
 
 i = 0

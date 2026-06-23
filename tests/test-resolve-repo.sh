@@ -52,6 +52,9 @@ test_case "multiple --repo uses first match" "first/repo" "$result"
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr view 99 --repo wrong/repo && gh pr merge 10 --repo right/repo --merge'")
 test_case "merge repo ignores earlier non-merge repo flag" "right/repo" "$result"
 
+result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr create --repo wrong/repo --title x --body y && gh pr merge 10 --repo right/repo --merge'")
+test_case "merge repo ignores earlier create repo flag" "right/repo" "$result"
+
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr merge 10 --merge -R right/repo 2>&1 && gh pr view 99 --repo wrong/repo'")
 test_case "merge repo ignores later non-merge repo flag with fd redirect" "right/repo" "$result"
 
