@@ -126,11 +126,35 @@ assert_eq "process substitution command substitution merge is detected" "123" \
 assert_count_eq "process substitution command substitution merge is counted" "1" \
   "cat <(echo \$(gh pr merge 123 --merge --repo owner/repo))"
 
+assert_eq "quoted process substitution command substitution merge is detected" "123" \
+  'cat <(echo "$(gh pr merge 123 --merge --repo owner/repo)")'
+
+assert_count_eq "quoted process substitution command substitution merge is counted" "1" \
+  'cat <(echo "$(gh pr merge 123 --merge --repo owner/repo)")'
+
+assert_eq "process substitution backtick merge is detected" "123" \
+  'cat <(echo `gh pr merge 123 --merge --repo owner/repo`)'
+
+assert_count_eq "process substitution backtick merge is counted" "1" \
+  'cat <(echo `gh pr merge 123 --merge --repo owner/repo`)'
+
+assert_eq "quoted process substitution backtick merge is detected" "123" \
+  'cat <(echo "`gh pr merge 123 --merge --repo owner/repo`")'
+
+assert_count_eq "quoted process substitution backtick merge is counted" "1" \
+  'cat <(echo "`gh pr merge 123 --merge --repo owner/repo`")'
+
 assert_eq "body-file command substitution hidden merge plus visible merge is unsafe" "__MULTIPLE__" \
   "gh pr merge --body-file <(printf %s \$(gh pr merge 999 --merge --repo owner/repo)) 123 --merge --repo owner/repo"
 
 assert_count_eq "body-file command substitution hidden merge plus visible merge is counted" "2" \
   "gh pr merge --body-file <(printf %s \$(gh pr merge 999 --merge --repo owner/repo)) 123 --merge --repo owner/repo"
+
+assert_eq "body-file readonly process substitution literal bash is skipped" "123" \
+  "gh pr merge --body-file <(printf bash) 123 --merge --repo owner/repo"
+
+assert_eq "body-file readonly process substitution literal eval is skipped" "123" \
+  "gh pr merge --body-file <(printf eval) 123 --merge --repo owner/repo"
 
 assert_eq "nested process substitution merge is detected" "123" \
   "cat <(head -n1 <(gh pr merge 123 --merge --repo owner/repo))"

@@ -427,6 +427,14 @@ def split_punctuation_tokens(tokens):
         if token in {"<(", ">("}:
             out.extend([token[0], "("])
             continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
+            continue
         if token and all(ch in ";()" for ch in token):
             out.extend(token)
             continue
@@ -459,9 +467,6 @@ def has_runtime_expansion(tokens):
         if "$" + "(" in token or chr(96) in token:
             return True
         if process_substitution_end(tokens, i) is not None:
-            return True
-        base = os.path.basename(token)
-        if base in shell_executors or base == "eval":
             return True
         i += 1
     return False
@@ -503,10 +508,50 @@ def command_end(tokens, start):
         end += 1
     return end
 
+def runtime_command_strings(token):
+    nested = []
+    marker = chr(36) + "("
+    i = 0
+    while True:
+        start = token.find(marker, i)
+        if start == -1:
+            break
+        depth = 1
+        j = start + len(marker)
+        while j < len(token):
+            if token[j] == "(":
+                depth += 1
+            elif token[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = token[start + len(marker):j].strip()
+                    if inner:
+                        nested.append(inner)
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            i = start + len(marker)
+    tick = chr(96)
+    i = 0
+    while True:
+        start = token.find(tick, i)
+        if start == -1:
+            break
+        end = token.find(tick, start + 1)
+        if end == -1:
+            break
+        inner = token[start + 1:end].strip()
+        if inner:
+            nested.append(inner)
+        i = end + 1
+    return nested
+
 def nested_command_strings(tokens):
     nested = []
     i = 0
     while i < len(tokens):
+        nested.extend(runtime_command_strings(tokens[i]))
         base = os.path.basename(tokens[i])
         end = command_end(tokens, i + 1)
         if base == "env":
@@ -710,6 +755,14 @@ def split_punctuation_tokens(tokens):
         if token in {"<(", ">("}:
             out.extend([token[0], "("])
             continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
+            continue
         if token and all(ch in ";()" for ch in token):
             out.extend(token)
             continue
@@ -742,9 +795,6 @@ def has_runtime_expansion(tokens):
         if "$" + "(" in token or chr(96) in token:
             return True
         if process_substitution_end(tokens, i) is not None:
-            return True
-        base = os.path.basename(token)
-        if base in shell_executors or base == "eval":
             return True
         i += 1
     return False
@@ -786,10 +836,50 @@ def command_end(tokens, start):
         end += 1
     return end
 
+def runtime_command_strings(token):
+    nested = []
+    marker = chr(36) + "("
+    i = 0
+    while True:
+        start = token.find(marker, i)
+        if start == -1:
+            break
+        depth = 1
+        j = start + len(marker)
+        while j < len(token):
+            if token[j] == "(":
+                depth += 1
+            elif token[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = token[start + len(marker):j].strip()
+                    if inner:
+                        nested.append(inner)
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            i = start + len(marker)
+    tick = chr(96)
+    i = 0
+    while True:
+        start = token.find(tick, i)
+        if start == -1:
+            break
+        end = token.find(tick, start + 1)
+        if end == -1:
+            break
+        inner = token[start + 1:end].strip()
+        if inner:
+            nested.append(inner)
+        i = end + 1
+    return nested
+
 def nested_command_strings(tokens):
     nested = []
     i = 0
     while i < len(tokens):
+        nested.extend(runtime_command_strings(tokens[i]))
         base = os.path.basename(tokens[i])
         end = command_end(tokens, i + 1)
         if base == "env":
@@ -959,6 +1049,14 @@ def split_punctuation_tokens(tokens):
         if token in {"<(", ">("}:
             out.extend([token[0], "("])
             continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
+            continue
         if token and all(ch in ";()" for ch in token):
             out.extend(token)
             continue
@@ -991,9 +1089,6 @@ def has_runtime_expansion(tokens):
         if "$" + "(" in token or chr(96) in token:
             return True
         if process_substitution_end(tokens, i) is not None:
-            return True
-        base = os.path.basename(token)
-        if base in shell_executors or base == "eval":
             return True
         i += 1
     return False
@@ -1035,10 +1130,50 @@ def command_end(tokens, start):
         end += 1
     return end
 
+def runtime_command_strings(token):
+    nested = []
+    marker = chr(36) + "("
+    i = 0
+    while True:
+        start = token.find(marker, i)
+        if start == -1:
+            break
+        depth = 1
+        j = start + len(marker)
+        while j < len(token):
+            if token[j] == "(":
+                depth += 1
+            elif token[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = token[start + len(marker):j].strip()
+                    if inner:
+                        nested.append(inner)
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            i = start + len(marker)
+    tick = chr(96)
+    i = 0
+    while True:
+        start = token.find(tick, i)
+        if start == -1:
+            break
+        end = token.find(tick, start + 1)
+        if end == -1:
+            break
+        inner = token[start + 1:end].strip()
+        if inner:
+            nested.append(inner)
+        i = end + 1
+    return nested
+
 def nested_command_strings(tokens):
     nested = []
     i = 0
     while i < len(tokens):
+        nested.extend(runtime_command_strings(tokens[i]))
         base = os.path.basename(tokens[i])
         end = command_end(tokens, i + 1)
         if base == "env":
@@ -1156,6 +1291,14 @@ def split_punctuation_tokens(tokens):
     for token in tokens:
         if token in {"<(", ">("}:
             out.extend([token[0], "("])
+            continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
             continue
         if token and all(ch in ";()" for ch in token):
             out.extend(token)
@@ -1478,6 +1621,14 @@ def split_punctuation_tokens(tokens):
         if token in {"<(", ">("}:
             out.extend([token[0], "("])
             continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
+            continue
         if token and all(ch in ";()" for ch in token):
             out.extend(token)
             continue
@@ -1510,9 +1661,6 @@ def has_runtime_expansion(tokens):
         if "$" + "(" in token or chr(96) in token:
             return True
         if process_substitution_end(tokens, i) is not None:
-            return True
-        base = os.path.basename(token)
-        if base in shell_executors or base == "eval":
             return True
         i += 1
     return False
@@ -1554,10 +1702,50 @@ def command_end(tokens, start):
         end += 1
     return end
 
+def runtime_command_strings(token):
+    nested = []
+    marker = chr(36) + "("
+    i = 0
+    while True:
+        start = token.find(marker, i)
+        if start == -1:
+            break
+        depth = 1
+        j = start + len(marker)
+        while j < len(token):
+            if token[j] == "(":
+                depth += 1
+            elif token[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = token[start + len(marker):j].strip()
+                    if inner:
+                        nested.append(inner)
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            i = start + len(marker)
+    tick = chr(96)
+    i = 0
+    while True:
+        start = token.find(tick, i)
+        if start == -1:
+            break
+        end = token.find(tick, start + 1)
+        if end == -1:
+            break
+        inner = token[start + 1:end].strip()
+        if inner:
+            nested.append(inner)
+        i = end + 1
+    return nested
+
 def nested_command_strings(tokens):
     nested = []
     i = 0
     while i < len(tokens):
+        nested.extend(runtime_command_strings(tokens[i]))
         base = os.path.basename(tokens[i])
         end = command_end(tokens, i + 1)
         if base == "env":
@@ -1848,6 +2036,14 @@ def split_punctuation_tokens(tokens):
     for token in tokens:
         if token in {"<(", ">("}:
             out.extend([token[0], "("])
+            continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
             continue
         if token and all(ch in ";()" for ch in token):
             out.extend(token)

@@ -290,6 +290,40 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+expect_rc "quoted process-substitution command substitution merge is evaluated" 2 "$BASE_SHA" 'cat <(echo "$(gh pr merge 999 --merge --repo owner/repo)")'
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: quoted process-substitution command substitution PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: quoted process-substitution command substitution PR #999 CI failure message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "process-substitution backtick merge is evaluated" 2 "$BASE_SHA" 'cat <(echo `gh pr merge 999 --merge --repo owner/repo`)'
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: process-substitution backtick PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: process-substitution backtick PR #999 CI failure message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "quoted process-substitution backtick merge is evaluated" 2 "$BASE_SHA" 'cat <(echo "`gh pr merge 999 --merge --repo owner/repo`")'
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: quoted process-substitution backtick PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: quoted process-substitution backtick PR #999 CI failure message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "body-file readonly process-substitution literal bash is allowed" 0 "$BASE_SHA" "gh pr merge --body-file <(printf bash) 123 --merge --repo owner/repo"
+
+expect_rc "body-file readonly process-substitution literal eval is allowed" 0 "$BASE_SHA" "gh pr merge --body-file <(printf eval) 123 --merge --repo owner/repo"
+
 expect_rc "body-file process-substitution command substitution merge is fail-closed" 2 "$BASE_SHA" "gh pr merge --body-file <(printf %s \$(gh pr merge 999 --merge --repo owner/repo)) 123 --merge --repo owner/repo"
 if grep -q "複数の gh pr merge" "$ERR_FILE"; then
   PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
