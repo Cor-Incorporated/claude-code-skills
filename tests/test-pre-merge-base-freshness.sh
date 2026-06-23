@@ -240,6 +240,16 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+expect_rc "sudo redirected hidden env assignment plus visible merge is fail-closed" 2 "$BASE_SHA" "sudo 2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 456 --merge --repo owner/repo"
+if grep -q "安全に解析できません" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: sudo redirected hidden env plus visible merge fail-closed message is explicit"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: sudo redirected hidden env plus visible merge fail-closed message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
 expect_rc "chained gh pr merge commands are blocked before first-target approval" 2 "$BASE_SHA" "gh pr merge 123 --merge --repo owner/repo && gh pr merge 999 --merge --repo owner/repo"
 if grep -q "複数の gh pr merge" "$ERR_FILE"; then
   PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))

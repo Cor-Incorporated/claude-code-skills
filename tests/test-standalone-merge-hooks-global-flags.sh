@@ -243,6 +243,10 @@ expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks redirected hidden env plus visible merge" "2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks redirected hidden env plus visible merge" "2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks redirected hidden env plus visible merge" "2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
+expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks sudo redirected hidden env plus visible merge" "sudo 2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
+expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks sudo redirected hidden env plus visible merge" "sudo 2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
+expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks sudo redirected hidden env plus visible merge" "sudo 2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
+expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks sudo redirected hidden env plus visible merge" "sudo 2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 
 rm -f /tmp/standalone_merge_hook.out /tmp/standalone_merge_hook.err
 echo "Results: $PASS passed, $FAIL failed (total $((PASS + FAIL)))"

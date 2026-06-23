@@ -961,6 +961,12 @@ def count_tokens_pr_merge(tokens, depth=0):
     return count
 
 
+def skip_redirects(tokens, i):
+    while i < len(tokens) and tokens[i] in redirects:
+        i += 2
+    return i
+
+
 def count_segment_pr_merge(segment_tokens, depth=0):
     if depth > 3:
         return 0
@@ -968,16 +974,18 @@ def count_segment_pr_merge(segment_tokens, depth=0):
         return 0
 
     count = 0
-    i = 0
-    while i < len(segment_tokens) and segment_tokens[i] in redirects:
-        i += 2
+    i = skip_redirects(segment_tokens, 0)
     while i < len(segment_tokens) and is_assignment(segment_tokens[i]):
         value = segment_tokens[i].split("=", 1)[1]
         if value:
             count += count_tokens_pr_merge(parse_tokens(value), depth + 1)
         i += 1
+    i = skip_redirects(segment_tokens, i)
 
-    while i < len(segment_tokens) and is_wrapper(segment_tokens[i]):
+    while i < len(segment_tokens):
+        i = skip_redirects(segment_tokens, i)
+        if i >= len(segment_tokens) or not is_wrapper(segment_tokens[i]):
+            break
         wrapper_index = i
         wrapper = os.path.basename(segment_tokens[i])
         if wrapper == "env":
@@ -985,13 +993,21 @@ def count_segment_pr_merge(segment_tokens, depth=0):
                 if payload:
                     count += count_tokens_pr_merge(parse_tokens(payload), depth + 1)
         i += 1
-        i = skip_wrapper_options(segment_tokens, i, wrapper)
+        while True:
+            before = i
+            i = skip_redirects(segment_tokens, i)
+            i = skip_wrapper_options(segment_tokens, i, wrapper)
+            i = skip_redirects(segment_tokens, i)
+            if i == before:
+                break
 
+    i = skip_redirects(segment_tokens, i)
     if i < len(segment_tokens):
         payload = shell_payload(segment_tokens, i)
         if payload:
             count += count_tokens_pr_merge(parse_tokens(payload), depth + 1)
 
+    i = skip_redirects(segment_tokens, i)
     if i >= len(segment_tokens) or not is_gh(segment_tokens[i]):
         return count
 

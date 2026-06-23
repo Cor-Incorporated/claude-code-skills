@@ -220,6 +220,11 @@ make_gh open; write_pending
 run_hook "2>/dev/null env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
 
+echo "[13d7] OPEN sudo redirected env assignment hidden merge plus visible merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "sudo 2>/dev/null env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "sudo redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+
 echo "[13e] PR comment body mentioning merge -> no hard block"
 make_gh open; write_pending
 out="$(run_hook "bash -c 'gh pr comment 999 --body merge'")"; rc=$?
