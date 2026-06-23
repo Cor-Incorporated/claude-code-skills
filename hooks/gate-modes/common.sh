@@ -402,7 +402,11 @@ def env_nested_commands(tokens, i, end):
 
 def skip_process_substitution_value(tokens, i):
     end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
-    if end is not None:
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
         return end
     return min(i + 1, len(tokens))
 
@@ -446,12 +450,36 @@ def process_substitution_end(tokens, i):
     return None
 
 
+def has_runtime_expansion(tokens):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "$" and i + 1 < len(tokens) and tokens[i + 1] == "(":
+            return True
+        if "$" + "(" in token or chr(96) in token:
+            return True
+        if process_substitution_end(tokens, i) is not None:
+            return True
+        base = os.path.basename(token)
+        if base in shell_executors or base == "eval":
+            return True
+        i += 1
+    return False
+
+
+def is_safe_readonly_process_substitution(tokens, start, end):
+    inner = tokens[start + 2:end - 1]
+    if not inner:
+        return True
+    return is_single_readonly_command(inner) and not has_runtime_expansion(inner)
+
+
 def strip_readonly_process_substitutions(tokens):
     out = []
     i = 0
     while i < len(tokens):
         end = process_substitution_end(tokens, i)
-        if end is not None and is_single_readonly_command(tokens[i + 2:end - 1]):
+        if end is not None and is_safe_readonly_process_substitution(tokens, i, end):
             out.extend([tokens[i], "(", ")"])
             i = end
             continue
@@ -657,7 +685,11 @@ def env_nested_commands(tokens, i, end):
 
 def skip_process_substitution_value(tokens, i):
     end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
-    if end is not None:
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
         return end
     return min(i + 1, len(tokens))
 
@@ -701,12 +733,36 @@ def process_substitution_end(tokens, i):
     return None
 
 
+def has_runtime_expansion(tokens):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "$" and i + 1 < len(tokens) and tokens[i + 1] == "(":
+            return True
+        if "$" + "(" in token or chr(96) in token:
+            return True
+        if process_substitution_end(tokens, i) is not None:
+            return True
+        base = os.path.basename(token)
+        if base in shell_executors or base == "eval":
+            return True
+        i += 1
+    return False
+
+
+def is_safe_readonly_process_substitution(tokens, start, end):
+    inner = tokens[start + 2:end - 1]
+    if not inner:
+        return True
+    return is_single_readonly_command(inner) and not has_runtime_expansion(inner)
+
+
 def strip_readonly_process_substitutions(tokens):
     out = []
     i = 0
     while i < len(tokens):
         end = process_substitution_end(tokens, i)
-        if end is not None and is_single_readonly_command(tokens[i + 2:end - 1]):
+        if end is not None and is_safe_readonly_process_substitution(tokens, i, end):
             out.extend([tokens[i], "(", ")"])
             i = end
             continue
@@ -878,7 +934,11 @@ def env_nested_commands(tokens, i, end):
 
 def skip_process_substitution_value(tokens, i):
     end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
-    if end is not None:
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
         return end
     return min(i + 1, len(tokens))
 
@@ -922,12 +982,36 @@ def process_substitution_end(tokens, i):
     return None
 
 
+def has_runtime_expansion(tokens):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "$" and i + 1 < len(tokens) and tokens[i + 1] == "(":
+            return True
+        if "$" + "(" in token or chr(96) in token:
+            return True
+        if process_substitution_end(tokens, i) is not None:
+            return True
+        base = os.path.basename(token)
+        if base in shell_executors or base == "eval":
+            return True
+        i += 1
+    return False
+
+
+def is_safe_readonly_process_substitution(tokens, start, end):
+    inner = tokens[start + 2:end - 1]
+    if not inner:
+        return True
+    return is_single_readonly_command(inner) and not has_runtime_expansion(inner)
+
+
 def strip_readonly_process_substitutions(tokens):
     out = []
     i = 0
     while i < len(tokens):
         end = process_substitution_end(tokens, i)
-        if end is not None and is_single_readonly_command(tokens[i + 2:end - 1]):
+        if end is not None and is_safe_readonly_process_substitution(tokens, i, end):
             out.extend([tokens[i], "(", ")"])
             i = end
             continue
@@ -1156,7 +1240,11 @@ def env_payloads(tokens, wrapper_index):
 
 def skip_process_substitution_value(tokens, i):
     end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
-    if end is not None:
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
         return end
     return min(i + 1, len(tokens))
 
@@ -1365,7 +1453,11 @@ def env_nested_commands(tokens, i, end):
 
 def skip_process_substitution_value(tokens, i):
     end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
-    if end is not None:
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
         return end
     return min(i + 1, len(tokens))
 
@@ -1409,12 +1501,36 @@ def process_substitution_end(tokens, i):
     return None
 
 
+def has_runtime_expansion(tokens):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "$" and i + 1 < len(tokens) and tokens[i + 1] == "(":
+            return True
+        if "$" + "(" in token or chr(96) in token:
+            return True
+        if process_substitution_end(tokens, i) is not None:
+            return True
+        base = os.path.basename(token)
+        if base in shell_executors or base == "eval":
+            return True
+        i += 1
+    return False
+
+
+def is_safe_readonly_process_substitution(tokens, start, end):
+    inner = tokens[start + 2:end - 1]
+    if not inner:
+        return True
+    return is_single_readonly_command(inner) and not has_runtime_expansion(inner)
+
+
 def strip_readonly_process_substitutions(tokens):
     out = []
     i = 0
     while i < len(tokens):
         end = process_substitution_end(tokens, i)
-        if end is not None and is_single_readonly_command(tokens[i + 2:end - 1]):
+        if end is not None and is_safe_readonly_process_substitution(tokens, i, end):
             out.extend([tokens[i], "(", ")"])
             i = end
             continue

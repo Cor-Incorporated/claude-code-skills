@@ -280,6 +280,36 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+expect_rc "process-substitution command substitution merge is evaluated" 2 "$BASE_SHA" "cat <(echo \$(gh pr merge 999 --merge --repo owner/repo))"
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: process-substitution command substitution PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: process-substitution command substitution PR #999 CI failure message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "body-file process-substitution command substitution merge is fail-closed" 2 "$BASE_SHA" "gh pr merge --body-file <(printf %s \$(gh pr merge 999 --merge --repo owner/repo)) 123 --merge --repo owner/repo"
+if grep -q "複数の gh pr merge" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: body-file process-substitution hidden merge plus visible merge message is explicit"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: body-file process-substitution hidden merge plus visible merge message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "nested process-substitution merge is evaluated" 2 "$BASE_SHA" "cat <(head -n1 <(gh pr merge 999 --merge --repo owner/repo))"
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: nested process-substitution PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: nested process-substitution PR #999 CI failure message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
 expect_rc "here-string redirected hidden env assignment plus visible merge is fail-closed" 2 "$BASE_SHA" "<<<x env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 456 --merge --repo owner/repo"
 if grep -q "安全に解析できません" "$ERR_FILE"; then
   PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))

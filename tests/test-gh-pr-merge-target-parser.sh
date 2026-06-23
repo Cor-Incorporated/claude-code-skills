@@ -17,9 +17,25 @@ run_unparsed_guard() {
   HOME="$TMP_HOME" bash -c "source '$ROOT/hooks/gate-modes/common.sh' >/dev/null 2>&1; c=\$(count_gh_pr_merge_invocations \"\$1\"); if should_block_unparsed_pr_merge \"\$1\" \"\$c\"; then echo block; else echo allow; fi" _ "$command"
 }
 
+run_count() {
+  local command="$1"
+  HOME="$TMP_HOME" bash -c "source '$ROOT/hooks/gate-modes/common.sh' >/dev/null 2>&1; count_gh_pr_merge_invocations \"\$1\"" _ "$command"
+}
+
 assert_eq() {
   local desc="$1" expected="$2" command="$3" actual
   actual="$(run_parser "$command")"
+  if [[ "$actual" == "$expected" ]]; then
+    echo "  PASS: $desc"
+  else
+    echo "  FAIL: $desc (expected '$expected', got '$actual')" >&2
+    exit 1
+  fi
+}
+
+assert_count_eq() {
+  local desc="$1" expected="$2" command="$3" actual
+  actual="$(run_count "$command")"
   if [[ "$actual" == "$expected" ]]; then
     echo "  PASS: $desc"
   else
@@ -103,6 +119,24 @@ assert_eq "body-file process substitution before target is skipped" "123" \
 
 assert_eq "body-file equals process substitution before target is skipped" "123" \
   "gh pr merge --body-file=<(printf ok) 123 --merge --repo owner/repo"
+
+assert_eq "process substitution command substitution merge is detected" "123" \
+  "cat <(echo \$(gh pr merge 123 --merge --repo owner/repo))"
+
+assert_count_eq "process substitution command substitution merge is counted" "1" \
+  "cat <(echo \$(gh pr merge 123 --merge --repo owner/repo))"
+
+assert_eq "body-file command substitution hidden merge plus visible merge is unsafe" "__MULTIPLE__" \
+  "gh pr merge --body-file <(printf %s \$(gh pr merge 999 --merge --repo owner/repo)) 123 --merge --repo owner/repo"
+
+assert_count_eq "body-file command substitution hidden merge plus visible merge is counted" "2" \
+  "gh pr merge --body-file <(printf %s \$(gh pr merge 999 --merge --repo owner/repo)) 123 --merge --repo owner/repo"
+
+assert_eq "nested process substitution merge is detected" "123" \
+  "cat <(head -n1 <(gh pr merge 123 --merge --repo owner/repo))"
+
+assert_count_eq "nested process substitution merge is counted" "1" \
+  "cat <(head -n1 <(gh pr merge 123 --merge --repo owner/repo))"
 
 assert_eq "non-numeric target is explicit and unsafe" "__NON_NUMERIC__:feature/foo" \
   "gh pr merge --repo owner/repo feature/foo --merge"
