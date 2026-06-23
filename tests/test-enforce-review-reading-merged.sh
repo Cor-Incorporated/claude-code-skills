@@ -195,6 +195,11 @@ make_gh open; write_pending
 run_hook "m=gh\\ pr\\ merge\\ 999\\ --merge\\ --repo\\ owner/repo; bash -c \"\$m\"" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "escaped dynamic bash -c hard-blocked" || bad "exit $rc (want 2)"
 
+echo "[13d2] OPEN escaped dynamic absolute bash -c merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "m=gh\\ pr\\ merge\\ 999\\ --merge\\ --repo\\ owner/repo; /bin/bash -c \"\$m\"" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "escaped dynamic absolute bash -c hard-blocked" || bad "exit $rc (want 2)"
+
 echo "[13e] PR comment body mentioning merge -> no hard block"
 make_gh open; write_pending
 out="$(run_hook "bash -c 'gh pr comment 999 --body merge'")"; rc=$?
@@ -225,6 +230,12 @@ make_gh open
 rm -f "$PENDING" "$CACHE" "$TARGET_PENDING" "$TARGET_CACHE"
 run_hook "cd '$TARGET_WORK' && gh pr merge 123 --merge --repo owner/repo; gh pr merge 999 --merge --repo owner/repo" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "multi-merge hard-blocked before state rebind" || bad "exit $rc (want 2)"
+
+echo "[13j] read-only command mentioning multiple merges -> not hard-blocked"
+make_gh open
+rm -f "$PENDING" "$CACHE" "$TARGET_PENDING" "$TARGET_CACHE"
+run_hook "echo gh pr merge 123 gh pr merge 999" >/dev/null; rc=$?
+[ "$rc" -eq 0 ] && ok "read-only multiple merge mention allowed" || bad "exit $rc (want 0)"
 
 echo "[14] gh failure -> fail-open (still warns, keeps state)"
 make_gh FAIL; write_pending

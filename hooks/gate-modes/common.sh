@@ -727,10 +727,16 @@ import shlex
 import sys
 
 value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
-separators = {";", "&&", "||", "|", "&"}
+separators = {";", "&&", "||", "|", "&", "(", ")"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
 command_wrappers = {"env", "command", "sudo"}
 shell_executors = {"bash", "sh", "zsh"}
+wrapper_value_flags = {
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt",
+             "-C", "--close-from", "-T", "--command-timeout", "-A", "--askpass"},
+    "command": set(),
+}
 
 
 def parse_tokens(text):
@@ -752,6 +758,22 @@ def is_gh(token):
 
 def is_wrapper(token):
     return os.path.basename(token) in command_wrappers
+
+
+def skip_wrapper_options(tokens, i, wrapper):
+    value_flags = wrapper_value_flags.get(wrapper, set())
+    while i < len(tokens) and tokens[i].startswith("-"):
+        token = tokens[i]
+        i += 1
+        if token in value_flags and i < len(tokens):
+            i += 1
+            continue
+        if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
+            continue
+    if wrapper == "env":
+        while i < len(tokens) and is_assignment(tokens[i]):
+            i += 1
+    return i
 
 
 def skip_value_flag(tokens, i):
@@ -808,11 +830,7 @@ def segment_mentions_pr_merge(segment_tokens, depth=0):
     while i < len(segment_tokens) and is_wrapper(segment_tokens[i]):
         wrapper = os.path.basename(segment_tokens[i])
         i += 1
-        while i < len(segment_tokens) and segment_tokens[i].startswith("-"):
-            i += 1
-        if wrapper == "env":
-            while i < len(segment_tokens) and is_assignment(segment_tokens[i]):
-                i += 1
+        i = skip_wrapper_options(segment_tokens, i, wrapper)
 
     if i < len(segment_tokens):
         payload = shell_payload(segment_tokens, i)
@@ -850,7 +868,7 @@ PY
 command_uses_shell_executor() {
   local cmd="${1:-}"
   [[ -n "$cmd" ]] || return 1
-  printf '%s' "$cmd" | grep -Eq '(^|[[:space:];|&"'\''`])(bash|sh|zsh|eval)([[:space:];|&"'\''`]|$)'
+  printf '%s' "$cmd" | grep -Eq '(^|[[:space:];|&"'\''`])([[:alnum:]_./-]*/)?(bash|sh|zsh|eval)([[:space:];|&"'\''`]|$)'
 }
 
 should_block_unparsed_pr_merge() {
@@ -1160,10 +1178,16 @@ import subprocess
 import sys
 
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
-separators = {"&&", "||", ";", "|", "&"}
+separators = {"&&", "||", ";", "|", "&", "(", ")"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
 shell_executors = {"bash", "sh", "zsh"}
 command_wrappers = {"env", "command", "sudo"}
+wrapper_value_flags = {
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt",
+             "-C", "--close-from", "-T", "--command-timeout", "-A", "--askpass"},
+    "command": set(),
+}
 
 def parse_tokens(text):
     try:
@@ -1179,6 +1203,21 @@ def is_gh(token):
 def is_assignment(token):
     return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
 
+def skip_wrapper_options(tokens, i, wrapper):
+    value_flags = wrapper_value_flags.get(wrapper, set())
+    while i < len(tokens) and tokens[i].startswith("-"):
+        token = tokens[i]
+        i += 1
+        if token in value_flags and i < len(tokens):
+            i += 1
+            continue
+        if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
+            continue
+    if wrapper == "env":
+        while i < len(tokens) and is_assignment(tokens[i]):
+            i += 1
+    return i
+
 def command_start(segment):
     i = 0
     while i < len(segment) and is_assignment(segment[i]):
@@ -1186,11 +1225,7 @@ def command_start(segment):
     while i < len(segment) and os.path.basename(segment[i]) in command_wrappers:
         wrapper = os.path.basename(segment[i])
         i += 1
-        while i < len(segment) and segment[i].startswith("-"):
-            i += 1
-        if wrapper == "env":
-            while i < len(segment) and is_assignment(segment[i]):
-                i += 1
+        i = skip_wrapper_options(segment, i, wrapper)
     return i
 
 def skip_value_flag(tokens, i, flags):

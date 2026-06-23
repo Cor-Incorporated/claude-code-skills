@@ -16,6 +16,17 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/gate-modes/common.sh"
 
+# Skip ONLY a single read-only inspection command that merely MENTIONS the operation
+# (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
+# so a real operation cannot be chained after a benign first token (prevents
+# `echo x && git push --force` style bypass). Executor tools excluded.
+if [[ -n "$cmd" ]] \
+   && [[ "$cmd" != *$'\n'* ]] \
+   && ! printf '%s' "$cmd" | grep -qE '[;&|`<>]|\$\(' \
+   && printf '%s' "$cmd" | grep -qE '^[[:space:]]*(grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|echo|printf)\b'; then
+  exit 0
+fi
+
 MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
 if [[ "$MERGE_COUNT" -gt 1 ]]; then
   echo "[BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。PRごとに個別実行してください。" >&2
@@ -313,17 +324,6 @@ resolve_current_branch_merge_pr() {
     gh pr list --head "$branch" --json number -q '.[0].number' 2>/dev/null || echo ""
   fi
 }
-
-# Skip ONLY a single read-only inspection command that merely MENTIONS the operation
-# (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
-# so a real operation cannot be chained after a benign first token (prevents
-# `echo x && git push --force` style bypass). Executor tools excluded.
-if [[ -n "$cmd" ]] \
-   && [[ "$cmd" != *$'\n'* ]] \
-   && ! printf '%s' "$cmd" | grep -qE '[;&|`<>]|\$\(' \
-   && printf '%s' "$cmd" | grep -qE '^[[:space:]]*(grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|echo|printf)\b'; then
-  exit 0
-fi
 
 # Read pending state
 REVIEW_DATA=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
