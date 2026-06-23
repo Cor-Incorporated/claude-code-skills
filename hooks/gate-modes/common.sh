@@ -28,6 +28,105 @@ else
 fi
 
 # =========================================================================
+# Helper: map GitHub repo slugs to local remotes
+# =========================================================================
+remote_slug() {
+  local remote="$1" url
+  url=$(git_ctx remote get-url "$remote" 2>/dev/null || echo "")
+  [[ -z "$url" ]] && return 1
+  printf '%s\n' "$url" \
+    | sed 's|^git@github.com:||;s|^https://github.com/||;s|^ssh://git@github.com/||;s|\.git$||'
+}
+
+remote_for_repo() {
+  local repo="$1" remote slug first_remote=""
+
+  for remote in origin upstream; do
+    git_ctx remote get-url "$remote" >/dev/null 2>&1 || continue
+    [[ -z "$first_remote" ]] && first_remote="$remote"
+    slug=$(remote_slug "$remote" || echo "")
+    if [[ -n "$repo" && "$slug" == "$repo" ]]; then
+      echo "$remote"
+      return
+    fi
+  done
+
+  [[ -n "$first_remote" ]] && echo "$first_remote"
+}
+
+# =========================================================================
+# Helper: verify the local gate is evaluating the current GitHub base snapshot
+# =========================================================================
+ensure_pr_base_fresh() {
+  local repo="$1" pr_number="$2" base_ref="$3" base_sha="$4"
+  local remote local_sha
+
+  if [[ -z "$repo" || -z "$pr_number" || -z "$base_ref" || -z "$base_sha" || "$base_sha" == "null" ]]; then
+    echo "🚫 [LOCAL_GATE_BASE_UNKNOWN] PR #${pr_number}: GitHub base ref/SHA を取得できません。" >&2
+    echo "  GitHub mergeable 判定とは別に、local gate が現在の base を検証できないためブロックします。" >&2
+    echo "  確認: gh pr view ${pr_number} -R ${repo} --json baseRefName,baseRefOid,mergeable" >&2
+    return 2
+  fi
+
+  remote=$(remote_for_repo "$repo" || echo "")
+  if [[ -z "$remote" ]]; then
+    echo "🚫 [LOCAL_GATE_BASE_UNKNOWN] PR #${pr_number}: ${repo} に対応する local remote を特定できません。" >&2
+    echo "  GitHub mergeable 判定とは別に、local gate の base snapshot が不明です。" >&2
+    return 2
+  fi
+
+  if [[ -n "${GIT_CONTEXT_DIR:-}" ]]; then
+    _fetch_base() { _timeout 20 git -C "$GIT_CONTEXT_DIR" fetch --quiet "$remote" "+refs/heads/${base_ref}:refs/remotes/${remote}/${base_ref}" 2>/dev/null; }
+    _rev_parse_base() { git -C "$GIT_CONTEXT_DIR" rev-parse "refs/remotes/${remote}/${base_ref}" 2>/dev/null || echo ""; }
+  else
+    _fetch_base() { _timeout 20 git fetch --quiet "$remote" "+refs/heads/${base_ref}:refs/remotes/${remote}/${base_ref}" 2>/dev/null; }
+    _rev_parse_base() { git rev-parse "refs/remotes/${remote}/${base_ref}" 2>/dev/null || echo ""; }
+  fi
+
+  if ! _fetch_base; then
+    echo "🚫 [LOCAL_GATE_STALE_BASE] PR #${pr_number}: ${remote}/${base_ref} を取得できません。" >&2
+    echo "  GitHub mergeable/CLEAN は GitHub 側の判定です。local gate は base snapshot を更新できないためブロックします。" >&2
+    echo "  復旧: git fetch ${remote} ${base_ref}" >&2
+    return 2
+  fi
+
+  local_sha=$(_rev_parse_base)
+  if [[ "$local_sha" != "$base_sha" ]]; then
+    echo "🚫 [LOCAL_GATE_STALE_BASE] PR #${pr_number}: local base snapshot が GitHub base と一致しません。" >&2
+    echo "  GitHub ${repo}:${base_ref}: ${base_sha}" >&2
+    echo "  Local  ${remote}/${base_ref}: ${local_sha:-missing}" >&2
+    echo "  GitHub mergeable 判定とは別の local gate blocker です。fetch 後に再試行してください。" >&2
+    return 2
+  fi
+
+  return 0
+}
+
+# =========================================================================
+# Helper: pending-review-comments.json stale-state cleanup
+# =========================================================================
+pending_review_pr_state() {
+  local pending_file="$1" fallback_repo="$2"
+  local pending_pr pending_repo state
+
+  [[ -f "$pending_file" ]] || return 1
+  pending_pr=$(jq -r '.pr // ""' "$pending_file" 2>/dev/null || echo "")
+  [[ -n "$pending_pr" && "$pending_pr" != "null" ]] || return 1
+  pending_repo=$(jq -r '.repo // ""' "$pending_file" 2>/dev/null || echo "")
+  [[ -n "$pending_repo" && "$pending_repo" != "null" ]] || pending_repo="$fallback_repo"
+  [[ -n "$pending_repo" ]] || return 1
+
+  state=$(_timeout 10 gh api "repos/${pending_repo}/pulls/${pending_pr}" --jq '.state' 2>/dev/null || echo "")
+  printf '%s\n' "$state" | tr '[:upper:]' '[:lower:]'
+}
+
+purge_pending_review_state() {
+  local pending_file="$1" cache_file
+  cache_file="$(dirname "$pending_file")/pending-review-pr-state.cache"
+  rm -f "$pending_file" "$cache_file" 2>/dev/null || true
+}
+
+# =========================================================================
 # Helper: verify pending-review-comments.json still matches GitHub comments
 # =========================================================================
 review_comment_set_hash_script() {

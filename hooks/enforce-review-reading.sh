@@ -118,12 +118,18 @@ except Exception:
 fi
 
 # HARD BLOCK: gh pr merge with unresolved findings
-if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
+cmd_first_line="$(echo "$cmd" | head -1)"
+if echo "$cmd_first_line" | grep -qE 'gh\s+pr\s+merge'; then
+  MERGE_PR=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
   if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
-    echo "[BLOCKED] PR #${PR}: 未対応のCRITICAL/HIGH指摘があります（CRITICAL=${CRITICAL}, HIGH=${HIGH}）。" >&2
-    echo "  レビューコメントを確認し、全て対応してからマージしてください。" >&2
-    echo "  確認: gh api repos/.../pulls/${PR}/comments" >&2
-    exit 2
+    if [[ -n "$MERGE_PR" && -n "$PR" && "$MERGE_PR" != "$PR" ]]; then
+      echo "[INFO] pending-review-comments.json は PR #${PR} の state です。PR #${MERGE_PR} の merge はこの hook では hard block しません。" >&2
+    else
+      echo "[BLOCKED] PR #${PR}: 未対応のCRITICAL/HIGH指摘があります（CRITICAL=${CRITICAL}, HIGH=${HIGH}）。" >&2
+      echo "  レビューコメントを確認し、全て対応してからマージしてください。" >&2
+      echo "  確認: gh api repos/.../pulls/${PR}/comments" >&2
+      exit 2
+    fi
   fi
 fi
 

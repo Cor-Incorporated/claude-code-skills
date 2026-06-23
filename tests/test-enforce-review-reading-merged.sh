@@ -77,19 +77,25 @@ make_gh open; write_pending
 run_hook "gh pr merge 999" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "merge hard-blocked" || bad "exit $rc (want 2)"
 
-echo "[5] gh failure -> fail-open (still warns, keeps state)"
+echo "[5] OPEN other PR + 'gh pr merge' -> not hard-blocked"
+make_gh open; write_pending
+run_hook "gh pr merge 123" >/dev/null; rc=$?
+[ "$rc" -eq 0 ] && ok "other PR merge not hard-blocked" || bad "exit $rc (want 0)"
+[ -f "$PENDING" ] && ok "other PR pending kept" || bad "other PR pending wrongly deleted"
+
+echo "[6] gh failure -> fail-open (still warns, keeps state)"
 make_gh FAIL; write_pending
 out="$(run_hook "git status")"; rc=$?
 printf '%s' "$out" | grep -q additionalContext && ok "fail-open banner" || bad "banner missing on gh failure"
 [ -f "$PENDING" ] && ok "pending kept on gh failure" || bad "pending deleted on gh failure"
 
-echo "[6] fresh open cache honoured -> gh skipped (gh says closed, cache says open)"
+echo "[7] fresh open cache honoured -> gh skipped (gh says closed, cache says open)"
 make_gh closed; write_pending; seed_cache open 5
 out="$(run_hook "git status")"; rc=$?
 [ -f "$PENDING" ] && ok "cache hit: gh not consulted, pending kept" || bad "cache ignored (pending purged)"
 printf '%s' "$out" | grep -q additionalContext && ok "banner from cache" || bad "banner missing"
 
-echo "[7] stale cache refreshed -> purge (gh says closed)"
+echo "[8] stale cache refreshed -> purge (gh says closed)"
 make_gh closed; write_pending; seed_cache open 1000
 run_hook "git status" >/dev/null; rc=$?
 [ ! -f "$PENDING" ] && ok "stale cache refreshed -> purged" || bad "stale cache not refreshed"
