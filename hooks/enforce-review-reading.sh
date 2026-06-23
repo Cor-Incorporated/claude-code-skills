@@ -10,19 +10,20 @@ set -uo pipefail
 [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] && exit 0
 [[ -n "${CLAUDE_AGENT_ID:-}" ]] && exit 0
 
-# Project-scoped state
-if git rev-parse --show-toplevel &>/dev/null; then
-  STATE_DIR="$(git rev-parse --show-toplevel)/.claude/state"
-else
-  STATE_DIR="$HOME/.claude/state"
+input=""
+[[ ! -t 0 ]] && input=$(cat)
+cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/gate-modes/common.sh"
+
+_cmd_context=$(command_git_context_dir "$cmd")
+if [[ -n "$_cmd_context" ]]; then
+  export GIT_CONTEXT_DIR="$_cmd_context"
+  use_git_context_state_dir
 fi
 
 PENDING_FILE="$STATE_DIR/pending-review-comments.json"
 [[ ! -f "$PENDING_FILE" ]] && exit 0
-
-input=""
-[[ ! -t 0 ]] && input=$(cat)
-cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 
 extract_gh_pr_merge_target() {
   local merge_cmd="${1:-}"
@@ -402,6 +403,13 @@ fi
 
 # HARD BLOCK: gh pr merge with unresolved findings
 MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+if [[ "$MERGE_COUNT" -eq 0 ]] && should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
+  if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
+    print_unparsed_pr_merge_block
+    echo "[BLOCKED] PR #${PR}: 未対応のCRITICAL/HIGH指摘があります（CRITICAL=${CRITICAL}, HIGH=${HIGH}）。" >&2
+    exit 2
+  fi
+fi
 if [[ "$MERGE_COUNT" -gt 0 ]]; then
   MERGE_PR=$(extract_gh_pr_merge_target "$cmd" || echo "")
   if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then

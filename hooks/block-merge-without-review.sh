@@ -44,6 +44,13 @@ if [[ "$MERGE_COUNT" -eq 0 ]]; then
     exit 0
 fi
 
+_cmd_context=$(command_git_context_dir "$cmd")
+if [[ -n "$_cmd_context" ]]; then
+    export GIT_CONTEXT_DIR="$_cmd_context"
+    use_git_context_state_dir
+    _STATE_BASE="$STATE_DIR"
+fi
+
 PR_NUM=$(extract_gh_pr_merge_target "$cmd" || echo "")
 if [[ "$MERGE_COUNT" -gt 1 || "$PR_NUM" == "__MULTIPLE__" ]]; then
     exit 0  # Let the stricter merge gate report multi-merge commands.

@@ -12,9 +12,25 @@ run_parser() {
   HOME="$TMP_HOME" bash -c "source '$ROOT/hooks/gate-modes/common.sh' >/dev/null 2>&1; extract_gh_pr_merge_target \"\$1\"" _ "$command"
 }
 
+run_unparsed_guard() {
+  local command="$1"
+  HOME="$TMP_HOME" bash -c "source '$ROOT/hooks/gate-modes/common.sh' >/dev/null 2>&1; c=\$(count_gh_pr_merge_invocations \"\$1\"); if should_block_unparsed_pr_merge \"\$1\" \"\$c\"; then echo block; else echo allow; fi" _ "$command"
+}
+
 assert_eq() {
   local desc="$1" expected="$2" command="$3" actual
   actual="$(run_parser "$command")"
+  if [[ "$actual" == "$expected" ]]; then
+    echo "  PASS: $desc"
+  else
+    echo "  FAIL: $desc (expected '$expected', got '$actual')" >&2
+    exit 1
+  fi
+}
+
+assert_guard_eq() {
+  local desc="$1" expected="$2" command="$3" actual
+  actual="$(run_unparsed_guard "$command")"
   if [[ "$actual" == "$expected" ]]; then
     echo "  PASS: $desc"
   else
@@ -111,5 +127,22 @@ assert_eq "ordinary heredoc body remains conservative" "123" \
 
 assert_eq "dash heredoc body remains conservative" "123" \
   $'cat <<-\'EOF\'\n\tEOF\ngh pr merge 123 --merge --repo owner/repo'
+
+echo "=== unparsed merge fallback guard ==="
+
+assert_guard_eq "escaped dynamic eval merge is fail-closed" "block" \
+  "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\$m\""
+
+assert_guard_eq "escaped dynamic bash -c merge is fail-closed" "block" \
+  "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\$m\""
+
+assert_guard_eq "PR comment body mentioning merge is allowed" "allow" \
+  "bash -c 'gh pr comment 123 --body merge'"
+
+assert_guard_eq "git merge-base after PR view is allowed" "allow" \
+  "bash -c 'gh pr view 123'; git merge-base HEAD origin/main"
+
+assert_guard_eq "echo merge after PR view is allowed" "allow" \
+  "bash -c 'gh pr view 123 --json title' && echo merge"
 
 echo "gh pr merge target parser tests passed."

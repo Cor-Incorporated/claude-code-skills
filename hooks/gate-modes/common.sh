@@ -723,12 +723,83 @@ command_mentions_pr_merge_text() {
   _CMD="$cmd" python3 - <<'PY'
 import os
 import re
+import shlex
 import sys
 
+value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {";", "&&", "||", "|", "&"}
+
+
+def parse_tokens(text):
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except ValueError:
+        return re.findall(r"&&|\|\||[;|&]|[^\s;|&]+", text)
+
+
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+
+def skip_value_flag(tokens, i):
+    token = tokens[i]
+    if token in value_flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in value_flags):
+        return i + 1
+    return None
+
+
+def segment_mentions_pr_merge(segment_tokens, depth=0):
+    if depth > 2:
+        return False
+    if not segment_tokens:
+        return False
+
+    i = 0
+    while i < len(segment_tokens) and is_assignment(segment_tokens[i]):
+        value = segment_tokens[i].split("=", 1)[1]
+        if value and segment_mentions_pr_merge(parse_tokens(value), depth + 1):
+            return True
+        i += 1
+
+    if i >= len(segment_tokens) or not is_gh(segment_tokens[i]):
+        return False
+
+    i += 1
+    while i < len(segment_tokens):
+        skipped = skip_value_flag(segment_tokens, i)
+        if skipped is not None:
+            i = skipped
+            continue
+        if segment_tokens[i].startswith("-"):
+            i += 1
+            continue
+        break
+
+    return (
+        i + 1 < len(segment_tokens)
+        and segment_tokens[i] == "pr"
+        and segment_tokens[i + 1] == "merge"
+    )
+
+
 cmd = os.environ.get("_CMD", "")
-cmd = re.sub(r"\\\s+", " ", cmd)
-if re.search(r"(^|[\s;|&=\"'`])([\w./-]*/)?gh\b.*\bpr\b.*\bmerge\b", cmd, re.S):
-    sys.exit(0)
+tokens = parse_tokens(cmd)
+segment = []
+for token in tokens + [";"]:
+    if token in separators:
+        if segment_mentions_pr_merge(segment):
+            sys.exit(0)
+        segment = []
+    else:
+        segment.append(token)
 sys.exit(1)
 PY
 }

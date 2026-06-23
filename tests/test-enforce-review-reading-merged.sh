@@ -16,16 +16,24 @@ ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 WORK="$(mktemp -d)"
+TARGET_WORK="$(mktemp -d)"
 GHBIN="$(mktemp -d)"
-trap 'rm -rf "$WORK" "$GHBIN"' EXIT
+trap 'rm -rf "$WORK" "$TARGET_WORK" "$GHBIN"' EXIT
 
 git -C "$WORK" init -q
 git -C "$WORK" config user.email t@t.t
 git -C "$WORK" config user.name t
+git -C "$TARGET_WORK" init -q
+git -C "$TARGET_WORK" config user.email t@t.t
+git -C "$TARGET_WORK" config user.name t
 STATE_DIR="$WORK/.claude/state"
+TARGET_STATE_DIR="$TARGET_WORK/.claude/state"
 mkdir -p "$STATE_DIR"
+mkdir -p "$TARGET_STATE_DIR"
 PENDING="$STATE_DIR/pending-review-comments.json"
+TARGET_PENDING="$TARGET_STATE_DIR/pending-review-comments.json"
 CACHE="$STATE_DIR/pending-review-pr-state.cache"
+TARGET_CACHE="$TARGET_STATE_DIR/pending-review-pr-state.cache"
 
 # gh mock: prints the configured state for any args; "FAIL" -> exit 1.
 make_gh() {
@@ -55,6 +63,13 @@ write_pending() {
 {"pr":"999","repo":"owner/repo","head_sha":"abc123","total":2,"critical":1,"high":1,"classification_method":"regex","output":"[review] PR #999 Severity: CRITICAL=1 HIGH=1"}
 JSON
   rm -f "$CACHE"
+}
+
+write_target_pending() {
+  cat > "$TARGET_PENDING" <<'JSON'
+{"pr":"999","repo":"owner/repo","head_sha":"abc123","total":2,"critical":1,"high":1,"classification_method":"regex","output":"[review] PR #999 Severity: CRITICAL=1 HIGH=1"}
+JSON
+  rm -f "$TARGET_CACHE"
 }
 
 seed_cache() {  # $1 = state, $2 = age_seconds_ago
@@ -169,6 +184,29 @@ echo "[13b] OPEN heredoc body mentioning 'gh pr merge' -> conservatively hard-bl
 make_gh open; write_pending
 run_hook $'cat <<\'EOF\'\ngh pr merge 999 --merge --repo owner/repo\nEOF' >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "heredoc literal hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[13c] OPEN escaped dynamic eval merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "m=gh\\ pr\\ merge\\ 999\\ --merge\\ --repo\\ owner/repo; eval \"\$m\"" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "escaped dynamic eval hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[13d] OPEN escaped dynamic bash -c merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "m=gh\\ pr\\ merge\\ 999\\ --merge\\ --repo\\ owner/repo; bash -c \"\$m\"" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "escaped dynamic bash -c hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[13e] PR comment body mentioning merge -> no hard block"
+make_gh open; write_pending
+out="$(run_hook "bash -c 'gh pr comment 999 --body merge'")"; rc=$?
+[ "$rc" -eq 0 ] && ok "comment body not treated as merge" || bad "exit $rc (want 0)"
+printf '%s' "$out" | grep -q additionalContext && ok "comment body still gets reminder" || bad "comment body reminder missing"
+
+echo "[13f] target repo pending state via cd + bash -c -> hard-blocked"
+make_gh open
+rm -f "$PENDING" "$CACHE"
+write_target_pending
+run_hook "cd '$TARGET_WORK' && bash -c 'gh pr merge 999 --merge --repo owner/repo'" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "target pending state hard-blocked" || bad "exit $rc (want 2)"
 
 echo "[14] gh failure -> fail-open (still warns, keeps state)"
 make_gh FAIL; write_pending
