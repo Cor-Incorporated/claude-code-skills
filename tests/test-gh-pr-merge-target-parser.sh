@@ -157,6 +157,9 @@ assert_guard_eq "env unset wrapped escaped dynamic eval merge is fail-closed" "b
 assert_guard_eq "env assignment shell payload merge is fail-closed" "block" \
   "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'"
 
+assert_guard_eq "env assignment hidden merge plus visible merge is fail-closed" "block" \
+  "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 456 --merge --repo owner/repo"
+
 assert_guard_eq "command-wrapped escaped dynamic eval merge is fail-closed" "block" \
   "m=command\\ gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\$m\""
 

@@ -482,7 +482,7 @@ except Exception:
 fi
 
 # HARD BLOCK: gh pr merge with unresolved findings
-if [[ "$MERGE_COUNT" -eq 0 ]] && should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
+if should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
   if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
     print_unparsed_pr_merge_block
     echo "[BLOCKED] PR #${PR}: 未対応のCRITICAL/HIGH指摘があります（CRITICAL=${CRITICAL}, HIGH=${HIGH}）。" >&2

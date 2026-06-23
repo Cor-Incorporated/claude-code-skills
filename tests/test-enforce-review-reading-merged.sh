@@ -210,6 +210,11 @@ make_gh open; write_pending
 run_hook "env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "env assignment shell payload hard-blocked" || bad "exit $rc (want 2)"
 
+echo "[13d5] OPEN env assignment hidden merge plus visible merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+
 echo "[13e] PR comment body mentioning merge -> no hard block"
 make_gh open; write_pending
 out="$(run_hook "bash -c 'gh pr comment 999 --body merge'")"; rc=$?

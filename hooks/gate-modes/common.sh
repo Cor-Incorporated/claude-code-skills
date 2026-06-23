@@ -828,9 +828,9 @@ print(count_pr_verb(tokens, "create"))
 PY
 }
 
-command_mentions_pr_merge_text() {
+command_pr_merge_text_count() {
   local cmd="${1:-}"
-  [[ -n "$cmd" ]] || return 1
+  [[ -n "$cmd" ]] || { echo 0; return 0; }
   _CMD="$cmd" python3 - <<'PY'
 import os
 import re
@@ -949,29 +949,30 @@ def shell_payload(segment_tokens, i):
     return ""
 
 
-def tokens_mention_pr_merge(tokens, depth=0):
+def count_tokens_pr_merge(tokens, depth=0):
+    count = 0
     segment = []
     for token in tokens + [";"]:
         if token in separators:
-            if segment_mentions_pr_merge(segment, depth):
-                return True
+            count += count_segment_pr_merge(segment, depth)
             segment = []
         else:
             segment.append(token)
-    return False
+    return count
 
 
-def segment_mentions_pr_merge(segment_tokens, depth=0):
+def count_segment_pr_merge(segment_tokens, depth=0):
     if depth > 3:
-        return False
+        return 0
     if not segment_tokens:
-        return False
+        return 0
 
+    count = 0
     i = 0
     while i < len(segment_tokens) and is_assignment(segment_tokens[i]):
         value = segment_tokens[i].split("=", 1)[1]
-        if value and segment_mentions_pr_merge(parse_tokens(value), depth + 1):
-            return True
+        if value:
+            count += count_tokens_pr_merge(parse_tokens(value), depth + 1)
         i += 1
 
     while i < len(segment_tokens) and is_wrapper(segment_tokens[i]):
@@ -979,18 +980,18 @@ def segment_mentions_pr_merge(segment_tokens, depth=0):
         wrapper = os.path.basename(segment_tokens[i])
         if wrapper == "env":
             for payload in env_payloads(segment_tokens, wrapper_index):
-                if payload and tokens_mention_pr_merge(parse_tokens(payload), depth + 1):
-                    return True
+                if payload:
+                    count += count_tokens_pr_merge(parse_tokens(payload), depth + 1)
         i += 1
         i = skip_wrapper_options(segment_tokens, i, wrapper)
 
     if i < len(segment_tokens):
         payload = shell_payload(segment_tokens, i)
-        if payload and tokens_mention_pr_merge(parse_tokens(payload), depth + 1):
-            return True
+        if payload:
+            count += count_tokens_pr_merge(parse_tokens(payload), depth + 1)
 
     if i >= len(segment_tokens) or not is_gh(segment_tokens[i]):
-        return False
+        return count
 
     i += 1
     while i < len(segment_tokens):
@@ -1003,18 +1004,25 @@ def segment_mentions_pr_merge(segment_tokens, depth=0):
             continue
         break
 
-    return (
+    if (
         i + 1 < len(segment_tokens)
         and segment_tokens[i] == "pr"
         and segment_tokens[i + 1] == "merge"
-    )
+    ):
+        count += 1
+    return count
 
 
 cmd = os.environ.get("_CMD", "")
-if tokens_mention_pr_merge(parse_tokens(cmd)):
-    sys.exit(0)
-sys.exit(1)
+print(count_tokens_pr_merge(parse_tokens(cmd)))
 PY
+}
+
+command_mentions_pr_merge_text() {
+  local cmd="${1:-}"
+  local count
+  count=$(command_pr_merge_text_count "$cmd" 2>/dev/null || echo 0)
+  [[ "$count" -gt 0 ]]
 }
 
 command_uses_shell_executor() {
@@ -1026,9 +1034,10 @@ command_uses_shell_executor() {
 should_block_unparsed_pr_merge() {
   local cmd="${1:-}"
   local merge_count="${2:-0}"
-  [[ "$merge_count" -eq 0 ]] || return 1
+  local text_count
   command_uses_shell_executor "$cmd" || return 1
-  command_mentions_pr_merge_text "$cmd" || return 1
+  text_count=$(command_pr_merge_text_count "$cmd" 2>/dev/null || echo 0)
+  [[ "$text_count" -gt "$merge_count" ]] || return 1
   return 0
 }
 

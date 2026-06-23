@@ -235,6 +235,10 @@ expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
 expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
 expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
+expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
+expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
+expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
+expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 
 rm -f /tmp/standalone_merge_hook.out /tmp/standalone_merge_hook.err
 echo "Results: $PASS passed, $FAIL failed (total $((PASS + FAIL)))"
