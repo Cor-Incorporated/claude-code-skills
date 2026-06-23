@@ -280,6 +280,16 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+expect_rc "leading process-substitution redirection before merge validates command PR" 2 "$BASE_SHA" "< <(printf x); gh pr merge 999 --merge --repo owner/repo"
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: leading process-substitution redirection PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: leading process-substitution redirection PR #999 CI failure message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
 expect_rc "process-substitution command substitution merge is evaluated" 2 "$BASE_SHA" "cat <(echo \$(gh pr merge 999 --merge --repo owner/repo))"
 if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
   PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
@@ -342,9 +352,21 @@ fi
 
 expect_rc "body-file readonly process-substitution literal ok is allowed" 0 "$BASE_SHA" "gh pr merge --body-file <(printf ok) 123 --merge --repo owner/repo"
 
+expect_rc "body-file process-substitution pipeline is allowed as body file" 0 "$BASE_SHA" "gh pr merge --body-file <(printf ok|bash|eval) 123 --merge --repo owner/repo"
+
 expect_rc "body-file readonly process-substitution literal bash is allowed" 0 "$BASE_SHA" "gh pr merge --body-file <(printf bash) 123 --merge --repo owner/repo"
 
 expect_rc "body-file readonly process-substitution literal eval is allowed" 0 "$BASE_SHA" "gh pr merge --body-file <(printf eval) 123 --merge --repo owner/repo"
+
+expect_rc "body-file direct process-substitution hidden merge plus visible merge is blocked" 2 "$BASE_SHA" "gh pr merge --body-file <(gh pr merge 999 --merge --repo owner/repo) 123 --merge --repo owner/repo"
+if grep -q "複数の gh pr merge" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: body-file direct process-substitution hidden merge plus visible merge message is explicit"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: body-file direct process-substitution hidden merge plus visible merge message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
 
 expect_rc "body-file process-substitution command substitution merge is fail-closed" 2 "$BASE_SHA" "gh pr merge --body-file <(printf %s \$(gh pr merge 999 --merge --repo owner/repo)) 123 --merge --repo owner/repo"
 if grep -q "複数の gh pr merge" "$ERR_FILE"; then
@@ -353,6 +375,16 @@ if grep -q "複数の gh pr merge" "$ERR_FILE"; then
 else
   FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
   echo "  FAIL: body-file process-substitution hidden merge plus visible merge message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "runtime command substitution hidden merge plus visible merge is blocked" 2 "$BASE_SHA" 'echo "$(gh pr merge 123 --merge --repo owner/repo)"; gh pr merge 999 --merge --repo owner/repo'
+if grep -q "複数の gh pr merge" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: runtime command substitution hidden merge plus visible merge message is explicit"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: runtime command substitution hidden merge plus visible merge message missing" >&2
   cat "$ERR_FILE" >&2 || true
 fi
 

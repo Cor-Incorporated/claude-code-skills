@@ -402,11 +402,7 @@ def env_nested_commands(tokens, i, end):
 
 def skip_process_substitution_value(tokens, i):
     end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
-    if (
-        end is not None
-        and "is_safe_readonly_process_substitution" in globals()
-        and is_safe_readonly_process_substitution(tokens, i, end)
-    ):
+    if end is not None:
         return end
     return min(i + 1, len(tokens))
 
@@ -493,12 +489,42 @@ def strip_readonly_process_substitutions(tokens):
     return out
 
 
+def strip_value_flag_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token in value_flags and i + 1 < len(tokens):
+            out.append(token)
+            end = process_substitution_end(tokens, i + 1)
+            if end is not None:
+                out.extend([tokens[i + 1], "(", ")"])
+                i = end
+                continue
+            i += 1
+            continue
+        if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
+            out.append(token)
+            if token.endswith("=") and i + 1 < len(tokens):
+                end = process_substitution_end(tokens, i + 1)
+                if end is not None:
+                    out.extend([tokens[i + 1], "(", ")"])
+                    i = end
+                    continue
+            i += 1
+            continue
+        out.append(token)
+        i += 1
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
+        tokens = strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
+        return strip_value_flag_process_substitutions(tokens)
     except Exception:
         return []
 
@@ -1460,6 +1486,32 @@ def runtime_command_strings(token):
     return nested
 
 
+def shell_payload_token_indexes(segment_tokens):
+    indexes = set()
+    i = 0
+    while i < len(segment_tokens):
+        base = os.path.basename(segment_tokens[i])
+        end = i + 1
+        while end < len(segment_tokens) and segment_tokens[end] not in separators:
+            end += 1
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = segment_tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        indexes.add(j + 1)
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            indexes.update(range(i + 1, end))
+        i += 1
+    return indexes
+
+
 def count_tokens_pr_merge(tokens, depth=0):
     count = 0
     segment = []
@@ -1485,7 +1537,10 @@ def count_segment_pr_merge(segment_tokens, depth=0):
         return 0
 
     count = 0
-    for token in segment_tokens:
+    runtime_skip = shell_payload_token_indexes(segment_tokens)
+    for index, token in enumerate(segment_tokens):
+        if index in runtime_skip or is_assignment(token):
+            continue
         for payload in runtime_command_strings(token):
             count += count_tokens_pr_merge(parse_tokens(payload), depth + 1)
 
@@ -1595,6 +1650,19 @@ import shlex
 import sys
 
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+pr_value_flags = {
+    "--repo",
+    "-R",
+    "--body",
+    "-b",
+    "--body-file",
+    "-F",
+    "--subject",
+    "-t",
+    "--match-head-commit",
+    "--author-email",
+    "-A",
+}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
@@ -1731,12 +1799,42 @@ def strip_readonly_process_substitutions(tokens):
     return out
 
 
+def strip_pr_value_flag_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token in pr_value_flags and i + 1 < len(tokens):
+            out.append(token)
+            end = process_substitution_end(tokens, i + 1)
+            if end is not None:
+                out.extend([tokens[i + 1], "(", ")"])
+                i = end
+                continue
+            i += 1
+            continue
+        if any(token.startswith(f"{flag}=") for flag in pr_value_flags if flag.startswith("--")):
+            out.append(token)
+            if token.endswith("=") and i + 1 < len(tokens):
+                end = process_substitution_end(tokens, i + 1)
+                if end is not None:
+                    out.extend([tokens[i + 1], "(", ")"])
+                    i = end
+                    continue
+            i += 1
+            continue
+        out.append(token)
+        i += 1
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
+        tokens = strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
+        return strip_pr_value_flag_process_substitutions(tokens)
     except Exception:
         return []
 
