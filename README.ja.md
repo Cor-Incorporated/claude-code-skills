@@ -247,6 +247,10 @@ PR に GitHub レビューがない場合（ソロ開発など）、**ローカ�
 - **STOP hook**: GitHub API で state 確認し、merge/closed エントリを自動除去
 - **手動クリーンアップ**: `GATE_MODE=CLEANUP bash hooks/pr-ci-review-gate.sh`
 
+GitHub 上では mergeable でも local hook が止める場合は、
+[GitHub mergeable と local gate の切り分け runbook](docs/runbooks/github-mergeable-vs-local-gate.md)
+で GitHub blocker と stale local review/base state を分離してください。
+
 ### PR ライフサイクル hook
 
 | フェーズ | hook | アクション |

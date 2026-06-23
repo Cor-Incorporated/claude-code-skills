@@ -139,6 +139,9 @@ rm -f "$HOME_DIR/.claude/scripts/example.sh"
 run_hook "$MANAGED_REPO" "$HOME_DIR" "gh pr create --base develop --title 'fix: managed' --body 'test'"
 expect_exit 2 "T5: managed repo missing deploy is blocked"
 
+run_hook "$MANAGED_REPO" "$HOME_DIR" "gh -R Cor-Incorporated/claude-code-skills pr create --base develop --title 'fix: managed' --body 'test'"
+expect_exit 2 "T5b: global -R pr create missing deploy is blocked"
+
 cp "$MANAGED_REPO/scripts/example.sh" "$HOME_DIR/.claude/scripts/example.sh"
 run_hook "$MANAGED_REPO" "$HOME_DIR" "gh pr create --base develop --title 'fix: managed' --body 'test'"
 expect_exit 0 "T6: managed repo passes after deploy"

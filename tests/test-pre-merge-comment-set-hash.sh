@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP_ROOT="$(mktemp -d)"
 TMP_HOME="$TMP_ROOT/home"
 TMP_REPO="$TMP_ROOT/repo"
+TMP_REMOTE="$TMP_ROOT/remote.git"
 TMP_BIN="$TMP_ROOT/bin"
 STATE_DIR="$TMP_REPO/.claude/state"
 PENDING_FILE="$STATE_DIR/pending-review-comments.json"
@@ -23,8 +24,13 @@ git -C "$TMP_REPO" config user.name Test
 printf '# test\n' > "$TMP_REPO/README.md"
 git -C "$TMP_REPO" add README.md
 git -C "$TMP_REPO" commit -q -m init
+git -C "$TMP_REPO" branch develop
 git -C "$TMP_REPO" branch -M feature
-git -C "$TMP_REPO" remote add origin https://github.com/owner/repo.git
+git clone -q --bare "$TMP_REPO" "$TMP_REMOTE"
+git -C "$TMP_REPO" remote add origin "$TMP_REMOTE"
+git -C "$TMP_REPO" push -q origin develop
+export FAKE_BASE_SHA
+FAKE_BASE_SHA="$(git -C "$TMP_REPO" rev-parse develop)"
 
 cat > "$TMP_BIN/gh" <<'FAKEGH'
 #!/bin/sh
@@ -33,11 +39,29 @@ if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/123" ]; then
     case "${4:-}" in
       ".head.ref") printf 'feature\n' ;;
       ".head.sha") printf 'abc123\n' ;;
+      ".base.ref") printf 'develop\n' ;;
+      ".base.sha") printf '%s\n' "${FAKE_BASE_SHA:-abc123}" ;;
       *) printf 'abc123\n' ;;
     esac
     exit 0
   fi
-  printf '{"head":{"sha":"abc123","ref":"feature"}}\n'
+  printf '{"head":{"sha":"abc123","ref":"feature"},"base":{"ref":"develop","sha":"%s"}}\n' "${FAKE_BASE_SHA:-abc123}"
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/999" ]; then
+  if [ "${3:-}" = "--jq" ] && [ "${4:-}" = ".state" ]; then
+    printf 'closed\n'
+    exit 0
+  fi
+  printf '{"state":"closed"}\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/git/ref/heads/develop" ]; then
+  if [ "${3:-}" = "--jq" ] && [ "${4:-}" = ".object.sha" ]; then
+    printf '%s\n' "${FAKE_BASE_SHA:-abc123}"
+    exit 0
+  fi
+  printf '{"object":{"sha":"%s"}}\n' "${FAKE_BASE_SHA:-abc123}"
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/123/files" ]; then
@@ -124,6 +148,25 @@ with open(os.environ["PENDING_FILE"], "w") as f:
 PY
 }
 
+write_other_closed_pending() {
+  PENDING_FILE="$PENDING_FILE" python3 - <<'PY'
+import json
+import os
+
+state = {
+    "pr": "999",
+    "repo": "owner/repo",
+    "head_sha": "old",
+    "total": 2,
+    "critical": 1,
+    "high": 1,
+    "comment_set_hash": "stale",
+}
+with open(os.environ["PENDING_FILE"], "w") as f:
+    json.dump(state, f)
+PY
+}
+
 write_review_status() {
   local codex="${1:-false}"
   CODEX="$codex" python3 - "$STATE_DIR/review-status.json" <<'PY'
@@ -154,7 +197,7 @@ reset_state() {
 }
 
 run_pre_merge() {
-  local payload='{"tool_name":"Bash","tool_input":{"command":"gh pr merge 123 --merge"}}'
+  local payload='{"tool_name":"Bash","tool_input":{"command":"gh pr merge 123 --merge --repo owner/repo"}}'
   (
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" \
@@ -207,6 +250,20 @@ reset_state
 write_pending "stale"
 write_review_status true
 expect_rc "T5: stale hash blocks even with Tier 1 LGTM" 2
+
+reset_state
+write_other_closed_pending
+write_review_status
+expect_rc "T6: closed other-PR pending state is purged and ignored" 0
+if [[ ! -f "$PENDING_FILE" ]]; then
+  PASSED=$((PASSED + 1))
+  TOTAL=$((TOTAL + 1))
+  echo "  PASS: T6b: closed pending file removed"
+else
+  FAILED=$((FAILED + 1))
+  TOTAL=$((TOTAL + 1))
+  echo "  FAIL: T6b: closed pending file still present" >&2
+fi
 
 echo "Total: $TOTAL  Passed: $PASSED  Failed: $FAILED"
 rm -f /tmp/pre_merge_hash_test.out /tmp/pre_merge_hash_test.err

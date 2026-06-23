@@ -14,6 +14,8 @@ fi
 
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/gate-modes/common.sh"
 
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
@@ -26,15 +28,26 @@ if [[ -n "$cmd" ]] \
   exit 0
 fi
 
-cmd_first_line=$(echo "$cmd" | head -1)
-
 # Only trigger for merge commands
-if ! echo "$cmd_first_line" | grep -qE 'gh\s+pr\s+merge\b'; then
+MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+if should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
+    print_unparsed_pr_merge_block
+    exit 2
+fi
+if [[ "$MERGE_COUNT" -eq 0 ]]; then
     exit 0
 fi
 
 # Extract PR number
-PR_NUM=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
+PR_NUM=$(extract_gh_pr_merge_target "$cmd" || echo "")
+if [[ "$MERGE_COUNT" -gt 1 || "$PR_NUM" == "__MULTIPLE__" ]]; then
+    echo "[BLOCK] 1つのBashコマンドに複数の gh pr merge が含まれています。" >&2
+    exit 2
+fi
+if [[ "$PR_NUM" == __NON_NUMERIC__:* ]]; then
+    echo "[BLOCK] PR番号が特定できません。gh pr merge <number> の形式で指定してください。" >&2
+    exit 2
+fi
 if [ -z "$PR_NUM" ]; then
     echo "[BLOCK] PR番号が特定できません。gh pr merge <number> の形式で指定してください。" >&2
     exit 2
@@ -45,7 +58,7 @@ fi
 # as "pending" in PR checks but are not CI/CD jobs. Fixes #163 root cause.
 echo "[Merge Guard] PR #${PR_NUM} の CI/CD ステータスを確認中..." >&2
 
-REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+REPO=$(resolve_repo "$cmd")
 HEAD_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
 
 # Fail-closed: if HEAD_SHA is empty, block merge

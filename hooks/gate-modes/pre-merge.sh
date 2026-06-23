@@ -24,15 +24,38 @@ if [[ -n "$cmd" ]] \
   exit 0
 fi
 
-# Verify this is a gh pr merge command
-if [[ -n "$cmd" ]] && ! echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
+# Verify this is a gh pr merge command anywhere in the Bash payload.
+MERGE_COUNT=0
+if [[ -n "$cmd" ]]; then
+  MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+fi
+if should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
+  print_unparsed_pr_merge_block
+  exit 2
+fi
+if [[ "$MERGE_COUNT" -eq 0 ]]; then
   exit 0
+fi
+
+_cmd_context=$(command_git_context_dir "$cmd")
+if [[ -n "$_cmd_context" ]]; then
+  export GIT_CONTEXT_DIR="$_cmd_context"
+  use_git_context_state_dir
 fi
 
 # Extract PR number from command FIRST (before branch lookup)
 PR_NUMBER=""
 if [[ -n "$cmd" ]]; then
-  PR_NUMBER=$(echo "$cmd" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' || echo "")
+  PR_NUMBER=$(extract_gh_pr_merge_target "$cmd" || echo "")
+  if [[ "$MERGE_COUNT" -gt 1 || "$PR_NUMBER" == "__MULTIPLE__" ]]; then
+    echo "🚫 [BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。PRごとに個別実行してください。" >&2
+    exit 2
+  fi
+  if [[ "$PR_NUMBER" == __NON_NUMERIC__:* ]]; then
+    echo "🚫 [BLOCKED] PR番号を特定できません。非数値の gh pr merge target は安全に検証できないため、PR番号を指定してください。" >&2
+    echo "  target: ${PR_NUMBER#__NON_NUMERIC__:}" >&2
+    exit 2
+  fi
 fi
 if [[ -z "$PR_NUMBER" ]]; then
   # Fallback: try current branch
@@ -67,6 +90,13 @@ fi
 # =========================================================================
 REPO=$(resolve_repo "$cmd")
 HEAD_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null || echo "")
+BASE_REF=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.base.ref' 2>/dev/null || echo "")
+BASE_SHA=""
+if [[ -n "$BASE_REF" ]]; then
+  BASE_SHA=$(_timeout 10 gh api "repos/${REPO}/git/ref/heads/${BASE_REF}" --jq '.object.sha' 2>/dev/null || echo "")
+fi
+[[ -n "$BASE_SHA" ]] || BASE_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.base.sha' 2>/dev/null || echo "")
+ensure_pr_base_fresh "$REPO" "$PR_NUMBER" "$BASE_REF" "$BASE_SHA" || exit 2
 TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
 
 if [[ "$TIER" == "EXEMPT" ]]; then
@@ -128,17 +158,34 @@ if [[ "$PRIMARY_LGTM" == "true" ]]; then
   if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
     _primary_pr_in_file=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
     _primary_head_sha_in_file=$(jq -r '.head_sha // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+    _primary_repo_in_file=$(jq -r '.repo // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+    [[ -n "$_primary_repo_in_file" && "$_primary_repo_in_file" != "null" ]] || _primary_repo_in_file="$REPO"
+
+    if [[ -n "$_primary_pr_in_file" && "$_primary_pr_in_file" != "null" && "$_primary_pr_in_file" != "$PR_NUMBER" ]]; then
+      _primary_pending_state=$(pending_review_pr_state "$PENDING_FILE" "$_primary_repo_in_file" || echo "")
+      if [[ "$_primary_pending_state" == "closed" ]] || [[ "$_primary_pending_state" == "merged" ]]; then
+        purge_pending_review_state "$PENDING_FILE"
+        echo "  ℹ️ [pre-merge] closed/merged PR #${_primary_pr_in_file} の stale pending-review-comments.json を削除しました。" >&2
+      else
+        echo "  ℹ️ [pre-merge] pending-review-comments.json は別PR #${_primary_pr_in_file} の state のため、PR #${PR_NUMBER} の判定には使いません。" >&2
+      fi
+    fi
+
     if [[ "$_primary_pr_in_file" == "$PR_NUMBER" ]]; then
       if [[ -z "$HEAD_SHA" ]]; then
         echo "🚫 [BLOCKED] PR #${PR_NUMBER}: HEAD SHA を確認できないため pending-review-comments.json を検証できません。" >&2
         exit 2
       fi
       if [[ "$_primary_head_sha_in_file" != "$HEAD_SHA" ]]; then
-        echo "🚫 [BLOCKED] PR #${PR_NUMBER}: pending-review-comments.json が古い HEAD を参照しています。gh pr checks ${PR_NUMBER} を再実行してください。" >&2
+        echo "🚫 [LOCAL_GATE_STALE_REVIEW_STATE] PR #${PR_NUMBER}: pending-review-comments.json が古い HEAD を参照しています。" >&2
+        echo "  GitHub mergeable 判定とは別の local gate blocker です。" >&2
+        echo "  復旧: gh pr checks ${PR_NUMBER} -R ${REPO} を再実行し、最新レビュー state を取得してください。" >&2
         exit 2
       fi
       if ! pending_comment_set_current "$PENDING_FILE" "$REPO" "$PR_NUMBER" "$HEAD_SHA"; then
-        echo "🚫 [BLOCKED] PR #${PR_NUMBER}: pending-review-comments.json が現在のレビューコメント集合と一致しません。gh pr checks ${PR_NUMBER} を再実行してください。" >&2
+        echo "🚫 [LOCAL_GATE_STALE_REVIEW_STATE] PR #${PR_NUMBER}: pending-review-comments.json が現在のレビューコメント集合と一致しません。" >&2
+        echo "  GitHub mergeable 判定とは別の local gate blocker です。" >&2
+        echo "  復旧: gh pr checks ${PR_NUMBER} -R ${REPO} を再実行し、最新レビュー state を取得してください。" >&2
         exit 2
       fi
     fi
@@ -168,6 +215,21 @@ PENDING_FILE="$STATE_DIR/pending-review-comments.json"
 if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
   _pr_in_file=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
   _head_sha_in_file=$(jq -r '.head_sha // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+  _repo_in_file=$(jq -r '.repo // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+  [[ -n "$_repo_in_file" && "$_repo_in_file" != "null" ]] || _repo_in_file="$REPO"
+
+  # A pending file for another PR must not approve or block this merge. If
+  # GitHub confirms that PR is already closed/merged, purge the local residue.
+  if [[ -n "$_pr_in_file" && "$_pr_in_file" != "null" && "$_pr_in_file" != "$PR_NUMBER" ]]; then
+    _pending_state=$(pending_review_pr_state "$PENDING_FILE" "$_repo_in_file" || echo "")
+    if [[ "$_pending_state" == "closed" ]] || [[ "$_pending_state" == "merged" ]]; then
+      purge_pending_review_state "$PENDING_FILE"
+      echo "  ℹ️ [pre-merge] closed/merged PR #${_pr_in_file} の stale pending-review-comments.json を削除しました。" >&2
+    else
+      echo "  ℹ️ [pre-merge] pending-review-comments.json は別PR #${_pr_in_file} の state のため、PR #${PR_NUMBER} の判定には使いません。" >&2
+    fi
+  fi
+
   # Validate scope: pending-review-comments must match current PR
   if [[ "$_pr_in_file" == "$PR_NUMBER" ]]; then
     if [[ -z "$HEAD_SHA" ]]; then
@@ -175,11 +237,15 @@ if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
       exit 2
     fi
     if [[ "$_head_sha_in_file" != "$HEAD_SHA" ]]; then
-      echo "🚫 [BLOCKED] PR #${PR_NUMBER}: pending-review-comments.json が古い HEAD を参照しています。gh pr checks ${PR_NUMBER} を再実行してください。" >&2
+      echo "🚫 [LOCAL_GATE_STALE_REVIEW_STATE] PR #${PR_NUMBER}: pending-review-comments.json が古い HEAD を参照しています。" >&2
+      echo "  GitHub mergeable 判定とは別の local gate blocker です。" >&2
+      echo "  復旧: gh pr checks ${PR_NUMBER} -R ${REPO} を再実行し、最新レビュー state を取得してください。" >&2
       exit 2
     fi
     if ! pending_comment_set_current "$PENDING_FILE" "$REPO" "$PR_NUMBER" "$HEAD_SHA"; then
-      echo "🚫 [BLOCKED] PR #${PR_NUMBER}: pending-review-comments.json が現在のレビューコメント集合と一致しません。gh pr checks ${PR_NUMBER} を再実行してください。" >&2
+      echo "🚫 [LOCAL_GATE_STALE_REVIEW_STATE] PR #${PR_NUMBER}: pending-review-comments.json が現在のレビューコメント集合と一致しません。" >&2
+      echo "  GitHub mergeable 判定とは別の local gate blocker です。" >&2
+      echo "  復旧: gh pr checks ${PR_NUMBER} -R ${REPO} を再実行し、最新レビュー state を取得してください。" >&2
       exit 2
     else
       # Issue #165: Check classification_method — prefer AI classification if available

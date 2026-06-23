@@ -21,6 +21,8 @@ mkdir -p "$_STATE_BASE"
 
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/gate-modes/common.sh"
 
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
@@ -33,19 +35,36 @@ if [[ -n "$cmd" ]] \
   exit 0
 fi
 
-cmd_first_line=$(echo "$cmd" | head -1)
-if ! echo "$cmd_first_line" | grep -qE 'gh[[:space:]]+pr[[:space:]]+merge\b'; then
+MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+if should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
+    print_unparsed_pr_merge_block
+    exit 2
+fi
+if [[ "$MERGE_COUNT" -eq 0 ]]; then
     exit 0
 fi
 
-PR_NUM=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
+_cmd_context=$(command_git_context_dir "$cmd")
+if [[ -n "$_cmd_context" ]]; then
+    export GIT_CONTEXT_DIR="$_cmd_context"
+    use_git_context_state_dir
+    _STATE_BASE="$STATE_DIR"
+fi
+
+PR_NUM=$(extract_gh_pr_merge_target "$cmd" || echo "")
+if [[ "$MERGE_COUNT" -gt 1 || "$PR_NUM" == "__MULTIPLE__" ]]; then
+    exit 0  # Let the stricter merge gate report multi-merge commands.
+fi
+if [[ "$PR_NUM" == __NON_NUMERIC__:* ]]; then
+    echo "[BLOCK] PR番号が特定できません。非数値の gh pr merge target は安全に検証できないため、PR番号を指定してください。" >&2
+    echo "  target: ${PR_NUM#__NON_NUMERIC__:}" >&2
+    exit 2
+fi
 if [ -z "$PR_NUM" ]; then
     exit 0
 fi
 
 # Get repo info (fork-aware: resolve_repo from common.sh)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/gate-modes/common.sh"
 REPO=$(resolve_repo "$cmd")
 if [ -z "$REPO" ]; then
     echo "[BLOCK] リポジトリ情報を取得できません。" >&2

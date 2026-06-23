@@ -26,8 +26,13 @@ if [[ -n "$cmd" ]] \
   exit 0
 fi
 
-# Verify this is a gh pr create command
-if [[ -n "$cmd" ]] && ! printf '%s\n' "$cmd" | grep -qE 'gh[[:space:]]+pr[[:space:]]+create'; then
+# Verify this is a gh pr create command, including gh global flags such as
+# `gh -R owner/repo pr create`.
+CREATE_COUNT=0
+if [[ -n "$cmd" ]]; then
+  CREATE_COUNT=$(count_gh_pr_create_invocations "$cmd" || echo 0)
+fi
+if [[ "$CREATE_COUNT" -eq 0 ]]; then
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) SKIP: cmd='$cmd' not gh pr create" >> "$LOG_FILE" 2>/dev/null
   exit 0
 fi

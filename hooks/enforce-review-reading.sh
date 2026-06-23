@@ -10,19 +10,11 @@ set -uo pipefail
 [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] && exit 0
 [[ -n "${CLAUDE_AGENT_ID:-}" ]] && exit 0
 
-# Project-scoped state
-if git rev-parse --show-toplevel &>/dev/null; then
-  STATE_DIR="$(git rev-parse --show-toplevel)/.claude/state"
-else
-  STATE_DIR="$HOME/.claude/state"
-fi
-
-PENDING_FILE="$STATE_DIR/pending-review-comments.json"
-[[ ! -f "$PENDING_FILE" ]] && exit 0
-
 input=""
 [[ ! -t 0 ]] && input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/gate-modes/common.sh"
 
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
@@ -34,6 +26,378 @@ if [[ -n "$cmd" ]] \
    && printf '%s' "$cmd" | grep -qE '^[[:space:]]*(grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|echo|printf)\b'; then
   exit 0
 fi
+
+MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+if [[ "$MERGE_COUNT" -gt 1 ]]; then
+  echo "[BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。PRごとに個別実行してください。" >&2
+  exit 2
+fi
+
+_cmd_context=$(command_git_context_dir "$cmd")
+if [[ -n "$_cmd_context" ]]; then
+  export GIT_CONTEXT_DIR="$_cmd_context"
+  use_git_context_state_dir
+fi
+
+PENDING_FILE="$STATE_DIR/pending-review-comments.json"
+[[ ! -f "$PENDING_FILE" ]] && exit 0
+
+extract_gh_pr_merge_target() {
+  local merge_cmd="${1:-}"
+  [[ -z "$merge_cmd" ]] && return 0
+  _CMD="$merge_cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+value_flags = {
+    "--repo",
+    "-R",
+    "--body",
+    "-b",
+    "--body-file",
+    "-F",
+    "--subject",
+    "-t",
+    "--match-head-commit",
+    "--author-email",
+    "-A",
+}
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+shell_executors = {"bash", "sh", "zsh"}
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
+def parse_tokens(text):
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
+
+def gh_pr_invocations(tokens, verb):
+    positions = []
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] == verb:
+                positions.append((i, j + 2, end))
+            break
+        i += 1
+    return positions
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
+    sys.exit(0)
+
+merge_positions = gh_pr_invocations(tokens, "merge")
+
+if len(merge_positions) > 1:
+    print("__MULTIPLE__")
+    sys.exit(0)
+
+for _, start, end in merge_positions:
+    j = start
+    while j < end:
+        token = tokens[j]
+        if token in separators:
+            break
+        if token in redirects:
+            j += 2
+            continue
+        if token in value_flags:
+            j += 2
+            continue
+        if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
+            j += 1
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+
+        match = re.search(r"^#?([0-9]+)$", token)
+        if match:
+            print(match.group(1))
+        else:
+            print(f"__NON_NUMERIC__:{token}")
+        sys.exit(0)
+
+print("")
+PY
+}
+
+count_gh_pr_merge_invocations() {
+  local merge_cmd="${1:-}"
+  [[ -z "$merge_cmd" ]] && { echo 0; return 0; }
+  _CMD="$merge_cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+shell_executors = {"bash", "sh", "zsh"}
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
+def parse_tokens(text):
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
+
+def count_pr_verb(tokens, verb):
+    count = 0
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] == verb:
+                count += 1
+            break
+        i += 1
+    return count
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
+    print(0)
+    sys.exit(0)
+
+print(count_pr_verb(tokens, "merge"))
+PY
+}
+
+resolve_current_branch_merge_pr() {
+  local repo="${1:-}"
+  local branch
+  branch=$(git branch --show-current 2>/dev/null || echo "")
+  [[ -z "$branch" ]] && return 0
+
+  if [[ -n "$repo" && "$repo" != "null" ]]; then
+    gh pr list --repo "$repo" --head "$branch" --json number -q '.[0].number' 2>/dev/null || echo ""
+  else
+    gh pr list --head "$branch" --json number -q '.[0].number' 2>/dev/null || echo ""
+  fi
+}
 
 # Read pending state
 REVIEW_DATA=$(_PENDING_FILE="$PENDING_FILE" python3 -c "
@@ -118,12 +482,40 @@ except Exception:
 fi
 
 # HARD BLOCK: gh pr merge with unresolved findings
-if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
+if should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
   if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
+    print_unparsed_pr_merge_block
     echo "[BLOCKED] PR #${PR}: 未対応のCRITICAL/HIGH指摘があります（CRITICAL=${CRITICAL}, HIGH=${HIGH}）。" >&2
-    echo "  レビューコメントを確認し、全て対応してからマージしてください。" >&2
-    echo "  確認: gh api repos/.../pulls/${PR}/comments" >&2
     exit 2
+  fi
+fi
+if [[ "$MERGE_COUNT" -gt 0 ]]; then
+  MERGE_PR=$(extract_gh_pr_merge_target "$cmd" || echo "")
+  if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
+    if [[ "$MERGE_COUNT" -gt 1 || "$MERGE_PR" == "__MULTIPLE__" ]]; then
+      echo "[BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。未対応レビュー state があるため、PRごとに個別実行してください。" >&2
+      exit 2
+    fi
+    if [[ -z "$MERGE_PR" ]]; then
+      MERGE_PR=$(resolve_current_branch_merge_pr "$REPO" || echo "")
+    fi
+    if [[ "$MERGE_PR" == __NON_NUMERIC__:* ]]; then
+      echo "[BLOCKED] gh pr merge target をPR番号として特定できません。未対応レビュー state があるため、PR番号を明示してください。" >&2
+      echo "  target: ${MERGE_PR#__NON_NUMERIC__:}" >&2
+      exit 2
+    fi
+    if [[ -z "$MERGE_PR" ]]; then
+      echo "[BLOCKED] gh pr merge の暗黙ターゲットを現在ブランチから解決できません。未対応レビュー state があるため、PR番号を明示してください。" >&2
+      exit 2
+    fi
+    if [[ -n "$PR" && "$MERGE_PR" != "$PR" ]]; then
+      echo "[INFO] pending-review-comments.json は PR #${PR} の state です。PR #${MERGE_PR} の merge はこの hook では hard block しません。" >&2
+    else
+      echo "[BLOCKED] PR #${PR}: 未対応のCRITICAL/HIGH指摘があります（CRITICAL=${CRITICAL}, HIGH=${HIGH}）。" >&2
+      echo "  レビューコメントを確認し、全て対応してからマージしてください。" >&2
+      echo "  確認: gh api repos/.../pulls/${PR}/comments" >&2
+      exit 2
+    fi
   fi
 fi
 

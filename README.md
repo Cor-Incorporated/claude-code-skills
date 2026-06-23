@@ -249,6 +249,10 @@ Merged or closed PRs are automatically cleaned from the lock state:
 - **STOP hook**: Auto-removes merged/closed PR entries via GitHub API
 - **Manual cleanup**: `GATE_MODE=CLEANUP bash hooks/pr-ci-review-gate.sh`
 
+When GitHub says a PR is mergeable but local hooks still block it, use the
+[GitHub mergeable vs local gate runbook](docs/runbooks/github-mergeable-vs-local-gate.md)
+to separate GitHub blockers from stale local review/base state.
+
 ### PR Lifecycle Hooks
 
 | Phase | Hook | Action |

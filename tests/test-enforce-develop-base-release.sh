@@ -54,6 +54,9 @@ git -C "$TMP_REPO" checkout -qb feat/test
 run_case "feature branch -> main PR is blocked" "feat/test" 2 \
   'gh pr create --base main --title "feat: test" --body "Closes #1"'
 
+run_case "global -R feature branch -> main PR is blocked" "feat/test" 2 \
+  'gh -R owner/repo pr create --base main --title "feat: test" --body "Closes #1"'
+
 run_case "feature branch -> develop PR is allowed" "feat/test" 0 \
   'gh pr create --base develop --title "feat: test" --body "Closes #1"'
 

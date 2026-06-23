@@ -95,6 +95,9 @@ check_exit 0 $? "T13: clean body -> PASS"
 mk_json 'gh pr create --title "Fix" --body "Resolved the issue"' | bash "$H1" >/dev/null 2>&1
 check_exit 0 $? "T14: gh pr create clean -> PASS"
 
+mk_json 'gh -R owner/repo pr create --title "Fix" --body "Resolved the issue"' | bash "$H1" >/dev/null 2>&1
+check_exit 0 $? "T14b: gh -R pr create clean -> PASS"
+
 mk_json 'gh issue view 123' | bash "$H1" >/dev/null 2>&1
 check_exit 0 $? "T15: gh issue view -> PASS (not write op)"
 
@@ -106,6 +109,9 @@ echo "(factcheck=false)"
 
 mk_json 'gh issue create --title "Clean" --body "All good"' | bash "$H1" >/dev/null 2>&1
 check_exit 2 $? "T17: factcheck=false -> BLOCK"
+
+mk_json 'gh -R owner/repo pr create --title "Clean" --body "All good"' | bash "$H1" >/dev/null 2>&1
+check_exit 2 $? "T18: factcheck=false gh -R pr create -> BLOCK"
 
 echo ""
 echo "===================================="

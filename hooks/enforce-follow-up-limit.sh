@@ -29,7 +29,7 @@ fi
 
 # Only act on gh pr create commands
 cmd_first=$(echo "$cmd" | head -1)
-if ! echo "$cmd_first" | grep -qE 'gh\s+pr\s+create\b'; then
+if ! echo "$cmd_first" | grep -qE '(^|[[:space:];&|])([^[:space:];&|]*/)?gh([[:space:]]+((-R|--repo)(=|[[:space:]])[^[:space:];&|]+))*[[:space:]]+pr[[:space:]]+create\b'; then
   exit 0
 fi
 

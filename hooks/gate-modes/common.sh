@@ -28,6 +28,105 @@ else
 fi
 
 # =========================================================================
+# Helper: map GitHub repo slugs to local remotes
+# =========================================================================
+remote_slug() {
+  local remote="$1" url
+  url=$(git_ctx remote get-url "$remote" 2>/dev/null || echo "")
+  [[ -z "$url" ]] && return 1
+  printf '%s\n' "$url" \
+    | sed 's|^git@github.com:||;s|^https://github.com/||;s|^ssh://git@github.com/||;s|\.git$||'
+}
+
+remote_for_repo() {
+  local repo="$1" remote slug first_remote=""
+
+  for remote in origin upstream; do
+    git_ctx remote get-url "$remote" >/dev/null 2>&1 || continue
+    [[ -z "$first_remote" ]] && first_remote="$remote"
+    slug=$(remote_slug "$remote" || echo "")
+    if [[ -n "$repo" && "$slug" == "$repo" ]]; then
+      echo "$remote"
+      return
+    fi
+  done
+
+  [[ -n "$first_remote" ]] && echo "$first_remote"
+}
+
+# =========================================================================
+# Helper: verify the local gate is evaluating the current GitHub base snapshot
+# =========================================================================
+ensure_pr_base_fresh() {
+  local repo="$1" pr_number="$2" base_ref="$3" base_sha="$4"
+  local remote local_sha
+
+  if [[ -z "$repo" || -z "$pr_number" || -z "$base_ref" || -z "$base_sha" || "$base_sha" == "null" ]]; then
+    echo "🚫 [LOCAL_GATE_BASE_UNKNOWN] PR #${pr_number}: GitHub base ref/SHA を取得できません。" >&2
+    echo "  GitHub mergeable 判定とは別に、local gate が現在の base を検証できないためブロックします。" >&2
+    echo "  確認: gh pr view ${pr_number} -R ${repo} --json baseRefName,baseRefOid,mergeable" >&2
+    return 2
+  fi
+
+  remote=$(remote_for_repo "$repo" || echo "")
+  if [[ -z "$remote" ]]; then
+    echo "🚫 [LOCAL_GATE_BASE_UNKNOWN] PR #${pr_number}: ${repo} に対応する local remote を特定できません。" >&2
+    echo "  GitHub mergeable 判定とは別に、local gate の base snapshot が不明です。" >&2
+    return 2
+  fi
+
+  if [[ -n "${GIT_CONTEXT_DIR:-}" ]]; then
+    _fetch_base() { _timeout 20 git -C "$GIT_CONTEXT_DIR" fetch --quiet "$remote" "+refs/heads/${base_ref}:refs/remotes/${remote}/${base_ref}" 2>/dev/null; }
+    _rev_parse_base() { git -C "$GIT_CONTEXT_DIR" rev-parse "refs/remotes/${remote}/${base_ref}" 2>/dev/null || echo ""; }
+  else
+    _fetch_base() { _timeout 20 git fetch --quiet "$remote" "+refs/heads/${base_ref}:refs/remotes/${remote}/${base_ref}" 2>/dev/null; }
+    _rev_parse_base() { git rev-parse "refs/remotes/${remote}/${base_ref}" 2>/dev/null || echo ""; }
+  fi
+
+  if ! _fetch_base; then
+    echo "🚫 [LOCAL_GATE_STALE_BASE] PR #${pr_number}: ${remote}/${base_ref} を取得できません。" >&2
+    echo "  GitHub mergeable/CLEAN は GitHub 側の判定です。local gate は base snapshot を更新できないためブロックします。" >&2
+    echo "  復旧: git fetch ${remote} ${base_ref}" >&2
+    return 2
+  fi
+
+  local_sha=$(_rev_parse_base)
+  if [[ "$local_sha" != "$base_sha" ]]; then
+    echo "🚫 [LOCAL_GATE_STALE_BASE] PR #${pr_number}: local base snapshot が GitHub base と一致しません。" >&2
+    echo "  GitHub ${repo}:${base_ref}: ${base_sha}" >&2
+    echo "  Local  ${remote}/${base_ref}: ${local_sha:-missing}" >&2
+    echo "  GitHub mergeable 判定とは別の local gate blocker です。fetch 後に再試行してください。" >&2
+    return 2
+  fi
+
+  return 0
+}
+
+# =========================================================================
+# Helper: pending-review-comments.json stale-state cleanup
+# =========================================================================
+pending_review_pr_state() {
+  local pending_file="$1" fallback_repo="$2"
+  local pending_pr pending_repo state
+
+  [[ -f "$pending_file" ]] || return 1
+  pending_pr=$(jq -r '.pr // ""' "$pending_file" 2>/dev/null || echo "")
+  [[ -n "$pending_pr" && "$pending_pr" != "null" ]] || return 1
+  pending_repo=$(jq -r '.repo // ""' "$pending_file" 2>/dev/null || echo "")
+  [[ -n "$pending_repo" && "$pending_repo" != "null" ]] || pending_repo="$fallback_repo"
+  [[ -n "$pending_repo" ]] || return 1
+
+  state=$(_timeout 10 gh api "repos/${pending_repo}/pulls/${pending_pr}" --jq '.state' 2>/dev/null || echo "")
+  printf '%s\n' "$state" | tr '[:upper:]' '[:lower:]'
+}
+
+purge_pending_review_state() {
+  local pending_file="$1" cache_file
+  cache_file="$(dirname "$pending_file")/pending-review-pr-state.cache"
+  rm -f "$pending_file" "$cache_file" 2>/dev/null || true
+}
+
+# =========================================================================
 # Helper: verify pending-review-comments.json still matches GitHub comments
 # =========================================================================
 review_comment_set_hash_script() {
@@ -78,6 +177,15 @@ REVIEW_STATE="$STATE_DIR/review-status.json"
 LOCK_STATE="$STATE_DIR/pr-review-lock.json"
 mkdir -p "$STATE_DIR"
 
+rebind_gate_state_dir() {
+  local repo_root="$1"
+  [[ -n "$repo_root" ]] || return 0
+  STATE_DIR="${repo_root}/.claude/state"
+  REVIEW_STATE="$STATE_DIR/review-status.json"
+  LOCK_STATE="$STATE_DIR/pr-review-lock.json"
+  mkdir -p "$STATE_DIR"
+}
+
 # =========================================================================
 # Dual-location lock files — project-scoped AND global (Issue #19 / Fix8)
 # The pessimistic lock (pr-review-lock.json) was written and read from
@@ -89,6 +197,12 @@ mkdir -p "$STATE_DIR"
 # =========================================================================
 GLOBAL_STATE_DIR="$HOME/.claude/state"
 mkdir -p "$GLOBAL_STATE_DIR" 2>/dev/null || true
+
+use_git_context_state_dir() {
+  if [[ -n "${GIT_CONTEXT_DIR:-}" ]]; then
+    rebind_gate_state_dir "$GIT_CONTEXT_DIR"
+  fi
+}
 
 # lock_files — echo the deduped list of lock file paths (project, then global)
 lock_files() {
@@ -210,43 +324,1722 @@ extract_cmd() {
     echo ""
   fi
 }
+
+# Extract the explicit PR target from a `gh pr merge` command. Supports valid
+# gh forms where flags appear before the positional PR argument, e.g.
+# `gh pr merge --repo owner/repo 123 --merge`, and gh global flags before
+# the `pr` subcommand, e.g. `gh -R owner/repo pr merge 123 --merge`.
+#
+# Output:
+#   - numeric PR number when an explicit numeric target is present
+#   - __NON_NUMERIC__:<target> when an explicit non-numeric target is present
+#   - empty when the command relies on the current branch implicit target
+extract_gh_pr_merge_target() {
+  local cmd="${1:-}"
+  [[ -z "$cmd" ]] && return 0
+  _CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+value_flags = {
+    "--repo",
+    "-R",
+    "--body",
+    "-b",
+    "--body-file",
+    "-F",
+    "--subject",
+    "-t",
+    "--match-head-commit",
+    "--author-email",
+    "-A",
+}
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
+shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
+        return end
+    return min(i + 1, len(tokens))
+
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return skip_process_substitution_value(tokens, i + 1)
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
+        return i + 1
+    return None
+
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
+def process_substitution_end(tokens, i):
+    if i + 1 >= len(tokens) or tokens[i] not in {"<", ">"} or tokens[i + 1] != "(":
+        return None
+    depth = 1
+    j = i + 2
+    while j < len(tokens):
+        if tokens[j] == "(":
+            depth += 1
+        elif tokens[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def has_runtime_expansion(tokens):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "$" and i + 1 < len(tokens) and tokens[i + 1] == "(":
+            return True
+        if "$" + "(" in token or chr(96) in token:
+            return True
+        if process_substitution_end(tokens, i) is not None:
+            return True
+        i += 1
+    return False
+
+
+def is_safe_readonly_process_substitution(tokens, start, end):
+    inner = tokens[start + 2:end - 1]
+    if not inner:
+        return True
+    return is_single_readonly_command(inner) and not has_runtime_expansion(inner)
+
+
+def strip_readonly_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        end = process_substitution_end(tokens, i)
+        if end is not None and is_safe_readonly_process_substitution(tokens, i, end):
+            out.extend([tokens[i], "(", ")"])
+            i = end
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
+def strip_value_flag_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token in value_flags and i + 1 < len(tokens):
+            out.append(token)
+            end = process_substitution_end(tokens, i + 1)
+            if end is not None and is_safe_readonly_process_substitution(tokens, i + 1, end):
+                out.extend([tokens[i + 1], "(", ")"])
+                i = end
+                continue
+            i += 1
+            continue
+        if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
+            out.append(token)
+            if token.endswith("=") and i + 1 < len(tokens):
+                end = process_substitution_end(tokens, i + 1)
+                if end is not None and is_safe_readonly_process_substitution(tokens, i + 1, end):
+                    out.extend([tokens[i + 1], "(", ")"])
+                    i = end
+                    continue
+            i += 1
+            continue
+        out.append(token)
+        i += 1
+    return out
+
+
+def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
+        return strip_value_flag_process_substitutions(tokens)
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def runtime_command_strings(token):
+    nested = []
+    marker = chr(36) + "("
+    i = 0
+    while True:
+        start = token.find(marker, i)
+        if start == -1:
+            break
+        depth = 1
+        j = start + len(marker)
+        while j < len(token):
+            if token[j] == "(":
+                depth += 1
+            elif token[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = token[start + len(marker):j].strip()
+                    if inner:
+                        nested.append(inner)
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            i = start + len(marker)
+    tick = chr(96)
+    i = 0
+    while True:
+        start = token.find(tick, i)
+        if start == -1:
+            break
+        end = token.find(tick, start + 1)
+        if end == -1:
+            break
+        inner = token[start + 1:end].strip()
+        if inner:
+            nested.append(inner)
+        i = end + 1
+    return nested
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        nested.extend(runtime_command_strings(tokens[i]))
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def is_single_readonly_command(tokens):
+    if not tokens or any(token in separators for token in tokens):
+        return False
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in redirects:
+            i += 2
+            continue
+        if is_assignment(tokens[i]):
+            i += 1
+            continue
+        break
+    return i < len(tokens) and os.path.basename(tokens[i]) in read_only_commands
+
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            if is_single_readonly_command(nested_tokens):
+                continue
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
+
+def gh_pr_invocations(tokens, verb):
+    positions = []
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] == verb:
+                positions.append((i, j + 2, end))
+            break
+        i += 1
+    return positions
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', cmd)
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
+    sys.exit(0)
+
+merge_positions = gh_pr_invocations(tokens, "merge")
+
+if len(merge_positions) > 1:
+    print("__MULTIPLE__")
+    sys.exit(0)
+
+for _, start, end in merge_positions:
+    j = start
+    while j < end:
+        token = tokens[j]
+        if token in separators:
+            break
+        if token in redirects:
+            j += 2
+            continue
+        if token in value_flags:
+            j = skip_process_substitution_value(tokens, j + 1)
+            continue
+        if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
+            if token.endswith("="):
+                j = skip_process_substitution_value(tokens, j + 1)
+            else:
+                j += 1
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+
+        match = re.search(r"^#?([0-9]+)$", token)
+        if match:
+            print(match.group(1))
+        else:
+            print(f"__NON_NUMERIC__:{token}")
+        sys.exit(0)
+
+print("")
+PY
+}
+
+count_gh_pr_merge_invocations() {
+  local cmd="${1:-}"
+  [[ -z "$cmd" ]] && { echo 0; return 0; }
+  _CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
+shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
+        return end
+    return min(i + 1, len(tokens))
+
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return skip_process_substitution_value(tokens, i + 1)
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
+        return i + 1
+    return None
+
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
+def process_substitution_end(tokens, i):
+    if i + 1 >= len(tokens) or tokens[i] not in {"<", ">"} or tokens[i + 1] != "(":
+        return None
+    depth = 1
+    j = i + 2
+    while j < len(tokens):
+        if tokens[j] == "(":
+            depth += 1
+        elif tokens[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def has_runtime_expansion(tokens):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "$" and i + 1 < len(tokens) and tokens[i + 1] == "(":
+            return True
+        if "$" + "(" in token or chr(96) in token:
+            return True
+        if process_substitution_end(tokens, i) is not None:
+            return True
+        i += 1
+    return False
+
+
+def is_safe_readonly_process_substitution(tokens, start, end):
+    inner = tokens[start + 2:end - 1]
+    if not inner:
+        return True
+    return is_single_readonly_command(inner) and not has_runtime_expansion(inner)
+
+
+def strip_readonly_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        end = process_substitution_end(tokens, i)
+        if end is not None and is_safe_readonly_process_substitution(tokens, i, end):
+            out.extend([tokens[i], "(", ")"])
+            i = end
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
+def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def runtime_command_strings(token):
+    nested = []
+    marker = chr(36) + "("
+    i = 0
+    while True:
+        start = token.find(marker, i)
+        if start == -1:
+            break
+        depth = 1
+        j = start + len(marker)
+        while j < len(token):
+            if token[j] == "(":
+                depth += 1
+            elif token[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = token[start + len(marker):j].strip()
+                    if inner:
+                        nested.append(inner)
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            i = start + len(marker)
+    tick = chr(96)
+    i = 0
+    while True:
+        start = token.find(tick, i)
+        if start == -1:
+            break
+        end = token.find(tick, start + 1)
+        if end == -1:
+            break
+        inner = token[start + 1:end].strip()
+        if inner:
+            nested.append(inner)
+        i = end + 1
+    return nested
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        nested.extend(runtime_command_strings(tokens[i]))
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def is_single_readonly_command(tokens):
+    if not tokens or any(token in separators for token in tokens):
+        return False
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in redirects:
+            i += 2
+            continue
+        if is_assignment(tokens[i]):
+            i += 1
+            continue
+        break
+    return i < len(tokens) and os.path.basename(tokens[i]) in read_only_commands
+
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            if is_single_readonly_command(nested_tokens):
+                continue
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
+
+def count_pr_verb(tokens, verb):
+    count = 0
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] == verb:
+                count += 1
+            break
+        i += 1
+    return count
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', cmd)
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
+    print(0)
+    sys.exit(0)
+
+print(count_pr_verb(tokens, "merge"))
+PY
+}
+
+count_gh_pr_create_invocations() {
+  local cmd="${1:-}"
+  [[ -z "$cmd" ]] && { echo 0; return 0; }
+  _CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
+shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
+        return end
+    return min(i + 1, len(tokens))
+
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return skip_process_substitution_value(tokens, i + 1)
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
+        return i + 1
+    return None
+
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
+def process_substitution_end(tokens, i):
+    if i + 1 >= len(tokens) or tokens[i] not in {"<", ">"} or tokens[i + 1] != "(":
+        return None
+    depth = 1
+    j = i + 2
+    while j < len(tokens):
+        if tokens[j] == "(":
+            depth += 1
+        elif tokens[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def has_runtime_expansion(tokens):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "$" and i + 1 < len(tokens) and tokens[i + 1] == "(":
+            return True
+        if "$" + "(" in token or chr(96) in token:
+            return True
+        if process_substitution_end(tokens, i) is not None:
+            return True
+        i += 1
+    return False
+
+
+def is_safe_readonly_process_substitution(tokens, start, end):
+    inner = tokens[start + 2:end - 1]
+    if not inner:
+        return True
+    return is_single_readonly_command(inner) and not has_runtime_expansion(inner)
+
+
+def strip_readonly_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        end = process_substitution_end(tokens, i)
+        if end is not None and is_safe_readonly_process_substitution(tokens, i, end):
+            out.extend([tokens[i], "(", ")"])
+            i = end
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
+def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def runtime_command_strings(token):
+    nested = []
+    marker = chr(36) + "("
+    i = 0
+    while True:
+        start = token.find(marker, i)
+        if start == -1:
+            break
+        depth = 1
+        j = start + len(marker)
+        while j < len(token):
+            if token[j] == "(":
+                depth += 1
+            elif token[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = token[start + len(marker):j].strip()
+                    if inner:
+                        nested.append(inner)
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            i = start + len(marker)
+    tick = chr(96)
+    i = 0
+    while True:
+        start = token.find(tick, i)
+        if start == -1:
+            break
+        end = token.find(tick, start + 1)
+        if end == -1:
+            break
+        inner = token[start + 1:end].strip()
+        if inner:
+            nested.append(inner)
+        i = end + 1
+    return nested
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        nested.extend(runtime_command_strings(tokens[i]))
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def is_single_readonly_command(tokens):
+    if not tokens or any(token in separators for token in tokens):
+        return False
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in redirects:
+            i += 2
+            continue
+        if is_assignment(tokens[i]):
+            i += 1
+            continue
+        break
+    return i < len(tokens) and os.path.basename(tokens[i]) in read_only_commands
+
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            if is_single_readonly_command(nested_tokens):
+                continue
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
+
+def count_pr_verb(tokens, verb):
+    count = 0
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] == verb:
+                count += 1
+            break
+        i += 1
+    return count
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', cmd)
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
+    print(0)
+    sys.exit(0)
+
+print(count_pr_verb(tokens, "create"))
+PY
+}
+
+command_pr_merge_text_count() {
+  local cmd="${1:-}"
+  [[ -n "$cmd" ]] || { echo 0; return 0; }
+  _CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {";", "&&", "||", "|", "&", "(", ")"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
+command_wrappers = {"env", "command", "sudo"}
+shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
+wrapper_value_flags = {
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt",
+             "-C", "--close-from", "-T", "--command-timeout", "-A", "--askpass"},
+    "command": set(),
+}
+
+
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
+def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return split_punctuation_tokens(list(lexer))
+    except ValueError:
+        return split_punctuation_tokens(re.findall(r"&&|\|\||[;|&]|[^\s;|&]+", text))
+
+
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+
+def is_wrapper(token):
+    return os.path.basename(token) in command_wrappers
+
+
+def skip_wrapper_options(tokens, i, wrapper):
+    value_flags = wrapper_value_flags.get(wrapper, set())
+    while i < len(tokens) and tokens[i].startswith("-"):
+        token = tokens[i]
+        i += 1
+        if token in value_flags and i < len(tokens):
+            i += 1
+            continue
+        if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
+            continue
+    if wrapper == "env":
+        while i < len(tokens) and is_assignment(tokens[i]):
+            i += 1
+    return i
+
+
+def env_payloads(tokens, wrapper_index):
+    payloads = []
+    j = wrapper_index + 1
+    while j < len(tokens):
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < len(tokens):
+                payloads.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            payloads.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            value = token.split("=", 1)[1]
+            if value:
+                payloads.append(value)
+            j += 1
+            continue
+        break
+    return payloads
+
+
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
+        return end
+    return min(i + 1, len(tokens))
+
+
+def skip_value_flag(tokens, i):
+    token = tokens[i]
+    if token in value_flags:
+        return skip_process_substitution_value(tokens, i + 1)
+    if any(token.startswith(f"{flag}=") for flag in value_flags):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
+        return i + 1
+    return None
+
+
+def shell_payload(segment_tokens, i):
+    base = os.path.basename(segment_tokens[i])
+    if base in shell_executors:
+        j = i + 1
+        while j < len(segment_tokens):
+            token = segment_tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                return segment_tokens[j + 1] if j + 1 < len(segment_tokens) else ""
+            j += 1
+    if base == "eval" and i + 1 < len(segment_tokens):
+        return " ".join(segment_tokens[i + 1:])
+    return ""
+
+
+def runtime_command_strings(token):
+    nested = []
+    marker = chr(36) + "("
+    i = 0
+    while True:
+        start = token.find(marker, i)
+        if start == -1:
+            break
+        depth = 1
+        j = start + len(marker)
+        while j < len(token):
+            if token[j] == "(":
+                depth += 1
+            elif token[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = token[start + len(marker):j].strip()
+                    if inner:
+                        nested.append(inner)
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            i = start + len(marker)
+    tick = chr(96)
+    i = 0
+    while True:
+        start = token.find(tick, i)
+        if start == -1:
+            break
+        end = token.find(tick, start + 1)
+        if end == -1:
+            break
+        inner = token[start + 1:end].strip()
+        if inner:
+            nested.append(inner)
+        i = end + 1
+    return nested
+
+
+def shell_payload_token_indexes(segment_tokens):
+    indexes = set()
+    i = 0
+    while i < len(segment_tokens):
+        base = os.path.basename(segment_tokens[i])
+        end = i + 1
+        while end < len(segment_tokens) and segment_tokens[end] not in separators:
+            end += 1
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = segment_tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        indexes.add(j + 1)
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            indexes.update(range(i + 1, end))
+        i += 1
+    return indexes
+
+
+def count_tokens_pr_merge(tokens, depth=0):
+    count = 0
+    segment = []
+    for token in tokens + [";"]:
+        if token in separators:
+            count += count_segment_pr_merge(segment, depth)
+            segment = []
+        else:
+            segment.append(token)
+    return count
+
+
+def skip_redirects(tokens, i):
+    while i < len(tokens) and tokens[i] in redirects:
+        i += 2
+    return i
+
+
+def count_segment_pr_merge(segment_tokens, depth=0):
+    if depth > 3:
+        return 0
+    if not segment_tokens:
+        return 0
+
+    count = 0
+    runtime_skip = shell_payload_token_indexes(segment_tokens)
+    for index, token in enumerate(segment_tokens):
+        if index in runtime_skip or is_assignment(token):
+            continue
+        for payload in runtime_command_strings(token):
+            count += count_tokens_pr_merge(parse_tokens(payload), depth + 1)
+
+    i = skip_redirects(segment_tokens, 0)
+    while i < len(segment_tokens) and is_assignment(segment_tokens[i]):
+        value = segment_tokens[i].split("=", 1)[1]
+        if value:
+            count += count_tokens_pr_merge(parse_tokens(value), depth + 1)
+        i += 1
+    i = skip_redirects(segment_tokens, i)
+
+    while i < len(segment_tokens):
+        i = skip_redirects(segment_tokens, i)
+        if i >= len(segment_tokens) or not is_wrapper(segment_tokens[i]):
+            break
+        wrapper_index = i
+        wrapper = os.path.basename(segment_tokens[i])
+        if wrapper == "env":
+            for payload in env_payloads(segment_tokens, wrapper_index):
+                if payload:
+                    count += count_tokens_pr_merge(parse_tokens(payload), depth + 1)
+        i += 1
+        while True:
+            before = i
+            i = skip_redirects(segment_tokens, i)
+            i = skip_wrapper_options(segment_tokens, i, wrapper)
+            i = skip_redirects(segment_tokens, i)
+            if i == before:
+                break
+
+    i = skip_redirects(segment_tokens, i)
+    if i < len(segment_tokens):
+        payload = shell_payload(segment_tokens, i)
+        if payload:
+            count += count_tokens_pr_merge(parse_tokens(payload), depth + 1)
+
+    i = skip_redirects(segment_tokens, i)
+    if i >= len(segment_tokens) or not is_gh(segment_tokens[i]):
+        return count
+
+    i += 1
+    while i < len(segment_tokens):
+        skipped = skip_value_flag(segment_tokens, i)
+        if skipped is not None:
+            i = skipped
+            continue
+        if segment_tokens[i].startswith("-"):
+            i += 1
+            continue
+        break
+
+    if (
+        i + 1 < len(segment_tokens)
+        and segment_tokens[i] == "pr"
+        and segment_tokens[i + 1] == "merge"
+    ):
+        count += 1
+    return count
+
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', cmd)
+print(count_tokens_pr_merge(parse_tokens(cmd)))
+PY
+}
+
+command_mentions_pr_merge_text() {
+  local cmd="${1:-}"
+  local count
+  count=$(command_pr_merge_text_count "$cmd" 2>/dev/null || echo 0)
+  [[ "$count" -gt 0 ]]
+}
+
+command_uses_shell_executor() {
+  local cmd="${1:-}"
+  [[ -n "$cmd" ]] || return 1
+  printf '%s' "$cmd" | grep -Eq '(^|[[:space:];|&"'\''`])([[:alnum:]_./-]*/)?(bash|sh|zsh|eval)([[:space:];|&"'\''`]|$)'
+}
+
+should_block_unparsed_pr_merge() {
+  local cmd="${1:-}"
+  local merge_count="${2:-0}"
+  local text_count
+  command_uses_shell_executor "$cmd" || return 1
+  text_count=$(command_pr_merge_text_count "$cmd" 2>/dev/null || echo 0)
+  [[ "$text_count" -gt "$merge_count" ]] || return 1
+  return 0
+}
+
+print_unparsed_pr_merge_block() {
+  echo "[BLOCK] gh pr merge を安全に解析できません。shell/eval 経由で隠さず、gh pr merge <number> --repo owner/repo を直接実行してください。" >&2
+}
 # =========================================================================
 # Helper: resolve repository (fork-aware)
-# Priority: CLAUDE_FORK_REPO env > --repo flag > upstream remote > origin
+# Priority: --repo flag > CLAUDE_FORK_REPO env > upstream remote > origin
 # =========================================================================
 resolve_repo() {
   local cmd="${1:-}"
 
-  # Priority 1: CLAUDE_FORK_REPO env var
+  # Priority 1: --repo / -R flag in command
+  if [[ -n "$cmd" ]]; then
+    local parsed_repo
+    parsed_repo=$(_CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+pr_value_flags = {
+    "--repo",
+    "-R",
+    "--body",
+    "-b",
+    "--body-file",
+    "-F",
+    "--subject",
+    "-t",
+    "--match-head-commit",
+    "--author-email",
+    "-A",
+}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
+shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def env_nested_commands(tokens, i, end):
+    nested = []
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < end:
+                nested.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            nested.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            j += 2
+            continue
+        if token.startswith("--unset=") or token.startswith("--chdir="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            j += 1
+            continue
+        break
+    return nested
+
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if (
+        end is not None
+        and "is_safe_readonly_process_substitution" in globals()
+        and is_safe_readonly_process_substitution(tokens, i, end)
+    ):
+        return end
+    return min(i + 1, len(tokens))
+
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return skip_process_substitution_value(tokens, i + 1)
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
+        return i + 1
+    return None
+
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
+def process_substitution_end(tokens, i):
+    if i + 1 >= len(tokens) or tokens[i] not in {"<", ">"} or tokens[i + 1] != "(":
+        return None
+    depth = 1
+    j = i + 2
+    while j < len(tokens):
+        if tokens[j] == "(":
+            depth += 1
+        elif tokens[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def has_runtime_expansion(tokens):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "$" and i + 1 < len(tokens) and tokens[i + 1] == "(":
+            return True
+        if "$" + "(" in token or chr(96) in token:
+            return True
+        if process_substitution_end(tokens, i) is not None:
+            return True
+        i += 1
+    return False
+
+
+def is_safe_readonly_process_substitution(tokens, start, end):
+    inner = tokens[start + 2:end - 1]
+    if not inner:
+        return True
+    return is_single_readonly_command(inner) and not has_runtime_expansion(inner)
+
+
+def strip_readonly_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        end = process_substitution_end(tokens, i)
+        if end is not None and is_safe_readonly_process_substitution(tokens, i, end):
+            out.extend([tokens[i], "(", ")"])
+            i = end
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
+def strip_pr_value_flag_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token in pr_value_flags and i + 1 < len(tokens):
+            out.append(token)
+            end = process_substitution_end(tokens, i + 1)
+            if end is not None and is_safe_readonly_process_substitution(tokens, i + 1, end):
+                out.extend([tokens[i + 1], "(", ")"])
+                i = end
+                continue
+            i += 1
+            continue
+        if any(token.startswith(f"{flag}=") for flag in pr_value_flags if flag.startswith("--")):
+            out.append(token)
+            if token.endswith("=") and i + 1 < len(tokens):
+                end = process_substitution_end(tokens, i + 1)
+                if end is not None and is_safe_readonly_process_substitution(tokens, i + 1, end):
+                    out.extend([tokens[i + 1], "(", ")"])
+                    i = end
+                    continue
+            i += 1
+            continue
+        out.append(token)
+        i += 1
+    return out
+
+
+def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
+        return strip_pr_value_flag_process_substitutions(tokens)
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def runtime_command_strings(token):
+    nested = []
+    marker = chr(36) + "("
+    i = 0
+    while True:
+        start = token.find(marker, i)
+        if start == -1:
+            break
+        depth = 1
+        j = start + len(marker)
+        while j < len(token):
+            if token[j] == "(":
+                depth += 1
+            elif token[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = token[start + len(marker):j].strip()
+                    if inner:
+                        nested.append(inner)
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            i = start + len(marker)
+    tick = chr(96)
+    i = 0
+    while True:
+        start = token.find(tick, i)
+        if start == -1:
+            break
+        end = token.find(tick, start + 1)
+        if end == -1:
+            break
+        inner = token[start + 1:end].strip()
+        if inner:
+            nested.append(inner)
+        i = end + 1
+    return nested
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        nested.extend(runtime_command_strings(tokens[i]))
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base == "env":
+            nested.extend(env_nested_commands(tokens, i, end))
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def is_single_readonly_command(tokens):
+    if not tokens or any(token in separators for token in tokens):
+        return False
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in redirects:
+            i += 2
+            continue
+        if is_assignment(tokens[i]):
+            i += 1
+            continue
+        break
+    return i < len(tokens) and os.path.basename(tokens[i]) in read_only_commands
+
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            if is_single_readonly_command(nested_tokens):
+                continue
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
+
+def gh_pr_invocations(tokens, verbs):
+    invocations = []
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] in verbs:
+                invocations.append((i, j + 2, end))
+            break
+        i += 1
+    return invocations
+
+def repo_in_range(tokens, start, end):
+    i = start
+    while i < end:
+        token = tokens[i]
+        if token in separators:
+            break
+        if token in redirects:
+            i += 2
+            continue
+        if token in {"--repo", "-R"} and i + 1 < len(tokens):
+            return tokens[i + 1]
+        if token.startswith("--repo="):
+            return token.split("=", 1)[1]
+        i += 1
+    return ""
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', cmd)
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
+    sys.exit(0)
+
+merge_invocations = gh_pr_invocations(tokens, {"merge"})
+for gh_start, _, end in merge_invocations:
+    repo = repo_in_range(tokens, gh_start + 1, end)
+    if repo:
+        print(repo)
+        sys.exit(0)
+
+if merge_invocations:
+    sys.exit(0)
+
+create_invocations = gh_pr_invocations(tokens, {"create"})
+for gh_start, _, end in create_invocations:
+    repo = repo_in_range(tokens, gh_start + 1, end)
+    if repo:
+        print(repo)
+        sys.exit(0)
+
+if create_invocations:
+    sys.exit(0)
+
+i = 0
+while i < len(tokens):
+    token = tokens[i]
+    if token in separators:
+        i += 1
+        continue
+    if token in redirects:
+        i += 2
+        continue
+    if token in {"--repo", "-R"} and i + 1 < len(tokens):
+        print(tokens[i + 1])
+        sys.exit(0)
+    if token.startswith("--repo="):
+        print(token.split("=", 1)[1])
+        sys.exit(0)
+    i += 1
+PY
+)
+    if [[ -n "$parsed_repo" ]]; then
+      echo "$parsed_repo"
+      return
+    fi
+  fi
+
+  # Priority 2: CLAUDE_FORK_REPO env var fallback
   if [[ -n "${CLAUDE_FORK_REPO:-}" ]]; then
     echo "$CLAUDE_FORK_REPO"
     return
-  fi
-
-  # Priority 2: --repo / -R flag in command
-  if [[ -n "$cmd" ]]; then
-    local expect_repo=0
-    local arg
-    for arg in $cmd; do
-      if [[ "$expect_repo" -eq 1 ]]; then
-        if [[ -n "$arg" ]]; then
-          echo "$arg"
-          return
-        fi
-      fi
-      case "$arg" in
-        --repo=*)
-          echo "${arg#--repo=}"
-          return
-          ;;
-        --repo|-R)
-          expect_repo=1
-          ;;
-        *)
-          expect_repo=0
-          ;;
-      esac
-    done
   fi
 
   # Priority 3: upstream remote (fork workflow)
@@ -291,63 +2084,327 @@ try:
 except Exception:
     sys.exit(0)
 
-for i in range(len(tokens) - 2):
-    if tokens[i:i+3] != ["gh", "pr", "create"]:
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
+
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if end is not None:
+        return end
+    return min(i + 1, len(tokens))
+
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return skip_process_substitution_value(tokens, i + 1)
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
+        return i + 1
+    return None
+
+i = 0
+while i < len(tokens):
+    if not is_gh(tokens[i]):
+        i += 1
         continue
-    j = i + 3
-    while j < len(tokens):
+    end = i + 1
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    j = i + 1
+    while j < end:
         token = tokens[j]
-        if token in {"&&", "||", ";", "|"}:
+        if token in redirects:
+            j += 2
+            continue
+        skipped = skip_value_flag(tokens, j, global_value_flags)
+        if skipped is not None:
+            j = skipped
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+        if token != "pr" or j + 1 >= end or tokens[j + 1] != "create":
             break
-        if token == "--head" and j + 1 < len(tokens):
-            value = tokens[j + 1]
-            print(value.split(":", 1)[-1])
-            sys.exit(0)
-        if token.startswith("--head="):
-            value = token.split("=", 1)[1]
-            print(value.split(":", 1)[-1])
-            sys.exit(0)
-        j += 1
+        k = j + 2
+        while k < end:
+            token = tokens[k]
+            if token in redirects:
+                k += 2
+                continue
+            if token == "--head" and k + 1 < end:
+                value = tokens[k + 1]
+                print(value.split(":", 1)[-1])
+                sys.exit(0)
+            if token.startswith("--head="):
+                value = token.split("=", 1)[1]
+                print(value.split(":", 1)[-1])
+                sys.exit(0)
+            k += 1
+        break
+    i += 1
 PY
 }
 
-# Resolve a leading `cd <path> && gh pr create ...` context from the raw
+# Resolve a leading `cd <path> && gh pr create/merge ...` context from the raw
 # Bash command without executing it. Claude hooks run before Bash, so the
 # hook process cannot observe subshell cd effects directly.
 command_git_context_dir() {
   local cmd="${1:-}"
   [[ -z "$cmd" ]] && return 0
   _CMD="$cmd" python3 - <<'PY'
-import os, shlex, subprocess, sys
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&", "(", ")"}
+redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
+shell_executors = {"bash", "sh", "zsh"}
+read_only_commands = {"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "comm", "diff", "cut", "tr", "uniq", "jq", "ls", "which", "type", "echo", "printf"}
+command_wrappers = {"env", "command", "sudo"}
+wrapper_value_flags = {
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt",
+             "-C", "--close-from", "-T", "--command-timeout", "-A", "--askpass"},
+    "command": set(),
+}
+
+def split_punctuation_tokens(tokens):
+    out = []
+    for token in tokens:
+        if token in {"<(", ">("}:
+            out.extend([token[0], "("])
+            continue
+        if token.count(chr(96)) == 1 and token != chr(96):
+            parts = token.split(chr(96))
+            for idx, part in enumerate(parts):
+                if idx > 0:
+                    out.append(chr(96))
+                if part:
+                    out.append(part)
+            continue
+        if token and all(ch in ";()" for ch in token):
+            out.extend(token)
+            continue
+        out.append(token)
+    return out
+
+
+def parse_tokens(text):
+    text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
+    try:
+        lexer = shlex.shlex(text.replace("\n", ";"), posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return split_punctuation_tokens(list(lexer))
+    except Exception:
+        return []
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def skip_wrapper_options(tokens, i, wrapper):
+    value_flags = wrapper_value_flags.get(wrapper, set())
+    while i < len(tokens) and tokens[i].startswith("-"):
+        token = tokens[i]
+        i += 1
+        if token in value_flags and i < len(tokens):
+            i += 1
+            continue
+        if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
+            continue
+    if wrapper == "env":
+        while i < len(tokens) and is_assignment(tokens[i]):
+            i += 1
+    return i
+
+def env_effects(tokens, wrapper_index):
+    payloads = []
+    chdir = ""
+    j = wrapper_index + 1
+    while j < len(tokens):
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if j + 1 < len(tokens):
+                payloads.append(tokens[j + 1])
+            j += 2
+            continue
+        if token.startswith("--split-string="):
+            payloads.append(token.split("=", 1)[1])
+            j += 1
+            continue
+        if token in {"-C", "--chdir"}:
+            if j + 1 < len(tokens):
+                chdir = tokens[j + 1]
+            j += 2
+            continue
+        if token.startswith("--chdir="):
+            chdir = token.split("=", 1)[1]
+            j += 1
+            continue
+        if token in {"-u", "--unset"}:
+            j += 2
+            continue
+        if token.startswith("--unset="):
+            j += 1
+            continue
+        if token.startswith("-") and token != "-":
+            j += 1
+            continue
+        if is_assignment(token):
+            value = token.split("=", 1)[1]
+            if value:
+                payloads.append(value)
+            j += 1
+            continue
+        break
+    return payloads, chdir
+
+def command_start(segment):
+    i = 0
+    while i < len(segment) and is_assignment(segment[i]):
+        i += 1
+    while i < len(segment) and os.path.basename(segment[i]) in command_wrappers:
+        wrapper = os.path.basename(segment[i])
+        i += 1
+        i = skip_wrapper_options(segment, i, wrapper)
+    return i
+
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if end is not None:
+        return end
+    return min(i + 1, len(tokens))
+
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return skip_process_substitution_value(tokens, i + 1)
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
+        return i + 1
+    return None
+
+def is_gh_pr_command(tokens, i, end):
+    if not is_gh(tokens[i]):
+        return False
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        skipped = skip_value_flag(tokens, j, global_value_flags)
+        if skipped is not None:
+            j = skipped
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+        return token == "pr" and j + 1 < end and tokens[j + 1] in {"create", "merge"}
+    return False
+
+def shell_payload(tokens, i, end):
+    base = os.path.basename(tokens[i])
+    if base in shell_executors:
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                return tokens[j + 1] if j + 1 < end else ""
+            j += 1
+    if base == "eval" and i + 1 < end:
+        return " ".join(tokens[i + 1:end])
+    return ""
+
+def split_segments(tokens):
+    segments = []
+    segment = []
+    for token in tokens:
+        if token in separators:
+            if segment:
+                segments.append(segment)
+            segment = []
+        else:
+            segment.append(token)
+    if segment:
+        segments.append(segment)
+    return segments
+
+def resolve_cd_path(path, base_dir):
+    if not path or path == "-":
+        return ""
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        return os.path.abspath(expanded)
+    return os.path.abspath(os.path.join(base_dir or os.getcwd(), expanded))
+
+def context_for_gh_pr(text, base_dir="", base_is_explicit=False, depth=0):
+    if depth >= 3:
+        return ""
+    tokens = parse_tokens(text)
+    if not tokens:
+        return ""
+    candidate = base_dir if base_is_explicit else ""
+    for segment in split_segments(tokens):
+        if not segment:
+            continue
+        pre = 0
+        while pre < len(segment) and is_assignment(segment[pre]):
+            pre += 1
+        if pre < len(segment) and os.path.basename(segment[pre]) == "env":
+            payloads, chdir = env_effects(segment, pre)
+            if chdir:
+                candidate = resolve_cd_path(chdir, candidate or base_dir)
+                base_dir = candidate or base_dir
+                base_is_explicit = bool(candidate)
+            for payload in payloads:
+                nested = context_for_gh_pr(payload, candidate or base_dir, bool(candidate), depth + 1)
+                if nested:
+                    return nested
+        start = command_start(segment)
+        if start >= len(segment):
+            continue
+        if segment[start] == "cd" and start + 1 < len(segment):
+            candidate = resolve_cd_path(segment[start + 1], base_dir)
+            base_dir = candidate or base_dir
+            base_is_explicit = bool(candidate)
+            continue
+        if is_gh_pr_command(segment, start, len(segment)):
+            return candidate
+        payload = shell_payload(segment, start, len(segment))
+        if payload:
+            nested = context_for_gh_pr(payload, candidate or base_dir, bool(candidate), depth + 1)
+            if nested:
+                return nested
+    return ""
 
 cmd = os.environ.get("_CMD", "")
-try:
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    tokens = list(lexer)
-except Exception:
+candidate = context_for_gh_pr(cmd)
+if not candidate:
     sys.exit(0)
 
-gh_index = -1
-for i in range(len(tokens) - 2):
-    if tokens[i:i+3] == ["gh", "pr", "create"]:
-        gh_index = i
-        break
-if gh_index < 0:
-    sys.exit(0)
-
-candidate = ""
-for i in range(gh_index):
-    if tokens[i] == "cd" and i + 1 < gh_index:
-        candidate = tokens[i + 1]
-
-if not candidate or candidate == "-":
-    sys.exit(0)
-
-path = os.path.abspath(os.path.expanduser(candidate))
 try:
     top = subprocess.check_output(
-        ["git", "-C", path, "rev-parse", "--show-toplevel"],
+        ["git", "-C", candidate, "rev-parse", "--show-toplevel"],
         stderr=subprocess.DEVNULL,
         text=True,
     ).strip()
