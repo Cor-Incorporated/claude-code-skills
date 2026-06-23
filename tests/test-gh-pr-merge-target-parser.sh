@@ -40,7 +40,7 @@ assert_eq "short author email flag before target" "123" \
 assert_eq "repo equals form before target" "123" \
   "gh pr merge --repo=owner/repo 123 --merge"
 
-assert_eq "pull URL target" "123" \
+assert_eq "pull URL target is explicit and unsafe" "__NON_NUMERIC__:https://github.com/owner/repo/pull/123" \
   "gh pr merge https://github.com/owner/repo/pull/123 --merge"
 
 assert_eq "implicit current-branch target" "" \

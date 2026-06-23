@@ -316,7 +316,7 @@ extract_cmd() {
 # the `pr` subcommand, e.g. `gh -R owner/repo pr merge 123 --merge`.
 #
 # Output:
-#   - numeric PR number when an explicit numeric/URL target is present
+#   - numeric PR number when an explicit numeric target is present
 #   - __NON_NUMERIC__:<target> when an explicit non-numeric target is present
 #   - empty when the command relies on the current branch implicit target
 extract_gh_pr_merge_target() {
@@ -419,7 +419,7 @@ for _, start, end in merge_positions:
             j += 1
             continue
 
-        match = re.search(r"(?:^|/pull/|#)([0-9]+)$", token)
+        match = re.search(r"^#?([0-9]+)$", token)
         if match:
             print(match.group(1))
         else:
