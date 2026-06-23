@@ -60,7 +60,9 @@ if [[ "$MERGE_COUNT" -gt 1 || "$PR_NUMBER" == "__MULTIPLE__" ]]; then
   exit 0  # Let the stricter merge gate report multi-merge commands.
 fi
 if [[ "$PR_NUMBER" == __NON_NUMERIC__:* ]]; then
-  exit 0
+  echo "[BLOCK] PR番号が特定できません。非数値の gh pr merge target は安全に検証できないため、PR番号を指定してください。" >&2
+  echo "  target: ${PR_NUMBER#__NON_NUMERIC__:}" >&2
+  exit 2
 fi
 [[ -z "$PR_NUMBER" ]] && exit 0
 
