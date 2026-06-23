@@ -31,11 +31,49 @@ try:
 except Exception:
     sys.exit(0)
 
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
 gh_index = -1
-for i in range(len(tokens) - 2):
-    if tokens[i:i+3] == ["gh", "pr", "create"]:
-        gh_index = i
+i = 0
+while i < len(tokens):
+    if not is_gh(tokens[i]):
+        i += 1
+        continue
+    end = i + 1
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        skipped = skip_value_flag(tokens, j, global_value_flags)
+        if skipped is not None:
+            j = skipped
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+        if token == "pr" and j + 1 < end and tokens[j + 1] == "create":
+            gh_index = i
         break
+    if gh_index >= 0:
+        break
+    i += 1
 if gh_index < 0:
     sys.exit(0)
 
@@ -157,7 +195,64 @@ if [[ -n "$COMMAND" ]] \
   exit 0
 fi
 
-echo "$COMMAND" | grep -qE '\bgh\s+pr\s+create\b' || exit 0
+if ! _COMMAND="$COMMAND" python3 - <<'PY'
+import os
+import shlex
+import sys
+
+cmd = os.environ.get("_COMMAND", "")
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    sys.exit(1)
+
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
+i = 0
+while i < len(tokens):
+    if not is_gh(tokens[i]):
+        i += 1
+        continue
+    end = i + 1
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        skipped = skip_value_flag(tokens, j, global_value_flags)
+        if skipped is not None:
+            j = skipped
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+        if token == "pr" and j + 1 < end and tokens[j + 1] == "create":
+            sys.exit(0)
+        break
+    i += 1
+sys.exit(1)
+PY
+then
+  exit 0
+fi
 
 _cmd_context=$(command_git_context_dir "$COMMAND")
 if [[ -n "$_cmd_context" ]]; then

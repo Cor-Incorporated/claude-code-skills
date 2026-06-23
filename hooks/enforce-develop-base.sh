@@ -72,7 +72,7 @@ fi
 # Rule 2: Block PR creation targeting main when develop exists
 # Matches: gh pr create (with or without --base)
 # =========================================================================
-if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+create'; then
+if echo "$(echo "$cmd" | head -1)" | grep -qE '(^|[[:space:];&|])([^[:space:];&|]*/)?gh([[:space:]]+((-R|--repo)(=|[[:space:]])[^[:space:];&|]+))*[[:space:]]+pr[[:space:]]+create\b'; then
   # Check if --base is explicitly set
   pr_base=$(echo "$cmd" | grep -oE '\-\-base\s+\S+' | awk '{print $2}' || echo "")
 

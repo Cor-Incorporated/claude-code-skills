@@ -76,6 +76,15 @@ assert_eq "merge after first line is still detected" "999" \
 assert_eq "absolute gh path is detected" "123" \
   "/opt/homebrew/bin/gh pr merge 123 --merge --repo owner/repo"
 
+assert_eq "global short repo flag before pr is detected" "123" \
+  "gh -R owner/repo pr merge 123 --merge"
+
+assert_eq "global repo flag before pr is detected" "123" \
+  "gh --repo owner/repo pr merge 123 --merge"
+
+assert_eq "absolute gh path with global repo flag is detected" "123" \
+  "/opt/homebrew/bin/gh -R owner/repo pr merge 123 --merge"
+
 assert_eq "quoted heredoc-looking literal before merge stays conservative" "123" \
   $'echo "<<EOF"\ngh pr merge 123 --merge --repo owner/repo'
 

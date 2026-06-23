@@ -33,18 +33,6 @@ import re
 import shlex
 import sys
 
-def is_gh(token):
-    return os.path.basename(token) == "gh"
-
-cmd = os.environ.get("_CMD", "")
-cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
-try:
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    tokens = list(lexer)
-except Exception:
-    sys.exit(0)
-
 value_flags = {
     "--repo",
     "-R",
@@ -58,20 +46,68 @@ value_flags = {
     "--author-email",
     "-A",
 }
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
-merge_positions = [
-    i for i in range(len(tokens) - 2)
-    if is_gh(tokens[i]) and tokens[i + 1:i + 3] == ["pr", "merge"]
-]
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
+def gh_pr_invocations(tokens, verb):
+    positions = []
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] == verb:
+                positions.append((i, j + 2, end))
+            break
+        i += 1
+    return positions
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    sys.exit(0)
+
+merge_positions = gh_pr_invocations(tokens, "merge")
 
 if len(merge_positions) > 1:
     print("__MULTIPLE__")
     sys.exit(0)
 
-for i in merge_positions:
-    j = i + 3
-    while j < len(tokens):
+for _, start, end in merge_positions:
+    j = start
+    while j < end:
         token = tokens[j]
         if token in separators:
             break
@@ -108,8 +144,49 @@ import re
 import shlex
 import sys
 
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+
 def is_gh(token):
     return os.path.basename(token) == "gh"
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
+def count_pr_verb(tokens, verb):
+    count = 0
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] == verb:
+                count += 1
+            break
+        i += 1
+    return count
 
 cmd = os.environ.get("_CMD", "")
 cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
@@ -121,11 +198,7 @@ except Exception:
     print(0)
     sys.exit(0)
 
-count = 0
-for i in range(len(tokens) - 2):
-    if is_gh(tokens[i]) and tokens[i + 1:i + 3] == ["pr", "merge"]:
-        count += 1
-print(count)
+print(count_pr_verb(tokens, "merge"))
 PY
 }
 

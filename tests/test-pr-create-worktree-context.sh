@@ -124,6 +124,14 @@ run_precreate \
   "gh pr create --head feat/worktree-pr --base develop --title 'fix: worktree context' --body 'Closes #999'" \
   "T3: PRE_CREATE uses explicit --head branch"
 
+run_precreate \
+  "gh -R owner/repo pr create --head feat/worktree-pr --base develop --title 'fix: worktree context' --body 'Closes #999'" \
+  "T3b: PRE_CREATE detects global -R before pr create"
+
+run_precreate \
+  "cd $WT && gh -R owner/repo pr create --base develop --title 'fix: worktree context' --body 'Closes #999'" \
+  "T3c: PRE_CREATE context detects global -R before pr create"
+
 mkdir -p "$HOME_DIR/.claude/hooks/gate-modes"
 printf '# base common\n' > "$HOME_DIR/.claude/hooks/gate-modes/common.sh"
 run_deploy_hook_expect \

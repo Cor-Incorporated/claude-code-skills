@@ -40,6 +40,12 @@ test_case "--repo= with equals" "user/equal-repo" "$result"
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr merge 10 -R user/short-flag --merge'")
 test_case "-R short flag" "user/short-flag" "$result"
 
+result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh -R user/global-short pr merge 10 --merge'")
+test_case "global -R before pr" "user/global-short" "$result"
+
+result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh --repo user/global-long pr merge 10 --merge'")
+test_case "global --repo before pr" "user/global-long" "$result"
+
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr merge 10 --repo first/repo --repo second/repo'")
 test_case "multiple --repo uses first match" "first/repo" "$result"
 
@@ -48,6 +54,9 @@ test_case "merge repo ignores earlier non-merge repo flag" "right/repo" "$result
 
 result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr merge 10 --merge -R right/repo 2>&1 && gh pr view 99 --repo wrong/repo'")
 test_case "merge repo ignores later non-merge repo flag with fd redirect" "right/repo" "$result"
+
+result=$(bash -c "source '$SCRIPT_DIR/hooks/gate-modes/common.sh' && resolve_repo 'gh pr view 99 --repo wrong/repo && gh pr merge 10 --merge'")
+test_case "merge without repo ignores earlier non-merge repo flag" "$EXPECTED_ORIGIN" "$result"
 
 # --- Priority 4: origin fallback ---
 echo "--- Priority 4: origin fallback ---"

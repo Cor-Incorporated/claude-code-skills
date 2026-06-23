@@ -21,7 +21,7 @@ fi
 # followed by pr followed by create with only whitespace between. This prevents a
 # loose match from firing on a regex/string that merely contains the tokens.
 cmd_first_line=$(echo "$cmd" | head -1)
-if ! echo "$cmd_first_line" | grep -qE 'gh[[:space:]]+pr[[:space:]]+create\b'; then
+if ! echo "$cmd_first_line" | grep -qE '(^|[[:space:];&|])([^[:space:];&|]*/)?gh([[:space:]]+((-R|--repo)(=|[[:space:]])[^[:space:];&|]+))*[[:space:]]+pr[[:space:]]+create\b'; then
     exit 0
 fi
 

@@ -46,8 +46,9 @@ fi
 # This prevents bypass via "gh issue create && gh issue view"
 first_cmd=$(echo "$command" | sed 's/[&|;].*//' | xargs 2>/dev/null || echo "$command")
 
-# gh issue/pr の書き込み操作のみ対象（\s+ for multi-space tolerance）
-if ! echo "$first_cmd" | grep -qE 'gh\s+(issue\s+(comment|create)|pr\s+create)'; then
+# gh issue/pr の書き込み操作のみ対象。PR作成は `gh -R owner/repo pr create`
+# のような gh global flags 付きも対象にする。
+if ! echo "$first_cmd" | grep -qE 'gh\s+issue\s+(comment|create)|(^|[[:space:];&|])([^[:space:];&|]*/)?gh([[:space:]]+((-R|--repo)(=|[[:space:]])[^[:space:];&|]+))*[[:space:]]+pr[[:space:]]+create\b'; then
     exit 0
 fi
 

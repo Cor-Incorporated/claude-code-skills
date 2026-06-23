@@ -312,7 +312,8 @@ extract_cmd() {
 
 # Extract the explicit PR target from a `gh pr merge` command. Supports valid
 # gh forms where flags appear before the positional PR argument, e.g.
-# `gh pr merge --repo owner/repo 123 --merge`.
+# `gh pr merge --repo owner/repo 123 --merge`, and gh global flags before
+# the `pr` subcommand, e.g. `gh -R owner/repo pr merge 123 --merge`.
 #
 # Output:
 #   - numeric PR number when an explicit numeric/URL target is present
@@ -327,18 +328,6 @@ import re
 import shlex
 import sys
 
-def is_gh(token):
-    return os.path.basename(token) == "gh"
-
-cmd = os.environ.get("_CMD", "")
-cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
-try:
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    tokens = list(lexer)
-except Exception:
-    sys.exit(0)
-
 value_flags = {
     "--repo",
     "-R",
@@ -352,20 +341,68 @@ value_flags = {
     "--author-email",
     "-A",
 }
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
-merge_positions = [
-    i for i in range(len(tokens) - 2)
-    if is_gh(tokens[i]) and tokens[i + 1:i + 3] == ["pr", "merge"]
-]
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
+def gh_pr_invocations(tokens, verb):
+    positions = []
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] == verb:
+                positions.append((i, j + 2, end))
+            break
+        i += 1
+    return positions
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    sys.exit(0)
+
+merge_positions = gh_pr_invocations(tokens, "merge")
 
 if len(merge_positions) > 1:
     print("__MULTIPLE__")
     sys.exit(0)
 
-for i in merge_positions:
-    j = i + 3
-    while j < len(tokens):
+for _, start, end in merge_positions:
+    j = start
+    while j < end:
         token = tokens[j]
         if token in separators:
             break
@@ -402,8 +439,49 @@ import re
 import shlex
 import sys
 
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+
 def is_gh(token):
     return os.path.basename(token) == "gh"
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
+def count_pr_verb(tokens, verb):
+    count = 0
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] == verb:
+                count += 1
+            break
+        i += 1
+    return count
 
 cmd = os.environ.get("_CMD", "")
 cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
@@ -415,11 +493,74 @@ except Exception:
     print(0)
     sys.exit(0)
 
-count = 0
-for i in range(len(tokens) - 2):
-    if is_gh(tokens[i]) and tokens[i + 1:i + 3] == ["pr", "merge"]:
-        count += 1
-print(count)
+print(count_pr_verb(tokens, "merge"))
+PY
+}
+
+count_gh_pr_create_invocations() {
+  local cmd="${1:-}"
+  [[ -z "$cmd" ]] && { echo 0; return 0; }
+  _CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
+def count_pr_verb(tokens, verb):
+    count = 0
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] == verb:
+                count += 1
+            break
+        i += 1
+    return count
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    print(0)
+    sys.exit(0)
+
+print(count_pr_verb(tokens, "create"))
 PY
 }
 # =========================================================================
@@ -444,8 +585,65 @@ import re
 import shlex
 import sys
 
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+
 def is_gh(token):
     return os.path.basename(token) == "gh"
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
+def gh_pr_invocations(tokens):
+    invocations = []
+    i = 0
+    while i < len(tokens):
+        if not is_gh(tokens[i]):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(tokens) and tokens[end] not in separators:
+            end += 1
+        j = i + 1
+        while j < end:
+            token = tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            skipped = skip_value_flag(tokens, j, global_value_flags)
+            if skipped is not None:
+                j = skipped
+                continue
+            if token.startswith("-"):
+                j += 1
+                continue
+            if token == "pr" and j + 1 < end and tokens[j + 1] in {"create", "merge"}:
+                invocations.append((i, j + 2, end))
+            break
+        i += 1
+    return invocations
+
+def repo_in_range(tokens, start, end):
+    i = start
+    while i < end:
+        token = tokens[i]
+        if token in separators:
+            break
+        if token in redirects:
+            i += 2
+            continue
+        if token in {"--repo", "-R"} and i + 1 < len(tokens):
+            return tokens[i + 1]
+        if token.startswith("--repo="):
+            return token.split("=", 1)[1]
+        i += 1
+    return ""
 
 cmd = os.environ.get("_CMD", "")
 cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
@@ -456,30 +654,15 @@ try:
 except Exception:
     sys.exit(0)
 
-separators = {"&&", "||", ";", "|", "&"}
-redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+target_invocations = gh_pr_invocations(tokens)
+for gh_start, _, end in target_invocations:
+    repo = repo_in_range(tokens, gh_start + 1, end)
+    if repo:
+        print(repo)
+        sys.exit(0)
 
-target_starts = [
-    i + 3 for i in range(len(tokens) - 2)
-    if is_gh(tokens[i]) and tokens[i + 1] == "pr" and tokens[i + 2] in {"create", "merge"}
-]
-
-for start in target_starts:
-    i = start
-    while i < len(tokens):
-        token = tokens[i]
-        if token in separators:
-            break
-        if token in redirects:
-            i += 2
-            continue
-        if token in {"--repo", "-R"} and i + 1 < len(tokens):
-            print(tokens[i + 1])
-            sys.exit(0)
-        if token.startswith("--repo="):
-            print(token.split("=", 1)[1])
-            sys.exit(0)
-        i += 1
+if target_invocations:
+    sys.exit(0)
 
 i = 0
 while i < len(tokens):
@@ -550,23 +733,58 @@ except Exception:
 def is_gh(token):
     return os.path.basename(token) == "gh"
 
-for i in range(len(tokens) - 2):
-    if not (is_gh(tokens[i]) and tokens[i + 1:i + 3] == ["pr", "create"]):
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
+i = 0
+while i < len(tokens):
+    if not is_gh(tokens[i]):
+        i += 1
         continue
-    j = i + 3
-    while j < len(tokens):
+    end = i + 1
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    j = i + 1
+    while j < end:
         token = tokens[j]
-        if token in {"&&", "||", ";", "|"}:
+        if token in redirects:
+            j += 2
+            continue
+        skipped = skip_value_flag(tokens, j, global_value_flags)
+        if skipped is not None:
+            j = skipped
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+        if token != "pr" or j + 1 >= end or tokens[j + 1] != "create":
             break
-        if token == "--head" and j + 1 < len(tokens):
-            value = tokens[j + 1]
-            print(value.split(":", 1)[-1])
-            sys.exit(0)
-        if token.startswith("--head="):
-            value = token.split("=", 1)[1]
-            print(value.split(":", 1)[-1])
-            sys.exit(0)
-        j += 1
+        k = j + 2
+        while k < end:
+            token = tokens[k]
+            if token in redirects:
+                k += 2
+                continue
+            if token == "--head" and k + 1 < end:
+                value = tokens[k + 1]
+                print(value.split(":", 1)[-1])
+                sys.exit(0)
+            if token.startswith("--head="):
+                value = token.split("=", 1)[1]
+                print(value.split(":", 1)[-1])
+                sys.exit(0)
+            k += 1
+        break
+    i += 1
 PY
 }
 
@@ -590,11 +808,46 @@ except Exception:
 def is_gh(token):
     return os.path.basename(token) == "gh"
 
+global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+
+def skip_value_flag(tokens, i, flags):
+    token = tokens[i]
+    if token in flags:
+        return min(i + 2, len(tokens))
+    if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        return i + 1
+    return None
+
 gh_index = -1
-for i in range(len(tokens) - 2):
-    if is_gh(tokens[i]) and tokens[i + 1] == "pr" and tokens[i + 2] in {"create", "merge"}:
-        gh_index = i
+i = 0
+while i < len(tokens):
+    if not is_gh(tokens[i]):
+        i += 1
+        continue
+    end = i + 1
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        skipped = skip_value_flag(tokens, j, global_value_flags)
+        if skipped is not None:
+            j = skipped
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+        if token == "pr" and j + 1 < end and tokens[j + 1] in {"create", "merge"}:
+            gh_index = i
         break
+    if gh_index >= 0:
+        break
+    i += 1
 if gh_index < 0:
     sys.exit(0)
 

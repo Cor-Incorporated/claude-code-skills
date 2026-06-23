@@ -170,6 +170,16 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+expect_rc "global -R before pr validates command PR" 2 "$BASE_SHA" "gh -R owner/repo pr merge 999 --merge"
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: global -R target PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: global -R target PR #999 CI failure message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
 expect_rc "chained gh pr merge commands are blocked before first-target approval" 2 "$BASE_SHA" "gh pr merge 123 --merge --repo owner/repo && gh pr merge 999 --merge --repo owner/repo"
 if grep -q "複数の gh pr merge" "$ERR_FILE"; then
   PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))

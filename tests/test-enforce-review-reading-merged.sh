@@ -117,6 +117,11 @@ make_gh open; write_pending
 run_hook "gh pr merge -A reviewer@example.com 123 --merge --repo owner/repo" >/dev/null; rc=$?
 [ "$rc" -eq 0 ] && ok "author-email other PR not hard-blocked" || bad "exit $rc (want 0)"
 
+echo "[8b] OPEN same PR + global -R before pr -> hard-blocked"
+make_gh open; write_pending
+run_hook "gh -R owner/repo pr merge 999 --merge" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "global -R same PR hard-blocked" || bad "exit $rc (want 2)"
+
 echo "[9] OPEN other current-branch PR + implicit 'gh pr merge' -> not hard-blocked"
 make_gh_with_current_pr open 123; write_pending
 run_hook "gh pr merge --merge --repo owner/repo" >/dev/null; rc=$?
