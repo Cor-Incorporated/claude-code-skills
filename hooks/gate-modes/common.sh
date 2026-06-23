@@ -400,11 +400,20 @@ def env_nested_commands(tokens, i, end):
         break
     return nested
 
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if end is not None:
+        return end
+    return min(i + 1, len(tokens))
+
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
-        return min(i + 2, len(tokens))
+        return skip_process_substitution_value(tokens, i + 1)
     if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
         return i + 1
     return None
 
@@ -421,12 +430,42 @@ def split_punctuation_tokens(tokens):
     return out
 
 
+def process_substitution_end(tokens, i):
+    if i + 1 >= len(tokens) or tokens[i] not in {"<", ">"} or tokens[i + 1] != "(":
+        return None
+    depth = 1
+    j = i + 2
+    while j < len(tokens):
+        if tokens[j] == "(":
+            depth += 1
+        elif tokens[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def strip_readonly_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        end = process_substitution_end(tokens, i)
+        if end is not None and is_single_readonly_command(tokens[i + 2:end - 1]):
+            out.extend([tokens[i], "(", ")"])
+            i = end
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return split_punctuation_tokens(list(lexer))
+        return strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
     except Exception:
         return []
 
@@ -540,10 +579,13 @@ for _, start, end in merge_positions:
             j += 2
             continue
         if token in value_flags:
-            j += 2
+            j = skip_process_substitution_value(tokens, j + 1)
             continue
         if any(token.startswith(f"{flag}=") for flag in value_flags if flag.startswith("--")):
-            j += 1
+            if token.endswith("="):
+                j = skip_process_substitution_value(tokens, j + 1)
+            else:
+                j += 1
             continue
         if token.startswith("-"):
             j += 1
@@ -613,11 +655,20 @@ def env_nested_commands(tokens, i, end):
         break
     return nested
 
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if end is not None:
+        return end
+    return min(i + 1, len(tokens))
+
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
-        return min(i + 2, len(tokens))
+        return skip_process_substitution_value(tokens, i + 1)
     if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
         return i + 1
     return None
 
@@ -634,12 +685,42 @@ def split_punctuation_tokens(tokens):
     return out
 
 
+def process_substitution_end(tokens, i):
+    if i + 1 >= len(tokens) or tokens[i] not in {"<", ">"} or tokens[i + 1] != "(":
+        return None
+    depth = 1
+    j = i + 2
+    while j < len(tokens):
+        if tokens[j] == "(":
+            depth += 1
+        elif tokens[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def strip_readonly_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        end = process_substitution_end(tokens, i)
+        if end is not None and is_single_readonly_command(tokens[i + 2:end - 1]):
+            out.extend([tokens[i], "(", ")"])
+            i = end
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return split_punctuation_tokens(list(lexer))
+        return strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
     except Exception:
         return []
 
@@ -795,11 +876,20 @@ def env_nested_commands(tokens, i, end):
         break
     return nested
 
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if end is not None:
+        return end
+    return min(i + 1, len(tokens))
+
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
-        return min(i + 2, len(tokens))
+        return skip_process_substitution_value(tokens, i + 1)
     if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
         return i + 1
     return None
 
@@ -816,12 +906,42 @@ def split_punctuation_tokens(tokens):
     return out
 
 
+def process_substitution_end(tokens, i):
+    if i + 1 >= len(tokens) or tokens[i] not in {"<", ">"} or tokens[i + 1] != "(":
+        return None
+    depth = 1
+    j = i + 2
+    while j < len(tokens):
+        if tokens[j] == "(":
+            depth += 1
+        elif tokens[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def strip_readonly_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        end = process_substitution_end(tokens, i)
+        if end is not None and is_single_readonly_command(tokens[i + 2:end - 1]):
+            out.extend([tokens[i], "(", ")"])
+            i = end
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return split_punctuation_tokens(list(lexer))
+        return strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
     except Exception:
         return []
 
@@ -1034,11 +1154,20 @@ def env_payloads(tokens, wrapper_index):
     return payloads
 
 
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if end is not None:
+        return end
+    return min(i + 1, len(tokens))
+
+
 def skip_value_flag(tokens, i):
     token = tokens[i]
     if token in value_flags:
-        return min(i + 2, len(tokens))
+        return skip_process_substitution_value(tokens, i + 1)
     if any(token.startswith(f"{flag}=") for flag in value_flags):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
         return i + 1
     return None
 
@@ -1234,11 +1363,20 @@ def env_nested_commands(tokens, i, end):
         break
     return nested
 
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if end is not None:
+        return end
+    return min(i + 1, len(tokens))
+
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
-        return min(i + 2, len(tokens))
+        return skip_process_substitution_value(tokens, i + 1)
     if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
         return i + 1
     return None
 
@@ -1255,12 +1393,42 @@ def split_punctuation_tokens(tokens):
     return out
 
 
+def process_substitution_end(tokens, i):
+    if i + 1 >= len(tokens) or tokens[i] not in {"<", ">"} or tokens[i + 1] != "(":
+        return None
+    depth = 1
+    j = i + 2
+    while j < len(tokens):
+        if tokens[j] == "(":
+            depth += 1
+        elif tokens[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def strip_readonly_process_substitutions(tokens):
+    out = []
+    i = 0
+    while i < len(tokens):
+        end = process_substitution_end(tokens, i)
+        if end is not None and is_single_readonly_command(tokens[i + 2:end - 1]):
+            out.extend([tokens[i], "(", ")"])
+            i = end
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
 def parse_tokens(text):
     text = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(<<<|>>?|>\||<<?|>&|<&|&>>?|&>)', r'\1\3', text)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return split_punctuation_tokens(list(lexer))
+        return strip_readonly_process_substitutions(split_punctuation_tokens(list(lexer)))
     except Exception:
         return []
 
@@ -1473,11 +1641,20 @@ global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if end is not None:
+        return end
+    return min(i + 1, len(tokens))
+
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
-        return min(i + 2, len(tokens))
+        return skip_process_substitution_value(tokens, i + 1)
     if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
         return i + 1
     return None
 
@@ -1648,11 +1825,20 @@ def command_start(segment):
         i = skip_wrapper_options(segment, i, wrapper)
     return i
 
+def skip_process_substitution_value(tokens, i):
+    end = process_substitution_end(tokens, i) if "process_substitution_end" in globals() else None
+    if end is not None:
+        return end
+    return min(i + 1, len(tokens))
+
+
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
     if token in flags:
-        return min(i + 2, len(tokens))
+        return skip_process_substitution_value(tokens, i + 1)
     if any(token.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
+        if token.endswith("="):
+            return skip_process_substitution_value(tokens, i + 1)
         return i + 1
     return None
 

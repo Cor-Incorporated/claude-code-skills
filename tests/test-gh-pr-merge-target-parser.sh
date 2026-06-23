@@ -65,6 +65,9 @@ assert_eq "bash -c numeric target is detected" "123" \
 assert_eq "nested echo mentioning merge is ignored" "" \
   "bash -c 'echo gh pr merge 123'"
 
+assert_eq "read-only process substitution mentioning merge is ignored" "" \
+  "cat <(echo gh pr merge 123)"
+
 assert_eq "bash -lc PR URL target is explicit and unsafe" "__NON_NUMERIC__:https://github.com/owner/repo/pull/123" \
   "bash -lc 'gh pr merge https://github.com/owner/repo/pull/123 --merge'"
 
@@ -94,6 +97,12 @@ assert_eq "stderr redirect before explicit target is skipped" "123" \
 
 assert_eq "repo equals with attached redirect before target is skipped" "123" \
   "gh pr merge --repo=owner/repo>/tmp/out 123 --merge"
+
+assert_eq "body-file process substitution before target is skipped" "123" \
+  "gh pr merge --body-file <(printf ok) 123 --merge --repo owner/repo"
+
+assert_eq "body-file equals process substitution before target is skipped" "123" \
+  "gh pr merge --body-file=<(printf ok) 123 --merge --repo owner/repo"
 
 assert_eq "non-numeric target is explicit and unsafe" "__NON_NUMERIC__:feature/foo" \
   "gh pr merge --repo owner/repo feature/foo --merge"
