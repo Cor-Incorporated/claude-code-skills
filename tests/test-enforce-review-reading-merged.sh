@@ -208,6 +208,24 @@ write_target_pending
 run_hook "cd '$TARGET_WORK' && bash -c 'gh pr merge 999 --merge --repo owner/repo'" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "target pending state hard-blocked" || bad "exit $rc (want 2)"
 
+echo "[13g] nested shell escaped dynamic eval merge -> hard-blocked"
+make_gh open; write_pending
+run_hook "bash -c 'm=gh\\ pr\\ merge\\ 999\\ --merge\\ --repo\\ owner/repo; eval \"\$m\"'" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "nested escaped dynamic eval hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[13h] nested shell target repo pending state -> hard-blocked"
+make_gh open
+rm -f "$PENDING" "$CACHE"
+write_target_pending
+run_hook "bash -c 'cd \"$TARGET_WORK\" && gh pr merge 999 --merge --repo owner/repo'" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "nested target pending state hard-blocked" || bad "exit $rc (want 2)"
+
+echo "[13i] multi-merge command without local pending state -> hard-blocked"
+make_gh open
+rm -f "$PENDING" "$CACHE" "$TARGET_PENDING" "$TARGET_CACHE"
+run_hook "cd '$TARGET_WORK' && gh pr merge 123 --merge --repo owner/repo; gh pr merge 999 --merge --repo owner/repo" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "multi-merge hard-blocked before state rebind" || bad "exit $rc (want 2)"
+
 echo "[14] gh failure -> fail-open (still warns, keeps state)"
 make_gh FAIL; write_pending
 out="$(run_hook "git status")"; rc=$?

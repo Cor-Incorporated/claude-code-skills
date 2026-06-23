@@ -16,6 +16,12 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/gate-modes/common.sh"
 
+MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+if [[ "$MERGE_COUNT" -gt 1 ]]; then
+  echo "[BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。PRごとに個別実行してください。" >&2
+  exit 2
+fi
+
 _cmd_context=$(command_git_context_dir "$cmd")
 if [[ -n "$_cmd_context" ]]; then
   export GIT_CONTEXT_DIR="$_cmd_context"
@@ -402,7 +408,6 @@ except Exception:
 fi
 
 # HARD BLOCK: gh pr merge with unresolved findings
-MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
 if [[ "$MERGE_COUNT" -eq 0 ]] && should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
   if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
     print_unparsed_pr_merge_block

@@ -122,6 +122,21 @@ else
   fi
 fi
 
+if run_hook "pr-merge-claude-review-gate.sh" "bash -c 'cd \"$TARGET_REPO\" && gh pr merge 123 --merge --repo owner/repo'"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: pr-merge-claude-review-gate missed nested shell target state" >&2
+else
+  rc=$?
+  if [[ "$rc" -eq 2 ]] && grep -q "レビューを未読" "$TMP_DIR/err"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: pr-merge-claude-review-gate blocks on nested shell target state"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: pr-merge-claude-review-gate nested shell unexpected exit $rc" >&2
+    cat "$TMP_DIR/err" >&2 || true
+  fi
+fi
+
 printf '{}\n' > "$SRC_REPO/.claude/state/pr-review-lock.json"
 printf '{"123":{"verified":false}}\n' > "$TARGET_REPO/.claude/state/pr-review-lock.json"
 if run_hook "block-merge-without-review.sh" "cd '$TARGET_REPO' && bash -c 'gh pr merge 123 --merge --repo owner/repo'"; then
@@ -135,6 +150,21 @@ else
   else
     FAIL=$((FAIL + 1))
     echo "  FAIL: block-merge-without-review unexpected exit $rc" >&2
+    cat "$TMP_DIR/err" >&2 || true
+  fi
+fi
+
+if run_hook "block-merge-without-review.sh" "bash -c 'cd \"$TARGET_REPO\" && gh pr merge 123 --merge --repo owner/repo'"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: block-merge-without-review missed nested shell target lock" >&2
+else
+  rc=$?
+  if [[ "$rc" -eq 2 ]] && grep -q "Pessimistic Lock" "$TMP_DIR/err"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: block-merge-without-review blocks on nested shell target lock"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: block-merge-without-review nested shell unexpected exit $rc" >&2
     cat "$TMP_DIR/err" >&2 || true
   fi
 fi

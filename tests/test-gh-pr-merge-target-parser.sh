@@ -136,8 +136,23 @@ assert_guard_eq "escaped dynamic eval merge is fail-closed" "block" \
 assert_guard_eq "escaped dynamic bash -c merge is fail-closed" "block" \
   "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\$m\""
 
+assert_guard_eq "nested shell escaped dynamic eval merge is fail-closed" "block" \
+  "bash -c 'm=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\$m\"'"
+
+assert_guard_eq "env-wrapped escaped dynamic eval merge is fail-closed" "block" \
+  "m=env\\ gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\$m\""
+
+assert_guard_eq "command-wrapped escaped dynamic eval merge is fail-closed" "block" \
+  "m=command\\ gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\$m\""
+
+assert_guard_eq "sudo-wrapped escaped dynamic eval merge is fail-closed" "block" \
+  "m=sudo\\ gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\$m\""
+
 assert_guard_eq "PR comment body mentioning merge is allowed" "allow" \
   "bash -c 'gh pr comment 123 --body merge'"
+
+assert_guard_eq "nested PR comment body mentioning merge is allowed" "allow" \
+  "bash -c 'bash -c \"gh pr comment 123 --body merge\"'"
 
 assert_guard_eq "git merge-base after PR view is allowed" "allow" \
   "bash -c 'gh pr view 123'; git merge-base HEAD origin/main"

@@ -728,6 +728,9 @@ import sys
 
 value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {";", "&&", "||", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+command_wrappers = {"env", "command", "sudo"}
+shell_executors = {"bash", "sh", "zsh"}
 
 
 def parse_tokens(text):
@@ -747,6 +750,10 @@ def is_gh(token):
     return os.path.basename(token) == "gh"
 
 
+def is_wrapper(token):
+    return os.path.basename(token) in command_wrappers
+
+
 def skip_value_flag(tokens, i):
     token = tokens[i]
     if token in value_flags:
@@ -756,8 +763,37 @@ def skip_value_flag(tokens, i):
     return None
 
 
+def shell_payload(segment_tokens, i):
+    base = os.path.basename(segment_tokens[i])
+    if base in shell_executors:
+        j = i + 1
+        while j < len(segment_tokens):
+            token = segment_tokens[j]
+            if token in redirects:
+                j += 2
+                continue
+            if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                return segment_tokens[j + 1] if j + 1 < len(segment_tokens) else ""
+            j += 1
+    if base == "eval" and i + 1 < len(segment_tokens):
+        return " ".join(segment_tokens[i + 1:])
+    return ""
+
+
+def tokens_mention_pr_merge(tokens, depth=0):
+    segment = []
+    for token in tokens + [";"]:
+        if token in separators:
+            if segment_mentions_pr_merge(segment, depth):
+                return True
+            segment = []
+        else:
+            segment.append(token)
+    return False
+
+
 def segment_mentions_pr_merge(segment_tokens, depth=0):
-    if depth > 2:
+    if depth > 3:
         return False
     if not segment_tokens:
         return False
@@ -768,6 +804,20 @@ def segment_mentions_pr_merge(segment_tokens, depth=0):
         if value and segment_mentions_pr_merge(parse_tokens(value), depth + 1):
             return True
         i += 1
+
+    while i < len(segment_tokens) and is_wrapper(segment_tokens[i]):
+        wrapper = os.path.basename(segment_tokens[i])
+        i += 1
+        while i < len(segment_tokens) and segment_tokens[i].startswith("-"):
+            i += 1
+        if wrapper == "env":
+            while i < len(segment_tokens) and is_assignment(segment_tokens[i]):
+                i += 1
+
+    if i < len(segment_tokens):
+        payload = shell_payload(segment_tokens, i)
+        if payload and tokens_mention_pr_merge(parse_tokens(payload), depth + 1):
+            return True
 
     if i >= len(segment_tokens) or not is_gh(segment_tokens[i]):
         return False
@@ -791,15 +841,8 @@ def segment_mentions_pr_merge(segment_tokens, depth=0):
 
 
 cmd = os.environ.get("_CMD", "")
-tokens = parse_tokens(cmd)
-segment = []
-for token in tokens + [";"]:
-    if token in separators:
-        if segment_mentions_pr_merge(segment):
-            sys.exit(0)
-        segment = []
-    else:
-        segment.append(token)
+if tokens_mention_pr_merge(parse_tokens(cmd)):
+    sys.exit(0)
 sys.exit(1)
 PY
 }
@@ -1111,6 +1154,7 @@ command_git_context_dir() {
   [[ -z "$cmd" ]] && return 0
   _CMD="$cmd" python3 - <<'PY'
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -1119,23 +1163,35 @@ global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
 shell_executors = {"bash", "sh", "zsh"}
+command_wrappers = {"env", "command", "sudo"}
 
 def parse_tokens(text):
     try:
-        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(text.replace("\n", ";"), posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         return list(lexer)
     except Exception:
         return []
 
-def command_end(tokens, start):
-    end = start
-    while end < len(tokens) and tokens[end] not in separators:
-        end += 1
-    return end
-
 def is_gh(token):
     return os.path.basename(token) == "gh"
+
+def is_assignment(token):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+def command_start(segment):
+    i = 0
+    while i < len(segment) and is_assignment(segment[i]):
+        i += 1
+    while i < len(segment) and os.path.basename(segment[i]) in command_wrappers:
+        wrapper = os.path.basename(segment[i])
+        i += 1
+        while i < len(segment) and segment[i].startswith("-"):
+            i += 1
+        if wrapper == "env":
+            while i < len(segment) and is_assignment(segment[i]):
+                i += 1
+    return i
 
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]
@@ -1180,47 +1236,63 @@ def shell_payload(tokens, i, end):
         return " ".join(tokens[i + 1:end])
     return ""
 
-def command_contains_gh_pr(text, depth=0):
-    if depth >= 3:
-        return False
-    nested_tokens = parse_tokens(text)
-    if not nested_tokens:
-        return False
-    return first_gh_pr_position(nested_tokens, depth + 1) >= 0
+def split_segments(tokens):
+    segments = []
+    segment = []
+    for token in tokens:
+        if token in separators:
+            if segment:
+                segments.append(segment)
+            segment = []
+        else:
+            segment.append(token)
+    if segment:
+        segments.append(segment)
+    return segments
 
-def first_gh_pr_position(tokens, depth=0):
-    i = 0
-    while i < len(tokens):
-        end = command_end(tokens, i + 1)
-        if is_gh_pr_command(tokens, i, end):
-            return i
-        payload = shell_payload(tokens, i, end)
-        if payload and command_contains_gh_pr(payload, depth):
-            return i
-        i += 1
-    return -1
+def resolve_cd_path(path, base_dir):
+    if not path or path == "-":
+        return ""
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        return os.path.abspath(expanded)
+    return os.path.abspath(os.path.join(base_dir or os.getcwd(), expanded))
+
+def context_for_gh_pr(text, base_dir="", base_is_explicit=False, depth=0):
+    if depth >= 3:
+        return ""
+    tokens = parse_tokens(text)
+    if not tokens:
+        return ""
+    candidate = base_dir if base_is_explicit else ""
+    for segment in split_segments(tokens):
+        if not segment:
+            continue
+        start = command_start(segment)
+        if start >= len(segment):
+            continue
+        if segment[start] == "cd" and start + 1 < len(segment):
+            candidate = resolve_cd_path(segment[start + 1], base_dir)
+            base_dir = candidate or base_dir
+            base_is_explicit = bool(candidate)
+            continue
+        if is_gh_pr_command(segment, start, len(segment)):
+            return candidate
+        payload = shell_payload(segment, start, len(segment))
+        if payload:
+            nested = context_for_gh_pr(payload, candidate or base_dir, bool(candidate), depth + 1)
+            if nested:
+                return nested
+    return ""
 
 cmd = os.environ.get("_CMD", "")
-tokens = parse_tokens(cmd)
-if not tokens:
+candidate = context_for_gh_pr(cmd)
+if not candidate:
     sys.exit(0)
 
-gh_index = first_gh_pr_position(tokens)
-if gh_index < 0:
-    sys.exit(0)
-
-candidate = ""
-for i in range(gh_index):
-    if tokens[i] == "cd" and i + 1 < gh_index:
-        candidate = tokens[i + 1]
-
-if not candidate or candidate == "-":
-    sys.exit(0)
-
-path = os.path.abspath(os.path.expanduser(candidate))
 try:
     top = subprocess.check_output(
-        ["git", "-C", path, "rev-parse", "--show-toplevel"],
+        ["git", "-C", candidate, "rev-parse", "--show-toplevel"],
         stderr=subprocess.DEVNULL,
         text=True,
     ).strip()
