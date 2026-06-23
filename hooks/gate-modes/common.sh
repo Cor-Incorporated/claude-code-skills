@@ -349,7 +349,8 @@ value_flags = {
     "--author-email",
     "-A",
 }
-operators = {"&&", "||", ";", "|", "&", ">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
 merge_positions = [
     i for i in range(len(tokens) - 2)
     if tokens[i:i + 3] == ["gh", "pr", "merge"]
@@ -363,8 +364,11 @@ for i in merge_positions:
     j = i + 3
     while j < len(tokens):
         token = tokens[j]
-        if token in operators:
+        if token in separators:
             break
+        if token in redirects:
+            j += 2
+            continue
         if token in value_flags:
             j += 2
             continue
@@ -427,28 +431,47 @@ resolve_repo() {
 
   # Priority 2: --repo / -R flag in command
   if [[ -n "$cmd" ]]; then
-    local expect_repo=0
-    local arg
-    for arg in $cmd; do
-      if [[ "$expect_repo" -eq 1 ]]; then
-        if [[ -n "$arg" ]]; then
-          echo "$arg"
-          return
-        fi
-      fi
-      case "$arg" in
-        --repo=*)
-          echo "${arg#--repo=}"
-          return
-          ;;
-        --repo|-R)
-          expect_repo=1
-          ;;
-        *)
-          expect_repo=0
-          ;;
-      esac
-    done
+    local parsed_repo
+    parsed_repo=$(_CMD="$cmd" python3 - <<'PY'
+import os
+import re
+import shlex
+import sys
+
+cmd = os.environ.get("_CMD", "")
+cmd = re.sub(r'(^|[ \t\r\n;&|])([0-9]+)(>>?|<<?|>&|<&|&>)', r'\1\3', cmd)
+try:
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+except Exception:
+    sys.exit(0)
+
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+
+i = 0
+while i < len(tokens):
+    token = tokens[i]
+    if token in separators:
+        i += 1
+        continue
+    if token in redirects:
+        i += 2
+        continue
+    if token in {"--repo", "-R"} and i + 1 < len(tokens):
+        print(tokens[i + 1])
+        sys.exit(0)
+    if token.startswith("--repo="):
+        print(token.split("=", 1)[1])
+        sys.exit(0)
+    i += 1
+PY
+)
+    if [[ -n "$parsed_repo" ]]; then
+      echo "$parsed_repo"
+      return
+    fi
   fi
 
   # Priority 3: upstream remote (fork workflow)

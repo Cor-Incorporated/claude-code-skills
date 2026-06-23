@@ -55,7 +55,8 @@ value_flags = {
     "--author-email",
     "-A",
 }
-operators = {"&&", "||", ";", "|", "&", ">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+separators = {"&&", "||", ";", "|", "&"}
+redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
 merge_positions = [
     i for i in range(len(tokens) - 2)
     if tokens[i:i + 3] == ["gh", "pr", "merge"]
@@ -69,8 +70,11 @@ for i in merge_positions:
     j = i + 3
     while j < len(tokens):
         token = tokens[j]
-        if token in operators:
+        if token in separators:
             break
+        if token in redirects:
+            j += 2
+            continue
         if token in value_flags:
             j += 2
             continue

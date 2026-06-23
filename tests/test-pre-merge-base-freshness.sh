@@ -190,6 +190,26 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+expect_rc "redirect before target validates command PR" 2 "$BASE_SHA" "gh pr merge --repo owner/repo >/tmp/out 999 --merge"
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: redirect-before-target PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: redirect-before-target PR #999 CI failure message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "attached repo redirect before target validates command PR" 2 "$BASE_SHA" "gh pr merge --repo=owner/repo>/tmp/out 999 --merge"
+if grep -q "CI に失敗ジョブあり" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: attached repo redirect PR #999 CI failure was evaluated"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: attached repo redirect PR #999 CI failure message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
 expect_rc "multiline chained gh pr merge commands are blocked" 2 "$BASE_SHA" $'gh pr merge 123 --merge --repo owner/repo\ngh pr merge 999 --merge --repo owner/repo'
 if grep -q "複数の gh pr merge" "$ERR_FILE"; then
   PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))

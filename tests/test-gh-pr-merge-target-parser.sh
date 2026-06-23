@@ -52,6 +52,15 @@ assert_eq "implicit target with stderr redirect stays implicit" "" \
 assert_eq "implicit target with stdout redirect stays implicit" "" \
   "gh pr merge --merge --repo owner/repo >/tmp/out"
 
+assert_eq "redirect before explicit target is skipped" "123" \
+  "gh pr merge --repo owner/repo >/tmp/out 123 --merge"
+
+assert_eq "stderr redirect before explicit target is skipped" "123" \
+  "gh pr merge --merge 2>/tmp/err 123 --repo owner/repo"
+
+assert_eq "repo equals with attached redirect before target is skipped" "123" \
+  "gh pr merge --repo=owner/repo>/tmp/out 123 --merge"
+
 assert_eq "non-numeric target is explicit and unsafe" "__NON_NUMERIC__:feature/foo" \
   "gh pr merge --repo owner/repo feature/foo --merge"
 
