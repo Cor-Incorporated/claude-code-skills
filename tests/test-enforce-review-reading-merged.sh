@@ -102,6 +102,15 @@ run_hook "gh pr merge 123" >/dev/null; rc=$?
 [ "$rc" -eq 0 ] && ok "other PR merge not hard-blocked" || bad "exit $rc (want 0)"
 [ -f "$PENDING" ] && ok "other PR pending kept" || bad "other PR pending wrongly deleted"
 
+echo "[5b] OPEN other PR URL target -> hard-blocked as unsafe"
+make_gh open; write_pending
+run_hook "gh pr merge https://github.com/owner/repo/pull/123 --merge" >/dev/null; rc=$?
+if [ "$rc" -eq 2 ] && grep -q "target: https://github.com/owner/repo/pull/123" "$WORK/err"; then
+  ok "PR URL target hard-blocked"
+else
+  bad "exit $rc or missing unsafe target message (want exit 2)"
+fi
+
 echo "[6] OPEN other PR + flag-before-target 'gh pr merge' -> not hard-blocked"
 make_gh open; write_pending
 run_hook "gh pr merge --repo owner/repo 123 --merge" >/dev/null; rc=$?

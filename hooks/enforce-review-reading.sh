@@ -124,7 +124,7 @@ for _, start, end in merge_positions:
             j += 1
             continue
 
-        match = re.search(r"(?:^|/pull/|#)([0-9]+)$", token)
+        match = re.search(r"^#?([0-9]+)$", token)
         if match:
             print(match.group(1))
         else:
