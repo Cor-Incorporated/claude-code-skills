@@ -989,22 +989,71 @@ command_git_context_dir() {
   local cmd="${1:-}"
   [[ -z "$cmd" ]] && return 0
   _CMD="$cmd" python3 - <<'PY'
-import os, shlex, subprocess, sys
-
-cmd = os.environ.get("_CMD", "")
-try:
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    tokens = list(lexer)
-except Exception:
-    sys.exit(0)
-
-def is_gh(token):
-    return os.path.basename(token) == "gh"
+import os
+import shlex
+import subprocess
+import sys
 
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
 separators = {"&&", "||", ";", "|", "&"}
 redirects = {">", ">>", "<", "<<", "<>", ">&", "<&", "&>"}
+shell_executors = {"bash", "sh", "zsh"}
+
+def parse_tokens(text):
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except Exception:
+        return []
+
+def command_end(tokens, start):
+    end = start
+    while end < len(tokens) and tokens[end] not in separators:
+        end += 1
+    return end
+
+def nested_command_strings(tokens):
+    nested = []
+    i = 0
+    while i < len(tokens):
+        base = os.path.basename(tokens[i])
+        end = command_end(tokens, i + 1)
+        if base in shell_executors:
+            j = i + 1
+            while j < end:
+                token = tokens[j]
+                if token in redirects:
+                    j += 2
+                    continue
+                if token == "-c" or (token.startswith("-") and not token.startswith("--") and "c" in token[1:]):
+                    if j + 1 < end:
+                        nested.append(tokens[j + 1])
+                    break
+                j += 1
+        elif base == "eval" and i + 1 < end:
+            nested.append(" ".join(tokens[i + 1:end]))
+        i += 1
+    return nested
+
+def expand_nested_shell(tokens, depth=0):
+    if depth >= 3:
+        return tokens
+    expanded = list(tokens)
+    for nested in nested_command_strings(tokens):
+        nested_tokens = parse_tokens(nested)
+        if nested_tokens:
+            expanded.append(";")
+            expanded.extend(expand_nested_shell(nested_tokens, depth + 1))
+    return expanded
+
+def is_gh(token):
+    return os.path.basename(token) == "gh"
+
+cmd = os.environ.get("_CMD", "")
+tokens = expand_nested_shell(parse_tokens(cmd))
+if not tokens:
+    sys.exit(0)
 
 def skip_value_flag(tokens, i, flags):
     token = tokens[i]

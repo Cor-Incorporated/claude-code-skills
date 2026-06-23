@@ -257,5 +257,20 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+TOTAL=$((TOTAL + 1))
+write_review_status
+set +e
+run_pre_merge "$BASE_SHA" "cd $TMP_REPO && bash -c 'gh pr merge 123 --merge --repo owner/repo'" "$TMP_ROOT"
+rc=$?
+set -e
+if [[ "$rc" -eq 0 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: cd-prefixed wrapped merge uses command repo context (exit=$rc)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: cd-prefixed wrapped merge should use command repo context (got $rc)" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
 echo "Total: $TOTAL  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
