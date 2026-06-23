@@ -1420,6 +1420,46 @@ def shell_payload(segment_tokens, i):
     return ""
 
 
+def runtime_command_strings(token):
+    nested = []
+    marker = chr(36) + "("
+    i = 0
+    while True:
+        start = token.find(marker, i)
+        if start == -1:
+            break
+        depth = 1
+        j = start + len(marker)
+        while j < len(token):
+            if token[j] == "(":
+                depth += 1
+            elif token[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = token[start + len(marker):j].strip()
+                    if inner:
+                        nested.append(inner)
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            i = start + len(marker)
+    tick = chr(96)
+    i = 0
+    while True:
+        start = token.find(tick, i)
+        if start == -1:
+            break
+        end = token.find(tick, start + 1)
+        if end == -1:
+            break
+        inner = token[start + 1:end].strip()
+        if inner:
+            nested.append(inner)
+        i = end + 1
+    return nested
+
+
 def count_tokens_pr_merge(tokens, depth=0):
     count = 0
     segment = []
@@ -1445,6 +1485,10 @@ def count_segment_pr_merge(segment_tokens, depth=0):
         return 0
 
     count = 0
+    for token in segment_tokens:
+        for payload in runtime_command_strings(token):
+            count += count_tokens_pr_merge(parse_tokens(payload), depth + 1)
+
     i = skip_redirects(segment_tokens, 0)
     while i < len(segment_tokens) and is_assignment(segment_tokens[i]):
         value = segment_tokens[i].split("=", 1)[1]

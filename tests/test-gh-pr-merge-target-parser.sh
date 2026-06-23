@@ -144,6 +144,12 @@ assert_eq "quoted process substitution backtick merge is detected" "123" \
 assert_count_eq "quoted process substitution backtick merge is counted" "1" \
   'cat <(echo "`gh pr merge 123 --merge --repo owner/repo`")'
 
+assert_guard_eq "quoted runtime command substitution dynamic eval merge is fail-closed" "block" \
+  'echo "$(m=gh\ pr\ merge\ 123\ --merge\ --repo\ owner/repo; eval "$m")"'
+
+assert_guard_eq "quoted runtime backtick dynamic eval merge is fail-closed" "block" \
+  'echo "`m=gh\ pr\ merge\ 123\ --merge\ --repo\ owner/repo; eval "$m"`"'
+
 assert_eq "body-file command substitution hidden merge plus visible merge is unsafe" "__MULTIPLE__" \
   "gh pr merge --body-file <(printf %s \$(gh pr merge 999 --merge --repo owner/repo)) 123 --merge --repo owner/repo"
 

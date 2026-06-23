@@ -320,6 +320,28 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+expect_rc "quoted runtime command substitution dynamic eval merge is fail-closed" 2 "$BASE_SHA" 'echo "$(m=gh\ pr\ merge\ 123\ --merge\ --repo\ owner/repo; eval "$m")"'
+if grep -q "安全に解析できません" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: quoted runtime command substitution dynamic eval message is explicit"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: quoted runtime command substitution dynamic eval message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "quoted runtime backtick dynamic eval merge is fail-closed" 2 "$BASE_SHA" 'echo "`m=gh\ pr\ merge\ 123\ --merge\ --repo\ owner/repo; eval "$m"`"'
+if grep -q "安全に解析できません" "$ERR_FILE"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: quoted runtime backtick dynamic eval message is explicit"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "  FAIL: quoted runtime backtick dynamic eval message missing" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
+expect_rc "body-file readonly process-substitution literal ok is allowed" 0 "$BASE_SHA" "gh pr merge --body-file <(printf ok) 123 --merge --repo owner/repo"
+
 expect_rc "body-file readonly process-substitution literal bash is allowed" 0 "$BASE_SHA" "gh pr merge --body-file <(printf bash) 123 --merge --repo owner/repo"
 
 expect_rc "body-file readonly process-substitution literal eval is allowed" 0 "$BASE_SHA" "gh pr merge --body-file <(printf eval) 123 --merge --repo owner/repo"
