@@ -24,23 +24,31 @@ is_inspection_command() {
   local cmd="$1"
 
   [[ "$cmd" != *$'\n'* ]] || return 1
-  if printf '%s' "$cmd" | grep -qE '[;&|`<>]|\$\('; then
+  if printf '%s' "$cmd" | grep -qE '[;&`<>]|\$\('; then
     return 1
   fi
-  printf '%s' "$cmd" | grep -qE '^[[:space:]]*(rg|grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|sed|awk|find)\b'
+  printf '%s' "$cmd" | grep -qE '^[[:space:]]*(rg|grep|egrep|fgrep|cat|head|tail|wc|comm|diff|cut|tr|uniq|jq|ls|which|type|sed|awk|find|git[[:space:]]+status)\b'
 }
 
-has_uat_trigger() {
-  printf '%s' "$COMMAND" | grep -Eiq '(UAT|UX|E2E|操作テスト|ブラウザ|browser|テスト済み?|完了|β[[:space:]]*Ready|Beta[[:space:]]*Ready|Issue[[:space:]]*close)'
+has_uat_context() {
+  printf '%s' "$COMMAND" | grep -Eiq '(UAT|UX|E2E|操作テスト|ブラウザ|browser|browser[-[:space:]]+test|ユーザー?[[:space:]-]*ジャーニー|UI[[:space:]-]*(proof|evidence|検証|確認)|live[[:space:]-]+verification|ライブ検証|本番検証|β[[:space:]]*Ready|Beta[[:space:]]*Ready)'
+}
+
+has_completion_claim() {
+  printf '%s' "$COMMAND" | grep -Eiq '(完了|完遂|テスト済み?|検証済み?|確認済み?|通過|合格|解決|修正済|close[[:space:]]*可能|ready[[:space:]]+to[[:space:]]+close|ready[[:space:]]+for[[:space:]]+(merge|review)|PR[[:space:]-]*ready|β[[:space:]]*Ready|Beta[[:space:]]*Ready|Issue[[:space:]]*close|クローズ|マージ|merged?|mergeable|completed?|done|resolved|fixed|verified|validated|passed|passing)'
 }
 
 is_github_guarded_operation() {
-  printf '%s' "$COMMAND" | grep -Eiq '(^|[;&|[:space:]])gh[[:space:]]+issue[[:space:]]+(create|comment|close)\b|(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+merge\b'
+  printf '%s' "$COMMAND" | grep -Eiq '(^|[;&|[:space:]])gh[[:space:]]+issue[[:space:]]+(create|comment|close)\b|(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+(create|comment|review|merge|ready)\b'
 }
 
-is_issue_blocker_report() {
-  printf '%s' "$COMMAND" | grep -Eiq '(^|[;&|[:space:]])gh[[:space:]]+issue[[:space:]]+(create|comment)\b' &&
-    printf '%s' "$COMMAND" | grep -Eiq '(未検証|未確認|未完了|未実施|未テスト|blocker|blocked|blocking|unverified|not[[:space:]-]+verified|not[[:space:]-]+tested|cannot[[:space:]-]+verify|要検証|要確認|失敗|failed|failure|NG|red|エラー|不具合|バグ|close不可|クローズ不可)'
+is_terminal_github_operation() {
+  printf '%s' "$COMMAND" | grep -Eiq '(^|[;&|[:space:]])gh[[:space:]]+issue[[:space:]]+close\b|(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+(merge|ready)\b'
+}
+
+is_blocker_or_unverified_status() {
+  ! is_terminal_github_operation &&
+    printf '%s' "$COMMAND" | grep -Eiq '(未検証|未確認|未完了|未実施|未テスト|blocker|blocked|blocking|unverified|not[[:space:]-]+verified|not[[:space:]-]+tested|cannot[[:space:]-]+verify|要検証|要確認|確認待ち|証跡不足|証跡待ち|証跡なし|失敗|failed|failure|NG|red|エラー|不具合|バグ|close不可|クローズ不可)'
 }
 
 is_completion_like_command() {
@@ -69,7 +77,7 @@ has_full_evidence() {
   [[ "$has_label" == true && "$has_execution" == true && "$has_artifact" == true && "$has_outcome" == true ]]
 }
 
-if ! has_uat_trigger; then
+if ! has_uat_context; then
   exit 0
 fi
 
@@ -77,11 +85,15 @@ if is_inspection_command "$FIRST_LINE"; then
   exit 0
 fi
 
-if ! is_github_guarded_operation && ! is_completion_like_command; then
+if is_blocker_or_unverified_status; then
   exit 0
 fi
 
-if is_issue_blocker_report; then
+if ! has_completion_claim && ! is_terminal_github_operation; then
+  exit 0
+fi
+
+if ! is_github_guarded_operation && ! is_completion_like_command; then
   exit 0
 fi
 
