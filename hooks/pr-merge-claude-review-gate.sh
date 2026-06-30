@@ -85,6 +85,51 @@ REPO=$(resolve_repo "$cmd")
 REVIEW_FILE="$_STATE_BASE/pr-review-read.json"
 [ ! -f "$REVIEW_FILE" ] && echo '{}' > "$REVIEW_FILE"
 
+review_read_files() {
+  local seen="|" candidate root
+  candidate="$_STATE_BASE/pr-review-read.json"
+  if [[ -n "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    seen="${seen}${candidate}|"
+  fi
+
+  if [[ -n "${GIT_CONTEXT_DIR:-}" ]]; then
+    root=$(git -C "$GIT_CONTEXT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "")
+  else
+    root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+  fi
+  if [[ -n "$root" ]]; then
+    candidate="$root/.claude/state/pr-review-read.json"
+    if [[ "$seen" != *"|$candidate|"* ]]; then
+      printf '%s\n' "$candidate"
+      seen="${seen}${candidate}|"
+    fi
+  fi
+
+  candidate="$HOME/.claude/state/pr-review-read.json"
+  if [[ "$seen" != *"|$candidate|"* ]]; then
+    printf '%s\n' "$candidate"
+  fi
+}
+
+review_read_bool() {
+  local pr="$1" field="$2" state_file val
+  while IFS= read -r state_file; do
+    [[ -z "$state_file" || ! -f "$state_file" ]] && continue
+    val=$(_REVIEW_FILE="$state_file" _PR="$pr" _FIELD="$field" python3 -c "
+import json, os
+try:
+    with open(os.environ['_REVIEW_FILE']) as f:
+        s = json.load(f)
+    print('True' if s.get(os.environ['_PR'], {}).get(os.environ['_FIELD'], False) else 'False')
+except Exception:
+    print('False')
+" 2>/dev/null || echo "False")
+    [[ "$val" == "True" ]] && { echo "True"; return; }
+  done < <(review_read_files)
+  echo "False"
+}
+
 # =========================================================================
 # GATE 0: All CI checks must be COMPLETED
 # =========================================================================
@@ -130,11 +175,7 @@ COMMENT_COUNT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq 'length
 
 if [[ "$COMMENT_COUNT" -eq 0 ]]; then
   # Check if a code-reviewer fallback was already done
-  FALLBACK_DONE=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
-import json, os
-with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
-print(s.get(os.environ['_PR'], {}).get('fallback_review_done', False))
-" 2>/dev/null || echo "False")
+  FALLBACK_DONE=$(review_read_bool "$PR_NUMBER" "fallback_review_done")
 
   if [[ "$FALLBACK_DONE" != "True" ]]; then
     echo "" >&2
@@ -159,11 +200,7 @@ fi
 # =========================================================================
 # GATE 3: Review must be marked as read
 # =========================================================================
-REVIEW_READ=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
-import json, os
-with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
-print(s.get(os.environ['_PR'], {}).get('review_read', False))
-" 2>/dev/null || echo "False")
+REVIEW_READ=$(review_read_bool "$PR_NUMBER" "review_read")
 
 if [[ "$REVIEW_READ" != "True" ]]; then
   echo "" >&2
@@ -215,19 +252,13 @@ fi
 
 # Also check if fallback review flagged critical
 if [[ "$HAS_CRITICAL" == "NO" ]]; then
-  HAS_CRITICAL=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
-import json, os
-with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
-print('YES' if s.get(os.environ['_PR'], {}).get('has_critical', False) else 'NO')
-" 2>/dev/null || echo "NO")
+  if [[ "$(review_read_bool "$PR_NUMBER" "has_critical")" == "True" ]]; then
+    HAS_CRITICAL="YES"
+  fi
 fi
 
 if [[ "$HAS_CRITICAL" == "YES" ]]; then
-  CRITICAL_ACK=$(_REVIEW_FILE="$REVIEW_FILE" _PR="$PR_NUMBER" python3 -c "
-import json, os
-with open(os.environ['_REVIEW_FILE']) as f: s=json.load(f)
-print(s.get(os.environ['_PR'], {}).get('critical_acknowledged', False))
-" 2>/dev/null || echo "False")
+  CRITICAL_ACK=$(review_read_bool "$PR_NUMBER" "critical_acknowledged")
 
   if [[ "$CRITICAL_ACK" != "True" ]]; then
     echo "" >&2

@@ -50,6 +50,15 @@ REVIEW_LOCK="$_STATE_BASE/pr-review-lock.json"
 mkdir -p "$(dirname "$REVIEW_LOCK")"
 [ ! -f "$REVIEW_LOCK" ] && echo '{}' > "$REVIEW_LOCK"
 
+_add_review_read_target() {
+  local target="$1" existing
+  [[ -z "$target" ]] && return 0
+  for existing in "${REVIEW_READ_TARGETS[@]:-}"; do
+    [[ "$existing" == "$target" ]] && return 0
+  done
+  REVIEW_READ_TARGETS+=("$target")
+}
+
 # Build deduped list of lock targets (project-scoped, then global)
 LOCK_TARGETS=("$REVIEW_LOCK")
 if [[ "$_GLOBAL_STATE_BASE/pr-review-lock.json" != "$REVIEW_LOCK" ]]; then
@@ -302,20 +311,33 @@ done
 
 # Also mark review as read (resolves pr-merge-claude-review-gate.sh / block-state-file-tampering-bash.sh design gap — Issue #99)
 # verify-pr-review.sh fetches and displays all review comments above, satisfying the "read" requirement.
-REVIEW_READ_FILE="$_STATE_BASE/pr-review-read.json"
-[ ! -f "$REVIEW_READ_FILE" ] && echo '{}' > "$REVIEW_READ_FILE"
-_RR="$REVIEW_READ_FILE" _PR="$PR_NUM" python3 -c "
+REVIEW_READ_TARGETS=()
+_add_review_read_target "$_STATE_BASE/pr-review-read.json"
+_GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+if [[ -n "$_GIT_ROOT" ]]; then
+  _add_review_read_target "$_GIT_ROOT/.claude/state/pr-review-read.json"
+fi
+_add_review_read_target "$_GLOBAL_STATE_BASE/pr-review-read.json"
+
+for _rr_target in "${REVIEW_READ_TARGETS[@]}"; do
+  mkdir -p "$(dirname "$_rr_target")"
+  [ ! -f "$_rr_target" ] && echo '{}' > "$_rr_target"
+  _RR="$_rr_target" _PR="$PR_NUM" python3 -c "
 import json, os, fcntl
 f_path = os.environ['_RR']
 with open(f_path, 'r+') as f:
     fcntl.flock(f, fcntl.LOCK_EX)
-    s = json.load(f)
+    try:
+        s = json.load(f)
+    except Exception:
+        s = {}
     s.setdefault(os.environ['_PR'], {})['review_read'] = True
     f.seek(0)
     f.truncate()
     json.dump(s, f, indent=2)
     fcntl.flock(f, fcntl.LOCK_UN)
 " 2>/dev/null || true
+done
 
 echo "✅ PR #${PR_NUM} ロック解除。claude-review クリーン確認済み。マージ可能。"
 exit 0
