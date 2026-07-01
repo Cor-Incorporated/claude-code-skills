@@ -60,12 +60,48 @@ else
     fi
 fi
 
-# --- 1. BLOCK: Issue reference with close keyword required ---
-if ! echo "$cmd" | grep -qiE '(closes?|fixes?|resolves?)\s*#[0-9]+'; then
-    if ! echo "$cmd" | grep -q '#[0-9]'; then
-        BLOCKERS+=("[BLOCK] PR に Issue 参照がありません。bodyに Closes #XX を含めてください。Issue → PR → Merge → Issue Close のライフサイクル必須")
+# --- 1. BLOCK: explicit Issue reference required ---
+ISSUE_SCAN_TEXT="$cmd"
+if command -v python3 >/dev/null 2>&1; then
+    BODY_FILE_TEXT=$(CMD="$cmd" python3 - <<'PY' 2>/dev/null || true
+import os
+import shlex
+
+cmd = os.environ.get("CMD", "")
+try:
+    tokens = shlex.split(cmd)
+except ValueError:
+    tokens = cmd.split()
+
+paths = []
+for i, token in enumerate(tokens):
+    if token == "--body-file" and i + 1 < len(tokens):
+        paths.append(tokens[i + 1])
+    elif token.startswith("--body-file="):
+        paths.append(token.split("=", 1)[1])
+
+for path in paths:
+    if path == "-":
+        continue
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8", errors="ignore") as f:
+            print(f.read())
+    except OSError:
+        pass
+PY
+)
+    ISSUE_SCAN_TEXT="${ISSUE_SCAN_TEXT}"$'\n'"${BODY_FILE_TEXT}"
+fi
+
+ISSUE_CLOSE_RE='(^|[^[:alnum:]_])(closes?|fixes?|resolves?)[[:space:]:]*#[0-9]+'
+ISSUE_REF_RE='(^|[^[:alnum:]_])(refs?|references?)[[:space:]:]*#[0-9]+'
+ISSUE_URL_RE='https://github[.]com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+'
+
+if ! printf '%s\n' "$ISSUE_SCAN_TEXT" | grep -qiE "${ISSUE_CLOSE_RE}|${ISSUE_REF_RE}|${ISSUE_URL_RE}"; then
+    if printf '%s\n' "$ISSUE_SCAN_TEXT" | grep -qE '(^|[^[:alnum:]_])#[0-9]+'; then
+        BLOCKERS+=("[BLOCK] Issue番号はありますが参照形式が曖昧です。自動クローズする場合は 'Closes #XX'、参照のみの場合は 'Refs #XX' または Issue URL を使ってください")
     else
-        BLOCKERS+=("[BLOCK] Issue番号はありますがクローズキーワード(Closes/Fixes/Resolves)がありません。'Closes #XX' 形式にしてください。マージ時に自動クローズされます")
+        BLOCKERS+=("[BLOCK] PR に Issue 参照がありません。bodyに 'Closes #XX'、'Refs #XX'、または Issue URL を含めてください")
     fi
 fi
 
