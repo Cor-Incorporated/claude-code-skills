@@ -43,14 +43,13 @@ for _sd in ${_TOP:+"$_TOP/.claude/state"} "$HOME/.claude/state"; do
     fi
 done
 
-# Extract Issue numbers from PR body (Closes/Fixes/Resolves #XX)
+# Extract Issue numbers from PR body (Closes/Fixes/Resolves #XX).
+# Refs-only PRs intentionally do not trigger automatic Issue closure.
 PR_BODY=$(gh pr view "$PR_NUM" --json body -q '.body' 2>/dev/null || echo "")
 ISSUE_NUMS=$(echo "$PR_BODY" | grep -oiE '(closes?|fixes?|resolves?)\s*#[0-9]+' | grep -oE '[0-9]+' || true)
 
 if [ -z "$ISSUE_NUMS" ]; then
-    echo "⚠️ [Post-Merge] PR #${PR_NUM} マージ済みだがクローズ対象のIssueが見つかりません。" >&2
-    echo "   PRのbodyに 'Closes #XX' が含まれていない可能性があります。" >&2
-    echo "   手動でIssueをクローズしてください。" >&2
+    echo "ℹ️ [Post-Merge] PR #${PR_NUM} はクローズキーワードなし。Issue自動クローズをスキップします。" >&2
     exit 0
 fi
 
