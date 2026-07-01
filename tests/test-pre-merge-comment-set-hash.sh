@@ -65,10 +65,11 @@ if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/git/ref/heads/develop" ]; then
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/123/files" ]; then
+  file="${FAKE_CHANGED_FILE:-README.md}"
   if [ "${3:-}" = "--jq" ]; then
-    printf 'README.md\n'
+    printf '%s\n' "$file"
   else
-    printf '[{"filename":"README.md"}]\n'
+    printf '[{"filename":"%s"}]\n' "$file"
   fi
   exit 0
 fi
@@ -169,29 +170,64 @@ PY
 
 write_review_status() {
   local codex="${1:-false}"
-  CODEX="$codex" python3 - "$STATE_DIR/review-status.json" <<'PY'
+  local code_sha="${2:-abc123}"
+  local codex_sha="${3:-abc123}"
+  CODEX="$codex" CODE_SHA="$code_sha" CODEX_SHA="$codex_sha" python3 - "$STATE_DIR/review-status.json" <<'PY'
 import json
 import os
 import sys
 
 codex = os.environ["CODEX"] == "true"
+code_sha = os.environ["CODE_SHA"]
+codex_sha = os.environ["CODEX_SHA"]
+state = {
+    "code_review": True,
+    "codex_review": codex,
+}
+if code_sha:
+    state["code_review_sha"] = code_sha
+if codex_sha:
+    state["codex_review_sha"] = codex_sha
 with open(sys.argv[1], "w") as f:
-    json.dump({"feature": {"code_review": True, "codex_review": codex}}, f)
+    json.dump({"feature": state}, f)
 PY
 }
 
-write_verified_lock() {
-  python3 - "$STATE_DIR/pr-review-lock.json" <<'PY'
+write_codex_only_status() {
+  local codex_sha="${1:-abc123}"
+  CODEX_SHA="$codex_sha" python3 - "$STATE_DIR/review-status.json" <<'PY'
 import json
+import os
 import sys
 
 with open(sys.argv[1], "w") as f:
-    json.dump({"123": {"verified": True}}, f)
+    json.dump({"feature": {"codex_review": True, "codex_review_sha": os.environ["CODEX_SHA"]}}, f)
+PY
+}
+
+write_gstack_review() {
+  local payload="$1"
+  local slug
+  slug=$(git -C "$TMP_REPO" remote get-url origin | sed 's|^git@github.com:||;s|^https://github.com/||;s|^ssh://git@github.com/||;s|\.git$||' | tr '/' '-')
+  mkdir -p "$TMP_HOME/.gstack/projects/$slug"
+  printf '%s\n' "$payload" > "$TMP_HOME/.gstack/projects/$slug/feature-reviews.jsonl"
+}
+
+write_verified_lock() {
+  local head_sha="${1:-abc123}"
+  HEAD_SHA="$head_sha" python3 - "$STATE_DIR/pr-review-lock.json" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], "w") as f:
+    json.dump({"123": {"verified": True, "head_sha": os.environ["HEAD_SHA"], "verified_head_sha": os.environ["HEAD_SHA"]}}, f)
 PY
 }
 
 reset_state() {
   rm -f "$STATE_DIR/review-status.json" "$STATE_DIR/pr-review-lock.json"
+  rm -rf "$TMP_HOME/.gstack"
   printf '{}\n' > "$STATE_DIR/review-status.json"
   printf '{}\n' > "$STATE_DIR/pr-review-lock.json"
 }
@@ -201,6 +237,7 @@ run_pre_merge() {
   (
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" \
+      FAKE_CHANGED_FILE="${FAKE_CHANGED_FILE:-README.md}" \
       GATE_MODE=PRE_MERGE bash "$ROOT/hooks/pr-ci-review-gate.sh" <<<"$payload"
   )
 }
@@ -264,6 +301,47 @@ else
   TOTAL=$((TOTAL + 1))
   echo "  FAIL: T6b: closed pending file still present" >&2
 fi
+
+reset_state
+FAKE_CHANGED_FILE="src/app.ts"
+write_review_status true oldsha oldsha
+expect_rc "T7: FULL tier stale review SHAs block boolean-only approval" 2
+
+reset_state
+FAKE_CHANGED_FILE="src/app.ts"
+write_review_status true abc123 abc123
+expect_rc "T8: FULL tier matching review SHAs allow Tier 1 LGTM" 0
+
+reset_state
+FAKE_CHANGED_FILE="src/app.ts"
+write_codex_only_status abc123
+write_gstack_review '{"status":"approved"}'
+expect_rc "T9: gstack review without commit does not satisfy same-head evidence" 2
+
+reset_state
+FAKE_CHANGED_FILE="src/app.ts"
+write_codex_only_status abc123
+write_gstack_review '{"status":"approved","commit":"abc123"}'
+expect_rc "T10: gstack review with matching commit hydrates code-review evidence" 0
+
+reset_state
+FAKE_CHANGED_FILE="src/app.ts"
+write_codex_only_status abc123
+write_gstack_review '{"status":"approved","commit":"abc123"}'
+expect_rc "T11: gstack review with short matching commit hydrates code-review evidence" 0
+
+reset_state
+FAKE_CHANGED_FILE="src/app.ts"
+write_codex_only_status abc123
+write_verified_lock oldsha
+expect_rc "T12: stale verified lock does not satisfy Pass C" 2
+
+reset_state
+FAKE_CHANGED_FILE="src/app.ts"
+write_codex_only_status abc123
+write_verified_lock abc123
+expect_rc "T13: matching verified lock satisfies Pass C" 0
+FAKE_CHANGED_FILE="README.md"
 
 echo "Total: $TOTAL  Passed: $PASSED  Failed: $FAILED"
 rm -f /tmp/pre_merge_hash_test.out /tmp/pre_merge_hash_test.err

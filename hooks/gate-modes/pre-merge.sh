@@ -91,6 +91,12 @@ fi
 REPO=$(resolve_repo "$cmd")
 HEAD_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null || echo "")
 BASE_REF=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.base.ref' 2>/dev/null || echo "")
+if [[ -z "$HEAD_SHA" || "$HEAD_SHA" == "null" ]]; then
+  echo "🚫 [BLOCKED] PR #${PR_NUMBER}: HEAD SHA を取得できません。" >&2
+  echo "  現在のPR headに対するレビュー証跡を検証できないため、fail closedします。" >&2
+  echo "  確認: gh pr view ${PR_NUMBER} -R ${REPO} --json headRefOid" >&2
+  exit 2
+fi
 BASE_SHA=""
 if [[ -n "$BASE_REF" ]]; then
   BASE_SHA=$(_timeout 10 gh api "repos/${REPO}/git/ref/heads/${BASE_REF}" --jq '.object.sha' 2>/dev/null || echo "")
@@ -135,8 +141,8 @@ fi
 # Review Hierarchy: Tier 1 PRIMARY_LGTM check (#175)
 # =========================================================================
 PRIMARY_LGTM="false"
-_code_rev=$(read_review "$BRANCH" "code_review")
-_codex_rev=$(read_review "$BRANCH" "codex_review")
+_code_rev=$(read_review_for_head "$BRANCH" "code_review" "$HEAD_SHA")
+_codex_rev=$(read_review_for_head "$BRANCH" "codex_review" "$HEAD_SHA")
 if [[ "$_code_rev" == "yes" ]] && [[ "$_codex_rev" == "yes" ]]; then
   PRIMARY_LGTM="true"
   echo "  ✅ [pre-merge] Tier 1 LGTM: code-reviewer + Codex CLI 確認済み" >&2
@@ -207,7 +213,7 @@ PASS_B="no"
 PASS_C="no"
 
 # --- Pass A: code-reviewer agent completion ---
-CODE_REVIEW=$(read_review "$BRANCH" "code_review")
+CODE_REVIEW=$(read_review_for_head "$BRANCH" "code_review" "$HEAD_SHA")
 [[ "$CODE_REVIEW" == "yes" ]] && PASS_A="yes"
 
 # --- Pass B: No CRITICAL/HIGH in review comments ---
@@ -268,17 +274,17 @@ fi
 # --- Pass C: Manual verification via pr-review-lock.json (Fix8 dual-location) ---
 # Check BOTH project-scoped AND global lock files (OR-logic) so a verified=true
 # written to either location releases the gate.
-[[ "$(lock_pr_verified "$PR_NUMBER")" == "yes" ]] && PASS_C="yes"
+[[ "$(lock_pr_verified_for_head "$PR_NUMBER" "$HEAD_SHA")" == "yes" ]] && PASS_C="yes"
 
 # --- Tier-aware judgment ---
-CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
+CODEX_REVIEW=$(read_review_for_head "$BRANCH" "codex_review" "$HEAD_SHA")
 
 # Issue #203: Severity-aware Codex override (consistent with pre-create.sh)
 # Policy: CRITICAL/HIGH → block, MEDIUM/LOW → follow-up Issue (not a blocker)
 if [[ "$CODEX_REVIEW" != "yes" ]]; then
-  _codex_ran=$(read_review "$BRANCH" "codex_review_ran")
-  _codex_critical=$(read_codex_severity "$BRANCH" "codex_critical")
-  _codex_high=$(read_codex_severity "$BRANCH" "codex_high")
+  _codex_ran=$(read_review_for_head "$BRANCH" "codex_review_ran" "$HEAD_SHA")
+  _codex_critical=$(read_codex_severity_for_head "$BRANCH" "codex_critical" "$HEAD_SHA")
+  _codex_high=$(read_codex_severity_for_head "$BRANCH" "codex_high" "$HEAD_SHA")
   if [[ "$_codex_ran" == "yes" ]] && \
      [[ "$_codex_critical" != "-1" ]] && [[ "$_codex_critical" -eq 0 ]] 2>/dev/null && \
      [[ "$_codex_high" != "-1" ]] && [[ "$_codex_high" -eq 0 ]] 2>/dev/null; then

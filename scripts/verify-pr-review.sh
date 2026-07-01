@@ -103,11 +103,14 @@ ISSUE_COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" 2>/dev/null ||
 
 # Issue #165: Check claude-review CI status. If passed or not configured, skip keyword severity detection.
 HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
-CLAUDE_REVIEW_CI=""
-if [[ -n "$HEAD_SHA" ]]; then
-  CLAUDE_REVIEW_CI=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
-    --jq '[.check_runs[] | select(.name | test("claude-review"; "i"))] | .[0].conclusion // ""' 2>/dev/null || echo "")
+if [[ -z "$HEAD_SHA" || "$HEAD_SHA" == "null" ]]; then
+  echo "❌ PR #${PR_NUM} の head SHA を取得できません。レビュー既読証跡を安全に記録できません。" >&2
+  echo "   確認: gh pr view ${PR_NUM} -R ${REPO} --json headRefOid" >&2
+  exit 1
 fi
+CLAUDE_REVIEW_CI=""
+CLAUDE_REVIEW_CI=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+  --jq '[.check_runs[] | select(.name | test("claude-review"; "i"))] | .[0].conclusion // ""' 2>/dev/null || echo "")
 
 # Issue #152: Only check the LATEST claude-review comment, not all historical ones.
 # Old reviews may contain 🔴 from issues already fixed in subsequent pushes.
@@ -285,7 +288,7 @@ fi
 # block-merge-without-review.sh reads $HOME/.claude/state when CLAUDE_PROJECT_DIR
 # is unset, so verified=true MUST land in the global file too.
 for _lt in "${LOCK_TARGETS[@]}"; do
-  _LOCK="$_lt" _PR="$PR_NUM" _NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 -c "
+  _LOCK="$_lt" _PR="$PR_NUM" _HEAD_SHA="$HEAD_SHA" _NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 -c "
 import json, os, fcntl
 f_path = os.environ['_LOCK']
 with open(f_path, 'r+') as f:
@@ -302,6 +305,8 @@ with open(f_path, 'r+') as f:
     s[os.environ['_PR']]['bug_count'] = 0
     s[os.environ['_PR']]['verified'] = True
     s[os.environ['_PR']]['verified_at'] = os.environ['_NOW']
+    s[os.environ['_PR']]['head_sha'] = os.environ['_HEAD_SHA']
+    s[os.environ['_PR']]['verified_head_sha'] = os.environ['_HEAD_SHA']
     f.seek(0)
     f.truncate()
     json.dump(s, f, indent=2)
@@ -322,7 +327,7 @@ _add_review_read_target "$_GLOBAL_STATE_BASE/pr-review-read.json"
 for _rr_target in "${REVIEW_READ_TARGETS[@]}"; do
   mkdir -p "$(dirname "$_rr_target")"
   [ ! -f "$_rr_target" ] && echo '{}' > "$_rr_target"
-  _RR="$_rr_target" _PR="$PR_NUM" python3 -c "
+  _RR="$_rr_target" _PR="$PR_NUM" _REPO="$REPO" _HEAD_SHA="$HEAD_SHA" _NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 -c "
 import json, os, fcntl
 f_path = os.environ['_RR']
 with open(f_path, 'r+') as f:
@@ -331,7 +336,11 @@ with open(f_path, 'r+') as f:
         s = json.load(f)
     except Exception:
         s = {}
-    s.setdefault(os.environ['_PR'], {})['review_read'] = True
+    entry = s.setdefault(os.environ['_PR'], {})
+    entry['review_read'] = True
+    entry['repo'] = os.environ['_REPO']
+    entry['head_sha'] = os.environ['_HEAD_SHA']
+    entry['read_at'] = os.environ['_NOW']
     f.seek(0)
     f.truncate()
     json.dump(s, f, indent=2)

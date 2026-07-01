@@ -10,6 +10,8 @@ TMP_REPO="$TMP_DIR/repo"
 TMP_BIN="$TMP_DIR/bin"
 TMP_HOME="$TMP_DIR/home"
 GH_LOG="$TMP_DIR/gh.log"
+OUT_FILE="$TMP_DIR/standalone_merge_hook.out"
+ERR_FILE="$TMP_DIR/standalone_merge_hook.err"
 mkdir -p "$TMP_BIN" "$TMP_HOME/.claude/state"
 
 git init -q "$TMP_REPO"
@@ -51,7 +53,7 @@ if [[ "$1" == "api" ]]; then
         case "$jq_expr" in
           *'status != "completed"'*) printf '0\n' ;;
           *'conclusion == "failure"'*) printf '0\n' ;;
-          *'test("claude-review"'*) printf 'success\n' ;;
+          *'test("claude-review"'*) printf '%s\n' "${FAKE_CLAUDE_REVIEW_CI:-success}" ;;
           *) printf '0\n' ;;
         esac
       else
@@ -64,14 +66,25 @@ if [[ "$1" == "api" ]]; then
       exit 0
       ;;
     repos/owner/repo/pulls/123/files)
+      file="${FAKE_CHANGED_FILE:-docs/README.md}"
       if [[ -n "$jq_expr" ]]; then
-        printf 'docs/README.md\n'
+        printf '%s\n' "$file"
       else
-        printf '[{"filename":"docs/README.md"}]\n'
+        printf '[{"filename":"%s"}]\n' "$file"
       fi
       exit 0
       ;;
     repos/owner/repo/pulls/123/comments|repos/owner/repo/issues/123/comments)
+      if [[ "${FAKE_REVIEW_COMMENTS:-}" == "high" ]]; then
+        if [[ "$jq_expr" == "length" ]]; then
+          printf '1\n'
+        elif [[ -n "$jq_expr" ]]; then
+          printf '[HIGH] stale Tier 1 must not bypass this finding\n'
+        else
+          printf '[{"body":"[HIGH] stale Tier 1 must not bypass this finding"}]\n'
+        fi
+        exit 0
+      fi
       if [[ "$jq_expr" == "length" ]]; then
         printf '0\n'
       elif [[ -n "$jq_expr" ]]; then
@@ -110,7 +123,7 @@ expect_hook_reaches_pr() {
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
       bash "$ROOT/hooks/$hook" <<<"$(payload 'gh -R owner/repo pr merge 123 --merge')"
-  ) >/tmp/standalone_merge_hook.out 2>/tmp/standalone_merge_hook.err
+  ) >"$OUT_FILE" 2>"$ERR_FILE"
   set -e
 
   if grep -q 'repos/owner/repo/pulls/123' "$GH_LOG"; then
@@ -122,7 +135,7 @@ expect_hook_reaches_pr() {
     echo "--- gh log ---" >&2
     cat "$GH_LOG" >&2 || true
     echo "--- stderr ---" >&2
-    cat /tmp/standalone_merge_hook.err >&2 || true
+    cat "$ERR_FILE" >&2 || true
   fi
 }
 
@@ -136,11 +149,11 @@ expect_hook_blocks_url_target() {
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
       bash "$ROOT/hooks/$hook" <<<"$(payload 'gh pr merge https://github.com/owner/repo/pull/123 --merge')"
-  ) >/tmp/standalone_merge_hook.out 2>/tmp/standalone_merge_hook.err
+  ) >"$OUT_FILE" 2>"$ERR_FILE"
   local rc=$?
   set -e
 
-  if [[ "$rc" -eq 2 ]] && grep -q "PR番号が特定できません" /tmp/standalone_merge_hook.err; then
+  if [[ "$rc" -eq 2 ]] && grep -q "PR番号が特定できません" "$ERR_FILE"; then
     PASS=$((PASS + 1))
     echo "  PASS: $label"
   else
@@ -149,7 +162,7 @@ expect_hook_blocks_url_target() {
     echo "--- gh log ---" >&2
     cat "$GH_LOG" >&2 || true
     echo "--- stderr ---" >&2
-    cat /tmp/standalone_merge_hook.err >&2 || true
+    cat "$ERR_FILE" >&2 || true
   fi
 }
 
@@ -163,11 +176,11 @@ expect_hook_blocks_wrapped_url_target() {
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
       bash "$ROOT/hooks/$hook" <<<"$(payload "bash -c 'gh pr merge https://github.com/owner/repo/pull/123 --merge'")"
-  ) >/tmp/standalone_merge_hook.out 2>/tmp/standalone_merge_hook.err
+  ) >"$OUT_FILE" 2>"$ERR_FILE"
   local rc=$?
   set -e
 
-  if [[ "$rc" -eq 2 ]] && grep -q "PR番号が特定できません" /tmp/standalone_merge_hook.err; then
+  if [[ "$rc" -eq 2 ]] && grep -q "PR番号が特定できません" "$ERR_FILE"; then
     PASS=$((PASS + 1))
     echo "  PASS: $label"
   else
@@ -176,7 +189,7 @@ expect_hook_blocks_wrapped_url_target() {
     echo "--- gh log ---" >&2
     cat "$GH_LOG" >&2 || true
     echo "--- stderr ---" >&2
-    cat /tmp/standalone_merge_hook.err >&2 || true
+    cat "$ERR_FILE" >&2 || true
   fi
 }
 
@@ -191,11 +204,11 @@ expect_hook_blocks_dynamic_eval_target() {
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
       bash "$ROOT/hooks/$hook" <<<"$(payload "$command")"
-  ) >/tmp/standalone_merge_hook.out 2>/tmp/standalone_merge_hook.err
+  ) >"$OUT_FILE" 2>"$ERR_FILE"
   local rc=$?
   set -e
 
-  if [[ "$rc" -eq 2 ]] && grep -q "安全に解析できません" /tmp/standalone_merge_hook.err; then
+  if [[ "$rc" -eq 2 ]] && grep -q "安全に解析できません" "$ERR_FILE"; then
     PASS=$((PASS + 1))
     echo "  PASS: $label"
   else
@@ -204,7 +217,64 @@ expect_hook_blocks_dynamic_eval_target() {
     echo "--- gh log ---" >&2
     cat "$GH_LOG" >&2 || true
     echo "--- stderr ---" >&2
-    cat /tmp/standalone_merge_hook.err >&2 || true
+    cat "$ERR_FILE" >&2 || true
+  fi
+}
+
+write_review_status() {
+  local target="$1"
+  local code_sha="$2"
+  local codex_sha="$3"
+  mkdir -p "$(dirname "$target")"
+  CODE_SHA="$code_sha" CODEX_SHA="$codex_sha" python3 - "$target" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], "w") as f:
+    json.dump({
+        "fix/test": {
+            "code_review": True,
+            "code_review_sha": os.environ["CODE_SHA"],
+            "codex_review": True,
+            "codex_review_sha": os.environ["CODEX_SHA"],
+        }
+    }, f)
+PY
+}
+
+reset_review_state() {
+  rm -rf "$TMP_REPO/.claude" "$TMP_HOME/.claude"
+  mkdir -p "$TMP_REPO/.claude/state" "$TMP_HOME/.claude/state"
+}
+
+expect_review_sha_guard() {
+  local label="$1"
+  local expected="$2"
+  local code_sha="$3"
+  local codex_sha="$4"
+  reset_review_state
+  write_review_status "$TMP_REPO/.claude/state/review-status.json" "$code_sha" "$codex_sha"
+  : > "$GH_LOG"
+
+  set +e
+  (
+    cd "$TMP_REPO"
+    HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
+      FAKE_CHANGED_FILE="src/app.ts" FAKE_REVIEW_COMMENTS="high" FAKE_CLAUDE_REVIEW_CI="failure" \
+      bash "$ROOT/hooks/block-merge-without-review.sh" <<<"$(payload 'gh pr merge 123 --merge --repo owner/repo')"
+  ) >"$OUT_FILE" 2>"$ERR_FILE"
+  local rc=$?
+  set -e
+
+  if [[ "$rc" -eq "$expected" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $label"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $label (expected exit $expected, got $rc)" >&2
+    echo "--- stderr ---" >&2
+    cat "$ERR_FILE" >&2 || true
   fi
 }
 
@@ -268,6 +338,10 @@ expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time
 expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks noclobber redirected hidden env plus visible merge" ">|/tmp/out env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks noclobber redirected hidden env plus visible merge" ">|/tmp/out env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 
-rm -f /tmp/standalone_merge_hook.out /tmp/standalone_merge_hook.err
+echo "=== standalone review gate SHA freshness ==="
+expect_review_sha_guard "block-merge-without-review blocks stale Tier 1 review SHAs" 2 oldsha oldsha
+expect_review_sha_guard "block-merge-without-review allows matching Tier 1 review SHAs" 0 abc123 abc123
+
+rm -f "$OUT_FILE" "$ERR_FILE"
 echo "Results: $PASS passed, $FAIL failed (total $((PASS + FAIL)))"
 [[ "$FAIL" -eq 0 ]]

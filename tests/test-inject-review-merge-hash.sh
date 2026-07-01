@@ -165,6 +165,15 @@ write_pending "$GOOD_HASH"
 clear_pending_head_sha
 expect_rc "T4: missing pending head SHA blocks standalone merge hook" 2 "gh pr merge 123 --merge"
 
+write_pending "$GOOD_HASH" 1 1
+expect_rc "T5: subagent merge still enforces pending blocker" 2 "gh pr merge 123 --merge" CLAUDE_AGENT_DEPTH=1
+
+write_pending "$GOOD_HASH" 1 1
+expect_rc "T6: subagent non-merge remains exempt" 0 "gh pr checks 123" CLAUDE_AGENT_DEPTH=1
+
+write_pending "$GOOD_HASH" 1 1
+expect_rc "T7: subagent global-flag merge still enforces pending blocker" 2 "gh -R owner/repo pr merge 123 --merge" CLAUDE_AGENT_ID=subagent-123
+
 echo "Total: $TOTAL  Passed: $PASSED  Failed: $FAILED"
 rm -f /tmp/inject_merge_hash_test.out /tmp/inject_merge_hash_test.err
 [[ "$FAILED" -eq 0 ]] && exit 0 || exit 1

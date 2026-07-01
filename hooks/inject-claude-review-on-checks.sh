@@ -11,8 +11,36 @@ set -uo pipefail
 export GH_NO_UPDATE_NOTIFIER=1
 export GH_FORCE_TTY=0
 
-[[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] && exit 0
-[[ -n "${CLAUDE_AGENT_ID:-}" ]] && exit 0
+input=""
+[[ ! -t 0 ]] && input=$(cat)
+cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+_common_merge_count() {
+  _COMMON_SH="${SCRIPT_DIR}/gate-modes/common.sh" _CMD="$1" bash -c '
+source "$_COMMON_SH"
+count_gh_pr_merge_invocations "$_CMD"
+' 2>/dev/null || echo 0
+}
+
+_common_merge_target() {
+  _COMMON_SH="${SCRIPT_DIR}/gate-modes/common.sh" _CMD="$1" bash -c '
+source "$_COMMON_SH"
+extract_gh_pr_merge_target "$_CMD"
+' 2>/dev/null || echo ""
+}
+
+MERGE_COUNT=$(_common_merge_count "$cmd")
+
+_IS_SUBAGENT=0
+case "${CLAUDE_AGENT_DEPTH:-0}" in
+  ''|*[!0-9]*) ;;
+  *) [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] && _IS_SUBAGENT=1 ;;
+esac
+[[ -n "${CLAUDE_AGENT_ID:-}" ]] && _IS_SUBAGENT=1
+if [[ "$_IS_SUBAGENT" -eq 1 && "$MERGE_COUNT" -eq 0 ]]; then
+  exit 0
+fi
 
 # Project-scoped state
 if git rev-parse --show-toplevel &>/dev/null 2>&1; then
@@ -73,10 +101,6 @@ _pending_comment_set_current() {
   [[ -n "$current_hash" && "$current_hash" == "$state_hash" ]]
 }
 
-input=""
-[[ ! -t 0 ]] && input=$(cat)
-cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
-
 # =========================================================================
 # MODE 1: gh pr checks → fetch reviews and save state
 # =========================================================================
@@ -116,9 +140,9 @@ fi
 # =========================================================================
 # MODE 2: gh pr merge → hard block if unresolved
 # =========================================================================
-if echo "$(echo "$cmd" | head -1)" | grep -qE 'gh\s+pr\s+merge'; then
+if [[ "$MERGE_COUNT" -gt 0 ]]; then
   if [[ -f "$PENDING_FILE" ]]; then
-    MERGE_PR=$(echo "$(echo "$cmd" | head -1)" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' || echo "")
+    MERGE_PR=$(_common_merge_target "$cmd")
     REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
     # Issue #169: Use shared severity reader instead of duplicated python3 one-liners
     IFS='|' read -r CRITICAL HIGH PR PENDING_HEAD_SHA _TOTAL _METHOD <<< "$(_read_severity "$PENDING_FILE")"

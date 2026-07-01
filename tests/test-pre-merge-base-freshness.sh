@@ -105,7 +105,7 @@ import json
 import sys
 
 with open(sys.argv[1], "w") as f:
-    json.dump({"feature": {"code_review": True}}, f)
+    json.dump({"feature": {"code_review": True, "code_review_sha": "abc123"}}, f)
 PY
 }
 

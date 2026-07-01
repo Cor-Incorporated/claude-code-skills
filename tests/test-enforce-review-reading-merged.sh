@@ -88,6 +88,13 @@ run_hook() {  # $1 = command; stdout returned, stderr -> $WORK/err
       | env CLAUDE_AGENT_DEPTH=0 CLAUDE_AGENT_ID= PATH="$GHBIN:$PATH" bash "$HOOK" ) 2>"$WORK/err"
 }
 
+run_hook_subagent() {  # $1 = command; stdout returned, stderr -> $WORK/err
+  local payload
+  payload=$(jq -cn --arg command "$1" '{tool_input:{command:$command}}')
+  ( cd "$WORK" && printf '%s\n' "$payload" \
+      | env CLAUDE_AGENT_DEPTH=1 CLAUDE_AGENT_ID=subagent-123 PATH="$GHBIN:$PATH" bash "$HOOK" ) 2>"$WORK/err"
+}
+
 echo "[1] merged/closed PR -> suppress + purge"
 make_gh closed; write_pending
 out="$(run_hook "git status")"; rc=$?
@@ -312,6 +319,17 @@ echo "[17] stale cache refreshed -> purge (gh says closed)"
 make_gh closed; write_pending; seed_cache open 1000
 run_hook "git status" >/dev/null; rc=$?
 [ ! -f "$PENDING" ] && ok "stale cache refreshed -> purged" || bad "stale cache not refreshed"
+
+echo "[18] subagent non-merge -> exempt"
+make_gh open; write_pending
+out="$(run_hook_subagent "git status")"; rc=$?
+[ "$rc" -eq 0 ] && ok "subagent non-merge exit 0" || bad "exit $rc (want 0)"
+printf '%s' "$out" | grep -q additionalContext && bad "subagent non-merge banner leaked" || ok "subagent non-merge stayed quiet"
+
+echo "[19] subagent same PR merge -> hard-blocked"
+make_gh open; write_pending
+run_hook_subagent "gh pr merge 999" >/dev/null; rc=$?
+[ "$rc" -eq 2 ] && ok "subagent merge hard-blocked" || bad "exit $rc (want 2)"
 
 echo ""
 echo "RESULT: PASS=$PASS FAIL=$FAIL"
