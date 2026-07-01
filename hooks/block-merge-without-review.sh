@@ -9,16 +9,6 @@
 #   - APPROVED/timestamp checks removed (handled by pr-ci-review-gate.sh)
 set -euo pipefail
 
-# Project-scoped state
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
-  _STATE_BASE="${CLAUDE_PROJECT_DIR}/.claude/state"
-elif git rev-parse --show-toplevel &>/dev/null; then
-  _STATE_BASE="$(git rev-parse --show-toplevel)/.claude/state"
-else
-  _STATE_BASE="$HOME/.claude/state"
-fi
-mkdir -p "$_STATE_BASE"
-
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,7 +38,6 @@ _cmd_context=$(command_git_context_dir "$cmd")
 if [[ -n "$_cmd_context" ]]; then
     export GIT_CONTEXT_DIR="$_cmd_context"
     use_git_context_state_dir
-    _STATE_BASE="$STATE_DIR"
 fi
 
 PR_NUM=$(extract_gh_pr_merge_target "$cmd" || echo "")
@@ -74,6 +63,11 @@ fi
 # Get PR branch for tier classification
 PR_BRANCH=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.ref' 2>/dev/null || echo "")
 HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
+if [[ -z "$HEAD_SHA" || "$HEAD_SHA" == "null" ]]; then
+    echo "[BLOCK] PR #${PR_NUM}: HEAD SHA を取得できません。レビュー証跡を安全に検証できないためブロックします。" >&2
+    echo "  確認: gh pr view ${PR_NUM} -R ${REPO} --json headRefOid" >&2
+    exit 2
+fi
 # Content-based tier (Fix B): a docs/config-only PR on a feat/*/fix/* branch must
 # resolve LIGHT, not FULL. classify_review_tier inspects the actual changed files
 # via the GitHub API (REPO already resolved above) and only escalates to FULL when
@@ -89,7 +83,7 @@ if [[ "$TIER" == "FULL" ]]; then
     # Read BOTH project-scoped AND global lock files (OR-logic via common.sh).
     # Treat as verified if EITHER file has verified=true; locked only if a lock
     # entry exists somewhere and NO file has verified=true.
-    if [[ "$(lock_pr_locked "$PR_NUM")" == "yes" ]]; then
+    if [[ "$(lock_pr_locked_for_head "$PR_NUM" "$HEAD_SHA")" == "yes" ]]; then
         echo "🔒 [Pessimistic Lock] PR #${PR_NUM} は review_pending 状態です。マージ不可。" >&2
         echo "" >&2
         echo "push後のclaude-review 3ソース全確認が未完了です。" >&2
@@ -102,17 +96,11 @@ fi
 # =========================================================================
 # Review Hierarchy: Tier 1 PRIMARY_LGTM override (#175)
 # =========================================================================
-# Read review state to check for Tier 1 LGTM
-_rvw_state_path="$_STATE_BASE/review-status.json"
 PRIMARY_LGTM="false"
-if [[ -f "$_rvw_state_path" ]] && command -v jq &>/dev/null; then
-  if [[ -n "$PR_BRANCH" ]]; then
-    _cr=$(jq -r --arg b "$PR_BRANCH" '.[$b].code_review // false' "$_rvw_state_path" 2>/dev/null || echo "false")
-    _cx=$(jq -r --arg b "$PR_BRANCH" '.[$b].codex_review // false' "$_rvw_state_path" 2>/dev/null || echo "false")
-    if [[ "$_cr" == "true" ]] && [[ "$_cx" == "true" ]]; then
-      PRIMARY_LGTM="true"
-    fi
-  fi
+if [[ -n "$PR_BRANCH" ]] && \
+   [[ "$(read_review_for_head "$PR_BRANCH" "code_review" "$HEAD_SHA")" == "yes" ]] && \
+   [[ "$(read_review_for_head "$PR_BRANCH" "codex_review" "$HEAD_SHA")" == "yes" ]]; then
+  PRIMARY_LGTM="true"
 fi
 
 if [[ "$PRIMARY_LGTM" == "true" ]]; then

@@ -25,11 +25,6 @@ mkdir -p "$_STATE_BASE"
 export GH_FORCE_TTY=0
 export GH_NO_UPDATE_NOTIFIER=1
 
-# Subagent exemption
-if [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] || [[ -n "${CLAUDE_AGENT_ID:-}" ]]; then
-  exit 0
-fi
-
 input=""
 [[ ! -t 0 ]] && input=$(cat)
 
@@ -79,7 +74,12 @@ fi
 
 # Get repo (fork-aware: resolve_repo from common.sh)
 REPO=$(resolve_repo "$cmd")
-[[ -z "$REPO" ]] && exit 0
+if [[ -z "$REPO" ]]; then
+  echo "[BLOCKED] PR #${PR_NUMBER}: リポジトリを特定できません。" >&2
+  echo "  merge gate がレビュー証跡を検証できないため、fail closedします。" >&2
+  echo "  gh pr merge には --repo owner/repo を明示してください。" >&2
+  exit 2
+fi
 
 # State file
 REVIEW_FILE="$_STATE_BASE/pr-review-read.json"
@@ -112,21 +112,37 @@ review_read_files() {
   fi
 }
 
-review_read_bool() {
-  local pr="$1" field="$2" state_file val
-  while IFS= read -r state_file; do
-    [[ -z "$state_file" || ! -f "$state_file" ]] && continue
-    val=$(_REVIEW_FILE="$state_file" _PR="$pr" _FIELD="$field" python3 -c "
+review_read_field_state() {
+  local pr="$1" field="$2" head_sha="$3" state_files
+  state_files="$(review_read_files)"
+  _STATE_FILES="$state_files" _PR="$pr" _FIELD="$field" _HEAD_SHA="$head_sha" python3 -c "
 import json, os
-try:
-    with open(os.environ['_REVIEW_FILE']) as f:
-        s = json.load(f)
-    print('True' if s.get(os.environ['_PR'], {}).get(os.environ['_FIELD'], False) else 'False')
-except Exception:
-    print('False')
-" 2>/dev/null || echo "False")
-    [[ "$val" == "True" ]] && { echo "True"; return; }
-  done < <(review_read_files)
+
+state = 'missing'
+for state_file in os.environ['_STATE_FILES'].splitlines():
+    if not state_file:
+        continue
+    try:
+        with open(state_file) as f:
+            entry = json.load(f).get(os.environ['_PR'], {})
+    except Exception:
+        continue
+    if entry.get(os.environ['_FIELD'], False) is not True:
+        continue
+    if entry.get('head_sha', '') == os.environ['_HEAD_SHA']:
+        print('current')
+        raise SystemExit(0)
+    state = 'stale'
+print(state)
+" 2>/dev/null || echo "missing"
+}
+
+review_read_current_bool() {
+  local pr="$1" field="$2" head_sha="$3"
+  if [[ "$(review_read_field_state "$pr" "$field" "$head_sha")" == "current" ]]; then
+    echo "True"
+    return
+  fi
   echo "False"
 }
 
@@ -134,9 +150,11 @@ except Exception:
 # GATE 0: All CI checks must be COMPLETED
 # =========================================================================
 HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null || echo "")
-if [[ -z "$HEAD_SHA" ]]; then
-  echo "[WARN] PR #${PR_NUMBER}: HEAD SHA 取得失敗。" >&2
-  exit 0
+if [[ -z "$HEAD_SHA" || "$HEAD_SHA" == "null" ]]; then
+  echo "[BLOCKED] PR #${PR_NUMBER}: HEAD SHA を取得できません。" >&2
+  echo "  現在のPR headに対するレビュー既読証跡を検証できないため、fail closedします。" >&2
+  echo "  確認: gh pr view ${PR_NUMBER} -R ${REPO} --json headRefOid" >&2
+  exit 2
 fi
 
 PENDING_COUNT=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
@@ -175,7 +193,7 @@ COMMENT_COUNT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq 'length
 
 if [[ "$COMMENT_COUNT" -eq 0 ]]; then
   # Check if a code-reviewer fallback was already done
-  FALLBACK_DONE=$(review_read_bool "$PR_NUMBER" "fallback_review_done")
+  FALLBACK_DONE=$(review_read_current_bool "$PR_NUMBER" "fallback_review_done" "$HEAD_SHA")
 
   if [[ "$FALLBACK_DONE" != "True" ]]; then
     echo "" >&2
@@ -200,11 +218,17 @@ fi
 # =========================================================================
 # GATE 3: Review must be marked as read
 # =========================================================================
-REVIEW_READ=$(review_read_bool "$PR_NUMBER" "review_read")
+REVIEW_READ_STATE=$(review_read_field_state "$PR_NUMBER" "review_read" "$HEAD_SHA")
 
-if [[ "$REVIEW_READ" != "True" ]]; then
+if [[ "$REVIEW_READ_STATE" != "current" ]]; then
   echo "" >&2
-  echo "[BLOCKED] PR #${PR_NUMBER}: レビューを未読のままマージしようとしています。" >&2
+  if [[ "$REVIEW_READ_STATE" == "stale" ]]; then
+    echo "[BLOCKED] PR #${PR_NUMBER}: レビュー既読証跡が現在の head_sha と一致しません。" >&2
+    echo "  現在の head_sha: ${HEAD_SHA}" >&2
+    echo "  push 後に古い既読証跡が残っている可能性があります。" >&2
+  else
+    echo "[BLOCKED] PR #${PR_NUMBER}: レビューを未読のままマージしようとしています。" >&2
+  fi
   echo "" >&2
   echo "  以下を実行してください（レビュー読み取り＋既読マークを一括で行います）:" >&2
   echo "     bash ~/.claude/scripts/verify-pr-review.sh ${PR_NUMBER}" >&2
@@ -252,13 +276,13 @@ fi
 
 # Also check if fallback review flagged critical
 if [[ "$HAS_CRITICAL" == "NO" ]]; then
-  if [[ "$(review_read_bool "$PR_NUMBER" "has_critical")" == "True" ]]; then
+  if [[ "$(review_read_current_bool "$PR_NUMBER" "has_critical" "$HEAD_SHA")" == "True" ]]; then
     HAS_CRITICAL="YES"
   fi
 fi
 
 if [[ "$HAS_CRITICAL" == "YES" ]]; then
-  CRITICAL_ACK=$(review_read_bool "$PR_NUMBER" "critical_acknowledged")
+  CRITICAL_ACK=$(review_read_current_bool "$PR_NUMBER" "critical_acknowledged" "$HEAD_SHA")
 
   if [[ "$CRITICAL_ACK" != "True" ]]; then
     echo "" >&2

@@ -23,14 +23,15 @@ GATE_MODES_DIR="${SCRIPT_DIR}/gate-modes"
 GATE_MODE="${GATE_MODE:-${1:-STOP}}"
 
 # =========================================================================
-# NO SUBAGENT EXEMPTION for PR create/merge.
-# Subagents MUST NOT create or merge PRs without review.
-# Only POST_PUSH and STOP modes are exempt for subagents.
+# NO SUBAGENT EXEMPTION for PR create/merge/push.
+# Subagents MUST NOT create or merge PRs without review, and POST_PUSH must
+# still invalidate stale review evidence after child-session pushes.
+# Only STOP mode is exempt for subagents.
 # =========================================================================
 if [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] || [[ -n "${CLAUDE_AGENT_ID:-}" ]]; then
   case "$GATE_MODE" in
-    POST_PUSH|STOP) exit 0 ;;
-    # PRE_CREATE and PRE_MERGE are NOT exempt — fall through to enforcement
+    STOP) exit 0 ;;
+    # PRE_CREATE, PRE_MERGE, and POST_PUSH are NOT exempt — fall through
   esac
 fi
 

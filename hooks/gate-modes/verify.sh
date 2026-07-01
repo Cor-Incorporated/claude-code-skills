@@ -71,8 +71,8 @@ TIER=$(classify_review_tier "$BRANCH" "${PR:-}")
 if [[ "$TIER" == "EXEMPT" ]]; then
   echo "✅ PR #${PR}: EXEMPT tier — CI green確認済み。" >&2
 else
-  CODE_REVIEW=$(read_review "$BRANCH" "code_review")
-  CODEX_REVIEW=$(read_review "$BRANCH" "codex_review")
+  CODE_REVIEW=$(read_review_for_head "$BRANCH" "code_review" "$HEAD_SHA")
+  CODEX_REVIEW=$(read_review_for_head "$BRANCH" "codex_review" "$HEAD_SHA")
 
   # Issue #60 Bug B: Also check pending-review-comments.json (claude-review results)
   # If claude-review reported CRITICAL/HIGH=0, treat as review passed
@@ -122,11 +122,13 @@ fi
 # decide. On failure, do NOT print the success line — exit non-zero so the operator
 # knows the lock is still pending.
 _lock_rc=0
-_BR="$BRANCH" lock_apply "$PR" "
+_BR="$BRANCH" _HEAD_SHA="$HEAD_SHA" lock_apply "$PR" "
 e = s.setdefault(PR, {'status': 'review_pending', 'branch': os.environ['_BR']})
 e['ci_green'] = True
 e['review_lgtm'] = True
 e['verified'] = True
+e['head_sha'] = os.environ['_HEAD_SHA']
+e['verified_head_sha'] = os.environ['_HEAD_SHA']
 " || _lock_rc=$?
 
 if [[ "$_lock_rc" -ne 0 ]]; then

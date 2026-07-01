@@ -7,8 +7,12 @@
 # addressed review findings.
 set -uo pipefail
 
-[[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] && exit 0
-[[ -n "${CLAUDE_AGENT_ID:-}" ]] && exit 0
+_IS_SUBAGENT=0
+case "${CLAUDE_AGENT_DEPTH:-0}" in
+  ''|*[!0-9]*) ;;
+  *) [[ "${CLAUDE_AGENT_DEPTH:-0}" -ge 1 ]] && _IS_SUBAGENT=1 ;;
+esac
+[[ -n "${CLAUDE_AGENT_ID:-}" ]] && _IS_SUBAGENT=1
 
 input=""
 [[ ! -t 0 ]] && input=$(cat)
@@ -28,6 +32,9 @@ if [[ -n "$cmd" ]] \
 fi
 
 MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+if [[ "$_IS_SUBAGENT" -eq 1 && "$MERGE_COUNT" -eq 0 ]]; then
+  exit 0
+fi
 if [[ "$MERGE_COUNT" -gt 1 ]]; then
   echo "[BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。PRごとに個別実行してください。" >&2
   exit 2

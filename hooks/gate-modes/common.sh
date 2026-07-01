@@ -232,11 +232,57 @@ except Exception:
   echo "no"
 }
 
+lock_pr_verified_for_head() {
+  local pr="$1"
+  local head_sha="$2"
+  local lf
+  [[ -n "$head_sha" && "$head_sha" != "null" ]] || { echo "no"; return; }
+  while IFS= read -r lf; do
+    [[ -z "$lf" || ! -f "$lf" ]] && continue
+    local val
+    val=$(_LOCK="$lf" _PR="$pr" _HEAD_SHA="$head_sha" python3 -c "
+import json, os
+try:
+    with open(os.environ['_LOCK']) as f:
+        s = json.load(f)
+    entry = s.get(os.environ['_PR'], {})
+    stored = entry.get('verified_head_sha') or entry.get('head_sha') or ''
+    print('yes' if entry.get('verified', False) and stored == os.environ['_HEAD_SHA'] else 'no')
+except Exception:
+    print('no')
+" 2>/dev/null || echo "no")
+    [[ "$val" == "yes" ]] && { echo "yes"; return; }
+  done < <(lock_files)
+  echo "no"
+}
+
 # lock_pr_locked <pr> — "yes" if a lock entry exists in ANY file AND no file
 # has verified=true (i.e. still review_pending somewhere, verified nowhere).
 lock_pr_locked() {
   local pr="$1"
   [[ "$(lock_pr_verified "$pr")" == "yes" ]] && { echo "no"; return; }
+  local lf
+  while IFS= read -r lf; do
+    [[ -z "$lf" || ! -f "$lf" ]] && continue
+    local has
+    has=$(_LOCK="$lf" _PR="$pr" python3 -c "
+import json, os
+try:
+    with open(os.environ['_LOCK']) as f:
+        s = json.load(f)
+    print('yes' if os.environ['_PR'] in s else 'no')
+except Exception:
+    print('no')
+" 2>/dev/null || echo "no")
+    [[ "$has" == "yes" ]] && { echo "yes"; return; }
+  done < <(lock_files)
+  echo "no"
+}
+
+lock_pr_locked_for_head() {
+  local pr="$1"
+  local head_sha="$2"
+  [[ "$(lock_pr_verified_for_head "$pr" "$head_sha")" == "yes" ]] && { echo "no"; return; }
   local lf
   while IFS= read -r lf; do
     [[ -z "$lf" || ! -f "$lf" ]] && continue
@@ -2585,18 +2631,96 @@ jq_ci_pending_filter() {
   echo "[.check_runs[] | select(.status!=\"completed\") | select(.name | test(\"${NON_CI_CHECK_PATTERN}\"; \"i\") | not)] | length"
 }
 
+review_state_files() {
+  local global_state="$HOME/.claude/state/review-status.json"
+
+  echo "$REVIEW_STATE"
+  if [[ "$global_state" != "$REVIEW_STATE" ]]; then
+    echo "$global_state"
+  fi
+}
+
+review_sha_field() {
+  case "$1" in
+    code_review) echo "code_review_sha" ;;
+    codex_review|codex_review_ran|codex_critical|codex_high|codex_medium|codex_low) echo "codex_review_sha" ;;
+    *) echo "${1}_sha" ;;
+  esac
+}
+
+gstack_review_file() {
+  local branch="$1"
+  local slug safe_branch
+
+  slug=$(remote_slug origin 2>/dev/null | tr '/' '-' || echo "")
+  [[ -n "$slug" ]] || return 1
+  safe_branch=$(printf '%s' "$branch" | tr '/' '-')
+  printf '%s\n' "$HOME/.gstack/projects/${slug}/${safe_branch}-reviews.jsonl"
+}
+
+gstack_review_for_head() {
+  local branch="$1"
+  local head_sha="$2"
+  local review_file
+
+  [[ -n "$branch" && -n "$head_sha" && "$head_sha" != "null" ]] || { echo "no"; return; }
+  review_file=$(gstack_review_file "$branch" || echo "")
+  [[ -n "$review_file" && -f "$review_file" ]] || { echo "no"; return; }
+
+  _REVIEW_FILE="$review_file" _HEAD_SHA="$head_sha" python3 - <<'PY' 2>/dev/null || echo "no"
+import json
+import os
+
+accepted = {"approve", "approved", "pass", "passed", "success", "ok", "lgtm", "clean", "no_findings", "no findings"}
+head_sha = os.environ["_HEAD_SHA"]
+
+def same_sha(value):
+    value = str(value or "").strip()
+    if not value:
+        return False
+    if value == head_sha:
+        return True
+    shorter, longer = sorted((value, head_sha), key=len)
+    return len(shorter) >= 6 and longer.startswith(shorter)
+
+try:
+    with open(os.environ["_REVIEW_FILE"]) as f:
+        lines = f.readlines()
+except Exception:
+    print("no")
+    raise SystemExit
+
+for line in reversed(lines):
+    try:
+        entry = json.loads(line)
+    except Exception:
+        continue
+    entry_sha = entry.get("commit") or entry.get("head_sha") or entry.get("head") or entry.get("sha")
+    if not same_sha(entry_sha):
+        continue
+    status = str(entry.get("status") or entry.get("result") or entry.get("gate") or "").strip().lower()
+    if status in accepted:
+        print("yes")
+        raise SystemExit
+    findings = entry.get("findings")
+    if isinstance(findings, dict):
+        critical = int(findings.get("critical") or findings.get("CRITICAL") or 0)
+        high = int(findings.get("high") or findings.get("HIGH") or 0)
+        if critical == 0 and high == 0:
+            print("yes")
+            raise SystemExit
+
+print("no")
+PY
+}
+
 read_review() {
   local branch="$1"
   local field="$2"
-  local global_state="$HOME/.claude/state/review-status.json"
+  local state_file
 
   # Check both state files — return "yes" if EITHER has the field set to true
-  local files_to_check=("$REVIEW_STATE")
-  if [[ "$global_state" != "$REVIEW_STATE" ]]; then
-    files_to_check+=("$global_state")
-  fi
-
-  for state_file in "${files_to_check[@]}"; do
+  while IFS= read -r state_file; do
     [[ ! -f "$state_file" ]] && continue
     if command -v jq &>/dev/null; then
       local val
@@ -2612,7 +2736,53 @@ read_review() {
         return
       fi
     fi
-  done
+  done < <(review_state_files)
+
+  echo "no"
+}
+
+read_review_for_head() {
+  local branch="$1"
+  local field="$2"
+  local head_sha="$3"
+  local sha_field state_file
+
+  [[ -n "$head_sha" && "$head_sha" != "null" ]] || { echo "no"; return; }
+  sha_field=$(review_sha_field "$field")
+
+  while IFS= read -r state_file; do
+    [[ ! -f "$state_file" ]] && continue
+    if command -v jq &>/dev/null; then
+      local val
+      val=$(jq -r --arg b "$branch" --arg f "$field" --arg sf "$sha_field" --arg sha "$head_sha" \
+        'if ((.[$b][$f] // false) == true and ((.[$b][$sf] // "") == $sha)) then "yes" else "no" end' \
+        "$state_file" 2>/dev/null || echo "no")
+      if [[ "$val" == "yes" ]]; then
+        echo "yes"
+        return
+      fi
+    else
+      local val
+      val=$(_STATE="$state_file" _BR="$branch" _FLD="$field" _SHA_FLD="$sha_field" _SHA="$head_sha" python3 -c "
+import json, os
+try:
+    with open(os.environ['_STATE']) as f:
+        data = json.load(f)
+    row = data.get(os.environ['_BR'], {})
+    print('yes' if row.get(os.environ['_FLD']) is True and row.get(os.environ['_SHA_FLD']) == os.environ['_SHA'] else 'no')
+except Exception:
+    print('no')
+" 2>/dev/null || echo "no")
+      if [[ "$val" == "yes" ]]; then
+        echo "yes"
+        return
+      fi
+    fi
+  done < <(review_state_files)
+  if [[ "$field" == "code_review" ]] && [[ "$(gstack_review_for_head "$branch" "$head_sha")" == "yes" ]]; then
+    echo "yes"
+    return
+  fi
   echo "no"
 }
 
@@ -2658,5 +2828,46 @@ except Exception:
       fi
     fi
   done
+  echo "-1"
+}
+
+read_codex_severity_for_head() {
+  local branch="$1"
+  local field="$2"
+  local head_sha="$3"
+  local state_file
+
+  [[ -n "$head_sha" && "$head_sha" != "null" ]] || { echo "-1"; return; }
+
+  while IFS= read -r state_file; do
+    [[ ! -f "$state_file" ]] && continue
+    if command -v jq &>/dev/null; then
+      local val
+      val=$(jq -r --arg b "$branch" --arg f "$field" --arg sha "$head_sha" \
+        'if ((.[$b].codex_review_sha // "") == $sha) then (.[$b][$f] // -1) else -1 end' \
+        "$state_file" 2>/dev/null || echo "-1")
+      if [[ "$val" != "-1" ]] && [[ "$val" != "null" ]] && [[ "$val" =~ ^[0-9]+$ ]]; then
+        echo "$val"
+        return
+      fi
+    else
+      local val
+      val=$(_STATE="$state_file" _BR="$branch" _FLD="$field" _SHA="$head_sha" python3 -c "
+import json, os
+try:
+    with open(os.environ['_STATE']) as f:
+        data = json.load(f)
+    row = data.get(os.environ['_BR'], {})
+    v = row.get(os.environ['_FLD'], -1) if row.get('codex_review_sha') == os.environ['_SHA'] else -1
+    print(int(v) if isinstance(v, (int, float)) and v >= 0 else -1)
+except Exception:
+    print(-1)
+" 2>/dev/null || echo "-1")
+      if [[ "$val" != "-1" ]] && [[ "$val" =~ ^[0-9]+$ ]]; then
+        echo "$val"
+        return
+      fi
+    fi
+  done < <(review_state_files)
   echo "-1"
 }
