@@ -25,11 +25,24 @@ if [[ -n "$cmd" ]] && ! echo "$(echo "$cmd" | head -1)" | grep -qE 'git\s+push';
   exit 0
 fi
 
+_cmd_context=$(command_git_push_context_dir "$cmd")
+if [[ -n "$_cmd_context" ]]; then
+  export GIT_CONTEXT_DIR="$_cmd_context"
+  use_git_context_state_dir
+fi
+
 BRANCH=$(current_branch)
 [ -z "$BRANCH" ] && exit 0
 
-PR_NUMBER=$(gh pr list --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || echo "")
+REPO=$(resolve_repo "$cmd")
+if [[ -n "$REPO" ]]; then
+  PR_NUMBER=$(gh pr list -R "$REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || echo "")
+else
+  PR_NUMBER=$(gh pr list --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || echo "")
+fi
 [ -z "$PR_NUMBER" ] && exit 0
+
+HEAD_SHA=$(git_ctx rev-parse HEAD 2>/dev/null || echo "")
 
 # Set pessimistic lock in BOTH project-scoped AND global state (Fix8).
 # A later reader (block-merge-without-review.sh) with no/other CLAUDE_PROJECT_DIR
@@ -39,10 +52,12 @@ PR_NUMBER=$(gh pr list --head "$BRANCH" --json number -q '.[0].number' 2>/dev/nu
 # the SHA-smart invalidation below still runs. A failed SET means a review-required
 # PR may be left UNLOCKED — the stderr warning is the operator's signal.
 _lock_rc=0
-_BR="$BRANCH" lock_apply "$PR_NUMBER" "
+_BR="$BRANCH" _REPO="$REPO" _HEAD_SHA="$HEAD_SHA" lock_apply "$PR_NUMBER" "
 s[PR] = {
     'status': 'review_pending',
     'branch': os.environ['_BR'],
+    'repo': os.environ.get('_REPO', ''),
+    'head_sha': os.environ.get('_HEAD_SHA', ''),
     'ci_green': False,
     'review_lgtm': False,
     'verified': False,
@@ -57,7 +72,6 @@ fi
 # changes since the reviewed commit. docs/config-only pushes keep the review
 # intact, eliminating needless re-review (the rework loop).
 GLOBAL_REVIEW="$HOME/.claude/state/review-status.json"
-HEAD_SHA=$(git_ctx rev-parse HEAD 2>/dev/null || echo "")
 review_invalidated=false
 review_kept=false
 for _target in "$REVIEW_STATE" "$GLOBAL_REVIEW"; do
@@ -109,7 +123,6 @@ elif [[ "$review_kept" == "true" ]]; then
   echo "✅ [Review Kept] 非ソース変更のみのため既存レビューを維持します（再レビュー不要）。" >&2
 fi
 
-REPO=$(resolve_repo "")
 # Classify tier to show appropriate requirements
 TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
 echo "" >&2

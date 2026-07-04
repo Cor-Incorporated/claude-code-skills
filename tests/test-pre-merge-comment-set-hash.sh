@@ -221,7 +221,12 @@ import os
 import sys
 
 with open(sys.argv[1], "w") as f:
-    json.dump({"123": {"verified": True, "head_sha": os.environ["HEAD_SHA"], "verified_head_sha": os.environ["HEAD_SHA"]}}, f)
+    json.dump({"123": {
+        "verified": True,
+        "repo": "owner/repo",
+        "head_sha": os.environ["HEAD_SHA"],
+        "verified_head_sha": os.environ["HEAD_SHA"],
+    }}, f)
 PY
 }
 

@@ -471,7 +471,7 @@ echo ""
 
 log "Next steps:"
 log "  Review results: ls ${RESULTS_DIR}/"
-log "  Push all:       for wt in ${REPO_PATH}/../.worktrees/${REPO_PATH##*/}-*; do (cd \"\$wt\" && git push -u origin HEAD); done"
+log "  Push all:       for wt in ${REPO_PATH}/.worktrees/codex/*; do (cd \"\$wt\" && git push -u origin HEAD); done"
 log "  Cleanup all:    git -C ${REPO_PATH} worktree prune"
 
 exit $FAILED

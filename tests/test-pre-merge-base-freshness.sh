@@ -536,5 +536,41 @@ else
   cat "$ERR_FILE" >&2 || true
 fi
 
+TARGET_LOCK_REPO="$TMP_ROOT/target-lock-repo"
+git clone -q "$TMP_REMOTE" "$TARGET_LOCK_REPO"
+git -C "$TARGET_LOCK_REPO" remote set-url origin git@github.com:owner/repo.git
+mkdir -p "$TARGET_LOCK_REPO/.claude/state"
+printf '{}\n' > "$STATE_DIR/review-status.json"
+printf '{}\n' > "$TMP_HOME/.claude/state/review-status.json"
+printf '{}\n' > "$STATE_DIR/pr-review-lock.json"
+printf '{}\n' > "$TMP_HOME/.claude/state/pr-review-lock.json"
+python3 - "$TARGET_LOCK_REPO/.claude/state/pr-review-lock.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "w") as f:
+    json.dump({
+        "123": {
+            "verified": True,
+            "repo": "owner/repo",
+            "head_sha": "abc123",
+            "verified_head_sha": "abc123",
+        }
+    }, f)
+PY
+TOTAL=$((TOTAL + 1))
+set +e
+run_pre_merge "$BASE_SHA" "gh pr merge 123 --merge --repo owner/repo" "$TMP_REPO"
+rc=$?
+set -e
+if [[ "$rc" -eq 0 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: PRE_MERGE Pass C reads target repo verified lock state (exit=$rc)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: PRE_MERGE Pass C should read target repo verified lock state (got $rc)" >&2
+  cat "$ERR_FILE" >&2 || true
+fi
+
 echo "Total: $TOTAL  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]

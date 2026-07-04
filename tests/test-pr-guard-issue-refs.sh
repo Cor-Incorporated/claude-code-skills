@@ -84,19 +84,27 @@ expect_allow \
   $'gh pr create --base develop --title "docs: refs issue" --body "## Summary\nRefs #220\n\ncodex review done"'
 
 expect_allow \
-  "T3: GitHub Issue URL is accepted" \
+  "T3: Ref reference is accepted without auto-close semantics" \
+  $'gh pr create --base develop --title "docs: ref issue" --body "## Summary\nRef #220\n\ncodex review done"'
+
+expect_allow \
+  "T4: References reference is accepted without auto-close semantics" \
+  $'gh pr create --base develop --title "docs: references issue" --body "## Summary\nReferences #220\n\ncodex review done"'
+
+expect_allow \
+  "T5: GitHub Issue URL is accepted" \
   $'gh pr create --base develop --title "docs: url issue" --body "## Summary\nhttps://github.com/Cor-Incorporated/Grift/issues/1261\n\ncodex review done"'
 
 expect_allow \
-  "T4: --body-file content is scanned for Issue URLs" \
+  "T6: --body-file content is scanned for Issue URLs" \
   "gh pr create --base develop --title 'docs: body file issue' --body-file '$BODY_FILE'"
 
 expect_block \
-  "T5: missing Issue reference is blocked" \
+  "T7: missing Issue reference is blocked" \
   $'gh pr create --base develop --title "docs: no issue" --body "## Summary\ncodex review done"'
 
 expect_block \
-  "T6: bare issue number remains blocked as ambiguous" \
+  "T8: bare issue number remains blocked as ambiguous" \
   $'gh pr create --base develop --title "docs: bare issue" --body "## Summary\n#220\n\ncodex review done"'
 
 echo ""

@@ -274,7 +274,7 @@ fi
 # --- Pass C: Manual verification via pr-review-lock.json (Fix8 dual-location) ---
 # Check BOTH project-scoped AND global lock files (OR-logic) so a verified=true
 # written to either location releases the gate.
-[[ "$(lock_pr_verified_for_head "$PR_NUMBER" "$HEAD_SHA")" == "yes" ]] && PASS_C="yes"
+[[ "$(lock_pr_verified_for_head "$PR_NUMBER" "$HEAD_SHA" "$REPO")" == "yes" ]] && PASS_C="yes"
 
 # --- Tier-aware judgment ---
 CODEX_REVIEW=$(read_review_for_head "$BRANCH" "codex_review" "$HEAD_SHA")

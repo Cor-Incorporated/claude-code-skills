@@ -27,7 +27,7 @@ esac
 EOF
 chmod +x "$GHBIN/gh"
 
-CLAUDE_PROJECT_DIR="$WORK" PATH="$GHBIN:$PATH" bash "$CLEANUP" >/dev/null 2>&1 || true
+(cd "$WORK" && CLAUDE_PROJECT_DIR="$WORK" PATH="$GHBIN:$PATH" bash "$CLEANUP") >/dev/null 2>&1 || true
 [ ! -f "$PENDING" ] && ok "merged-PR pending purged by cleanup" || bad "pending still present"
 echo "RESULT: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

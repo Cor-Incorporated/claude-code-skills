@@ -23,7 +23,10 @@ export CLAUDE_PROJECT_DIR="$TEMP_DIR"
 # and create empty state files there
 source "$PROJECT_DIR/hooks/gate-modes/common.sh" 2>/dev/null || true
 
-# Now override REVIEW_STATE to a flat path in TEMP_DIR for easier test control
+# Now override REVIEW_STATE to a flat path in TEMP_DIR for easier test control.
+# common.sh now ignores non-repo broad CLAUDE_PROJECT_DIR values when a real repo
+# cwd exists, so this test creates its temp state directory explicitly.
+mkdir -p "$TEMP_DIR/.claude/state"
 export REVIEW_STATE="$TEMP_DIR/.claude/state/rs.json"
 export LOCK_STATE="$TEMP_DIR/.claude/state/lk.json"
 echo '{}'  > "$REVIEW_STATE"

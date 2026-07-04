@@ -23,8 +23,7 @@
 # IMPORTANT:
 #   - Do NOT checkout the target branch in the main repo before running this script.
 #     This script creates a git worktree for the branch, which fails if the branch
-#     is already checked out elsewhere. The script will auto-switch main repo to
-#     'develop' if the target branch is currently checked out.
+#     is already checked out elsewhere. It will not switch the main repo branch.
 #   - Codex CLI runs are MCP-off by default to avoid startup hangs from user
 #     config MCP bootstrap. Set CODEX_ENABLE_MCP=1 only when a task needs MCP.
 
@@ -242,7 +241,8 @@ fi
 
 # Config
 REPO_NAME=$(basename "$REPO_PATH")
-WORKTREE_PATH="${REPO_PATH}/../.worktrees/${REPO_NAME}-${BRANCH_NAME//\//-}"
+BRANCH_SLUG="${BRANCH_NAME//\//-}"
+WORKTREE_PATH="${REPO_PATH}/.worktrees/codex/${BRANCH_SLUG}"
 OUTPUT_FILE="${CODEX_OUTPUT:-/tmp/codex-result-${BRANCH_NAME//\//-}.md}"
 
 # --- Auto-detect sandbox level based on task type ---
@@ -277,29 +277,33 @@ if [[ ! -d "$REPO_PATH/.git" ]] && [[ ! -f "$REPO_PATH/.git" ]]; then
     exit 1
 fi
 
-# --- Create worktree ---
-log "Creating worktree: ${WORKTREE_PATH}"
-mkdir -p "$(dirname "$WORKTREE_PATH")"
-
 # Check if branch is currently checked out in main repo
 CURRENT_BRANCH=$(git -C "$REPO_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 if [[ "$CURRENT_BRANCH" == "$BRANCH_NAME" ]]; then
     warn "Branch '${BRANCH_NAME}' is checked out in main repo."
-    warn "Switching main repo to 'develop' to free the branch for worktree."
-    git -C "$REPO_PATH" checkout develop 2>/dev/null || {
-        error "Cannot switch main repo away from '${BRANCH_NAME}'. Checkout a different branch first."
-        exit 1
-    }
+    error "Cannot create a worktree for a branch already checked out at ${REPO_PATH}."
+    error "Checkout a different branch first, or choose a different target branch."
+    exit 1
 fi
+
+# --- Create worktree ---
+log "Creating worktree: ${WORKTREE_PATH}"
+mkdir -p "$(dirname "$WORKTREE_PATH")"
 
 # Create branch if it doesn't exist
 if ! git -C "$REPO_PATH" rev-parse --verify "$BRANCH_NAME" >/dev/null 2>&1; then
     git -C "$REPO_PATH" branch "$BRANCH_NAME" 2>/dev/null || true
 fi
 
-# Create worktree (remove stale if exists)
+# Create worktree. Existing worktrees are only replaced with an explicit opt-in
+# so delegation cannot silently delete in-progress work.
 if [[ -d "$WORKTREE_PATH" ]]; then
-    warn "Worktree exists, removing stale: ${WORKTREE_PATH}"
+    if [[ "${CODEX_REPLACE_WORKTREE:-0}" != "1" ]]; then
+        error "Worktree already exists: ${WORKTREE_PATH}"
+        error "Review or remove it manually, or set CODEX_REPLACE_WORKTREE=1 to replace it."
+        exit 1
+    fi
+    warn "Replacing existing worktree: ${WORKTREE_PATH}"
     git -C "$REPO_PATH" worktree remove --force "$WORKTREE_PATH" 2>/dev/null || rm -rf "$WORKTREE_PATH"
     git -C "$REPO_PATH" worktree prune 2>/dev/null || true
 fi
