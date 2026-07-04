@@ -200,10 +200,10 @@ hook スクリプトが委任ルールを自動的に強制します:
 ```
 PR マージ可能？
 │
-├─ Gate 1: CI 全グリーン？ ──────────────── block-merge-without-ci.sh
+├─ Gate 1: CI 全グリーン？ ──────────────── gate-modes/pre-merge.sh
 │  └─ 全 GitHub Actions チェックが ✅（pending/failed は不可）
 │
-├─ Gate 2: 最新 push 後のレビュー？ ──────── block-merge-without-review.sh
+├─ Gate 2: 最新 push 後のレビュー？ ──────── gate-modes/pre-merge.sh
 │  └─ review.submittedAt > 最終 push 時刻（古いレビューは拒否）
 │
 ├─ Gate 3: レビュー検証済み？ ───────────── pr-ci-review-gate.sh (LIGHT tier 3-pass OR)
@@ -294,7 +294,7 @@ GitHub 上では mergeable でも local hook が止める場合は、
 以下で強制:
 - **4段階検証**: コード存在 → 構文OK → settings.json登録 → 実際に発火
 - **`delivery_score.py`**: 定量品質スコア（hookカバレッジ、CI合格率、レビュー遵守率）
-- **`validate-hook-deployment.sh`**: ソース ↔ デプロイ ↔ 登録の整合性チェック
+- **`enforce-hook-deploy-integrity.sh`**: ソース ↔ デプロイ ↔ 登録の整合性チェック（auto-sync + orphan 検出）
 - **CI/CD**: shellcheck + JSON validation + syntax checking（全PR）
 
 **Epic #130 前**: hookゲート動作率 39% (7/18) → **後**: 98%+ (59/59 hooks 登録 + デプロイ済み)
@@ -332,14 +332,12 @@ P2-MEDIUM Issue #136-#147 も後続 PR で解決済みです。現在のオー�
 - `reset-factcheck.sh` — セッション開始時にファクトチェック状態をリセット
 - `enforce-branch-workflow.sh` — develop ブランチ自動作成、フィーチャーブランチワークフロー強制
 - `validate-no-local-hooks.sh` — セッション開始時に hook 上書きが存在しないことを検証
-- `validate-hook-deployment.sh` — 全 hook のインストールと settings.json への登録を検証
+- `enforce-hook-deploy-integrity.sh` — 全 hook のインストールと settings.json への登録を検証（auto-sync + orphan 検出）
 
 ### 品質ゲート（マージ前）
-- `block-merge-without-ci.sh` — CI 全チェックグリーンなしでマージをブロック
-- `block-merge-without-review.sh` — 最新 push 後のレビューなしでマージをブロック
-- `pr-ci-review-gate.sh` — 6 モードゲート (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) Tier 制レビュー対応
-- `pr-merge-claude-review-gate.sh` — 5 サブゲート Claude レビュー強制
-- `inject-claude-review-on-checks.sh` — `gh pr checks` / `gh pr merge` 時にレビューコメントを自動取得
+- `pr-ci-review-gate.sh` — 6 モードゲートディスパッチャ (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) Tier 制レビュー対応
+- `gate-modes/pre-merge.sh` — 統合 PR マージ 5-ゲートシーケンス（CI completed/green、comments exist、review_read、CRITICAL ack）。Phase 3 で block-merge-without-ci/review + pr-merge-claude-review-gate を吸収
+- `inject-claude-review-on-checks.sh` — `gh pr checks` 時にレビューコメント自動取得（MODE1）+ 軟提醒（MODE3）。マージ時 hard-block は pre-merge.sh に移管
 - `pr-guard.sh` — ベースブランチ、Issue 参照、コンフリクトチェック
 - `task-completion-gate.sh` — 早期タスク完了をブロック（CI pending または CRITICAL/HIGH 指摘あり）
 - `stop-test-gate.sh` — セッション終了前に change-related test gate 実行（docs/config-only はスキップ、必要時は full suite fallback、stop_hook_active ガード付き）

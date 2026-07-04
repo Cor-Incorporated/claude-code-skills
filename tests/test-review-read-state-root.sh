@@ -125,7 +125,7 @@ run_merge_gate() {
   (
     cd "$TMP_REPO"
     env -u CLAUDE_PROJECT_DIR HOME="$TMP_HOME" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
-      bash "$ROOT/hooks/pr-merge-claude-review-gate.sh" \
+      GATE_MODE=PRE_MERGE bash "$ROOT/hooks/pr-ci-review-gate.sh" \
         <<<"$(payload 'gh pr merge 123 --merge --repo owner/repo')"
   )
 }

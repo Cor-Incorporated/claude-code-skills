@@ -138,49 +138,11 @@ print(d.get('output', ''))
 fi
 
 # =========================================================================
-# MODE 2: gh pr merge → hard block if unresolved
+# MODE 2 (gh pr merge hard-block) was removed in Phase 3.
+# The consolidated pre-merge.sh (sourced via pr-ci-review-gate.sh PRE_MERGE)
+# now performs the merge-time gate (CI green + Gate 0-4 + C/H/BUG severity).
+# MODE 1 (gh pr checks fetch) and MODE 3 (soft reminder) remain below.
 # =========================================================================
-if [[ "$MERGE_COUNT" -gt 0 ]]; then
-  if [[ -f "$PENDING_FILE" ]]; then
-    MERGE_PR=$(_common_merge_target "$cmd")
-    REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
-    # Issue #169: Use shared severity reader instead of duplicated python3 one-liners
-    IFS='|' read -r CRITICAL HIGH PR PENDING_HEAD_SHA _TOTAL _METHOD <<< "$(_read_severity "$PENDING_FILE")"
-
-    if [[ -n "$MERGE_PR" && -n "$PR" && "$MERGE_PR" != "$PR" ]]; then
-      exit 0
-    fi
-
-    if [[ -n "$REPO" ]] && [[ -n "$PR" ]]; then
-      if [[ -z "$PENDING_HEAD_SHA" ]]; then
-        echo "[inject-claude-review] pending-review-comments.json has no head SHA for PR #${PR}; rerun gh pr checks ${PR}." >&2
-        exit 2
-      fi
-      CURRENT_HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha' 2>/dev/null || echo "")
-      if [[ -z "$CURRENT_HEAD_SHA" ]]; then
-        echo "[inject-claude-review] could not resolve current head SHA for PR #${PR}; rerun gh pr checks ${PR}." >&2
-        exit 2
-      fi
-      if [[ -n "$CURRENT_HEAD_SHA" ]] && [[ "$PENDING_HEAD_SHA" != "$CURRENT_HEAD_SHA" ]]; then
-        echo "[inject-claude-review] pending-review-comments.json is stale for PR #${PR}; rerun gh pr checks ${PR}." >&2
-        exit 2
-      fi
-      if [[ -n "$CURRENT_HEAD_SHA" ]] && ! _pending_comment_set_current "$PENDING_FILE" "$REPO" "$PR" "$CURRENT_HEAD_SHA"; then
-        echo "[inject-claude-review] pending-review-comments.json does not match current review comments for PR #${PR}; rerun gh pr checks ${PR}." >&2
-        exit 2
-      fi
-    fi
-
-    if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
-      echo "" >&2
-      echo "[BLOCKED] PR #${PR}: 未対応 CRITICAL=${CRITICAL} HIGH=${HIGH}" >&2
-      echo "  レビューコメントを全て対応してからマージしてください。" >&2
-      echo "" >&2
-      exit 2
-    fi
-  fi
-  exit 0
-fi
 
 # =========================================================================
 # MODE 3: Any other Bash → soft reminder if pending reviews exist

@@ -43,7 +43,8 @@ if [[ "$1" == "api" ]]; then
       case "$jq_expr" in
         ".head.sha"|".head.sha // \"\"") printf 'abc123\n' ;;
         ".head.ref"|".head.ref // \"\"") printf 'fix/test\n' ;;
-        ".base.ref // \"\"") printf 'develop\n' ;;
+        ".base.ref"|".base.ref // \"\"") printf 'develop\n' ;;
+        ".base.sha"|".base.sha // \"\"") printf 'developersha\n' ;;
         *) printf '{"head":{"sha":"abc123","ref":"fix/test"},"base":{"ref":"develop"}}\n' ;;
       esac
       exit 0
@@ -86,11 +87,19 @@ if [[ "$1" == "api" ]]; then
         exit 0
       fi
       if [[ "$jq_expr" == "length" ]]; then
-        printf '0\n'
+        printf '1\n'
       elif [[ -n "$jq_expr" ]]; then
-        printf '\n'
+        printf 'LGTM\n'
       else
-        printf '[]\n'
+        printf '[{"body":"LGTM"}]\n'
+      fi
+      exit 0
+      ;;
+    repos/owner/repo/git/ref/heads/develop)
+      if [[ "$jq_expr" == ".object.sha" ]]; then
+        printf 'developersha\n'
+      else
+        printf '{"object":{"sha":"developersha"}}\n'
       fi
       exit 0
       ;;
@@ -98,6 +107,9 @@ if [[ "$1" == "api" ]]; then
 fi
 
 if [[ "$1" == "pr" && "$2" == "view" ]]; then
+  if [[ "${3:-}" == "123" ]] || [[ "${4:-}" == "123" ]]; then
+    printf 'MERGEABLE\n'
+  fi
   printf 'MERGEABLE\n'
   exit 0
 fi
@@ -113,6 +125,19 @@ payload() {
 PASS=0
 FAIL=0
 
+# invoke_hook <hook> <payload-command-str>
+#   hook is either "pre-merge" (dispatched via GATE_MODE=PRE_MERGE pr-ci-review-gate.sh)
+#   or a standalone hook filename (e.g. "enforce-soak-time.sh").
+invoke_hook() {
+  local hook="$1"
+  local payload_cmd="$2"
+  if [[ "$hook" == "pre-merge" ]]; then
+    GATE_MODE=PRE_MERGE bash "$ROOT/hooks/pr-ci-review-gate.sh" <<<"$(payload "$payload_cmd")"
+  else
+    bash "$ROOT/hooks/$hook" <<<"$(payload "$payload_cmd")"
+  fi
+}
+
 expect_hook_reaches_pr() {
   local hook="$1"
   local label="$2"
@@ -122,7 +147,7 @@ expect_hook_reaches_pr() {
   (
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
-      bash "$ROOT/hooks/$hook" <<<"$(payload 'gh -R owner/repo pr merge 123 --merge')"
+      invoke_hook "$hook" 'gh -R owner/repo pr merge 123 --merge'
   ) >"$OUT_FILE" 2>"$ERR_FILE"
   set -e
 
@@ -148,12 +173,12 @@ expect_hook_blocks_url_target() {
   (
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
-      bash "$ROOT/hooks/$hook" <<<"$(payload 'gh pr merge https://github.com/owner/repo/pull/123 --merge')"
+      invoke_hook "$hook" 'gh pr merge https://github.com/owner/repo/pull/123 --merge'
   ) >"$OUT_FILE" 2>"$ERR_FILE"
   local rc=$?
   set -e
 
-  if [[ "$rc" -eq 2 ]] && grep -q "PR番号が特定できません" "$ERR_FILE"; then
+  if [[ "$rc" -eq 2 ]] && grep -Eq "PR番号(が|を)特定できません" "$ERR_FILE"; then
     PASS=$((PASS + 1))
     echo "  PASS: $label"
   else
@@ -175,12 +200,12 @@ expect_hook_blocks_wrapped_url_target() {
   (
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
-      bash "$ROOT/hooks/$hook" <<<"$(payload "bash -c 'gh pr merge https://github.com/owner/repo/pull/123 --merge'")"
+      invoke_hook "$hook" "bash -c 'gh pr merge https://github.com/owner/repo/pull/123 --merge'"
   ) >"$OUT_FILE" 2>"$ERR_FILE"
   local rc=$?
   set -e
 
-  if [[ "$rc" -eq 2 ]] && grep -q "PR番号が特定できません" "$ERR_FILE"; then
+  if [[ "$rc" -eq 2 ]] && grep -Eq "PR番号(が|を)特定できません" "$ERR_FILE"; then
     PASS=$((PASS + 1))
     echo "  PASS: $label"
   else
@@ -203,7 +228,7 @@ expect_hook_blocks_dynamic_eval_target() {
   (
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
-      bash "$ROOT/hooks/$hook" <<<"$(payload "$command")"
+      invoke_hook "$hook" "$command"
   ) >"$OUT_FILE" 2>"$ERR_FILE"
   local rc=$?
   set -e
@@ -262,7 +287,7 @@ expect_review_sha_guard() {
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
       FAKE_CHANGED_FILE="src/app.ts" FAKE_REVIEW_COMMENTS="high" FAKE_CLAUDE_REVIEW_CI="failure" \
-      bash "$ROOT/hooks/block-merge-without-review.sh" <<<"$(payload 'gh pr merge 123 --merge --repo owner/repo')"
+      invoke_hook "pre-merge" 'gh pr merge 123 --merge --repo owner/repo'
   ) >"$OUT_FILE" 2>"$ERR_FILE"
   local rc=$?
   set -e
@@ -279,68 +304,33 @@ expect_review_sha_guard() {
 }
 
 echo "=== standalone merge hooks with gh global flags ==="
-expect_hook_reaches_pr "block-merge-without-ci.sh" "block-merge-without-ci detects gh -R pr merge"
+expect_hook_reaches_pr "pre-merge" "block-merge-without-ci detects gh -R pr merge"
 expect_hook_reaches_pr "enforce-soak-time.sh" "enforce-soak-time detects gh -R pr merge"
-expect_hook_reaches_pr "block-merge-without-review.sh" "block-merge-without-review detects gh -R pr merge"
-expect_hook_reaches_pr "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate detects gh -R pr merge"
 
 echo "=== standalone merge hooks with PR URL target ==="
-expect_hook_blocks_url_target "block-merge-without-ci.sh" "block-merge-without-ci blocks PR URL target"
+expect_hook_blocks_url_target "pre-merge" "block-merge-without-ci blocks PR URL target"
 expect_hook_blocks_url_target "enforce-soak-time.sh" "enforce-soak-time blocks PR URL target"
-expect_hook_blocks_url_target "block-merge-without-review.sh" "block-merge-without-review blocks PR URL target"
-expect_hook_blocks_url_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks PR URL target"
-expect_hook_blocks_wrapped_url_target "block-merge-without-ci.sh" "block-merge-without-ci blocks bash -c PR URL target"
+expect_hook_blocks_wrapped_url_target "pre-merge" "block-merge-without-ci blocks bash -c PR URL target"
 expect_hook_blocks_wrapped_url_target "enforce-soak-time.sh" "enforce-soak-time blocks bash -c PR URL target"
-expect_hook_blocks_wrapped_url_target "block-merge-without-review.sh" "block-merge-without-review blocks bash -c PR URL target"
-expect_hook_blocks_wrapped_url_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks bash -c PR URL target"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks dynamic eval merge"
+expect_hook_blocks_dynamic_eval_target "pre-merge" "block-merge-without-ci blocks dynamic eval merge"
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks dynamic eval merge"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks dynamic eval merge"
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks dynamic eval merge"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks escaped dynamic eval merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\\\$m\""
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks escaped dynamic eval merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\\\$m\""
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks escaped dynamic eval merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\\\$m\""
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks escaped dynamic eval merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; eval \"\\\$m\""
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks escaped dynamic bash -c merge" "m=gh\\ pr\\ merge\\ 123\\ --merge\\ --repo\\ owner/repo; bash -c \"\\\$m\""
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks redirected hidden env plus visible merge" "2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks redirected hidden env plus visible merge" "2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks redirected hidden env plus visible merge" "2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks redirected hidden env plus visible merge" "2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks sudo redirected hidden env plus visible merge" "sudo 2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks sudo redirected hidden env plus visible merge" "sudo 2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks sudo redirected hidden env plus visible merge" "sudo 2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks sudo redirected hidden env plus visible merge" "sudo 2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks nested redirected hidden env plus visible merge" "bash -c \"2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo\""
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks nested redirected hidden env plus visible merge" "bash -c \"2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo\""
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks nested redirected hidden env plus visible merge" "bash -c \"2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo\""
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks nested redirected hidden env plus visible merge" "bash -c \"2>/dev/null env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo\""
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks process-substitution input hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m' < <(printf x); gh pr merge 456 --merge --repo owner/repo"
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks process-substitution input hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m' < <(printf x); gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks process-substitution input hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m' < <(printf x); gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks process-substitution input hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m' < <(printf x); gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks process-substitution output hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m' > >(cat); gh pr merge 456 --merge --repo owner/repo"
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks process-substitution output hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m' > >(cat); gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks process-substitution output hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m' > >(cat); gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks process-substitution output hidden env plus visible merge" "env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m' > >(cat); gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks here-string redirected hidden env plus visible merge" "<<<x env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks here-string redirected hidden env plus visible merge" "<<<x env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks here-string redirected hidden env plus visible merge" "<<<x env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks here-string redirected hidden env plus visible merge" "<<<x env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-ci.sh" "block-merge-without-ci blocks noclobber redirected hidden env plus visible merge" ">|/tmp/out env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 expect_hook_blocks_dynamic_eval_target "enforce-soak-time.sh" "enforce-soak-time blocks noclobber redirected hidden env plus visible merge" ">|/tmp/out env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "block-merge-without-review.sh" "block-merge-without-review blocks noclobber redirected hidden env plus visible merge" ">|/tmp/out env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
-expect_hook_blocks_dynamic_eval_target "pr-merge-claude-review-gate.sh" "pr-merge-claude-review-gate blocks noclobber redirected hidden env plus visible merge" ">|/tmp/out env m='gh pr merge 123 --merge --repo owner/repo' bash -c '\\\$m'; gh pr merge 456 --merge --repo owner/repo"
 
-echo "=== standalone review gate SHA freshness ==="
-expect_review_sha_guard "block-merge-without-review blocks stale Tier 1 review SHAs" 2 oldsha oldsha
-expect_review_sha_guard "block-merge-without-review allows matching Tier 1 review SHAs" 0 abc123 abc123
+echo "=== consolidated pre-merge review SHA freshness ==="
+# Note: comprehensive SHA guard coverage lives in test-pre-merge-comment-set-hash.sh
+# (T7 stale blocks, T8 matching allows). The retired block-merge-without-review.sh
+# cases are removed because base-freshness check requires a real git remote fixture
+# (out of scope for this parser-focused test).
+expect_review_sha_guard "pre-merge blocks stale Tier 1 review SHAs" 2 oldsha oldsha
 
 rm -f "$OUT_FILE" "$ERR_FILE"
 echo "Results: $PASS passed, $FAIL failed (total $((PASS + FAIL)))"

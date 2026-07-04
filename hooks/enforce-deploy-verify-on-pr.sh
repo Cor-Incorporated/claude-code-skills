@@ -279,6 +279,11 @@ check_deploy() {
   local file="$1" deploy_dir="$2"
   [[ -z "$file" ]] && return
   local source="$PROJECT_DIR/$file"
+  # Phase 3 robustness: if the source file is missing in the working tree
+  # (deleted or moved to hooks/_unused/ in this PR), skip the deploy check.
+  # The committed diff may still reference the old path until the move lands,
+  # but reading $source would fail under `set -e` and crash the hook.
+  [[ -f "$source" ]] || return 0
   local rel_path deployed
   case "$file" in
     hooks/*) rel_path="${file#hooks/}" ;;

@@ -1,8 +1,31 @@
 #!/bin/bash
-# pre-merge.sh — PRE_MERGE mode: Block PR merge without CI green + review
+# pre-merge.sh — PRE_MERGE mode: consolidated gh pr merge gate (Phase 3)
 # =========================================================================
 # Exit 0 = allow, Exit 2 = HARD BLOCK
 # All output to stderr (Claude Code hooks spec)
+#
+# Phase 3 consolidation — absorbs (do NOT weaken vs. the union):
+#   * pr-merge-claude-review-gate.sh  → Gate 0 (CI completed),
+#                                        Gate 1 (CI green),
+#                                        Gate 2 (comments exist or fallback),
+#                                        Gate 3 (review_read current — Issue #151),
+#                                        Gate 4 (CRITICAL acknowledged)
+#   * block-merge-without-ci.sh       → CI_TOTAL=0 fail-closed,
+#                                        mergeable CONFLICTING block
+#   * block-merge-without-review.sh   → FULL tier pessimistic lock,
+#                                        CRITICAL/HIGH/BUG comment severity
+#                                        (skipped when claude-review CI passes)
+#
+# Five unique logics that MUST be preserved (regression = security hole):
+#   1. CI_TOTAL=0 fail-closed        (no-CI repos cannot merge)
+#   2. mergeable CONFLICTING         (conflict PRs cannot merge)
+#   3. BUG severity detection        ([BUG] line-level filter, Issue #142)
+#   4. Gate 3 review_read            (pr-review-read.json, Issue #151)
+#   5. PR auto-close self-heal       (purge stale pending-review state)
+#
+# API call reduction: a single check-runs fetch feeds CI_TOTAL / failures /
+# pending / claude-review-conclusion (was 5 separate gh calls across the
+# three retired hooks).
 # =========================================================================
 set -euo pipefail
 
@@ -11,8 +34,9 @@ GATE_MODES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${GATE_MODES_DIR}/common.sh"
 
 # DIAGNOSTIC: Log hook invocation
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) PRE_MERGE invoked. cmd=$(extract_cmd)" >> "${STATE_DIR}/pr-gate-diagnostic.log" 2>/dev/null
 cmd=$(extract_cmd)
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) PRE_MERGE invoked. cmd=${cmd}" >> "${STATE_DIR}/pr-gate-diagnostic.log" 2>/dev/null || true
+
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
 # so a real operation cannot be chained after a benign first token (prevents
@@ -93,7 +117,7 @@ HEAD_SHA=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha
 BASE_REF=$(_timeout 10 gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.base.ref' 2>/dev/null || echo "")
 if [[ -z "$HEAD_SHA" || "$HEAD_SHA" == "null" ]]; then
   echo "🚫 [BLOCKED] PR #${PR_NUMBER}: HEAD SHA を取得できません。" >&2
-  echo "  現在のPR headに対するレビュー証跡を検証できないため、fail closedします。" >&2
+  echo "  現在のPR headに対するレビュー証拠を検証できないため、fail closedします。" >&2
   echo "  確認: gh pr view ${PR_NUMBER} -R ${REPO} --json headRefOid" >&2
   exit 2
 fi
@@ -105,18 +129,45 @@ fi
 ensure_pr_base_fresh "$REPO" "$PR_NUMBER" "$BASE_REF" "$BASE_SHA" || exit 2
 TIER=$(classify_review_tier "$BRANCH" "${PR_NUMBER:-}")
 
-if [[ "$TIER" == "EXEMPT" ]]; then
-  echo "✅ PR #${PR_NUMBER}: EXEMPT tier ($BRANCH). CIグリーンのみで許可。" >&2
-  exit 0
-fi
+# =========================================================================
+# CONSOLIDATED CI GATE — Gate 0 + Gate 1 + (CI_TOTAL=0 fail-closed) +
+# mergeable CONFLICTING. Single check-runs fetch, multi-pass jq.
+# EXEMPT tier skips Gate 0/1 only (chicken-and-egg, fix #163); EXEMPT still
+# must pass Gate 2/3/4 + 3-pass judgment below.
+# =========================================================================
+if [[ "$TIER" != "EXEMPT" ]]; then
+  CHECK_RUNS_JSON=""
+  if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
+    CHECK_RUNS_JSON=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" 2>/dev/null || echo "")
+  fi
+  if [[ -z "$CHECK_RUNS_JSON" ]]; then
+    echo "" >&2
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER}: check-runs API を取得できませんでした（タイムアウトまたはAPI障害）。" >&2
+    echo "  fail-closed でマージを拒否します。確認: gh pr checks ${PR_NUMBER} -R ${REPO}" >&2
+    echo "" >&2
+    exit 2
+  fi
 
-# CI status check (non-EXEMPT tiers only)
-if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
-  CI_FAILURES=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
-    --jq "$(jq_ci_failures_filter)" 2>/dev/null || echo "0")
-  CI_PENDING=$(_timeout 10 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
-    --jq "$(jq_ci_pending_filter)" 2>/dev/null || echo "0")
+  EXCL="${NON_CI_CHECK_PATTERN}"
+  CI_TOTAL=$(printf '%s' "$CHECK_RUNS_JSON" \
+    | jq "[.check_runs[] | select(.name | test(\"${EXCL}\"; \"i\") | not)] | length" 2>/dev/null || echo "0")
+  CI_FAILURES=$(printf '%s' "$CHECK_RUNS_JSON" \
+    | jq "[.check_runs[] | select((.name | test(\"${EXCL}\"; \"i\") | not) and .conclusion==\"failure\")] | length" 2>/dev/null || echo "0")
+  CI_PENDING=$(printf '%s' "$CHECK_RUNS_JSON" \
+    | jq "[.check_runs[] | select((.name | test(\"${EXCL}\"; \"i\") | not) and .status!=\"completed\")] | length" 2>/dev/null || echo "0")
+  CLAUDE_REVIEW_CI=$(printf '%s' "$CHECK_RUNS_JSON" \
+    | jq -r '[.check_runs[] | select(.name | test("claude-review"; "i"))] | .[0].conclusion // ""' 2>/dev/null || echo "")
 
+  # Logic 1: CI_TOTAL=0 fail-closed (from block-merge-without-ci.sh)
+  if [[ "$CI_TOTAL" -eq 0 ]]; then
+    echo "" >&2
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER} にCIチェックがありません。" >&2
+    echo "  CIが設定されたリポジトリでのみマージできます。確認: gh pr view ${PR_NUMBER} --json mergeable,mergeStateStatus" >&2
+    echo "" >&2
+    exit 2
+  fi
+
+  # Gate 1: CI failures
   if [[ "$CI_FAILURES" -gt 0 ]]; then
     echo "" >&2
     echo "🚫 [BLOCKED] CI に失敗ジョブあり ($CI_FAILURES 件)" >&2
@@ -126,6 +177,8 @@ if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
     echo "" >&2
     exit 2
   fi
+
+  # Gate 0: CI pending
   if [[ "$CI_PENDING" -gt 0 ]]; then
     echo "" >&2
     echo "🚫 [BLOCKED] CI に実行中ジョブあり ($CI_PENDING 件)" >&2
@@ -134,6 +187,22 @@ if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
     echo "  NOTE: Agent/copilot/dependabot/CodeRabbit は自動除外済み" >&2
     echo "" >&2
     exit 2
+  fi
+
+  # Logic 2: mergeable CONFLICTING (from block-merge-without-ci.sh)
+  MERGEABLE=$(pr_mergeable_state "$REPO" "$PR_NUMBER")
+  if [[ "$MERGEABLE" == "conflicting" ]]; then
+    echo "" >&2
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER} にコンフリクトがあります。リベースで解決してください。" >&2
+    echo "  確認: gh pr view ${PR_NUMBER} -R ${REPO} --json mergeable,mergeStateStatus" >&2
+    echo "" >&2
+    exit 2
+  fi
+else
+  # EXEMPT still needs claude-review conclusion for the severity skip path below.
+  CLAUDE_REVIEW_CI=""
+  if [[ -n "$REPO" ]] && [[ -n "$HEAD_SHA" ]]; then
+    CLAUDE_REVIEW_CI=$(claude_review_ci_conclusion "$REPO" "$HEAD_SHA" "")
   fi
 fi
 
@@ -145,43 +214,54 @@ _code_rev=$(read_review_for_head "$BRANCH" "code_review" "$HEAD_SHA")
 _codex_rev=$(read_review_for_head "$BRANCH" "codex_review" "$HEAD_SHA")
 if [[ "$_code_rev" == "yes" ]] && [[ "$_codex_rev" == "yes" ]]; then
   PRIMARY_LGTM="true"
-  echo "  ✅ [pre-merge] Tier 1 LGTM: code-reviewer + Codex CLI 確認済み" >&2
 fi
 
-# Tier 2 LGTM check from pending-review-comments.json
-TIER2_LGTM="false"
-PENDING_FILE="$STATE_DIR/pending-review-comments.json"
-if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
-  _t2=$(jq -r '.tier2_lgtm // false' "$PENDING_FILE" 2>/dev/null || echo "false")
-  if [[ "$_t2" == "true" ]]; then
-    TIER2_LGTM="true"
+# =========================================================================
+# FULL tier pessimistic lock (from block-merge-without-review.sh)
+# Read BOTH project-scoped AND global lock files (OR-logic via common.sh).
+# Tier 1 PRIMARY_LGTM bypasses the lock (reviewer + Codex already verified).
+# =========================================================================
+if [[ "$TIER" == "FULL" ]] && [[ "$PRIMARY_LGTM" != "true" ]]; then
+  if [[ "$(lock_pr_locked_for_head "$PR_NUMBER" "$HEAD_SHA" "$REPO")" == "yes" ]]; then
+    echo "" >&2
+    echo "🔒 [Pessimistic Lock] PR #${PR_NUMBER} は review_pending 状態です。マージ不可。" >&2
+    echo "  push後のclaude-review 3ソース全確認が未完了です。" >&2
+    echo "  解除: bash ~/.claude/scripts/verify-pr-review.sh ${PR_NUMBER}" >&2
+    echo "  または /review-loop ${PR_NUMBER} で自動検証" >&2
+    echo "" >&2
+    exit 2
   fi
 fi
 
-# PRIMARY_LGTM override: Tier 1 trust bypasses Tier 2 severity
+# =========================================================================
+# Logic 5: PR auto-close self-heal + Tier 1 PRIMARY_LGTM override.
+# If pending-review-comments.json references a closed/merged PR, purge it.
+# If the file references another OPEN PR, ignore it for this PR's judgment.
+# PRIMARY_LGTM then overrides Tier 2 (pending-review-comments) findings.
+# =========================================================================
+PENDING_FILE="$STATE_DIR/pending-review-comments.json"
+if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
+  _primary_pr_in_file=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+  _primary_head_sha_in_file=$(jq -r '.head_sha // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+  _primary_repo_in_file=$(jq -r '.repo // ""' "$PENDING_FILE" 2>/dev/null || echo "")
+  [[ -n "$_primary_repo_in_file" && "$_primary_repo_in_file" != "null" ]] || _primary_repo_in_file="$REPO"
+
+  if [[ -n "$_primary_pr_in_file" && "$_primary_pr_in_file" != "null" && "$_primary_pr_in_file" != "$PR_NUMBER" ]]; then
+    _primary_pending_state=$(pending_review_pr_state "$PENDING_FILE" "$_primary_repo_in_file" || echo "")
+    if [[ "$_primary_pending_state" == "closed" ]] || [[ "$_primary_pending_state" == "merged" ]]; then
+      purge_pending_review_state "$PENDING_FILE"
+      echo "  ℹ️ [pre-merge] closed/merged PR #${_primary_pr_in_file} の stale pending-review-comments.json を削除しました。" >&2
+    else
+      echo "  ℹ️ [pre-merge] pending-review-comments.json は別PR #${_primary_pr_in_file} の state のため、PR #${PR_NUMBER} の判定には使いません。" >&2
+    fi
+  fi
+fi
+
 if [[ "$PRIMARY_LGTM" == "true" ]]; then
-  PENDING_FILE="$STATE_DIR/pending-review-comments.json"
+  # Validate pending-review-comments.json scope (Issue #165 comment_set_hash).
   if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
     _primary_pr_in_file=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
-    _primary_head_sha_in_file=$(jq -r '.head_sha // ""' "$PENDING_FILE" 2>/dev/null || echo "")
-    _primary_repo_in_file=$(jq -r '.repo // ""' "$PENDING_FILE" 2>/dev/null || echo "")
-    [[ -n "$_primary_repo_in_file" && "$_primary_repo_in_file" != "null" ]] || _primary_repo_in_file="$REPO"
-
-    if [[ -n "$_primary_pr_in_file" && "$_primary_pr_in_file" != "null" && "$_primary_pr_in_file" != "$PR_NUMBER" ]]; then
-      _primary_pending_state=$(pending_review_pr_state "$PENDING_FILE" "$_primary_repo_in_file" || echo "")
-      if [[ "$_primary_pending_state" == "closed" ]] || [[ "$_primary_pending_state" == "merged" ]]; then
-        purge_pending_review_state "$PENDING_FILE"
-        echo "  ℹ️ [pre-merge] closed/merged PR #${_primary_pr_in_file} の stale pending-review-comments.json を削除しました。" >&2
-      else
-        echo "  ℹ️ [pre-merge] pending-review-comments.json は別PR #${_primary_pr_in_file} の state のため、PR #${PR_NUMBER} の判定には使いません。" >&2
-      fi
-    fi
-
     if [[ "$_primary_pr_in_file" == "$PR_NUMBER" ]]; then
-      if [[ -z "$HEAD_SHA" ]]; then
-        echo "🚫 [BLOCKED] PR #${PR_NUMBER}: HEAD SHA を確認できないため pending-review-comments.json を検証できません。" >&2
-        exit 2
-      fi
       if [[ "$_primary_head_sha_in_file" != "$HEAD_SHA" ]]; then
         echo "🚫 [LOCAL_GATE_STALE_REVIEW_STATE] PR #${PR_NUMBER}: pending-review-comments.json が古い HEAD を参照しています。" >&2
         echo "  GitHub mergeable 判定とは別の local gate blocker です。" >&2
@@ -197,8 +277,103 @@ if [[ "$PRIMARY_LGTM" == "true" ]]; then
     fi
   fi
   echo "  ℹ️ [pre-merge] Tier 1 LGTM により Tier 2 findings を許可。マージ可。" >&2
-  # Still record the review status
   exit 0
+fi
+
+# =========================================================================
+# Logic 3: CRITICAL/HIGH/BUG comment severity (from block-merge-without-review.sh)
+# Issue #165: skip comment-based detection when claude-review CI passed
+# (residual bot comments should not block a clean latest CI).
+# Gate 4 (CRITICAL acknowledgement) is folded in: if CRITICAL is detected
+# and not yet acknowledged in pr-review-read.json, block.
+# =========================================================================
+if [[ "$CLAUDE_REVIEW_CI" != "success" ]]; then
+  _bodies=$(pr_comment_bodies "$REPO" "$PR_NUMBER")
+  HAS_CRITICAL=$(printf '%s' "$_bodies" | detect_critical_severity)
+  HAS_HIGH=$(printf '%s' "$_bodies" | detect_high_severity)
+  HAS_BUG=$(printf '%s' "$_bodies" | detect_bug_severity)
+
+  BLOCKERS=""
+  [[ "$HAS_CRITICAL" -gt 0 ]] && BLOCKERS="${BLOCKERS}CRITICAL($HAS_CRITICAL) "
+  [[ "$HAS_HIGH" -gt 0 ]] && BLOCKERS="${BLOCKERS}HIGH($HAS_HIGH) "
+  [[ "$HAS_BUG" -gt 0 ]] && BLOCKERS="${BLOCKERS}BUG($HAS_BUG) "
+
+  if [[ -n "$BLOCKERS" ]]; then
+    echo "" >&2
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER} にブロッカー指摘があります: ${BLOCKERS}(tier=$TIER)" >&2
+    echo "  全レビューソースを確認してください:" >&2
+    echo "    gh api repos/${REPO}/pulls/${PR_NUMBER}/comments" >&2
+    echo "    gh api repos/${REPO}/issues/${PR_NUMBER}/comments" >&2
+    echo "" >&2
+    exit 2
+  fi
+
+  # Gate 4: CRITICAL findings must be acknowledged (Issue #154).
+  # If detected (either via comment grep OR has_critical flag in state),
+  # critical_acknowledged must be set current in pr-review-read.json.
+  _has_critical_flag=$(review_read_current_bool "$PR_NUMBER" "has_critical" "$HEAD_SHA" "$REPO")
+  if [[ "$HAS_CRITICAL" -gt 0 ]] || [[ "$_has_critical_flag" == "True" ]]; then
+    _critical_ack=$(review_read_current_bool "$PR_NUMBER" "critical_acknowledged" "$HEAD_SHA" "$REPO")
+    if [[ "$_critical_ack" != "True" ]]; then
+      echo "" >&2
+      echo "🚫 [BLOCKED] PR #${PR_NUMBER}: CRITICAL 指摘が未対応です。" >&2
+      echo "  修正を push し、レビューを再確認したうえで正規フローを完了してください。" >&2
+      echo "  code-reviewer の再実行、または必要な確認後に VERIFY を再実行してください:" >&2
+      echo "  bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER}" >&2
+      echo "" >&2
+      exit 2
+    fi
+  fi
+fi
+
+# =========================================================================
+# Gate 2: Review comment must exist (Claude Review) or fallback done.
+# (from pr-merge-claude-review-gate.sh Gate 2)
+# =========================================================================
+COMMENT_COUNT=$(pr_issue_comment_count "$REPO" "$PR_NUMBER")
+if [[ "$COMMENT_COUNT" -eq 0 ]]; then
+  _fallback_done=$(review_read_current_bool "$PR_NUMBER" "fallback_review_done" "$HEAD_SHA" "$REPO")
+  if [[ "$_fallback_done" != "True" ]]; then
+    echo "" >&2
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER}: レビューコメントが存在しません。" >&2
+    echo "  Claude Review workflow のコメントが見つかりません。" >&2
+    echo "  以下のいずれかを実行してください:" >&2
+    echo "    A) Claude Review の完了を待つ（workflow が設定されている場合）" >&2
+    echo "       gh pr checks ${PR_NUMBER} -R ${REPO}" >&2
+    echo "    B) code-reviewer エージェントで代替レビューを実行:" >&2
+    echo "       Agent(subagent_type='code-reviewer', prompt='Review PR #${PR_NUMBER} ...')" >&2
+    echo "       完了後、必要に応じて VERIFY を実行してから再試行してください:" >&2
+    echo "       bash ~/.claude/hooks/pr-ci-review-gate.sh VERIFY ${PR_NUMBER}" >&2
+    echo "" >&2
+    exit 2
+  fi
+fi
+
+# =========================================================================
+# Logic 4: Gate 3 review_read (Issue #151) — from pr-merge-claude-review-gate.sh.
+# pr-review-read.json must have review_read=true with current head_sha.
+# =========================================================================
+REVIEW_READ_STATE=$(review_read_field_state "$PR_NUMBER" "review_read" "$HEAD_SHA" "$REPO")
+if [[ "$REVIEW_READ_STATE" != "current" ]]; then
+  echo "" >&2
+  if [[ "$REVIEW_READ_STATE" == "stale" ]]; then
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER}: レビュー既読証跡が現在の head_sha と一致しません。" >&2
+    echo "  現在の head_sha: ${HEAD_SHA}" >&2
+    echo "  push 後に古い既読証跡が残っている可能性があります。" >&2
+  elif [[ "$REVIEW_READ_STATE" == "foreign" ]]; then
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER}: レビュー既読証跡が別リポジトリのものです。" >&2
+    echo "  対象 repo: ${REPO}" >&2
+    echo "  同じPR番号を持つ別リポジトリの state を merge 根拠にはできません (Issue #258)。" >&2
+  else
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER}: レビューを未読のままマージしようとしています。" >&2
+  fi
+  echo "" >&2
+  echo "  以下を実行してください（レビュー読み取り＋既読マークを一括で行います）:" >&2
+  echo "     bash ~/.claude/scripts/verify-pr-review.sh ${PR_NUMBER} ${REPO}" >&2
+  echo "  ※ verify-pr-review.sh はレビュー内容を表示し、問題なければ自動で既読マークします。" >&2
+  echo "  ※ 直接 pr-review-read.json を書き換える必要はありません (Issue #151)。" >&2
+  echo "" >&2
+  exit 2
 fi
 
 # =========================================================================
@@ -217,26 +392,15 @@ CODE_REVIEW=$(read_review_for_head "$BRANCH" "code_review" "$HEAD_SHA")
 [[ "$CODE_REVIEW" == "yes" ]] && PASS_A="yes"
 
 # --- Pass B: No CRITICAL/HIGH in review comments ---
-PENDING_FILE="$STATE_DIR/pending-review-comments.json"
 if [[ -f "$PENDING_FILE" ]] && command -v jq &>/dev/null; then
   _pr_in_file=$(jq -r '.pr // ""' "$PENDING_FILE" 2>/dev/null || echo "")
   _head_sha_in_file=$(jq -r '.head_sha // ""' "$PENDING_FILE" 2>/dev/null || echo "")
   _repo_in_file=$(jq -r '.repo // ""' "$PENDING_FILE" 2>/dev/null || echo "")
   [[ -n "$_repo_in_file" && "$_repo_in_file" != "null" ]] || _repo_in_file="$REPO"
 
-  # A pending file for another PR must not approve or block this merge. If
-  # GitHub confirms that PR is already closed/merged, purge the local residue.
-  if [[ -n "$_pr_in_file" && "$_pr_in_file" != "null" && "$_pr_in_file" != "$PR_NUMBER" ]]; then
-    _pending_state=$(pending_review_pr_state "$PENDING_FILE" "$_repo_in_file" || echo "")
-    if [[ "$_pending_state" == "closed" ]] || [[ "$_pending_state" == "merged" ]]; then
-      purge_pending_review_state "$PENDING_FILE"
-      echo "  ℹ️ [pre-merge] closed/merged PR #${_pr_in_file} の stale pending-review-comments.json を削除しました。" >&2
-    else
-      echo "  ℹ️ [pre-merge] pending-review-comments.json は別PR #${_pr_in_file} の state のため、PR #${PR_NUMBER} の判定には使いません。" >&2
-    fi
-  fi
-
-  # Validate scope: pending-review-comments must match current PR
+  # A pending file for another PR must not approve or block this merge. The
+  # closed/merged purge already ran above; remaining mismatched files are
+  # informational only and ignored here.
   if [[ "$_pr_in_file" == "$PR_NUMBER" ]]; then
     if [[ -z "$HEAD_SHA" ]]; then
       echo "🚫 [BLOCKED] PR #${PR_NUMBER}: HEAD SHA を確認できないため pending-review-comments.json を検証できません。" >&2

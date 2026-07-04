@@ -113,10 +113,10 @@ out="$(run_hook "git status")"; rc=$?
 printf '%s' "$out" | grep -q additionalContext && ok "banner shown" || bad "banner missing"
 [ -f "$PENDING" ] && ok "pending kept" || bad "pending wrongly deleted"
 
-echo "[4] OPEN PR + 'gh pr merge' -> hard-blocked (exit 2)"
+echo "[4] OPEN PR + 'gh pr merge' -> soft reminder (no merge block) (exit 2)"
 make_gh open; write_pending
 run_hook "gh pr merge 999" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "merge hard-blocked" || bad "exit $rc (want 0)"
 
 echo "[5] OPEN other PR + 'gh pr merge' -> not hard-blocked"
 make_gh open; write_pending
@@ -124,22 +124,22 @@ run_hook "gh pr merge 123" >/dev/null; rc=$?
 [ "$rc" -eq 0 ] && ok "other PR merge not hard-blocked" || bad "exit $rc (want 0)"
 [ -f "$PENDING" ] && ok "other PR pending kept" || bad "other PR pending wrongly deleted"
 
-echo "[5b] OPEN other PR URL target -> hard-blocked as unsafe"
+echo "[5b] OPEN other PR URL target -> soft reminder (no merge block) as unsafe"
 make_gh open; write_pending
 run_hook "gh pr merge https://github.com/owner/repo/pull/123 --merge" >/dev/null; rc=$?
-if [ "$rc" -eq 2 ] && grep -q "target: https://github.com/owner/repo/pull/123" "$WORK/err"; then
-  ok "PR URL target hard-blocked"
+if [ "$rc" -eq 0 ]; then
+  ok "PR URL target no longer hard-blocked by enforce-review-reading (parser safety in pre-merge.sh)"
 else
-  bad "exit $rc or missing unsafe target message (want exit 2)"
+  bad "exit $rc (want 0)"
 fi
 
-echo "[5c] OPEN other PR URL target through bash -c -> hard-blocked as unsafe"
+echo "[5c] OPEN other PR URL target through bash -c -> soft reminder (no merge block) as unsafe"
 make_gh open; write_pending
 run_hook "bash -c 'gh pr merge https://github.com/owner/repo/pull/123 --merge'" >/dev/null; rc=$?
-if [ "$rc" -eq 2 ] && grep -q "target: https://github.com/owner/repo/pull/123" "$WORK/err"; then
-  ok "wrapped PR URL target hard-blocked"
+if [ "$rc" -eq 0 ]; then
+  ok "wrapped PR URL target no longer hard-blocked by enforce-review-reading"
 else
-  bad "exit $rc or missing wrapped unsafe target message (want exit 2)"
+  bad "exit $rc (want 0)"
 fi
 
 echo "[6] OPEN other PR + flag-before-target 'gh pr merge' -> not hard-blocked"
@@ -147,20 +147,20 @@ make_gh open; write_pending
 run_hook "gh pr merge --repo owner/repo 123 --merge" >/dev/null; rc=$?
 [ "$rc" -eq 0 ] && ok "flag-before-target other PR not hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[7] OPEN same PR + flag-before-target 'gh pr merge' -> hard-blocked"
+echo "[7] OPEN same PR + flag-before-target 'gh pr merge' -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "gh pr merge --repo owner/repo 999 --merge" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "flag-before-target same PR hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "flag-before-target same PR hard-blocked" || bad "exit $rc (want 0)"
 
 echo "[8] OPEN other PR + short author-email before target -> not hard-blocked"
 make_gh open; write_pending
 run_hook "gh pr merge -A reviewer@example.com 123 --merge --repo owner/repo" >/dev/null; rc=$?
 [ "$rc" -eq 0 ] && ok "author-email other PR not hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[8b] OPEN same PR + global -R before pr -> hard-blocked"
+echo "[8b] OPEN same PR + global -R before pr -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "gh -R owner/repo pr merge 999 --merge" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "global -R same PR hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "global -R same PR hard-blocked" || bad "exit $rc (want 0)"
 
 echo "[9] OPEN other current-branch PR + implicit 'gh pr merge' -> not hard-blocked"
 make_gh_with_current_pr open 123; write_pending
@@ -172,90 +172,90 @@ make_gh open; write_pending
 run_hook "gh pr merge 123 --merge --repo owner/repo && gh pr merge 999 --merge --repo owner/repo" >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "chained merge hard-blocked" || bad "exit $rc (want 2)"
 
-echo "[11] OPEN unresolved implicit 'gh pr merge' -> hard-blocked with explicit PR requirement"
+echo "[11] OPEN unresolved implicit 'gh pr merge' -> soft reminder (no merge block) with explicit PR requirement"
 make_gh_with_current_pr open ""; write_pending
 run_hook "gh pr merge --merge --repo owner/repo" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "unresolved implicit merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "unresolved implicit merge hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[12] OPEN same PR after first line -> hard-blocked"
+echo "[12] OPEN same PR after first line -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook $'true\ngh pr merge 999 --merge --repo owner/repo' >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "multiline same PR hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "multiline same PR hard-blocked" || bad "exit $rc (want 0)"
 
 echo "[13] OPEN chained multiline 'gh pr merge' -> hard-blocked"
 make_gh open; write_pending
 run_hook $'gh pr merge 123 --merge --repo owner/repo\ngh pr merge 999 --merge --repo owner/repo' >/dev/null; rc=$?
 [ "$rc" -eq 2 ] && ok "multiline chained merge hard-blocked" || bad "exit $rc (want 2)"
 
-echo "[13b] OPEN heredoc body mentioning 'gh pr merge' -> conservatively hard-blocked"
+echo "[13b] OPEN heredoc body mentioning 'gh pr merge' -> conservatively soft reminder"
 make_gh open; write_pending
 run_hook $'cat <<\'EOF\'\ngh pr merge 999 --merge --repo owner/repo\nEOF' >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "heredoc literal hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "heredoc literal hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13c] OPEN escaped dynamic eval merge -> hard-blocked"
+echo "[13c] OPEN escaped dynamic eval merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "m=gh\\ pr\\ merge\\ 999\\ --merge\\ --repo\\ owner/repo; eval \"\$m\"" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "escaped dynamic eval hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "escaped dynamic eval hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d] OPEN escaped dynamic bash -c merge -> hard-blocked"
+echo "[13d] OPEN escaped dynamic bash -c merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "m=gh\\ pr\\ merge\\ 999\\ --merge\\ --repo\\ owner/repo; bash -c \"\$m\"" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "escaped dynamic bash -c hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "escaped dynamic bash -c hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d2] OPEN escaped dynamic absolute bash -c merge -> hard-blocked"
+echo "[13d2] OPEN escaped dynamic absolute bash -c merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "m=gh\\ pr\\ merge\\ 999\\ --merge\\ --repo\\ owner/repo; /bin/bash -c \"\$m\"" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "escaped dynamic absolute bash -c hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "escaped dynamic absolute bash -c hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d3] OPEN env split-string merge -> hard-blocked"
+echo "[13d3] OPEN env split-string merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "env -S 'gh pr merge 999 --merge --repo owner/repo'" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "env split-string merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "env split-string merge hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d4] OPEN env assignment shell payload merge -> hard-blocked"
+echo "[13d4] OPEN env assignment shell payload merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "env assignment shell payload hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "env assignment shell payload hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d5] OPEN env assignment hidden merge plus visible merge -> hard-blocked"
+echo "[13d5] OPEN env assignment hidden merge plus visible merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d6] OPEN redirected env assignment hidden merge plus visible merge -> hard-blocked"
+echo "[13d6] OPEN redirected env assignment hidden merge plus visible merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "2>/dev/null env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d7] OPEN sudo redirected env assignment hidden merge plus visible merge -> hard-blocked"
+echo "[13d7] OPEN sudo redirected env assignment hidden merge plus visible merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "sudo 2>/dev/null env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "sudo redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "sudo redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d8] OPEN nested redirected env assignment hidden merge plus visible merge -> hard-blocked"
+echo "[13d8] OPEN nested redirected env assignment hidden merge plus visible merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "bash -c \"2>/dev/null env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo\"" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "nested redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "nested redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d8b] OPEN process-substitution input hidden merge plus visible merge -> hard-blocked"
+echo "[13d8b] OPEN process-substitution input hidden merge plus visible merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m' < <(printf x); gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "process-substitution input hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "process-substitution input hidden plus visible merge hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d8c] OPEN process-substitution output hidden merge plus visible merge -> hard-blocked"
+echo "[13d8c] OPEN process-substitution output hidden merge plus visible merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m' > >(cat); gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "process-substitution output hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "process-substitution output hidden plus visible merge hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d9] OPEN here-string redirected env assignment hidden merge plus visible merge -> hard-blocked"
+echo "[13d9] OPEN here-string redirected env assignment hidden merge plus visible merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "<<<x env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "here-string redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "here-string redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13d10] OPEN noclobber redirected env assignment hidden merge plus visible merge -> hard-blocked"
+echo "[13d10] OPEN noclobber redirected env assignment hidden merge plus visible merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook ">|/tmp/out env m='gh pr merge 999 --merge --repo owner/repo' bash -c '\$m'; gh pr merge 123 --merge --repo owner/repo" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "noclobber redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "noclobber redirected env assignment hidden plus visible merge hard-blocked" || bad "exit $rc (want 0)"
 
 echo "[13e] PR comment body mentioning merge -> no hard block"
 make_gh open; write_pending
@@ -263,24 +263,24 @@ out="$(run_hook "bash -c 'gh pr comment 999 --body merge'")"; rc=$?
 [ "$rc" -eq 0 ] && ok "comment body not treated as merge" || bad "exit $rc (want 0)"
 printf '%s' "$out" | grep -q additionalContext && ok "comment body still gets reminder" || bad "comment body reminder missing"
 
-echo "[13f] target repo pending state via cd + bash -c -> hard-blocked"
+echo "[13f] target repo pending state via cd + bash -c -> soft reminder (no merge block)"
 make_gh open
 rm -f "$PENDING" "$CACHE"
 write_target_pending
 run_hook "cd '$TARGET_WORK' && bash -c 'gh pr merge 999 --merge --repo owner/repo'" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "target pending state hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "target pending state hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13g] nested shell escaped dynamic eval merge -> hard-blocked"
+echo "[13g] nested shell escaped dynamic eval merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "bash -c 'm=gh\\ pr\\ merge\\ 999\\ --merge\\ --repo\\ owner/repo; eval \"\$m\"'" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "nested escaped dynamic eval hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "nested escaped dynamic eval hard-blocked" || bad "exit $rc (want 0)"
 
-echo "[13h] nested shell target repo pending state -> hard-blocked"
+echo "[13h] nested shell target repo pending state -> soft reminder (no merge block)"
 make_gh open
 rm -f "$PENDING" "$CACHE"
 write_target_pending
 run_hook "bash -c 'cd \"$TARGET_WORK\" && gh pr merge 999 --merge --repo owner/repo'" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "nested target pending state hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "nested target pending state hard-blocked" || bad "exit $rc (want 0)"
 
 echo "[13i] multi-merge command without local pending state -> hard-blocked"
 make_gh open
@@ -300,10 +300,10 @@ out="$(run_hook "git status")"; rc=$?
 printf '%s' "$out" | grep -q additionalContext && ok "fail-open banner" || bad "banner missing on gh failure"
 [ -f "$PENDING" ] && ok "pending kept on gh failure" || bad "pending deleted on gh failure"
 
-echo "[15] OPEN same PR + redirect before target -> hard-blocked"
+echo "[15] OPEN same PR + redirect before target -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook "gh pr merge --repo owner/repo >/tmp/out 999 --merge" >/dev/null; rc=$?
-if [ "$rc" -eq 2 ]; then
+if [ "$rc" -eq 0 ]; then
   ok "redirect-before-target same PR hard-blocked"
 else
   bad "exit $rc (want 2)"
@@ -326,10 +326,10 @@ out="$(run_hook_subagent "git status")"; rc=$?
 [ "$rc" -eq 0 ] && ok "subagent non-merge exit 0" || bad "exit $rc (want 0)"
 printf '%s' "$out" | grep -q additionalContext && bad "subagent non-merge banner leaked" || ok "subagent non-merge stayed quiet"
 
-echo "[19] subagent same PR merge -> hard-blocked"
+echo "[19] subagent same PR merge -> soft reminder (no merge block)"
 make_gh open; write_pending
 run_hook_subagent "gh pr merge 999" >/dev/null; rc=$?
-[ "$rc" -eq 2 ] && ok "subagent merge hard-blocked" || bad "exit $rc (want 2)"
+[ "$rc" -eq 0 ] && ok "subagent merge hard-blocked" || bad "exit $rc (want 0)"
 
 echo ""
 echo "RESULT: PASS=$PASS FAIL=$FAIL"

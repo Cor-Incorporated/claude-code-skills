@@ -83,7 +83,7 @@ if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/commits/abc123/check-runs" ]; 
   if [ "${3:-}" = "--jq" ]; then
     printf '0\n'
   else
-    printf '{"check_runs":[]}\n'
+    printf '{"check_runs":[{"name":"build","status":"completed","conclusion":"success"},{"name":"claude-review","status":"completed","conclusion":"success"}]}\n'
   fi
   exit 0
 fi
@@ -93,6 +93,21 @@ if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/commits/def999/check-runs" ]; 
   else
     printf '{"check_runs":[{"name":"unit","status":"completed","conclusion":"failure"}]}\n'
   fi
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/issues/123/comments" ]; then
+  if [ "${3:-}" = "--jq" ]; then
+    case "${4:-}" in
+      length) printf '1\n' ;;
+      *) printf 'LGTM\n' ;;
+    esac
+  else
+    printf '[{"body":"LGTM"}]\n'
+  fi
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/123/comments" ]; then
+  printf '[]\n'
   exit 0
 fi
 exit 1
@@ -106,6 +121,13 @@ import sys
 
 with open(sys.argv[1], "w") as f:
     json.dump({"feature": {"code_review": True, "code_review_sha": "abc123"}}, f)
+PY
+  # Phase 3: Gate 3 (review_read) prerequisite
+  python3 - "$STATE_DIR/pr-review-read.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "w") as f:
+    json.dump({"123": {"review_read": True, "head_sha": "abc123"}}, f)
 PY
 }
 
@@ -527,7 +549,7 @@ set +e
 run_pre_merge "$BASE_SHA" "cd $TARGET_REPO && bash -c 'gh pr merge 123 --merge --repo owner/repo'" "$TMP_REPO"
 rc=$?
 set -e
-if [[ "$rc" -eq 2 ]] && grep -q "レビュー未完了" "$ERR_FILE"; then
+if [[ "$rc" -eq 2 ]] && grep -Eq "レビュー未完了|レビューを未読" "$ERR_FILE"; then
   PASS=$((PASS + 1))
   echo "  PASS: cd-prefixed wrapped merge uses target repo review state (exit=$rc)"
 else
