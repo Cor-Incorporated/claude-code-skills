@@ -314,7 +314,6 @@ absorbed by a consolidated gate during Phase 1–3.
 | Script | Reason for retirement |
 |---|---|
 | `enforce-ci-check.sh` | Superseded by `pr-guard.sh` (consolidated PR-create guard) |
-| `enforce-review-pipeline.sh` | Folded into `pr-ci-review-gate.sh` `PRE_CREATE` mode |
 | `post-push-review-check.sh` | Folded into `pr-ci-review-gate.sh` `POST_PUSH` mode |
 | `validate-hook-deployment.sh` | Replaced by `enforce-hook-deploy-integrity.sh` (auto-sync + orphan detection) |
 | `block-merge-without-ci.sh` | Phase 3 — absorbed by `gate-modes/pre-merge.sh` |

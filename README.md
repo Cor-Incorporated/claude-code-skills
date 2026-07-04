@@ -202,10 +202,10 @@ Every PR must pass a **multi-gate review pipeline** before merge is allowed. Thi
 ```
 PR Ready to Merge?
 │
-├─ Gate 1: CI All Green? ──────────────── block-merge-without-ci.sh
+├─ Gate 1: CI All Green? ──────────────── gate-modes/pre-merge.sh
 │  └─ All GitHub Actions checks must be ✅ (not pending, not failed)
 │
-├─ Gate 2: Review After Latest Push? ──── block-merge-without-review.sh
+├─ Gate 2: Review After Latest Push? ──── gate-modes/pre-merge.sh
 │  └─ review.submittedAt > last push timestamp (stale reviews rejected)
 │
 ├─ Gate 3: Review Verified? ───────────── pr-ci-review-gate.sh (LIGHT tier 3-pass OR)
@@ -296,7 +296,7 @@ The core operational principle, born from an incident where 11 of 18 hooks (61%)
 This principle is enforced through:
 - **4-stage verification**: Code exists → Syntax OK → Registered in settings.json → Actually fires
 - **`delivery_score.py`**: Quantitative quality scoring (hook coverage, CI pass rate, review compliance)
-- **`validate-hook-deployment.sh`**: Source ↔ deployed ↔ registered consistency check
+- **`enforce-hook-deploy-integrity.sh`**: Source ↔ deployed ↔ registered consistency check (auto-sync + orphan detection)
 - **CI/CD**: shellcheck + JSON validation + syntax checking on every PR
 
 **Before Epic #130**: Hook gate operation rate 39% (7/18)
@@ -338,14 +338,12 @@ P2-MEDIUM issues #136-#147 resolved in subsequent PRs. Current open items:
 - `reset-factcheck.sh` — Reset fact-check state on session start
 - `enforce-branch-workflow.sh` — Auto-create develop branch, enforce feature branch workflow
 - `validate-no-local-hooks.sh` — Validate no hook overrides exist on session start
-- `validate-hook-deployment.sh` — Verify all hooks are installed and registered in settings.json
+- `enforce-hook-deploy-integrity.sh` — Verify all hooks are installed and registered in settings.json (auto-sync + orphan detection)
 
 ### Quality Gates (Pre-merge)
-- `block-merge-without-ci.sh` — Block merge unless all CI checks green
-- `block-merge-without-review.sh` — Block merge unless review is newer than latest push
-- `pr-ci-review-gate.sh` — 6-mode gate (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) with tiered review
-- `pr-merge-claude-review-gate.sh` — 5-sub-gate Claude review enforcement
-- `inject-claude-review-on-checks.sh` — Auto-fetch review comments on `gh pr checks` / `gh pr merge`
+- `pr-ci-review-gate.sh` — 6-mode gate dispatcher (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) with tiered review
+- `gate-modes/pre-merge.sh` — Consolidated PR-merge 5-gate sequence (CI completed/green, comments exist, review_read, CRITICAL ack); absorbed block-merge-without-ci/review + pr-merge-claude-review-gate (Phase 3)
+- `inject-claude-review-on-checks.sh` — Auto-fetch review comments on `gh pr checks` (MODE1) + soft reminder (MODE3); merge hard-block moved to pre-merge.sh
 - `pr-guard.sh` — Base branch, issue ref, conflict checks
 - `task-completion-gate.sh` — Block premature task completion (CI pending or CRITICAL/HIGH findings)
 - `stop-test-gate.sh` — Run change-related test gate before session end (docs/config-only skip, full-suite fallback, stop_hook_active guard)
