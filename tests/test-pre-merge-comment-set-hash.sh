@@ -77,7 +77,7 @@ if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/commits/abc123/check-runs" ]; 
   if [ "${3:-}" = "--jq" ]; then
     printf '0\n'
   else
-    printf '{"check_runs":[]}\n'
+    printf '{"check_runs":[{"name":"build","status":"completed","conclusion":"success"},{"name":"claude-review","status":"completed","conclusion":"success"}]}\n'
   fi
   exit 0
 fi
@@ -231,10 +231,20 @@ PY
 }
 
 reset_state() {
-  rm -f "$STATE_DIR/review-status.json" "$STATE_DIR/pr-review-lock.json"
+  rm -f "$STATE_DIR/review-status.json" "$STATE_DIR/pr-review-lock.json" "$STATE_DIR/pr-review-read.json"
   rm -rf "$TMP_HOME/.gstack"
   printf '{}\n' > "$STATE_DIR/review-status.json"
   printf '{}\n' > "$STATE_DIR/pr-review-lock.json"
+}
+
+# Phase 3: write review_read=current (Gate 3 prerequisite) for passing cases.
+write_review_read_current() {
+  local head_sha="${1:-abc123}"
+  REVIEW_READ="$head_sha" python3 - "$STATE_DIR/pr-review-read.json" <<'PY'
+import json, os, sys
+with open(sys.argv[1], "w") as f:
+    json.dump({"123": {"review_read": True, "head_sha": os.environ["REVIEW_READ"]}}, f)
+PY
 }
 
 run_pre_merge() {
@@ -272,6 +282,7 @@ GOOD_HASH="$(calc_hash)"
 
 reset_state
 write_pending "$GOOD_HASH"
+write_review_read_current
 expect_rc "T1: matching comment_set_hash allows Pass B" 0
 
 reset_state
@@ -296,6 +307,7 @@ expect_rc "T5: stale hash blocks even with Tier 1 LGTM" 2
 reset_state
 write_other_closed_pending
 write_review_status
+write_review_read_current
 expect_rc "T6: closed other-PR pending state is purged and ignored" 0
 if [[ ! -f "$PENDING_FILE" ]]; then
   PASSED=$((PASSED + 1))
@@ -345,6 +357,7 @@ reset_state
 FAKE_CHANGED_FILE="src/app.ts"
 write_codex_only_status abc123
 write_verified_lock abc123
+write_review_read_current
 expect_rc "T13: matching verified lock satisfies Pass C" 0
 FAKE_CHANGED_FILE="README.md"
 

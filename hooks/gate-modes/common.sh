@@ -178,6 +178,166 @@ purge_pending_review_state() {
 }
 
 # =========================================================================
+# Phase 3 helpers — consolidated pre-merge.sh primitives
+# =========================================================================
+
+# pr_mergeable_state <repo> <pr_number>
+#   Returns lowercased GitHub mergeable flag: "mergeable", "conflicting", "unknown".
+#   fail-OPEN on gh failure (returns "unknown" so the CONFLICTING branch is not
+#   triggered by a transient API error).
+pr_mergeable_state() {
+  local repo="$1" pr_number="$2"
+  local state
+  [[ -n "$repo" && -n "$pr_number" ]] || { echo "unknown"; return; }
+  state=$(_timeout 10 gh pr view "$pr_number" -R "$repo" --json mergeable -q '.mergeable' 2>/dev/null || echo "UNKNOWN")
+  printf '%s\n' "$state" | tr '[:upper:]' '[:lower:]'
+}
+
+# _count_nonempty_lines — pipe-friendly counter; echoes integer >= 0
+_count_nonempty_lines() {
+  local data
+  data=$(cat 2>/dev/null || echo "")
+  if [[ -z "$data" ]]; then
+    echo 0
+    return
+  fi
+  printf '%s\n' "$data" | grep -c '.' 2>/dev/null || echo 0
+}
+
+# detect_critical_severity — stdin: comment bodies; echoes CRITICAL line count
+detect_critical_severity() {
+  grep -iE '\[CRITICAL\]|\*\*CRITICAL\*\*|severity:[[:space:]]*CRITICAL|^[[:space:]]*CRITICAL[:[:space:]-]|>[[:space:]]*CRITICAL' 2>/dev/null \
+    | _count_nonempty_lines
+}
+
+# detect_high_severity — stdin: comment bodies; echoes HIGH line count
+# Excludes lines discussing the detector itself (avoids self-matches).
+detect_high_severity() {
+  grep -iE '\[HIGH\]|\*\*HIGH\*\*|severity:[[:space:]]*HIGH|^[[:space:]]*HIGH[:[:space:]-]|>[[:space:]]*HIGH' 2>/dev/null \
+    | grep -viE 'severity検出|severity.パターン|パターンを追加|検出パターン|detection|filter|high_count|の検出' 2>/dev/null \
+    | _count_nonempty_lines
+}
+
+# detect_bug_severity — stdin: comment bodies; echoes BUG line count
+# Line-level context analysis: match BUG patterns then exclude false-positive
+# lines (bug fix / no bug / バグなし etc.) so a real "[BUG]" is not cancelled
+# by an unrelated "bug fix" comment.
+detect_bug_severity() {
+  grep -iE '\[BUG\]|\*\*BUG\*\*|severity:[[:space:]]*BUG|bug[[:space:]]+found|バグ発見|バグあり' 2>/dev/null \
+    | grep -viE 'no[[:space:]]+bug|bug[[:space:]]*fix|fix.*bug|0[[:space:]]+bug|バグなし|バグ修正|バグ0件|バグ解消|バグありません|bug[[:space:]]*free' 2>/dev/null \
+    | _count_nonempty_lines
+}
+
+# claude_review_ci_conclusion <repo> <head_sha> [check_runs_json]
+#   Returns the claude-review check-run conclusion for the commit:
+#   "success" | "failure" | "" (not configured / unknown / API error).
+#   When check_runs_json is supplied, no API call is made (call reduction).
+claude_review_ci_conclusion() {
+  local repo="$1" head_sha="$2" check_runs_json="${3:-}"
+  [[ -n "$repo" && -n "$head_sha" ]] || { echo ""; return; }
+  if [[ -n "$check_runs_json" ]]; then
+    printf '%s' "$check_runs_json" \
+      | jq -r '[.check_runs[] | select(.name | test("claude-review"; "i"))] | .[0].conclusion // ""' 2>/dev/null || echo ""
+  else
+    _timeout 10 gh api "repos/${repo}/commits/${head_sha}/check-runs" \
+      --jq '[.check_runs[] | select(.name | test("claude-review"; "i"))] | .[0].conclusion // ""' 2>/dev/null || echo ""
+  fi
+}
+
+# pr_comment_bodies <repo> <pr_number>
+#   Concatenated PR line-comments + issue-comments bodies (for severity grep).
+#   Silently returns empty on gh failure (caller decides fail policy).
+pr_comment_bodies() {
+  local repo="$1" pr_number="$2"
+  local pr_comments issue_comments
+  [[ -n "$repo" && -n "$pr_number" ]] || return
+  pr_comments=$(_timeout 10 gh api "repos/${repo}/pulls/${pr_number}/comments" 2>/dev/null || echo "[]")
+  issue_comments=$(_timeout 10 gh api "repos/${repo}/issues/${pr_number}/comments" 2>/dev/null || echo "[]")
+  {
+    printf '%s' "$pr_comments" | jq -r '.[].body // ""' 2>/dev/null
+    printf '%s' "$issue_comments" | jq -r '.[].body // ""' 2>/dev/null
+  }
+}
+
+# pr_issue_comment_count <repo> <pr_number>
+#   Returns issue-comments API length (Issue-comment gate, Gate 2).
+pr_issue_comment_count() {
+  local repo="$1" pr_number="$2"
+  [[ -n "$repo" && -n "$pr_number" ]] || { echo 0; return; }
+  _timeout 10 gh api "repos/${repo}/issues/${pr_number}/comments" --jq 'length' 2>/dev/null || echo "0"
+}
+
+# review_read_state_files — echo candidate pr-review-read.json paths
+# (project STATE_DIR + parent git root + $HOME global) deduplicated.
+review_read_state_files() {
+  local seen="|" candidate root
+  candidate="$STATE_DIR/pr-review-read.json"
+  printf '%s\n' "$candidate"
+  seen="|${candidate}|"
+
+  if [[ -n "${GIT_CONTEXT_DIR:-}" ]]; then
+    root=$(git -C "$GIT_CONTEXT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "")
+  else
+    root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+  fi
+  if [[ -n "$root" ]]; then
+    candidate="$root/.claude/state/pr-review-read.json"
+    if [[ "$seen" != *"|$candidate|"* ]]; then
+      printf '%s\n' "$candidate"
+      seen="${seen}${candidate}|"
+    fi
+  fi
+
+  candidate="$HOME/.claude/state/pr-review-read.json"
+  if [[ "$seen" != *"|$candidate|"* ]]; then
+    printf '%s\n' "$candidate"
+  fi
+}
+
+# review_read_field_state <pr> <field> <head_sha>
+#   Returns "current" (field true + head_sha matches), "stale" (true + sha
+#   mismatch), or "missing". Used by Gate 3 (review_read) and Gate 4
+#   (critical_acknowledged / fallback_review_done / has_critical).
+review_read_field_state() {
+  local pr="$1" field="$2" head_sha="$3"
+  local state="missing" state_file val
+  [[ -n "$pr" && -n "$field" && -n "$head_sha" ]] || { echo "missing"; return; }
+  while IFS= read -r state_file; do
+    [[ -z "$state_file" || ! -f "$state_file" ]] && continue
+    val=$(_STATE="$state_file" _PR="$pr" _FIELD="$field" _SHA="$head_sha" python3 -c "
+import json, os
+try:
+    with open(os.environ['_STATE']) as f:
+        entry = json.load(f).get(os.environ['_PR'], {})
+except Exception:
+    raise SystemExit
+if entry.get(os.environ['_FIELD'], False) is not True:
+    raise SystemExit
+if entry.get('head_sha', '') == os.environ['_SHA']:
+    print('current')
+    raise SystemExit(0)
+print('stale')
+" 2>/dev/null || echo "")
+    if [[ "$val" == "current" ]]; then
+      echo "current"
+      return
+    fi
+    [[ "$val" == "stale" ]] && state="stale"
+  done < <(review_read_state_files)
+  echo "$state"
+}
+
+# review_read_current_bool <pr> <field> <head_sha>
+#   Wrapper returning "True"/"False" for easier shell boolean comparison.
+review_read_current_bool() {
+  if [[ "$(review_read_field_state "$1" "$2" "$3")" == "current" ]]; then
+    echo "True"
+  else
+    echo "False"
+  fi
+}
+
+# =========================================================================
 # Helper: verify pending-review-comments.json still matches GitHub comments
 # =========================================================================
 review_comment_set_hash_script() {

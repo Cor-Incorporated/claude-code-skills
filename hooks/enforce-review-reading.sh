@@ -488,43 +488,13 @@ except Exception:
   fi
 fi
 
-# HARD BLOCK: gh pr merge with unresolved findings
-if should_block_unparsed_pr_merge "$cmd" "$MERGE_COUNT"; then
-  if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
-    print_unparsed_pr_merge_block
-    echo "[BLOCKED] PR #${PR}: 未対応のCRITICAL/HIGH指摘があります（CRITICAL=${CRITICAL}, HIGH=${HIGH}）。" >&2
-    exit 2
-  fi
-fi
-if [[ "$MERGE_COUNT" -gt 0 ]]; then
-  MERGE_PR=$(extract_gh_pr_merge_target "$cmd" || echo "")
-  if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
-    if [[ "$MERGE_COUNT" -gt 1 || "$MERGE_PR" == "__MULTIPLE__" ]]; then
-      echo "[BLOCKED] 1つのBashコマンドに複数の gh pr merge が含まれています。未対応レビュー state があるため、PRごとに個別実行してください。" >&2
-      exit 2
-    fi
-    if [[ -z "$MERGE_PR" ]]; then
-      MERGE_PR=$(resolve_current_branch_merge_pr "$REPO" || echo "")
-    fi
-    if [[ "$MERGE_PR" == __NON_NUMERIC__:* ]]; then
-      echo "[BLOCKED] gh pr merge target をPR番号として特定できません。未対応レビュー state があるため、PR番号を明示してください。" >&2
-      echo "  target: ${MERGE_PR#__NON_NUMERIC__:}" >&2
-      exit 2
-    fi
-    if [[ -z "$MERGE_PR" ]]; then
-      echo "[BLOCKED] gh pr merge の暗黙ターゲットを現在ブランチから解決できません。未対応レビュー state があるため、PR番号を明示してください。" >&2
-      exit 2
-    fi
-    if [[ -n "$PR" && "$MERGE_PR" != "$PR" ]]; then
-      echo "[INFO] pending-review-comments.json は PR #${PR} の state です。PR #${MERGE_PR} の merge はこの hook では hard block しません。" >&2
-    else
-      echo "[BLOCKED] PR #${PR}: 未対応のCRITICAL/HIGH指摘があります（CRITICAL=${CRITICAL}, HIGH=${HIGH}）。" >&2
-      echo "  レビューコメントを確認し、全て対応してからマージしてください。" >&2
-      echo "  確認: gh api repos/.../pulls/${PR}/comments" >&2
-      exit 2
-    fi
-  fi
-fi
+# =========================================================================
+# Phase 3: gh pr merge hard-block moved to consolidated pre-merge.sh.
+# This hook now only emits a SOFT reminder (hookSpecificOutput) so the agent
+# sees pending reviews on every Bash command; the consolidated pre-merge.sh
+# gate handles the actual merge-time block (CI green + Gate 0-4 + C/H/BUG).
+# Multi-merge structural safety (line 38-41 above) is preserved.
+# =========================================================================
 
 # SOFT REMINDER: any other command — output pending review info
 # This outputs hookSpecificOutput so agent sees the pending reviews

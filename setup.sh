@@ -14,6 +14,10 @@ echo "=== Claude Code Skills Setup ==="
 echo ""
 
 # 1. Copy settings
+# NOTE: settings.json is overwritten from master on every setup. Store env vars
+# (API tokens, model config, base URL) in settings.local.json — Claude Code merges
+# settings.json + settings.local.json (local takes precedence), and the sanitize
+# step below preserves settings.local.json's env (only strips permissions).
 echo "[1/8] Installing settings..."
 mkdir -p "$CLAUDE_DIR"
 cp "$REPO_DIR/settings.json" "$CLAUDE_DIR/settings.json"

@@ -8,17 +8,32 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 SRC_REPO="$TMP_DIR/source"
 TARGET_REPO="$TMP_DIR/target"
+TMP_REMOTE="$TMP_DIR/remote.git"
 TMP_BIN="$TMP_DIR/bin"
 TMP_HOME="$TMP_DIR/home"
 GH_LOG="$TMP_DIR/gh.log"
 mkdir -p "$TMP_BIN" "$TMP_HOME/.claude/state"
 
-for repo in "$SRC_REPO" "$TARGET_REPO"; do
-  git init -q "$repo"
-  git -C "$repo" config user.email test@example.com
-  git -C "$repo" config user.name Test
-  mkdir -p "$repo/.claude/state"
-done
+# Real shared bare remote so pre-merge.sh base-freshness (git fetch + rev-parse)
+# succeeds in both repos. BASE_SHA is exported so the gh mock can return it
+# for base.sha / git/ref/heads/<ref> queries.
+git init -q "$SRC_REPO"
+git -C "$SRC_REPO" config user.email test@example.com
+git -C "$SRC_REPO" config user.name Test
+printf 'root\n' > "$SRC_REPO/README.md"
+git -C "$SRC_REPO" add README.md
+git -C "$SRC_REPO" commit -qm init
+git -C "$SRC_REPO" branch -M develop
+git clone -q --bare "$SRC_REPO" "$TMP_REMOTE"
+git -C "$SRC_REPO" remote add origin "$TMP_REMOTE"
+git -C "$SRC_REPO" push -q origin develop
+git clone -q "$TMP_REMOTE" "$TARGET_REPO"
+git -C "$TARGET_REPO" config user.email test@example.com
+git -C "$TARGET_REPO" config user.name Test
+mkdir -p "$SRC_REPO/.claude/state" "$TARGET_REPO/.claude/state"
+BASE_SHA="$(git -C "$SRC_REPO" rev-parse develop)"
+TEST_BASE_SHA="$BASE_SHA"
+export TEST_BASE_SHA
 
 cat > "$TMP_BIN/gh" <<'SH'
 #!/bin/bash
@@ -45,8 +60,17 @@ case "$path" in
     case "$jq_expr" in
       ".head.sha"|".head.sha // \"\"") printf 'abc123\n' ;;
       ".head.ref"|".head.ref // \"\"") printf 'feat/context\n' ;;
-      *) printf '{"head":{"sha":"abc123","ref":"feat/context"},"base":{"ref":"develop"}}\n' ;;
+      ".base.ref"|".base.ref // \"\"") printf 'develop\n' ;;
+      ".base.sha"|".base.sha // \"\"") printf '%s\n' "${TEST_BASE_SHA:-developsha}" ;;
+      *) printf '{"head":{"sha":"abc123","ref":"feat/context"},"base":{"ref":"develop","sha":"%s"}}\n' "${TEST_BASE_SHA:-developsha}" ;;
     esac
+    ;;
+  repos/owner/repo/git/ref/heads/develop)
+    if [[ "$jq_expr" == ".object.sha" ]]; then
+      printf '%s\n' "${TEST_BASE_SHA:-developsha}"
+    else
+      printf '{"object":{"sha":"%s"}}\n' "${TEST_BASE_SHA:-developsha}"
+    fi
     ;;
   repos/owner/repo/commits/abc123/check-runs)
     case "$jq_expr" in
@@ -89,6 +113,20 @@ payload() {
 run_hook() {
   local hook="$1"
   local command="$2"
+  case "$hook" in
+    pr-merge-claude-review-gate.sh|block-merge-without-review.sh)
+      # Phase 3: retired hooks consolidated into pre-merge.sh
+      set +e
+      (
+        cd "$SRC_REPO"
+        HOME="$TMP_HOME" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
+          GATE_MODE=PRE_MERGE bash "$ROOT/hooks/pr-ci-review-gate.sh" <<<"$(payload "$command")"
+      ) >"$TMP_DIR/out" 2>"$TMP_DIR/err"
+      local rc=$?
+      set -e
+      return "$rc"
+      ;;
+  esac
   set +e
   (
     cd "$SRC_REPO"

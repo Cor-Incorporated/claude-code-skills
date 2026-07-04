@@ -18,7 +18,13 @@ git -C "$TMP_REPO" config user.name Test
 printf '# test\n' > "$TMP_REPO/README.md"
 git -C "$TMP_REPO" add README.md
 git -C "$TMP_REPO" commit -q -m init
-git -C "$TMP_REPO" remote add origin git@github.com:owner/repo.git
+git -C "$TMP_REPO" branch -M develop
+TMP_REMOTE="$TMP_ROOT/remote.git"
+git clone -q --bare "$TMP_REPO" "$TMP_REMOTE"
+git -C "$TMP_REPO" remote add origin "$TMP_REMOTE"
+git -C "$TMP_REPO" push -q origin develop
+TEST_BASE_SHA="$(git -C "$TMP_REPO" rev-parse develop)"
+export TEST_BASE_SHA
 mkdir -p "$TMP_REPO/.claude/state"
 
 cat > "$TMP_BIN/gh" <<'FAKEGH'
@@ -48,8 +54,17 @@ case "$path" in
     case "$jq_expr" in
       ".head.sha"|".head.sha // \"\"") printf '%s\n' "$head_sha" ;;
       ".head.ref"|".head.ref // \"\"") printf 'fix/test\n' ;;
-      *) printf '{"head":{"sha":"%s","ref":"fix/test"},"base":{"ref":"develop"}}\n' "$head_sha" ;;
+      ".base.ref"|".base.ref // \"\"") printf 'develop\n' ;;
+      ".base.sha"|".base.sha // \"\"") printf '%s\n' "${TEST_BASE_SHA:-developsha}" ;;
+      *) printf '{"head":{"sha":"%s","ref":"fix/test"},"base":{"ref":"develop","sha":"%s"}}\n' "$head_sha" "${TEST_BASE_SHA:-developsha}" ;;
     esac
+    ;;
+  repos/owner/repo/git/ref/heads/develop)
+    if [[ "$jq_expr" == ".object.sha" ]]; then
+      printf '%s\n' "${TEST_BASE_SHA:-developsha}"
+    else
+      printf '{"object":{"sha":"%s"}}\n' "${TEST_BASE_SHA:-developsha}"
+    fi
     ;;
   repos/owner/repo/commits/*/check-runs)
     case "$jq_expr" in
@@ -87,6 +102,13 @@ JSON
   repos/owner/repo/pulls/123/reviews)
     printf '[]\n'
     ;;
+  repos/owner/repo/pulls/123/files)
+    # Empty array: classify_review_tier falls back to LIGHT (no source files).
+    case "$jq_expr" in
+      *filename*) printf '\n' ;;
+      *) printf '[]\n' ;;
+    esac
+    ;;
   *)
     printf '{}\n'
     ;;
@@ -103,6 +125,12 @@ reset_state() {
   printf '{}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
   printf '{}\n' > "$TMP_PARENT/.claude/state/pr-review-read.json"
   printf '{}\n' > "$TMP_REPO/.claude/state/pr-review-read.json"
+  # Phase 3: consolidated pre-merge.sh requires 3-pass judgment after Gate 0-4.
+  # Seed review-status.json with code_review=true so Pass A succeeds for the
+  # happy-path cases. Tests that expect a block override this or omit it.
+  for state_dir in "$TMP_HOME/.claude/state" "$TMP_PARENT/.claude/state" "$TMP_REPO/.claude/state"; do
+    printf '{"fix/test":{"code_review":true,"code_review_sha":"abc123"}}\n' > "$state_dir/review-status.json"
+  done
 }
 
 payload() {
@@ -117,7 +145,7 @@ run_merge_gate() {
 	      FAKE_NO_HEAD="${FAKE_NO_HEAD:-0}" FAKE_HEAD_SHA="${FAKE_HEAD_SHA:-abc123}" \
 	      FAKE_NO_COMMENTS="${FAKE_NO_COMMENTS:-0}" FAKE_CLAUDE_STATUS="${FAKE_CLAUDE_STATUS:-success}" \
 	      FAKE_COMMENT_CRITICAL="${FAKE_COMMENT_CRITICAL:-0}" \
-	      bash "$ROOT/hooks/pr-merge-claude-review-gate.sh" <<<"$(payload "$command")"
+	      GATE_MODE=PRE_MERGE bash "$ROOT/hooks/pr-ci-review-gate.sh" <<<"$(payload "$command")"
   )
 }
 
