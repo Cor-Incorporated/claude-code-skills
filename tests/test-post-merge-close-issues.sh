@@ -70,15 +70,15 @@ chmod +x "$TMP_DIR/gh"
 
 run_hook() {
   local body="$1"
+  local command="${2:-gh pr merge 123 --squash --repo Cor-Incorporated/claude-code-skills}"
   printf '%s\n' "$body" > "$BODY_FILE"
   : > "$LOG_FILE"
   LAST_OUTPUT=""
   LAST_RC=0
   set +e
   LAST_OUTPUT=$(
-    PATH="$TMP_DIR:$PATH" GH_LOG="$LOG_FILE" GH_BODY_FILE="$BODY_FILE" bash "$HOOK" 2>&1 <<'JSON'
-{"tool_name":"Bash","tool_input":{"command":"gh pr merge 123 --squash"}}
-JSON
+    jq -nc --arg cmd "$command" '{tool_name:"Bash",tool_input:{command:$cmd}}' \
+      | PATH="$TMP_DIR:$PATH" GH_LOG="$LOG_FILE" GH_BODY_FILE="$BODY_FILE" bash "$HOOK" 2>&1
   )
   LAST_RC=$?
   set -e
@@ -106,6 +106,22 @@ expect_close() {
   fi
 }
 
+expect_close_in_repo() {
+  local label="$1"
+  local body="$2"
+  local command="$3"
+  local repo="$4"
+  run_hook "$body" "$command"
+  if [[ "$LAST_RC" -eq 0 ]] \
+    && grep -q "pr view 123 -R $repo" "$LOG_FILE" \
+    && grep -q "issue view 220 -R $repo" "$LOG_FILE" \
+    && grep -q "issue close 220 -R $repo" "$LOG_FILE"; then
+    pass "$label"
+  else
+    fail "$label (exit $LAST_RC: $LAST_OUTPUT; log: $(cat "$LOG_FILE"))"
+  fi
+}
+
 echo "=== post-merge close Issue tests ==="
 
 expect_no_close \
@@ -113,12 +129,30 @@ expect_no_close \
   $'## Summary\nRefs #220\n'
 
 expect_no_close \
-  "T2: Issue URL-only PR does not call gh issue close" \
+  "T2: Ref-only PR does not call gh issue close" \
+  $'## Summary\nRef #220\n'
+
+expect_no_close \
+  "T3: References-only PR does not call gh issue close" \
+  $'## Summary\nReferences #220\n'
+
+expect_no_close \
+  "T4: Issue URL-only PR does not call gh issue close" \
   $'## Summary\nhttps://github.com/Cor-Incorporated/Grift/issues/1261\n'
 
 expect_close \
-  "T3: closing keyword PR still closes the Issue" \
+  "T5: closing keyword PR still closes the Issue" \
   $'## Summary\nCloses #220\n'
+
+expect_close \
+  "T6: closing keyword with colon still closes the Issue" \
+  $'## Summary\nResolves: #220\n'
+
+expect_close_in_repo \
+  "T7: --repo merge closes the Issue in the command repo" \
+  $'## Summary\nCloses #220\n' \
+  "gh pr merge --repo owner/repo 123 --squash" \
+  "owner/repo"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed (total $TOTAL)"

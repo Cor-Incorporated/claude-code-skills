@@ -12,6 +12,114 @@ if [ -z "$PR_NUM" ]; then
     exit 1
 fi
 
+git_root_for_dir() {
+    local dir="${1:-}"
+    [ -n "$dir" ] && [ -d "$dir" ] || return 1
+    git -C "$dir" rev-parse --show-toplevel 2>/dev/null || return 1
+}
+
+git_common_dir_for_dir() {
+    local dir="${1:-}" common
+    [ -n "$dir" ] && [ -d "$dir" ] || return 1
+    common=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+    [ -n "$common" ] || return 1
+    printf '%s\n' "$common"
+}
+
+same_git_common_dir() {
+    local left="${1:-}" right="${2:-}" left_common right_common
+    left_common=$(git_common_dir_for_dir "$left" 2>/dev/null || true)
+    right_common=$(git_common_dir_for_dir "$right" 2>/dev/null || true)
+    [ -n "$left_common" ] && [ -n "$right_common" ] && [ "$left_common" = "$right_common" ]
+}
+
+repo_root_matches_slug() {
+    local root="${1:-}" repo="${2:-}" remote url slug
+    [ -n "$root" ] && [ -d "$root" ] && [ -n "$repo" ] || return 1
+    for remote in origin upstream; do
+        url=$(git -C "$root" remote get-url "$remote" 2>/dev/null || true)
+        [ -n "$url" ] || continue
+        slug=$(printf '%s\n' "$url" \
+            | sed 's|^git@github.com:||;s|^https://github.com/||;s|^ssh://git@github.com/||;s|\.git$||')
+        [ "$slug" = "$repo" ] && return 0
+    done
+    return 1
+}
+
+scan_child_repos_for_slug() {
+    local base="${1:-}" repo="${2:-}" candidate root
+    [ -n "$base" ] && [ -d "$base" ] && [ -n "$repo" ] || return 1
+    for candidate in "$base"/*; do
+        [ -d "$candidate" ] || continue
+        if repo_root_matches_slug "$candidate" "$repo"; then
+            root=$(git_root_for_dir "$candidate" 2>/dev/null || printf '%s\n' "$candidate")
+            printf '%s\n' "$root"
+            return 0
+        fi
+    done
+    return 1
+}
+
+local_repo_root_for_slug() {
+    local repo="${1:-}" cwd_root project_root candidate
+    [ -n "$repo" ] || return 1
+
+    cwd_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    if repo_root_matches_slug "$cwd_root" "$repo"; then
+        printf '%s\n' "$cwd_root"
+        return 0
+    fi
+
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+        project_root=$(git_root_for_dir "$CLAUDE_PROJECT_DIR" 2>/dev/null || true)
+        if repo_root_matches_slug "$project_root" "$repo"; then
+            printf '%s\n' "$project_root"
+            return 0
+        fi
+    fi
+
+    if [ -n "$cwd_root" ]; then
+        candidate=$(scan_child_repos_for_slug "$(dirname "$cwd_root")" "$repo" 2>/dev/null || true)
+        [ -n "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    fi
+    if [ -n "$project_root" ]; then
+        candidate=$(scan_child_repos_for_slug "$(dirname "$project_root")" "$repo" 2>/dev/null || true)
+        [ -n "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    fi
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+        candidate=$(scan_child_repos_for_slug "$CLAUDE_PROJECT_DIR" "$repo" 2>/dev/null || true)
+        [ -n "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    fi
+    if [ -d "$HOME/Developer" ]; then
+        candidate=$(scan_child_repos_for_slug "$HOME/Developer" "$repo" 2>/dev/null || true)
+        [ -n "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    fi
+
+    return 1
+}
+
+current_repo_root() {
+    local cwd_root project_root
+    cwd_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    project_root=""
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+        project_root=$(git_root_for_dir "$CLAUDE_PROJECT_DIR" 2>/dev/null || true)
+    fi
+
+    if [ -n "$cwd_root" ]; then
+        if [ -n "$project_root" ] && same_git_common_dir "$project_root" "$cwd_root"; then
+            printf '%s\n' "$project_root"
+        else
+            printf '%s\n' "$cwd_root"
+        fi
+        return 0
+    fi
+
+    if [ -n "$project_root" ]; then
+        printf '%s\n' "$project_root"
+    fi
+}
+
 # Resolve REPO independent of cwd (Fix8):
 #   1. CLAUDE_FORK_REPO env override
 #   2. explicit 2nd CLI arg (owner/repo)
@@ -22,7 +130,7 @@ if [ -z "$REPO" ]; then
     REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
 fi
 if [ -z "$REPO" ]; then
-    _repo_dir="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo "")}"
+    _repo_dir="$(current_repo_root || true)"
     if [ -n "$_repo_dir" ]; then
         REPO=$(git -C "$_repo_dir" remote get-url upstream 2>/dev/null \
                  | sed 's|.*github.com[:/]||;s|\.git$||')
@@ -35,13 +143,15 @@ if [ -z "$REPO" ]; then
     exit 1
 fi
 
-# Project-scoped state: match block-merge-without-review.sh resolution (Issue #19).
-# Fix8: write the lock to BOTH the project-scoped dir AND the global dir so a
-# later reader with no/other CLAUDE_PROJECT_DIR (block-merge) sees verified=true.
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
-  _STATE_BASE="${CLAUDE_PROJECT_DIR}/.claude/state"
-elif git rev-parse --show-toplevel &>/dev/null; then
-  _STATE_BASE="$(git rev-parse --show-toplevel)/.claude/state"
+# Project-scoped state: use the actual git repo root, not a broad parent
+# CLAUDE_PROJECT_DIR such as ~/Developer. Fix8 still writes global state too.
+_REPO_ROOT="$(current_repo_root || true)"
+_REPO_ROOT_FOR_REPO="$(local_repo_root_for_slug "$REPO" 2>/dev/null || true)"
+if [[ -n "$_REPO_ROOT_FOR_REPO" ]]; then
+  _REPO_ROOT="$_REPO_ROOT_FOR_REPO"
+fi
+if [[ -n "$_REPO_ROOT" ]]; then
+  _STATE_BASE="${_REPO_ROOT}/.claude/state"
 else
   _STATE_BASE="$HOME/.claude/state"
 fi
@@ -259,7 +369,7 @@ if [ "$BLOCKING" -gt 0 ] || [ "$MUST_FIX" -gt 0 ] || [ "$CRITICAL" -gt 0 ] || [ 
 
     # Fix8: write failure state (verified=False) to ALL lock locations
     for _lt in "${LOCK_TARGETS[@]}"; do
-      _LOCK="$_lt" _PR="$PR_NUM" _BLOCKING="$BLOCKING" _MUST_FIX="$MUST_FIX" _CRITICAL="$CRITICAL" _HIGH="$HIGH" _BUG="$BUG" python3 -c "
+    _LOCK="$_lt" _PR="$PR_NUM" _REPO="$REPO" _BLOCKING="$BLOCKING" _MUST_FIX="$MUST_FIX" _CRITICAL="$CRITICAL" _HIGH="$HIGH" _BUG="$BUG" python3 -c "
 import json, os, fcntl
 f_path = os.environ['_LOCK']
 with open(f_path, 'r+') as f:
@@ -275,6 +385,7 @@ with open(f_path, 'r+') as f:
     s[os.environ['_PR']]['high_count'] = int(os.environ['_HIGH'])
     s[os.environ['_PR']]['bug_count'] = int(os.environ['_BUG'])
     s[os.environ['_PR']]['verified'] = False
+    s[os.environ['_PR']]['repo'] = os.environ['_REPO']
     f.seek(0)
     f.truncate()
     json.dump(s, f, indent=2)
@@ -288,7 +399,7 @@ fi
 # block-merge-without-review.sh reads $HOME/.claude/state when CLAUDE_PROJECT_DIR
 # is unset, so verified=true MUST land in the global file too.
 for _lt in "${LOCK_TARGETS[@]}"; do
-  _LOCK="$_lt" _PR="$PR_NUM" _HEAD_SHA="$HEAD_SHA" _NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 -c "
+  _LOCK="$_lt" _PR="$PR_NUM" _REPO="$REPO" _HEAD_SHA="$HEAD_SHA" _NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 -c "
 import json, os, fcntl
 f_path = os.environ['_LOCK']
 with open(f_path, 'r+') as f:
@@ -305,6 +416,7 @@ with open(f_path, 'r+') as f:
     s[os.environ['_PR']]['bug_count'] = 0
     s[os.environ['_PR']]['verified'] = True
     s[os.environ['_PR']]['verified_at'] = os.environ['_NOW']
+    s[os.environ['_PR']]['repo'] = os.environ['_REPO']
     s[os.environ['_PR']]['head_sha'] = os.environ['_HEAD_SHA']
     s[os.environ['_PR']]['verified_head_sha'] = os.environ['_HEAD_SHA']
     f.seek(0)
@@ -319,7 +431,7 @@ done
 REVIEW_READ_TARGETS=()
 _add_review_read_target "$_STATE_BASE/pr-review-read.json"
 _GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
-if [[ -n "$_GIT_ROOT" ]]; then
+if [[ -n "$_GIT_ROOT" ]] && { same_git_common_dir "$_GIT_ROOT" "$_REPO_ROOT" || repo_root_matches_slug "$_GIT_ROOT" "$REPO"; }; then
   _add_review_read_target "$_GIT_ROOT/.claude/state/pr-review-read.json"
 fi
 _add_review_read_target "$_GLOBAL_STATE_BASE/pr-review-read.json"

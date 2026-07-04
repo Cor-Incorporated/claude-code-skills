@@ -122,17 +122,23 @@ fi
 # decide. On failure, do NOT print the success line — exit non-zero so the operator
 # knows the lock is still pending.
 _lock_rc=0
-_BR="$BRANCH" _HEAD_SHA="$HEAD_SHA" lock_apply "$PR" "
+_BR="$BRANCH" _HEAD_SHA="$HEAD_SHA" _REPO="$REPO" lock_apply "$PR" "
 e = s.setdefault(PR, {'status': 'review_pending', 'branch': os.environ['_BR']})
 e['ci_green'] = True
 e['review_lgtm'] = True
 e['verified'] = True
+e['repo'] = os.environ['_REPO']
 e['head_sha'] = os.environ['_HEAD_SHA']
 e['verified_head_sha'] = os.environ['_HEAD_SHA']
 " || _lock_rc=$?
 
 if [[ "$_lock_rc" -ne 0 ]]; then
   echo "❌ PR #${PR}: 検証は通りましたがロック解除の保存に失敗しました。再実行してください。" >&2
+  exit 1
+fi
+
+if ! mark_review_read "$PR" "$REPO" "$HEAD_SHA"; then
+  echo "❌ PR #${PR}: 検証は通りましたがレビュー既読証跡の保存に失敗しました。再実行してください。" >&2
   exit 1
 fi
 

@@ -105,7 +105,7 @@ FAIL=0
 
 echo "=== merge hooks target repo context ==="
 
-printf '{"123":{"review_read":true,"fallback_review_done":true}}\n' > "$SRC_REPO/.claude/state/pr-review-read.json"
+printf '{"123":{"review_read":true,"fallback_review_done":true,"repo":"owner/repo","head_sha":"abc123"}}\n' > "$SRC_REPO/.claude/state/pr-review-read.json"
 printf '{}\n' > "$TARGET_REPO/.claude/state/pr-review-read.json"
 if run_hook "pr-merge-claude-review-gate.sh" "cd '$TARGET_REPO' && bash -c 'gh pr merge 123 --merge --repo owner/repo'"; then
   FAIL=$((FAIL + 1))
@@ -213,7 +213,7 @@ else
 fi
 
 printf '{}\n' > "$SRC_REPO/.claude/state/pr-review-lock.json"
-printf '{"123":{"verified":false}}\n' > "$TARGET_REPO/.claude/state/pr-review-lock.json"
+printf '{"123":{"verified":false,"repo":"owner/repo","head_sha":"abc123"}}\n' > "$TARGET_REPO/.claude/state/pr-review-lock.json"
 if run_hook "block-merge-without-review.sh" "cd '$TARGET_REPO' && bash -c 'gh pr merge 123 --merge --repo owner/repo'"; then
   FAIL=$((FAIL + 1))
   echo "  FAIL: block-merge-without-review read source lock state" >&2

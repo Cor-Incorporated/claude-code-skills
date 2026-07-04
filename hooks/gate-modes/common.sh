@@ -54,6 +54,57 @@ remote_for_repo() {
   [[ -n "$first_remote" ]] && echo "$first_remote"
 }
 
+repo_root_matches_slug() {
+  local root="$1" repo="$2" remote slug
+  [[ -n "$root" && -d "$root" && -n "$repo" ]] || return 1
+  for remote in origin upstream; do
+    git -C "$root" remote get-url "$remote" >/dev/null 2>&1 || continue
+    slug=$(git -C "$root" remote get-url "$remote" 2>/dev/null \
+      | sed 's|^git@github.com:||;s|^https://github.com/||;s|^ssh://git@github.com/||;s|\.git$||' \
+      || true)
+    [[ "$slug" == "$repo" ]] && return 0
+  done
+  return 1
+}
+
+local_repo_root_for_slug() {
+  local repo="$1" root base candidate
+  [[ -n "$repo" ]] || return 1
+
+  if [[ -n "${GIT_CONTEXT_DIR:-}" ]]; then
+    root=$(git_toplevel_for_dir "$GIT_CONTEXT_DIR" 2>/dev/null || true)
+  else
+    root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  fi
+  if [[ -n "$root" ]] && repo_root_matches_slug "$root" "$repo"; then
+    printf '%s\n' "$root"
+    return 0
+  fi
+
+  if [[ -n "$root" ]]; then
+    base="$(dirname "$root")"
+    for candidate in "$base"/*; do
+      [[ -d "$candidate" ]] || continue
+      if repo_root_matches_slug "$candidate" "$repo"; then
+        printf '%s\n' "$(git_toplevel_for_dir "$candidate" 2>/dev/null || printf '%s\n' "$candidate")"
+        return 0
+      fi
+    done
+  fi
+
+  if [[ -d "$HOME/Developer" ]]; then
+    for candidate in "$HOME/Developer"/*; do
+      [[ -d "$candidate" ]] || continue
+      if repo_root_matches_slug "$candidate" "$repo"; then
+        printf '%s\n' "$(git_toplevel_for_dir "$candidate" 2>/dev/null || printf '%s\n' "$candidate")"
+        return 0
+      fi
+    done
+  fi
+
+  return 1
+}
+
 # =========================================================================
 # Helper: verify the local gate is evaluating the current GitHub base snapshot
 # =========================================================================
@@ -166,10 +217,54 @@ pending_comment_set_current() {
 # =========================================================================
 # State directory — project-scoped
 # =========================================================================
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
-  STATE_DIR="${CLAUDE_PROJECT_DIR}/.claude/state"
-elif git rev-parse --show-toplevel &>/dev/null; then
-  STATE_DIR="$(git rev-parse --show-toplevel)/.claude/state"
+git_toplevel_for_dir() {
+  local dir="${1:-}"
+  [[ -n "$dir" && -d "$dir" ]] || return 1
+  git -C "$dir" rev-parse --show-toplevel 2>/dev/null || return 1
+}
+
+git_common_dir_for_dir() {
+  local dir="${1:-}" common
+  [[ -n "$dir" && -d "$dir" ]] || return 1
+  common=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  [[ -n "$common" ]] || return 1
+  printf '%s\n' "$common"
+}
+
+same_git_common_dir() {
+  local left="${1:-}" right="${2:-}" left_common right_common
+  left_common=$(git_common_dir_for_dir "$left" 2>/dev/null || true)
+  right_common=$(git_common_dir_for_dir "$right" 2>/dev/null || true)
+  [[ -n "$left_common" && -n "$right_common" && "$left_common" == "$right_common" ]]
+}
+
+initial_gate_repo_root() {
+  local cwd_root project_root
+  cwd_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  project_root=""
+  if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
+    project_root=$(git_toplevel_for_dir "$CLAUDE_PROJECT_DIR" 2>/dev/null || true)
+  fi
+
+  if [[ -n "$cwd_root" ]]; then
+    # A broad parent CLAUDE_PROJECT_DIR (for example ~/Developer) is not a repo
+    # and must not become the project state root for a nested checkout.
+    if [[ -n "$project_root" ]] && same_git_common_dir "$project_root" "$cwd_root"; then
+      printf '%s\n' "$project_root"
+    else
+      printf '%s\n' "$cwd_root"
+    fi
+    return 0
+  fi
+
+  if [[ -n "$project_root" ]]; then
+    printf '%s\n' "$project_root"
+  fi
+}
+
+_INITIAL_REPO_ROOT="$(initial_gate_repo_root || true)"
+if [[ -n "$_INITIAL_REPO_ROOT" ]]; then
+  STATE_DIR="${_INITIAL_REPO_ROOT}/.claude/state"
 else
   STATE_DIR="$HOME/.claude/state"
 fi
@@ -180,6 +275,7 @@ mkdir -p "$STATE_DIR"
 rebind_gate_state_dir() {
   local repo_root="$1"
   [[ -n "$repo_root" ]] || return 0
+  repo_root=$(git_toplevel_for_dir "$repo_root" 2>/dev/null || printf '%s\n' "$repo_root")
   STATE_DIR="${repo_root}/.claude/state"
   REVIEW_STATE="$STATE_DIR/review-status.json"
   LOCK_STATE="$STATE_DIR/pr-review-lock.json"
@@ -212,6 +308,28 @@ lock_files() {
   fi
 }
 
+lock_files_for_repo() {
+  local repo="${1:-}" repo_root candidate seen="|"
+
+  while IFS= read -r candidate; do
+    [[ -z "$candidate" ]] && continue
+    if [[ "$seen" != *"|$candidate|"* ]]; then
+      printf '%s\n' "$candidate"
+      seen="${seen}${candidate}|"
+    fi
+  done < <(lock_files)
+
+  if [[ -n "$repo" ]]; then
+    repo_root=$(local_repo_root_for_slug "$repo" 2>/dev/null || true)
+    if [[ -n "$repo_root" ]]; then
+      candidate="$repo_root/.claude/state/pr-review-lock.json"
+      if [[ "$seen" != *"|$candidate|"* ]]; then
+        printf '%s\n' "$candidate"
+      fi
+    fi
+  fi
+}
+
 # lock_pr_verified <pr> — "yes" if ANY lock file has verified=true for the PR
 lock_pr_verified() {
   local pr="$1" lf
@@ -235,24 +353,27 @@ except Exception:
 lock_pr_verified_for_head() {
   local pr="$1"
   local head_sha="$2"
+  local repo="${3:-}"
   local lf
   [[ -n "$head_sha" && "$head_sha" != "null" ]] || { echo "no"; return; }
   while IFS= read -r lf; do
     [[ -z "$lf" || ! -f "$lf" ]] && continue
     local val
-    val=$(_LOCK="$lf" _PR="$pr" _HEAD_SHA="$head_sha" python3 -c "
+    val=$(_LOCK="$lf" _PR="$pr" _HEAD_SHA="$head_sha" _REPO="$repo" python3 -c "
 import json, os
 try:
     with open(os.environ['_LOCK']) as f:
         s = json.load(f)
     entry = s.get(os.environ['_PR'], {})
     stored = entry.get('verified_head_sha') or entry.get('head_sha') or ''
-    print('yes' if entry.get('verified', False) and stored == os.environ['_HEAD_SHA'] else 'no')
+    entry_repo = entry.get('repo', '')
+    repo_ok = (not os.environ['_REPO']) or entry_repo == os.environ['_REPO']
+    print('yes' if entry.get('verified', False) and stored == os.environ['_HEAD_SHA'] and repo_ok else 'no')
 except Exception:
     print('no')
 " 2>/dev/null || echo "no")
     [[ "$val" == "yes" ]] && { echo "yes"; return; }
-  done < <(lock_files)
+  done < <(lock_files_for_repo "$repo")
   echo "no"
 }
 
@@ -282,22 +403,28 @@ except Exception:
 lock_pr_locked_for_head() {
   local pr="$1"
   local head_sha="$2"
-  [[ "$(lock_pr_verified_for_head "$pr" "$head_sha")" == "yes" ]] && { echo "no"; return; }
+  local repo="${3:-}"
+  [[ "$(lock_pr_verified_for_head "$pr" "$head_sha" "$repo")" == "yes" ]] && { echo "no"; return; }
   local lf
   while IFS= read -r lf; do
     [[ -z "$lf" || ! -f "$lf" ]] && continue
     local has
-    has=$(_LOCK="$lf" _PR="$pr" python3 -c "
+    has=$(_LOCK="$lf" _PR="$pr" _HEAD_SHA="$head_sha" _REPO="$repo" python3 -c "
 import json, os
 try:
     with open(os.environ['_LOCK']) as f:
         s = json.load(f)
-    print('yes' if os.environ['_PR'] in s else 'no')
+    entry = s.get(os.environ['_PR'], {})
+    entry_repo = entry.get('repo', '')
+    stored = entry.get('head_sha') or entry.get('verified_head_sha') or ''
+    repo_ok = (not os.environ['_REPO']) or (entry_repo == os.environ['_REPO'])
+    head_ok = (not os.environ['_HEAD_SHA']) or stored == os.environ['_HEAD_SHA']
+    print('yes' if entry and repo_ok and head_ok else 'no')
 except Exception:
     print('no')
 " 2>/dev/null || echo "no")
     [[ "$has" == "yes" ]] && { echo "yes"; return; }
-  done < <(lock_files)
+  done < <(lock_files_for_repo "$repo")
   echo "no"
 }
 
@@ -348,6 +475,68 @@ with open(f_path, 'r+') as f:
     fi
   done < <(lock_files)
   return "$failed"
+}
+
+state_file_candidates() {
+  local filename="$1" seen="|" candidate root
+
+  candidate="$STATE_DIR/$filename"
+  printf '%s\n' "$candidate"
+  seen="${seen}${candidate}|"
+
+  if [[ -n "${GIT_CONTEXT_DIR:-}" ]]; then
+    root=$(git_toplevel_for_dir "$GIT_CONTEXT_DIR" 2>/dev/null || true)
+  else
+    root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  fi
+  if [[ -n "$root" ]]; then
+    candidate="$root/.claude/state/$filename"
+    if [[ "$seen" != *"|$candidate|"* ]]; then
+      printf '%s\n' "$candidate"
+      seen="${seen}${candidate}|"
+    fi
+  fi
+
+  candidate="$GLOBAL_STATE_DIR/$filename"
+  if [[ "$seen" != *"|$candidate|"* ]]; then
+    printf '%s\n' "$candidate"
+  fi
+}
+
+review_read_files() {
+  state_file_candidates "pr-review-read.json"
+}
+
+mark_review_read() {
+  local pr="$1" repo="$2" head_sha="$3" now target
+  [[ -n "$pr" && -n "$repo" && -n "$head_sha" && "$head_sha" != "null" ]] || return 1
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  while IFS= read -r target; do
+    [[ -z "$target" ]] && continue
+    mkdir -p "$(dirname "$target")" 2>/dev/null || true
+    [[ ! -f "$target" ]] && echo '{}' > "$target"
+    _RR="$target" _PR="$pr" _REPO="$repo" _HEAD_SHA="$head_sha" _NOW="$now" python3 -c "
+import json, os, fcntl
+f_path = os.environ['_RR']
+with open(f_path, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    try:
+        s = json.load(f)
+    except Exception:
+        s = {}
+    entry = s.setdefault(os.environ['_PR'], {})
+    entry['review_read'] = True
+    entry['repo'] = os.environ['_REPO']
+    entry['head_sha'] = os.environ['_HEAD_SHA']
+    entry['read_at'] = os.environ['_NOW']
+    entry['source'] = 'verify'
+    f.seek(0)
+    f.truncate()
+    json.dump(s, f, indent=2)
+    fcntl.flock(f, fcntl.LOCK_UN)
+" || return 1
+  done < <(review_read_files)
 }
 
 # Fail-closed: python3 is required for state file operations
@@ -2202,8 +2391,9 @@ PY
 # hook process cannot observe subshell cd effects directly.
 command_git_context_dir() {
   local cmd="${1:-}"
+  local kind="${2:-gh_pr}"
   [[ -z "$cmd" ]] && return 0
-  _CMD="$cmd" python3 - <<'PY'
+  _CMD="$cmd" _CONTEXT_KIND="$kind" python3 - <<'PY'
 import os
 import re
 import shlex
@@ -2211,6 +2401,7 @@ import subprocess
 import sys
 
 global_value_flags = {"--repo", "-R", "--hostname", "--config-dir"}
+git_global_value_flags = {"-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 separators = {"&&", "||", ";", "|", "&", "(", ")"}
 redirects = {">", ">>", ">|", "<", "<<", "<<<", "<>", ">&", "<&", "&>", "&>>"}
 shell_executors = {"bash", "sh", "zsh"}
@@ -2276,6 +2467,7 @@ def skip_wrapper_options(tokens, i, wrapper):
 
 def env_effects(tokens, wrapper_index):
     payloads = []
+    assignments = {}
     chdir = ""
     j = wrapper_index + 1
     while j < len(tokens):
@@ -2311,13 +2503,21 @@ def env_effects(tokens, wrapper_index):
             j += 1
             continue
         if is_assignment(token):
-            value = token.split("=", 1)[1]
-            if value:
-                payloads.append(value)
+            name, value = token.split("=", 1)
+            assignments[name] = value
             j += 1
             continue
         break
-    return payloads, chdir
+    return payloads, chdir, assignments
+
+def expand_assignment_payload(payload, assignments):
+    if not assignments:
+        return payload
+    match = re.fullmatch(r"\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)\}", payload.strip())
+    if not match:
+        return payload
+    name = match.group(1) or match.group(2)
+    return assignments.get(name, "")
 
 def command_start(segment):
     i = 0
@@ -2365,6 +2565,30 @@ def is_gh_pr_command(tokens, i, end):
         return token == "pr" and j + 1 < end and tokens[j + 1] in {"create", "merge"}
     return False
 
+def is_git_push_command(tokens, i, end):
+    if os.path.basename(tokens[i]) != "git":
+        return False
+    j = i + 1
+    while j < end:
+        token = tokens[j]
+        if token in redirects:
+            j += 2
+            continue
+        skipped = skip_value_flag(tokens, j, git_global_value_flags)
+        if skipped is not None:
+            j = skipped
+            continue
+        if token.startswith("-"):
+            j += 1
+            continue
+        return token == "push"
+    return False
+
+def is_target_command(tokens, i, end):
+    if os.environ.get("_CONTEXT_KIND") == "git_push":
+        return is_git_push_command(tokens, i, end)
+    return is_gh_pr_command(tokens, i, end)
+
 def shell_payload(tokens, i, end):
     base = os.path.basename(tokens[i])
     if base in shell_executors:
@@ -2403,7 +2627,7 @@ def resolve_cd_path(path, base_dir):
         return os.path.abspath(expanded)
     return os.path.abspath(os.path.join(base_dir or os.getcwd(), expanded))
 
-def context_for_gh_pr(text, base_dir="", base_is_explicit=False, depth=0):
+def context_for_target_command(text, base_dir="", base_is_explicit=False, depth=0):
     if depth >= 3:
         return ""
     tokens = parse_tokens(text)
@@ -2416,14 +2640,15 @@ def context_for_gh_pr(text, base_dir="", base_is_explicit=False, depth=0):
         pre = 0
         while pre < len(segment) and is_assignment(segment[pre]):
             pre += 1
+        env_assignments = {}
         if pre < len(segment) and os.path.basename(segment[pre]) == "env":
-            payloads, chdir = env_effects(segment, pre)
+            payloads, chdir, env_assignments = env_effects(segment, pre)
             if chdir:
                 candidate = resolve_cd_path(chdir, candidate or base_dir)
                 base_dir = candidate or base_dir
                 base_is_explicit = bool(candidate)
             for payload in payloads:
-                nested = context_for_gh_pr(payload, candidate or base_dir, bool(candidate), depth + 1)
+                nested = context_for_target_command(payload, candidate or base_dir, bool(candidate), depth + 1)
                 if nested:
                     return nested
         start = command_start(segment)
@@ -2434,17 +2659,18 @@ def context_for_gh_pr(text, base_dir="", base_is_explicit=False, depth=0):
             base_dir = candidate or base_dir
             base_is_explicit = bool(candidate)
             continue
-        if is_gh_pr_command(segment, start, len(segment)):
+        if is_target_command(segment, start, len(segment)):
             return candidate
         payload = shell_payload(segment, start, len(segment))
         if payload:
-            nested = context_for_gh_pr(payload, candidate or base_dir, bool(candidate), depth + 1)
+            payload = expand_assignment_payload(payload, env_assignments)
+            nested = context_for_target_command(payload, candidate or base_dir, bool(candidate), depth + 1)
             if nested:
                 return nested
     return ""
 
 cmd = os.environ.get("_CMD", "")
-candidate = context_for_gh_pr(cmd)
+candidate = context_for_target_command(cmd)
 if not candidate:
     sys.exit(0)
 
@@ -2460,6 +2686,10 @@ except Exception:
 if top:
     print(top)
 PY
+}
+
+command_git_push_context_dir() {
+  command_git_context_dir "${1:-}" "git_push"
 }
 
 # =========================================================================

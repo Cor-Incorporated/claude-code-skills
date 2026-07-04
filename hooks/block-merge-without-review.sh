@@ -83,7 +83,7 @@ if [[ "$TIER" == "FULL" ]]; then
     # Read BOTH project-scoped AND global lock files (OR-logic via common.sh).
     # Treat as verified if EITHER file has verified=true; locked only if a lock
     # entry exists somewhere and NO file has verified=true.
-    if [[ "$(lock_pr_locked_for_head "$PR_NUM" "$HEAD_SHA")" == "yes" ]]; then
+    if [[ "$(lock_pr_locked_for_head "$PR_NUM" "$HEAD_SHA" "$REPO")" == "yes" ]]; then
         echo "🔒 [Pessimistic Lock] PR #${PR_NUM} は review_pending 状態です。マージ不可。" >&2
         echo "" >&2
         echo "push後のclaude-review 3ソース全確認が未完了です。" >&2

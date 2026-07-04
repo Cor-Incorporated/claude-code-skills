@@ -12,16 +12,6 @@
 # =========================================================================
 set -euo pipefail
 
-# Project-scoped state
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
-  _STATE_BASE="${CLAUDE_PROJECT_DIR}/.claude/state"
-elif git rev-parse --show-toplevel &>/dev/null; then
-  _STATE_BASE="$(git rev-parse --show-toplevel)/.claude/state"
-else
-  _STATE_BASE="$HOME/.claude/state"
-fi
-mkdir -p "$_STATE_BASE"
-
 export GH_FORCE_TTY=0
 export GH_NO_UPDATE_NOTIFIER=1
 
@@ -31,6 +21,7 @@ input=""
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/gate-modes/common.sh"
+_STATE_BASE="$STATE_DIR"
 
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
@@ -86,7 +77,7 @@ REVIEW_FILE="$_STATE_BASE/pr-review-read.json"
 [ ! -f "$REVIEW_FILE" ] && echo '{}' > "$REVIEW_FILE"
 
 review_read_files() {
-  local seen="|" candidate root
+  local seen="|" candidate root repo_root
   candidate="$_STATE_BASE/pr-review-read.json"
   if [[ -n "$candidate" ]]; then
     printf '%s\n' "$candidate"
@@ -106,6 +97,15 @@ review_read_files() {
     fi
   fi
 
+  repo_root=$(local_repo_root_for_slug "$REPO" 2>/dev/null || true)
+  if [[ -n "$repo_root" ]]; then
+    candidate="$repo_root/.claude/state/pr-review-read.json"
+    if [[ "$seen" != *"|$candidate|"* ]]; then
+      printf '%s\n' "$candidate"
+      seen="${seen}${candidate}|"
+    fi
+  fi
+
   candidate="$HOME/.claude/state/pr-review-read.json"
   if [[ "$seen" != *"|$candidate|"* ]]; then
     printf '%s\n' "$candidate"
@@ -113,9 +113,9 @@ review_read_files() {
 }
 
 review_read_field_state() {
-  local pr="$1" field="$2" head_sha="$3" state_files
+  local pr="$1" field="$2" head_sha="$3" repo="$4" state_files
   state_files="$(review_read_files)"
-  _STATE_FILES="$state_files" _PR="$pr" _FIELD="$field" _HEAD_SHA="$head_sha" python3 -c "
+  _STATE_FILES="$state_files" _PR="$pr" _FIELD="$field" _HEAD_SHA="$head_sha" _REPO="$repo" python3 -c "
 import json, os
 
 state = 'missing'
@@ -129,6 +129,9 @@ for state_file in os.environ['_STATE_FILES'].splitlines():
         continue
     if entry.get(os.environ['_FIELD'], False) is not True:
         continue
+    if entry.get('repo', '') != os.environ['_REPO']:
+        state = 'foreign'
+        continue
     if entry.get('head_sha', '') == os.environ['_HEAD_SHA']:
         print('current')
         raise SystemExit(0)
@@ -139,7 +142,7 @@ print(state)
 
 review_read_current_bool() {
   local pr="$1" field="$2" head_sha="$3"
-  if [[ "$(review_read_field_state "$pr" "$field" "$head_sha")" == "current" ]]; then
+  if [[ "$(review_read_field_state "$pr" "$field" "$head_sha" "$REPO")" == "current" ]]; then
     echo "True"
     return
   fi
@@ -218,7 +221,7 @@ fi
 # =========================================================================
 # GATE 3: Review must be marked as read
 # =========================================================================
-REVIEW_READ_STATE=$(review_read_field_state "$PR_NUMBER" "review_read" "$HEAD_SHA")
+REVIEW_READ_STATE=$(review_read_field_state "$PR_NUMBER" "review_read" "$HEAD_SHA" "$REPO")
 
 if [[ "$REVIEW_READ_STATE" != "current" ]]; then
   echo "" >&2
@@ -226,12 +229,16 @@ if [[ "$REVIEW_READ_STATE" != "current" ]]; then
     echo "[BLOCKED] PR #${PR_NUMBER}: レビュー既読証跡が現在の head_sha と一致しません。" >&2
     echo "  現在の head_sha: ${HEAD_SHA}" >&2
     echo "  push 後に古い既読証跡が残っている可能性があります。" >&2
+  elif [[ "$REVIEW_READ_STATE" == "foreign" ]]; then
+    echo "[BLOCKED] PR #${PR_NUMBER}: レビュー既読証跡が別リポジトリのものです。" >&2
+    echo "  対象 repo: ${REPO}" >&2
+    echo "  同じPR番号を持つ別repoの state を merge 根拠にはできません。" >&2
   else
     echo "[BLOCKED] PR #${PR_NUMBER}: レビューを未読のままマージしようとしています。" >&2
   fi
   echo "" >&2
   echo "  以下を実行してください（レビュー読み取り＋既読マークを一括で行います）:" >&2
-  echo "     bash ~/.claude/scripts/verify-pr-review.sh ${PR_NUMBER}" >&2
+  echo "     bash ~/.claude/scripts/verify-pr-review.sh ${PR_NUMBER} ${REPO}" >&2
   echo "" >&2
   echo "  ※ verify-pr-review.sh はレビュー内容を表示し、問題なければ自動で既読マークします。" >&2
   echo "  ※ 直接 pr-review-read.json を書き換える必要はありません (Issue #151)。" >&2

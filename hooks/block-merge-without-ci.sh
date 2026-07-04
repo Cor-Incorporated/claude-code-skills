@@ -38,6 +38,12 @@ if [[ "$MERGE_COUNT" -eq 0 ]]; then
     exit 0
 fi
 
+_cmd_context=$(command_git_context_dir "$cmd")
+if [[ -n "$_cmd_context" ]]; then
+    export GIT_CONTEXT_DIR="$_cmd_context"
+    use_git_context_state_dir
+fi
+
 # Extract PR number
 PR_NUM=$(extract_gh_pr_merge_target "$cmd" || echo "")
 if [[ "$MERGE_COUNT" -gt 1 || "$PR_NUM" == "__MULTIPLE__" ]]; then
@@ -76,17 +82,9 @@ if [ -z "$CHECK_RUNS" ]; then
     exit 2
 fi
 
-# Exclude known non-CI review bots (CodeRabbit only).
-# Claude Review (GitHub Actions) is NOT excluded — it is a real CI check.
-# Pattern: case-insensitive match on "coderabbit" in check run name.
-# Review Hierarchy (#175):
-#   CodeRabbit (Tier 3) → excluded from CI count (informational only)
-#   Claude Review, Copilot (Tier 2) → counted as CI (wait for completion)
-EXCLUDED_PATTERN="coderabbit"
-
-CI_TOTAL=$(echo "$CHECK_RUNS" | jq --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select(.name | test($ex; "i") | not)] | length' 2>/dev/null || echo "0")
-CI_FAILURES=$(echo "$CHECK_RUNS" | jq --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select((.name | test($ex; "i") | not) and .conclusion=="failure")] | length' 2>/dev/null || echo "0")
-CI_PENDING=$(echo "$CHECK_RUNS" | jq --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select((.name | test($ex; "i") | not) and .status!="completed")] | length' 2>/dev/null || echo "0")
+CI_TOTAL=$(echo "$CHECK_RUNS" | jq "[.check_runs[] | select(.name | test(\"${NON_CI_CHECK_PATTERN}\"; \"i\") | not)] | length" 2>/dev/null || echo "0")
+CI_FAILURES=$(echo "$CHECK_RUNS" | jq "$(jq_ci_failures_filter)" 2>/dev/null || echo "0")
+CI_PENDING=$(echo "$CHECK_RUNS" | jq "$(jq_ci_pending_filter)" 2>/dev/null || echo "0")
 
 # No checks at all (after exclusion)
 if [ "$CI_TOTAL" -eq 0 ]; then
@@ -97,20 +95,20 @@ fi
 
 # Check for failures (CodeRabbit excluded, Claude Review included)
 if [ "$CI_FAILURES" -gt 0 ]; then
-    FAILED_NAMES=$(echo "$CHECK_RUNS" | jq -r --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select((.name | test($ex; "i") | not) and .conclusion=="failure") | .name] | join(", ")' 2>/dev/null || echo "unknown")
+    FAILED_NAMES=$(echo "$CHECK_RUNS" | jq -r "[.check_runs[] | select((.name | test(\"${NON_CI_CHECK_PATTERN}\"; \"i\") | not) and .conclusion==\"failure\") | .name] | join(\", \")" 2>/dev/null || echo "unknown")
     echo "[BLOCK] PR #${PR_NUM} の CI/CD に失敗あり ($CI_FAILURES 件: $FAILED_NAMES)。" >&2
     exit 2
 fi
 
-# Check for pending (CodeRabbit excluded, Claude Review included)
+# Check for pending (same non-CI filter as pr-ci-review-gate)
 if [ "$CI_PENDING" -gt 0 ]; then
-    PENDING_NAMES=$(echo "$CHECK_RUNS" | jq -r --arg ex "$EXCLUDED_PATTERN" '[.check_runs[] | select((.name | test($ex; "i") | not) and .status!="completed") | .name] | join(", ")' 2>/dev/null || echo "unknown")
+    PENDING_NAMES=$(echo "$CHECK_RUNS" | jq -r "[.check_runs[] | select((.name | test(\"${NON_CI_CHECK_PATTERN}\"; \"i\") | not) and .status!=\"completed\") | .name] | join(\", \")" 2>/dev/null || echo "unknown")
     echo "[BLOCK] PR #${PR_NUM} の CI/CD がまだ実行中です ($CI_PENDING 件: $PENDING_NAMES)。" >&2
     exit 2
 fi
 
 # Check mergeable status
-MERGEABLE=$(_timeout 10 gh pr view "$PR_NUM" --json mergeable -q '.mergeable' 2>/dev/null || echo "UNKNOWN")
+MERGEABLE=$(_timeout 10 gh pr view "$PR_NUM" -R "$REPO" --json mergeable -q '.mergeable' 2>/dev/null || echo "UNKNOWN")
 if [ "$MERGEABLE" = "CONFLICTING" ]; then
     echo "[BLOCK] PR #${PR_NUM} にコンフリクトがあります。Codex CLIでリベースしてください。" >&2
     exit 2

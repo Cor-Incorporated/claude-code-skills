@@ -182,15 +182,15 @@ expect_rc() {
 echo "=== pr-review-read state path regression ==="
 
 reset_state
-printf '{"123":{"review_read":true,"head_sha":"abc123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
+printf '{"123":{"review_read":true,"repo":"owner/repo","head_sha":"abc123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
 expect_rc "merge gate accepts global review_read when CLAUDE_PROJECT_DIR is parent" 0 run_merge_gate
 
 reset_state
-printf '{"123":{"review_read":true,"head_sha":"abc123"}}\n' > "$TMP_REPO/.claude/state/pr-review-read.json"
+printf '{"123":{"review_read":true,"repo":"owner/repo","head_sha":"abc123"}}\n' > "$TMP_REPO/.claude/state/pr-review-read.json"
 expect_rc "merge gate accepts git-root review_read when CLAUDE_PROJECT_DIR is parent" 0 run_merge_gate
 
 reset_state
-printf '{"123":{"review_read":true,"head_sha":"old123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
+printf '{"123":{"review_read":true,"repo":"owner/repo","head_sha":"old123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
 expect_rc "merge gate blocks stale review_read after push" 2 run_merge_gate
 if grep -q "head_sha と一致しません" "$TMP_ROOT/err"; then
   PASS=$((PASS + 1))
@@ -198,6 +198,18 @@ if grep -q "head_sha と一致しません" "$TMP_ROOT/err"; then
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: stale head block reason missing" >&2
+  cat "$TMP_ROOT/err" >&2 || true
+fi
+
+reset_state
+printf '{"123":{"review_read":true,"repo":"other/repo","head_sha":"abc123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
+expect_rc "merge gate blocks foreign repo review_read with same PR number" 2 run_merge_gate
+if grep -q "別リポジトリ" "$TMP_ROOT/err"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: foreign repo block reason is reported"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: foreign repo block reason missing" >&2
   cat "$TMP_ROOT/err" >&2 || true
 fi
 
@@ -213,16 +225,16 @@ else
 fi
 
 reset_state
-printf '{"123":{"fallback_review_done":true,"review_read":true,"head_sha":"abc123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
+printf '{"123":{"fallback_review_done":true,"review_read":true,"repo":"owner/repo","head_sha":"abc123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
 expect_rc "merge gate OR-reads fallback_review_done from global state" 0 run_merge_gate_no_comments
 
 reset_state
-printf '{"123":{"review_read":true,"has_critical":true,"head_sha":"abc123"}}\n' > "$TMP_REPO/.claude/state/pr-review-read.json"
-printf '{"123":{"critical_acknowledged":true,"head_sha":"abc123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
+printf '{"123":{"review_read":true,"has_critical":true,"repo":"owner/repo","head_sha":"abc123"}}\n' > "$TMP_REPO/.claude/state/pr-review-read.json"
+printf '{"123":{"critical_acknowledged":true,"repo":"owner/repo","head_sha":"abc123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
 expect_rc "merge gate OR-reads critical fallback and acknowledgement" 0 run_merge_gate_critical_status
 
 reset_state
-printf '{"123":{"review_read":true,"head_sha":"abc123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
+printf '{"123":{"review_read":true,"repo":"owner/repo","head_sha":"abc123"}}\n' > "$TMP_HOME/.claude/state/pr-review-read.json"
 expect_rc "merge gate fails closed when PR head cannot be resolved" 2 run_merge_gate_no_head
 if grep -q "HEAD SHA を取得できません" "$TMP_ROOT/err"; then
   PASS=$((PASS + 1))
@@ -236,7 +248,6 @@ fi
 reset_state
 expect_rc "verify-pr-review writes review_read successfully" 0 run_verify_script
 for state_file in \
-  "$TMP_PARENT/.claude/state/pr-review-read.json" \
   "$TMP_REPO/.claude/state/pr-review-read.json" \
   "$TMP_HOME/.claude/state/pr-review-read.json"; do
 	  if json_field_true "$state_file" review_read; then
@@ -256,6 +267,15 @@ for state_file in \
     cat "$state_file" >&2 || true
   fi
 done
+
+if json_field_true "$TMP_PARENT/.claude/state/pr-review-read.json" review_read; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: verify-pr-review wrote broad parent state unexpectedly" >&2
+  cat "$TMP_PARENT/.claude/state/pr-review-read.json" >&2 || true
+else
+  PASS=$((PASS + 1))
+  echo "  PASS: verify-pr-review did not write broad parent state"
+fi
 
 echo "Results: $PASS passed, $FAIL failed (total $((PASS + FAIL)))"
 [[ "$FAIL" -eq 0 ]]

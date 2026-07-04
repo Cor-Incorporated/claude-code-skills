@@ -10,20 +10,30 @@ set -euo pipefail
 
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/gate-modes/common.sh"
 
-cmd_first_line=$(echo "$cmd" | head -1)
-if ! echo "$cmd_first_line" | grep -q 'gh.*pr.*merge'; then
+MERGE_COUNT=$(count_gh_pr_merge_invocations "$cmd" || echo 0)
+if [ "$MERGE_COUNT" -ne 1 ]; then
     exit 0
 fi
 
-PR_NUM=$(echo "$cmd_first_line" | grep -oE 'pr[[:space:]]+merge[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
-[ -z "$PR_NUM" ] && exit 0
+_cmd_context=$(command_git_context_dir "$cmd")
+if [[ -n "$_cmd_context" ]]; then
+    export GIT_CONTEXT_DIR="$_cmd_context"
+    use_git_context_state_dir
+fi
 
-REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+PR_NUM=$(extract_gh_pr_merge_target "$cmd" || echo "")
+if [[ "$PR_NUM" == __NON_NUMERIC__:* || -z "$PR_NUM" ]]; then
+    exit 0
+fi
+
+REPO=$(resolve_repo "$cmd")
 [ -z "$REPO" ] && exit 0
 
 # Check if PR was actually merged
-PR_STATE=$(gh pr view "$PR_NUM" --json state -q '.state' 2>/dev/null || echo "")
+PR_STATE=$(gh pr view "$PR_NUM" -R "$REPO" --json state -q '.state' 2>/dev/null || echo "")
 if [ "$PR_STATE" != "MERGED" ]; then
     exit 0
 fi
@@ -32,7 +42,7 @@ fi
 # enforce-review-reading.sh banner does not linger after merge. Removes the
 # state only when its .pr matches THIS PR, in BOTH project-scoped and global
 # state dirs.
-_TOP=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+_TOP=$(git_ctx rev-parse --show-toplevel 2>/dev/null || echo "")
 for _sd in ${_TOP:+"$_TOP/.claude/state"} "$HOME/.claude/state"; do
     _pf="$_sd/pending-review-comments.json"
     [ -f "$_pf" ] || continue
@@ -45,8 +55,8 @@ done
 
 # Extract Issue numbers from PR body (Closes/Fixes/Resolves #XX).
 # Refs-only PRs intentionally do not trigger automatic Issue closure.
-PR_BODY=$(gh pr view "$PR_NUM" --json body -q '.body' 2>/dev/null || echo "")
-ISSUE_NUMS=$(echo "$PR_BODY" | grep -oiE '(closes?|fixes?|resolves?)\s*#[0-9]+' | grep -oE '[0-9]+' || true)
+PR_BODY=$(gh pr view "$PR_NUM" -R "$REPO" --json body -q '.body' 2>/dev/null || echo "")
+ISSUE_NUMS=$(echo "$PR_BODY" | grep -oiE '(^|[^[:alnum:]_])(closes?|fixes?|resolves?)[[:space:]:]*#[0-9]+' | grep -oE '[0-9]+' || true)
 
 if [ -z "$ISSUE_NUMS" ]; then
     echo "ℹ️ [Post-Merge] PR #${PR_NUM} はクローズキーワードなし。Issue自動クローズをスキップします。" >&2
@@ -56,9 +66,9 @@ fi
 # Close each linked Issue
 CLOSED_COUNT=0
 for ISSUE_NUM in $ISSUE_NUMS; do
-    ISSUE_STATE=$(gh issue view "$ISSUE_NUM" --json state -q '.state' 2>/dev/null || echo "")
+    ISSUE_STATE=$(gh issue view "$ISSUE_NUM" -R "$REPO" --json state -q '.state' 2>/dev/null || echo "")
     if [ "$ISSUE_STATE" = "OPEN" ]; then
-        gh issue close "$ISSUE_NUM" --comment "Closed by PR #${PR_NUM} merge." 2>/dev/null && {
+        gh issue close "$ISSUE_NUM" -R "$REPO" --comment "Closed by PR #${PR_NUM} merge." 2>/dev/null && {
             CLOSED_COUNT=$((CLOSED_COUNT + 1))
             echo "✅ [Post-Merge] Issue #${ISSUE_NUM} を自動クローズしました (PR #${PR_NUM})" >&2
         }
