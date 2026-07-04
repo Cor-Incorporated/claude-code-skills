@@ -222,7 +222,7 @@ fi
 # Tier 1 PRIMARY_LGTM bypasses the lock (reviewer + Codex already verified).
 # =========================================================================
 if [[ "$TIER" == "FULL" ]] && [[ "$PRIMARY_LGTM" != "true" ]]; then
-  if [[ "$(lock_pr_locked_for_head "$PR_NUMBER" "$HEAD_SHA")" == "yes" ]]; then
+  if [[ "$(lock_pr_locked_for_head "$PR_NUMBER" "$HEAD_SHA" "$REPO")" == "yes" ]]; then
     echo "" >&2
     echo "🔒 [Pessimistic Lock] PR #${PR_NUMBER} は review_pending 状態です。マージ不可。" >&2
     echo "  push後のclaude-review 3ソース全確認が未完了です。" >&2
@@ -311,9 +311,9 @@ if [[ "$CLAUDE_REVIEW_CI" != "success" ]]; then
   # Gate 4: CRITICAL findings must be acknowledged (Issue #154).
   # If detected (either via comment grep OR has_critical flag in state),
   # critical_acknowledged must be set current in pr-review-read.json.
-  _has_critical_flag=$(review_read_current_bool "$PR_NUMBER" "has_critical" "$HEAD_SHA")
+  _has_critical_flag=$(review_read_current_bool "$PR_NUMBER" "has_critical" "$HEAD_SHA" "$REPO")
   if [[ "$HAS_CRITICAL" -gt 0 ]] || [[ "$_has_critical_flag" == "True" ]]; then
-    _critical_ack=$(review_read_current_bool "$PR_NUMBER" "critical_acknowledged" "$HEAD_SHA")
+    _critical_ack=$(review_read_current_bool "$PR_NUMBER" "critical_acknowledged" "$HEAD_SHA" "$REPO")
     if [[ "$_critical_ack" != "True" ]]; then
       echo "" >&2
       echo "🚫 [BLOCKED] PR #${PR_NUMBER}: CRITICAL 指摘が未対応です。" >&2
@@ -332,7 +332,7 @@ fi
 # =========================================================================
 COMMENT_COUNT=$(pr_issue_comment_count "$REPO" "$PR_NUMBER")
 if [[ "$COMMENT_COUNT" -eq 0 ]]; then
-  _fallback_done=$(review_read_current_bool "$PR_NUMBER" "fallback_review_done" "$HEAD_SHA")
+  _fallback_done=$(review_read_current_bool "$PR_NUMBER" "fallback_review_done" "$HEAD_SHA" "$REPO")
   if [[ "$_fallback_done" != "True" ]]; then
     echo "" >&2
     echo "🚫 [BLOCKED] PR #${PR_NUMBER}: レビューコメントが存在しません。" >&2
@@ -353,19 +353,23 @@ fi
 # Logic 4: Gate 3 review_read (Issue #151) — from pr-merge-claude-review-gate.sh.
 # pr-review-read.json must have review_read=true with current head_sha.
 # =========================================================================
-REVIEW_READ_STATE=$(review_read_field_state "$PR_NUMBER" "review_read" "$HEAD_SHA")
+REVIEW_READ_STATE=$(review_read_field_state "$PR_NUMBER" "review_read" "$HEAD_SHA" "$REPO")
 if [[ "$REVIEW_READ_STATE" != "current" ]]; then
   echo "" >&2
   if [[ "$REVIEW_READ_STATE" == "stale" ]]; then
     echo "🚫 [BLOCKED] PR #${PR_NUMBER}: レビュー既読証跡が現在の head_sha と一致しません。" >&2
     echo "  現在の head_sha: ${HEAD_SHA}" >&2
     echo "  push 後に古い既読証跡が残っている可能性があります。" >&2
+  elif [[ "$REVIEW_READ_STATE" == "foreign" ]]; then
+    echo "🚫 [BLOCKED] PR #${PR_NUMBER}: レビュー既読証跡が別リポジトリのものです。" >&2
+    echo "  対象 repo: ${REPO}" >&2
+    echo "  同じPR番号を持つ別リポジトリの state を merge 根拠にはできません (Issue #258)。" >&2
   else
     echo "🚫 [BLOCKED] PR #${PR_NUMBER}: レビューを未読のままマージしようとしています。" >&2
   fi
   echo "" >&2
   echo "  以下を実行してください（レビュー読み取り＋既読マークを一括で行います）:" >&2
-  echo "     bash ~/.claude/scripts/verify-pr-review.sh ${PR_NUMBER}" >&2
+  echo "     bash ~/.claude/scripts/verify-pr-review.sh ${PR_NUMBER} ${REPO}" >&2
   echo "  ※ verify-pr-review.sh はレビュー内容を表示し、問題なければ自動で既読マークします。" >&2
   echo "  ※ 直接 pr-review-read.json を書き換える必要はありません (Issue #151)。" >&2
   echo "" >&2

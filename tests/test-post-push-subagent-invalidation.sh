@@ -24,6 +24,14 @@ git -C "$TMP_REPO" commit -q -m init
 git -C "$TMP_REPO" branch develop
 git -C "$TMP_REPO" branch -M feature
 git -C "$TMP_REPO" remote add origin git@github.com:owner/repo.git
+# Map the github.com origin URL to a local bare remote so the consolidated
+# pre-merge.sh ensure_pr_base_fresh can `git fetch origin develop` in the
+# sandbox. remote_slug() still sees `owner/repo` because origin's URL keeps
+# its github.com form (insteadOf rewrites only what git fetch/push uses).
+TMP_REMOTE="$TMP_ROOT/repo.git"
+git clone -q --bare "$TMP_REPO" "$TMP_REMOTE"
+git -C "$TMP_REPO" config "url.${TMP_REMOTE}.insteadOf" "git@github.com:owner/repo.git"
+git -C "$TMP_REPO" push -q origin develop feature
 
 git init -q "$OTHER_REPO"
 git -C "$OTHER_REPO" config user.email test@example.com
@@ -40,6 +48,11 @@ printf 'export const value = 1\n' > "$TMP_REPO/src/app.ts"
 git -C "$TMP_REPO" add src/app.ts
 git -C "$TMP_REPO" commit -q -m 'add source'
 HEAD_SHA="$(git -C "$TMP_REPO" rev-parse HEAD)"
+# develop branch points at REVIEWED_SHA (initial commit). The consolidated
+# pre-merge.sh base-freshness check fetches develop and compares the SHA
+# against gh api pulls/123 .base.sha — feed the same value to the fake gh.
+FAKE_BASE_SHA="$REVIEWED_SHA"
+export FAKE_BASE_SHA
 
 cat > "$TMP_BIN/gh" <<'FAKEGH'
 #!/bin/bash
@@ -52,11 +65,21 @@ if [[ "${1:-}" == "api" && "${2:-}" == "repos/owner/repo/pulls/123" ]]; then
     case "${4:-}" in
       ".head.ref"|".head.ref // \"\"") printf 'feature\n' ;;
       ".head.sha"|".head.sha // \"\"") printf '%s\n' "${FAKE_HEAD_SHA:-}" ;;
+      ".base.ref"|".base.ref // \"\"") printf 'develop\n' ;;
+      ".base.sha"|".base.sha // \"\"") printf '%s\n' "${FAKE_BASE_SHA:-}" ;;
       *) printf '%s\n' "${FAKE_HEAD_SHA:-}" ;;
     esac
     exit 0
   fi
-  printf '{"head":{"ref":"feature","sha":"%s"}}\n' "${FAKE_HEAD_SHA:-}"
+  printf '{"head":{"ref":"feature","sha":"%s"},"base":{"ref":"develop","sha":"%s"}}\n' "${FAKE_HEAD_SHA:-}" "${FAKE_BASE_SHA:-}"
+  exit 0
+fi
+if [[ "${1:-}" == "api" && "${2:-}" == "repos/owner/repo/git/ref/heads/develop" ]]; then
+  if [[ "${3:-}" == "--jq" && "${4:-}" == ".object.sha" ]]; then
+    printf '%s\n' "${FAKE_BASE_SHA:-}"
+  else
+    printf '{"object":{"sha":"%s"}}\n' "${FAKE_BASE_SHA:-}"
+  fi
   exit 0
 fi
 if [[ "${1:-}" == "api" && "${2:-}" == "repos/owner/repo/pulls/123/files" ]]; then
@@ -172,7 +195,7 @@ run_block_merge() {
   (
     cd "$TMP_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$TMP_REPO" PATH="$TMP_BIN:$PATH" FAKE_HEAD_SHA="$HEAD_SHA" \
-      bash "$ROOT/hooks/block-merge-without-review.sh" <<<"$payload"
+      GATE_MODE=PRE_MERGE bash "$ROOT/hooks/pr-ci-review-gate.sh" <<<"$payload"
   )
 }
 

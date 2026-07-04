@@ -30,9 +30,14 @@ fi
 # =========================================================================
 # Helper: map GitHub repo slugs to local remotes
 # =========================================================================
+# Read the configured remote URL via `git config --get remote.<name>.url`
+# (NOT `git remote get-url`) so any `url.<base>.insteadOf` rewrite is NOT
+# applied — the canonical slug must come from the URL the user configured,
+# otherwise a sandbox insteadOf (e.g. github.com → local bare repo for
+# tests) would yield a path-shaped slug and break owner/repo matching.
 remote_slug() {
   local remote="$1" url
-  url=$(git_ctx remote get-url "$remote" 2>/dev/null || echo "")
+  url=$(git_ctx config --get "remote.${remote}.url" 2>/dev/null || echo "")
   [[ -z "$url" ]] && return 1
   printf '%s\n' "$url" \
     | sed 's|^git@github.com:||;s|^https://github.com/||;s|^ssh://git@github.com/||;s|\.git$||'
@@ -42,7 +47,7 @@ remote_for_repo() {
   local repo="$1" remote slug first_remote=""
 
   for remote in origin upstream; do
-    git_ctx remote get-url "$remote" >/dev/null 2>&1 || continue
+    git_ctx config --get "remote.${remote}.url" >/dev/null 2>&1 || continue
     [[ -z "$first_remote" ]] && first_remote="$remote"
     slug=$(remote_slug "$remote" || echo "")
     if [[ -n "$repo" && "$slug" == "$repo" ]]; then
@@ -58,8 +63,11 @@ repo_root_matches_slug() {
   local root="$1" repo="$2" remote slug
   [[ -n "$root" && -d "$root" && -n "$repo" ]] || return 1
   for remote in origin upstream; do
-    git -C "$root" remote get-url "$remote" >/dev/null 2>&1 || continue
-    slug=$(git -C "$root" remote get-url "$remote" 2>/dev/null \
+    # `git config --get` returns the configured URL without insteadOf
+    # rewriting, so a sandbox insteadOf (github.com → local bare) does not
+    # corrupt slug matching.
+    git -C "$root" config --get "remote.${remote}.url" >/dev/null 2>&1 || continue
+    slug=$(git -C "$root" config --get "remote.${remote}.url" 2>/dev/null \
       | sed 's|^git@github.com:||;s|^https://github.com/||;s|^ssh://git@github.com/||;s|\.git$||' \
       || true)
     [[ "$slug" == "$repo" ]] && return 0
@@ -267,10 +275,13 @@ pr_issue_comment_count() {
   _timeout 10 gh api "repos/${repo}/issues/${pr_number}/comments" --jq 'length' 2>/dev/null || echo "0"
 }
 
-# review_read_state_files — echo candidate pr-review-read.json paths
-# (project STATE_DIR + parent git root + $HOME global) deduplicated.
+# review_read_state_files [repo] — echo candidate pr-review-read.json paths
+# (project STATE_DIR + parent git root + repo slug root + $HOME global)
+# deduplicated. When <repo> is supplied, also include the repo-local checkout
+# root resolved via local_repo_root_for_slug (Issue #258: target repo state
+# must be readable even when cwd/CLAUDE_PROJECT_DIR points elsewhere).
 review_read_state_files() {
-  local seen="|" candidate root
+  local repo="${1:-}" seen="|" candidate root repo_root
   candidate="$STATE_DIR/pr-review-read.json"
   printf '%s\n' "$candidate"
   seen="|${candidate}|"
@@ -288,23 +299,38 @@ review_read_state_files() {
     fi
   fi
 
+  if [[ -n "$repo" ]]; then
+    repo_root=$(local_repo_root_for_slug "$repo" 2>/dev/null || true)
+    if [[ -n "$repo_root" ]]; then
+      candidate="$repo_root/.claude/state/pr-review-read.json"
+      if [[ "$seen" != *"|$candidate|"* ]]; then
+        printf '%s\n' "$candidate"
+        seen="${seen}${candidate}|"
+      fi
+    fi
+  fi
+
   candidate="$HOME/.claude/state/pr-review-read.json"
   if [[ "$seen" != *"|$candidate|"* ]]; then
     printf '%s\n' "$candidate"
   fi
 }
 
-# review_read_field_state <pr> <field> <head_sha>
-#   Returns "current" (field true + head_sha matches), "stale" (true + sha
-#   mismatch), or "missing". Used by Gate 3 (review_read) and Gate 4
+# review_read_field_state <pr> <field> <head_sha> [repo]
+#   Returns "current" (field true + head_sha matches + repo matches),
+#   "foreign" (field true but repo mismatch), "stale" (true + sha mismatch),
+#   or "missing". Used by Gate 3 (review_read) and Gate 4
 #   (critical_acknowledged / fallback_review_done / has_critical).
+#   Issue #258: when <repo> is supplied, an entry whose `repo` field points to
+#   a different slug must NOT satisfy the gate (same PR number on another repo
+#   must not be used as merge evidence).
 review_read_field_state() {
-  local pr="$1" field="$2" head_sha="$3"
+  local pr="$1" field="$2" head_sha="$3" repo="${4:-}"
   local state="missing" state_file val
   [[ -n "$pr" && -n "$field" && -n "$head_sha" ]] || { echo "missing"; return; }
   while IFS= read -r state_file; do
     [[ -z "$state_file" || ! -f "$state_file" ]] && continue
-    val=$(_STATE="$state_file" _PR="$pr" _FIELD="$field" _SHA="$head_sha" python3 -c "
+    val=$(_STATE="$state_file" _PR="$pr" _FIELD="$field" _SHA="$head_sha" _REPO="$repo" python3 -c "
 import json, os
 try:
     with open(os.environ['_STATE']) as f:
@@ -313,6 +339,11 @@ except Exception:
     raise SystemExit
 if entry.get(os.environ['_FIELD'], False) is not True:
     raise SystemExit
+if os.environ['_REPO']:
+    entry_repo = entry.get('repo', '')
+    if entry_repo and entry_repo != os.environ['_REPO']:
+        print('foreign')
+        raise SystemExit
 if entry.get('head_sha', '') == os.environ['_SHA']:
     print('current')
     raise SystemExit(0)
@@ -322,15 +353,16 @@ print('stale')
       echo "current"
       return
     fi
-    [[ "$val" == "stale" ]] && state="stale"
-  done < <(review_read_state_files)
+    [[ "$val" == "foreign" && "$state" == "missing" ]] && state="foreign"
+    [[ "$val" == "stale" && "$state" != "foreign" ]] && state="stale"
+  done < <(review_read_state_files "$repo")
   echo "$state"
 }
 
-# review_read_current_bool <pr> <field> <head_sha>
+# review_read_current_bool <pr> <field> <head_sha> [repo]
 #   Wrapper returning "True"/"False" for easier shell boolean comparison.
 review_read_current_bool() {
-  if [[ "$(review_read_field_state "$1" "$2" "$3")" == "current" ]]; then
+  if [[ "$(review_read_field_state "$1" "$2" "$3" "$4")" == "current" ]]; then
     echo "True"
   else
     echo "False"
@@ -2438,13 +2470,15 @@ PY
   fi
 
   # Priority 3: upstream remote (fork workflow)
-  if git_ctx remote get-url upstream &>/dev/null; then
-    git_ctx remote get-url upstream 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||'
+  if git_ctx config --get remote.upstream.url &>/dev/null; then
+    git_ctx config --get remote.upstream.url 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||'
     return
   fi
 
   # Priority 4: origin (default)
-  git_ctx remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo ""
+  # `git config --get` returns the configured URL without insteadOf rewriting
+  # so a sandbox insteadOf (github.com → local bare) does not corrupt the slug.
+  git_ctx config --get remote.origin.url 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo ""
 }
 
 

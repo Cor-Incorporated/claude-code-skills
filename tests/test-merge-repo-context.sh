@@ -21,11 +21,32 @@ for repo in "$SRC_REPO" "$TARGET_REPO" "$OTHER_REPO"; do
   printf '# test\n' > "$repo/README.md"
   git -C "$repo" add README.md
   git -C "$repo" commit -q -m init
+  # develop branch required so pre-merge.sh ensure_pr_base_fresh can resolve
+  # the GitHub base ref against a local fetchable remote (Phase 3 consolidation
+  # routes every gh pr merge through gate-modes/pre-merge.sh).
+  git -C "$repo" branch develop
   mkdir -p "$repo/.claude/state"
 done
 git -C "$SRC_REPO" remote add origin git@github.com:owner/source.git
 git -C "$TARGET_REPO" remote add origin git@github.com:owner/target.git
 git -C "$OTHER_REPO" remote add origin git@github.com:owner/other.git
+
+# Map each github.com origin URL to a local bare remote so the consolidated
+# pre-merge.sh ensure_pr_base_fresh can `git fetch origin develop` in the
+# sandbox. remote_slug() still sees `owner/<name>` because each repo's origin
+# URL keeps its github.com form (insteadOf rewrites only what git fetch/push
+# uses); local_repo_root_for_slug() therefore still resolves target/other
+# checkouts during cross-repo merge tests.
+SRC_REMOTE="$TMP_ROOT/source.git"
+TGT_REMOTE="$TMP_ROOT/target.git"
+git clone -q --bare "$SRC_REPO" "$SRC_REMOTE"
+git clone -q --bare "$TARGET_REPO" "$TGT_REMOTE"
+git -C "$SRC_REPO" config "url.${SRC_REMOTE}.insteadOf" "git@github.com:owner/source.git"
+git -C "$TARGET_REPO" config "url.${TGT_REMOTE}.insteadOf" "git@github.com:owner/target.git"
+git -C "$SRC_REPO" push -q origin develop
+git -C "$TARGET_REPO" push -q origin develop
+SRC_DEVELOP_SHA="$(git -C "$SRC_REPO" rev-parse develop)"
+export SRC_DEVELOP_SHA
 
 cat > "$TMP_BIN/gh" <<'FAKEGH'
 #!/bin/bash
@@ -52,9 +73,17 @@ case "$path" in
     case "$jq_expr" in
       ".head.sha"|".head.sha // \"\"") printf 'targetsha\n' ;;
       ".head.ref"|".head.ref // \"\"") printf 'feat/target\n' ;;
-      ".base.ref // \"\"") printf 'develop\n' ;;
-      *) printf '{"head":{"sha":"targetsha","ref":"feat/target"},"base":{"ref":"develop"}}\n' ;;
+      ".base.ref"|".base.ref // \"\"") printf 'develop\n' ;;
+      ".base.sha"|".base.sha // \"\"") printf '%s\n' "$SRC_DEVELOP_SHA" ;;
+      *) printf '{"head":{"sha":"targetsha","ref":"feat/target"},"base":{"ref":"develop","sha":"%s"}}\n' "$SRC_DEVELOP_SHA" ;;
     esac
+    ;;
+  repos/owner/target/git/ref/heads/develop)
+    if [[ "$jq_expr" == ".object.sha" ]]; then
+      printf '%s\n' "$SRC_DEVELOP_SHA"
+    else
+      printf '{"object":{"sha":"%s"}}\n' "$SRC_DEVELOP_SHA"
+    fi
     ;;
   repos/owner/target/commits/targetsha/check-runs)
     case "$jq_expr" in
@@ -108,7 +137,7 @@ run_hook() {
   (
     cd "$SRC_REPO"
     HOME="$TMP_HOME" CLAUDE_PROJECT_DIR="$SRC_REPO" PATH="$TMP_BIN:$PATH" GH_LOG="$GH_LOG" \
-      bash "$ROOT/hooks/$hook" <<<"$(payload "$command")"
+      GATE_MODE=PRE_MERGE bash "$ROOT/hooks/pr-ci-review-gate.sh" <<<"$(payload "$command")"
   )
 }
 
@@ -170,6 +199,34 @@ expect_allow() {
 
 echo "=== merge hook --repo context ==="
 
+# seed_target_review_ok — write review_read + review-status that satisfy the
+# consolidated pre-merge.sh Gate 3 (review_read current) and the FULL-tier
+# 3-pass judgment for the TARGET repo. The consolidated dispatcher runs every
+# gate for `gh pr merge`, so allow cases must keep the non-lock gates green
+# while still exercising lock-state handling.
+#
+# review-status.json seeds code_review (Pass A) plus the Issue #203 Codex
+# severity override (codex_review_ran + codex_critical/high = 0). codex_review
+# is intentionally NOT set so PRIMARY_LGTM stays false and the pessimistic
+# lock gate at pre-merge.sh line 224 still fires — otherwise the lock state
+# under test would be bypassed entirely.
+seed_target_review_ok() {
+  printf '{"123":{"review_read":true,"repo":"owner/target","head_sha":"targetsha"}}\n' \
+    > "$TARGET_REPO/.claude/state/pr-review-read.json"
+  printf '{}\n' > "$SRC_REPO/.claude/state/pr-review-read.json"
+  # review-status.json is read from $REVIEW_STATE (cwd project state) and
+  # $HOME/.claude/state (review_state_files helper), not from the target
+  # repo. Write to both so the consolidated pre-merge.sh 3-pass judgment
+  # (Pass A code_review + Issue #203 Codex severity override) is satisfied
+  # without triggering PRIMARY_LGTM (codex_review stays unset).
+  local _review_status
+  _review_status='{"feat/target":{"code_review":true,"code_review_sha":"targetsha","codex_review_ran":true,"codex_review_sha":"targetsha","codex_critical":0,"codex_high":0}}'
+  printf '%s\n' "$_review_status" > "$SRC_REPO/.claude/state/review-status.json"
+  printf '%s\n' "$_review_status" > "$TMP_HOME/.claude/state/review-status.json"
+  rm -f "$TARGET_REPO/.claude/state/pending-review-comments.json" \
+        "$SRC_REPO/.claude/state/pending-review-comments.json"
+}
+
 printf '{"123":{"review_read":true,"repo":"owner/source","head_sha":"targetsha"}}\n' \
   > "$SRC_REPO/.claude/state/pr-review-read.json"
 printf '{}\n' > "$TARGET_REPO/.claude/state/pr-review-read.json"
@@ -187,6 +244,7 @@ expect_block \
   "block-merge-without-review.sh" \
   "gh pr merge 123 --merge --repo owner/target"
 
+seed_target_review_ok
 printf '{"123":{"verified":false,"repo":"owner/source","head_sha":"targetsha"}}\n' \
   > "$SRC_REPO/.claude/state/pr-review-lock.json"
 printf '{"123":{"verified":true,"repo":"owner/target","head_sha":"targetsha","verified_head_sha":"targetsha"}}\n' \
@@ -196,6 +254,7 @@ expect_allow \
   "block-merge-without-review.sh" \
   "gh pr merge 123 --merge --repo owner/target"
 
+seed_target_review_ok
 printf '{}\n' > "$SRC_REPO/.claude/state/pr-review-lock.json"
 printf '{"123":{"verified":false,"repo":"owner/target","head_sha":"oldsha"}}\n' \
   > "$TARGET_REPO/.claude/state/pr-review-lock.json"
@@ -204,6 +263,7 @@ expect_allow \
   "block-merge-without-review.sh" \
   "gh pr merge 123 --merge --repo owner/target"
 
+seed_target_review_ok
 printf '{}\n' > "$SRC_REPO/.claude/state/pr-review-lock.json"
 printf '{}\n' > "$TARGET_REPO/.claude/state/pr-review-lock.json"
 printf '{"123":{"verified":false,"repo":"owner/target","head_sha":"targetsha"}}\n' \
