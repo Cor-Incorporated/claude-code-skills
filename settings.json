@@ -7,6 +7,7 @@
   "permissions": {
     "allow": [
       "Bash",
+      "Bash(./build.sh)",
       "Bash(./node_modules/.bin/astro:*)",
       "Bash(astro:*)",
       "Bash(cat:*)",
@@ -30,6 +31,8 @@
       "Bash(npx markdownlint:*)",
       "Bash(npx playwright:*)",
       "Bash(nslookup:*)",
+      "Bash(open http://localhost:4321/blog)",
+      "Bash(open http://localhost:4321/blog/react-hooks-guide/)",
       "Bash(openssl rand:*)",
       "Bash(pip3 install:*)",
       "Bash(pkill:*)",
@@ -44,6 +47,8 @@
       "Bash(sudo dscacheutil:*)",
       "Bash(supabase:*)",
       "Bash(test:*)",
+      "Bash(timeout 30 npm run build)",
+      "Bash(timeout 5 curl -w \"%{http_code}\" -s -o /dev/null http://localhost:4321/blog)",
       "Bash(vercel:*)",
       "Bash(wc:*)",
       "Bash(wget:*)",
@@ -53,6 +58,7 @@
       "Grep",
       "Read",
       "WebFetch",
+      "WebFetch(domain:cor-jp.com)",
       "WebFetch(domain:developers.linear.app)",
       "WebFetch(domain:docs.github.com)",
       "WebFetch(domain:docs.x.ai)",
@@ -63,7 +69,16 @@
       "mcp__brave-search__brave_local_search",
       "mcp__brave-search__brave_web_search",
       "mcp__plugin_context7_context7__query-docs",
-      "mcp__plugin_context7_context7__resolve-library-id"
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__serena__check_onboarding_performed",
+      "mcp__serena__find_file",
+      "mcp__serena__find_symbol",
+      "mcp__serena__get_symbols_overview",
+      "mcp__serena__list_dir",
+      "mcp__serena__onboarding",
+      "mcp__serena__search_for_pattern",
+      "mcp__serena__think_about_collected_information",
+      "mcp__serena__write_memory"
     ],
     "defaultMode": "dontAsk"
   },
