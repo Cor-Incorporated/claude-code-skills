@@ -128,6 +128,12 @@
             "command": "bash ~/.claude/hooks/enforce-hook-deploy-integrity.sh",
             "timeout": 15,
             "statusMessage": "Checking hook deployment integrity + auto-sync..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/auto-update-plugins.sh",
+            "timeout": 60,
+            "statusMessage": "Updating third-party plugins (24h cooldown)..."
           }
         ]
       }
