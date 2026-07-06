@@ -75,7 +75,9 @@ fi
 COMMIT_MSG="chore(team): apply worker changes from ${TASK_LABEL}"
 
 # --- Auto-commit (best effort) ---
-git add -A 2>/dev/null || true
+# .claude/state must never ride along in worker commits (gate/lock state is
+# session-local; committing it corrupts gate state in other checkouts).
+git add -A -- ':(exclude).claude/state' ':(glob,exclude)**/.claude/state/**' 2>/dev/null || true
 if git commit -m "$COMMIT_MSG" --no-verify 2>/dev/null; then
   echo "[auto-commit] worktree changes committed: ${COMMIT_MSG}" >&2
   # Output additionalContext JSON via saved fd 3

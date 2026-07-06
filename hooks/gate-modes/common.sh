@@ -12,8 +12,9 @@ if [[ "${_COMMON_SH_LOADED:-}" == "1" ]]; then
 fi
 _COMMON_SH_LOADED=1
 
-# Prevent gh CLI TTY hangs
-export GH_FORCE_TTY=0
+# gh forces TTY-style (ANSI-colored) output when GH_FORCE_TTY is set to ANY
+# value, including 0 — which corrupts `gh api | jq` JSON parsing. Unset it.
+unset GH_FORCE_TTY
 export GH_NO_UPDATE_NOTIFIER=1
 
 # =========================================================================

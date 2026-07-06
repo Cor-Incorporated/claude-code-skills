@@ -6,7 +6,56 @@ set -euo pipefail
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
-if ! echo "$cmd" | grep -qE 'git\s+commit\s+.*-m'; then
+# Cheap pre-filter: skip non-git commands entirely.
+case "$cmd" in *"git "*) ;; *) exit 0;; esac
+
+# --- Resolve git context dir: honor `cd <dir> && ...` and `git -C <dir>` ---
+# The hook process cwd is the SESSION cwd, not the repo the command targets.
+# Without this, `cd ~/Developer/repo && git commit ...` issued from a non-repo
+# cwd makes `git branch --show-current` return "" → false "detached HEAD"
+# block, and the staged-file lint checks silently evaluate the wrong repo.
+ctx_dir=$(CMD="$cmd" python3 - <<'PY'
+import os, re
+cmd = os.environ.get("CMD", "")
+q1, q2 = chr(34), chr(39)
+pat_val = r'((?:%s[^%s]+%s)|(?:%s[^%s]+%s)|(?:[^\s;&|]+))' % (q1, q1, q1, q2, q2, q2)
+def _resolve(m):
+    if not m:
+        return ""
+    d = os.path.expanduser(os.path.expandvars(m.group(1).strip(q1 + q2)))
+    return d if d and os.path.isdir(d) else ""
+
+# `git -C <dir>` wins over a leading `cd <dir> &&` (git resolves -C itself),
+# but only when its value is a real directory — a `git -C` appearing inside a
+# quoted string (e.g. an issue title) must not shadow a valid leading cd.
+d = _resolve(re.search(r'git\s+-C\s+' + pat_val, cmd))
+if not d:
+    d = _resolve(re.match(r'^\s*cd\s+' + pat_val + r'\s*(?:&&|;)', cmd))
+print(d)
+PY
+)
+git_ctx() {
+    if [[ -n "$ctx_dir" ]]; then git -C "$ctx_dir" "$@"; else git "$@"; fi
+}
+
+# cmd_norm: collapse git global options (-C <dir>, -c <k=v>, --no-pager) so the
+# commit pattern matches below cannot be dodged with `git -C <repo> commit`
+# (fail-open bypass). Quote-aware: -C "/path with spaces" collapses too.
+# ctx_dir above still reads the ORIGINAL command.
+cmd_norm=$(CMD="$cmd" python3 - <<'PY'
+import os, re
+cmd = os.environ.get("CMD", "")
+q1, q2 = chr(34), chr(39)
+val = r'(?:%s[^%s]*%s|%s[^%s]*%s|[^\s;&|]+)' % (q1, q1, q1, q2, q2, q2)
+opt = r'(?:\s+-C\s+' + val + r'|\s+-c\s+' + val + r'|\s+--no-pager)'
+print(re.sub(r'git' + opt + r'+(\s+)', r'git\g<1>', cmd), end="")
+PY
+)
+
+# Gate: run on any git commit that carries a message source (-m/--message/-F/--file).
+# -F/--file included so file-based messages are validated too (was unreachable before).
+# -F has no \b so the attached form (-F<file>) is gated too.
+if ! echo "$cmd_norm" | grep -qE 'git\s+commit\b.*(-m|--message|-F|--file\b)'; then
     exit 0
 fi
 
@@ -31,9 +80,9 @@ fi
 if [[ "$IS_SUBAGENT" == "false" ]]; then
     # claude-code-skills repo exemption: this repo IS the hook infrastructure.
     # Blocking main agent commits causes circular dependencies when fixing hooks.
-    _remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+    _remote_url=$(git_ctx remote get-url origin 2>/dev/null || echo "")
     if [[ "$_remote_url" != *"/claude-code-skills"* ]]; then
-        current_branch=$(git branch --show-current 2>/dev/null || echo "")
+        current_branch=$(git_ctx branch --show-current 2>/dev/null || echo "")
         # Whitelist: only base branches are allowed for main agent commits
         case "$current_branch" in
             develop|main|master) ;; # allowed base branches
@@ -58,7 +107,7 @@ fi
 # Git allows multiple -m/--message flags and joins them as paragraphs. The
 # guard must validate the first paragraph as the subject while still accepting
 # issue references in later paragraphs.
-commit_msg=$(CMD="$cmd" python3 - <<'PY'
+commit_msg=$(CMD="$cmd_norm" CTX_DIR="$ctx_dir" python3 - <<'PY'
 import os
 import re
 import shlex
@@ -67,7 +116,15 @@ import sys
 cmd = os.environ.get("CMD", "")
 
 def heredoc_message(raw: str) -> str:
-    match = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", raw)
+    # Only treat a heredoc as the commit message when it feeds git commit
+    # (-m "$(cat <<EOF ...)" / -F - <<EOF). An unrelated heredoc elsewhere in
+    # the command (e.g. writing a file that merely mentions git commit) must
+    # not be validated as the commit subject.
+    match = re.search(
+        r"git\s+commit[^\n]*(?:\$\(\s*cat\s*|-F\s*-\s*|--file[= ]-\s*)"
+        r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?",
+        raw,
+    )
     if not match:
         return ""
     marker = match.group(1)
@@ -115,6 +172,32 @@ for i in range(len(tokens) - 1):
             messages.append(token[2:])
             j += 1
             continue
+        # -F <path> / -F<path> / --file <path> / --file=<path>: read message
+        # from file. Relative paths resolve against CTX_DIR (the repo the
+        # command targets via cd/-C), not the hook cwd. "-" (stdin) is
+        # skipped; unreadable files are ignored (fail-open, same as the
+        # existing behavior for empty messages).
+        file_path = None
+        if token in {"-F", "--file"} and j + 1 < len(tokens):
+            file_path = tokens[j + 1]
+            j += 2
+        elif token.startswith("--file="):
+            file_path = token.split("=", 1)[1]
+            j += 1
+        elif token.startswith("-F") and len(token) > 2 and not token.startswith("--file"):
+            file_path = token[2:]
+            j += 1
+        if file_path is not None:
+            if file_path != "-":
+                ctx = os.environ.get("CTX_DIR", "")
+                if ctx and not os.path.isabs(file_path):
+                    file_path = os.path.join(ctx, file_path)
+                try:
+                    with open(os.path.expanduser(file_path)) as fh:
+                        messages.append(fh.read())
+                except OSError:
+                    pass
+            continue
         j += 1
     break
 
@@ -145,9 +228,9 @@ if ! echo "$commit_subject" | grep -qEi "^(chore|docs|ci|release|Merge|initial)"
 fi
 
 # --- 3. Zero-tolerance pre-commit (lint/type/format checks) ---
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+project_root=$(git_ctx rev-parse --show-toplevel 2>/dev/null || echo "")
 if [ -n "$project_root" ]; then
-    STAGED=$(git diff --cached --name-only 2>/dev/null || echo "")
+    STAGED=$(git_ctx diff --cached --name-only 2>/dev/null || echo "")
 
     # v1 frontend
     if echo "$STAGED" | grep -q "^frontend/" && [ -f "$project_root/frontend/package.json" ]; then

@@ -6,6 +6,50 @@ set -euo pipefail
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
+# --- Resolve git context dir: honor `cd <dir> && ...` and `git -C <dir>` ---
+# The hook process cwd is the SESSION cwd, not the repo the command targets.
+# Without this, the implicit-branch force-push check (git rev-parse HEAD) and
+# the pre-push lint checks (rev-parse --show-toplevel) evaluate whatever repo
+# the session happens to sit in — blocking pushes to repo B because repo A
+# has lint errors, or misreading the current branch entirely.
+ctx_dir=$(CMD="$cmd" python3 - <<'PY'
+import os, re
+cmd = os.environ.get("CMD", "")
+q1, q2 = chr(34), chr(39)
+pat_val = r'((?:%s[^%s]+%s)|(?:%s[^%s]+%s)|(?:[^\s;&|]+))' % (q1, q1, q1, q2, q2, q2)
+def _resolve(m):
+    if not m:
+        return ""
+    d = os.path.expanduser(os.path.expandvars(m.group(1).strip(q1 + q2)))
+    return d if d and os.path.isdir(d) else ""
+
+# `git -C <dir>` wins over a leading `cd <dir> &&` (git resolves -C itself),
+# but only when its value is a real directory — a `git -C` appearing inside a
+# quoted string (e.g. an issue title) must not shadow a valid leading cd.
+d = _resolve(re.search(r'git\s+-C\s+' + pat_val, cmd))
+if not d:
+    d = _resolve(re.match(r'^\s*cd\s+' + pat_val + r'\s*(?:&&|;)', cmd))
+print(d)
+PY
+)
+git_ctx() {
+  if [[ -n "$ctx_dir" ]]; then git -C "$ctx_dir" "$@"; else git "$@"; fi
+}
+
+# cmd_norm: collapse git global options (-C <dir>, -c <k=v>, --no-pager) so the
+# push/commit pattern matches below cannot be dodged with `git -C <repo> push`
+# (fail-open bypass). Quote-aware: -C "/path with spaces" collapses too.
+# ctx_dir above still reads the ORIGINAL command.
+cmd_norm=$(CMD="$cmd" python3 - <<'PY'
+import os, re
+cmd = os.environ.get("CMD", "")
+q1, q2 = chr(34), chr(39)
+val = r'(?:%s[^%s]*%s|%s[^%s]*%s|[^\s;&|]+)' % (q1, q1, q1, q2, q2, q2)
+opt = r'(?:\s+-C\s+' + val + r'|\s+-c\s+' + val + r'|\s+--no-pager)'
+print(re.sub(r'git' + opt + r'+(\s+)', r'git\g<1>', cmd), end="")
+PY
+)
+
 # mentions_protected_ref <cmd> <branch>
 # Returns 0 if <branch> appears as a push ref token anywhere in <cmd>, tolerant
 # of process substitution `<(...)`, command chains, redirects and refspec forms
@@ -53,18 +97,18 @@ fi
 # --- 0. Early exit: only run on git push commands (Issue #150) ---
 # Without this guard, black/ruff checks in section 3 block ALL Bash commands,
 # creating an unrecoverable deadlock where even `black .` is blocked.
-if ! echo "$cmd" | grep -qE '\bgit\s+push\b'; then
+if ! echo "$cmd_norm" | grep -qE '\bgit\s+push\b'; then
   exit 0
 fi
 
 # --- 1. Force push to shared branches check (Issue #17) ---
 # Block --force / --force-with-lease to develop/main/master
 # Feature branches are allowed (user's own branch history cleanup is legitimate)
-if echo "$cmd" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b)' || \
-   echo "$cmd" | grep -qE 'git\s+push\s+-[a-zA-Z]*f'; then
+if echo "$cmd_norm" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b)' || \
+   echo "$cmd_norm" | grep -qE 'git\s+push\s+-[a-zA-Z]*f'; then
     # Check explicit branch names in the command
     for branch in develop main master; do
-        if mentions_protected_ref "$cmd" "$branch"; then
+        if mentions_protected_ref "$cmd_norm" "$branch"; then
             cat >&2 <<ERRMSG
 [BLOCK] 共有ブランチ '${branch}' への force push を検出
 
@@ -84,8 +128,8 @@ ERRMSG
 
     # Fallback: if no explicit push ref in command, check current branch
     # Catches: git push --force, git push --force origin (implicit branch)
-    if ! has_explicit_push_ref "$cmd"; then
-        current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if ! has_explicit_push_ref "$cmd_norm"; then
+        current_branch=$(git_ctx rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
         for branch in develop main master; do
             if [[ "$current_branch" == "$branch" ]]; then
                 cat >&2 <<ERRMSG
@@ -107,9 +151,9 @@ fi
 
 # --- 2. Protected branch direct push check ---
 for branch in develop main master; do
-    if echo "$cmd" | grep -qE "git\s+push\s+.*\b${branch}\b" && \
-       ! echo "$cmd" | grep -qE "(--delete|:${branch})"; then
-        push_target=$(echo "$cmd" | grep -oE "push\s+[^|;&)<>]*" | sed 's/push\s*//' | sed 's/\s*-[a-zA-Z-]*//g' | xargs)
+    if echo "$cmd_norm" | grep -qE "git\s+push\s+.*\b${branch}\b" && \
+       ! echo "$cmd_norm" | grep -qE "(--delete|:${branch})"; then
+        push_target=$(echo "$cmd_norm" | grep -oE "push\s+[^|;&)<>]*" | sed 's/push\s*//' | sed 's/\s*-[a-zA-Z-]*//g' | xargs)
         refspec=$(echo "$push_target" | awk '{print $NF}')
         if [ "$refspec" = "$branch" ] || echo "$refspec" | grep -qE ":${branch}$"; then
             echo "[BLOCKED] Direct push to '${branch}'. Use PR instead." >&2
@@ -120,7 +164,7 @@ for branch in develop main master; do
 done
 
 # --- 3. Local CI check before push (AP-10 prevention) ---
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+project_root=$(git_ctx rev-parse --show-toplevel 2>/dev/null || echo "")
 if [ -n "$project_root" ]; then
     ci_failed=false
 

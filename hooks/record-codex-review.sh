@@ -198,8 +198,20 @@ if [[ $# -eq 0 ]]; then
   CONTEXT_JSON=$(resolve_review_context)
   COMMAND=$(echo "$CONTEXT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('command',''))" 2>/dev/null || echo "")
 
-  # Only trigger on codex review commands
-  echo "$COMMAND" | grep -qE 'codex\s+exec.*review|codex-parallel\.sh\s+--review' || exit 0
+  # Only trigger on codex review commands.
+  # Japanese prompts say レビュー instead of "review" — both must record,
+  # otherwise the PR-create gate rejects a review that actually ran.
+  # codex must be in command position (not inside a quoted string of echo/grep etc.)
+  # — otherwise a mere mention records a fake review (false evidence for PR gate).
+  # BOTH alternatives are command-position-anchored, and the codex-exec wildcard
+  # is bounded to [^;&|] so it cannot cross command separators (e.g.
+  # `codex exec build && git review` must not record).
+  # The anchor class deliberately excludes '(' — a literal paren inside a quoted
+  # string (e.g. `echo '(codex exec review)'`) must not satisfy the anchor and
+  # record a fake review. Trade-off: subshell-parenthesized invocations
+  # `(codex exec review)` no longer auto-record — acceptable; the standard forms
+  # (plain, after &&/;, bash codex-parallel.sh) still record.
+  echo "$COMMAND" | grep -qE '(^|[;&|])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)?(codex[[:space:]]+exec\b[^;&|]*(review|レビュー)|(bash[[:space:]]+)?[^[:space:]]*codex-parallel\.sh[[:space:]]+--review)' || exit 0
 
   BRANCH=$(echo "$CONTEXT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('branch',''))" 2>/dev/null || echo "")
   [[ -z "$BRANCH" ]] && exit 0
