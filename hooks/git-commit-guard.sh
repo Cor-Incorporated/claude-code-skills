@@ -19,14 +19,19 @@ import os, re
 cmd = os.environ.get("CMD", "")
 q1, q2 = chr(34), chr(39)
 pat_val = r'((?:%s[^%s]+%s)|(?:%s[^%s]+%s)|(?:[^\s;&|]+))' % (q1, q1, q1, q2, q2, q2)
-# `git -C <dir>` wins over a leading `cd <dir> &&`: git itself resolves -C, so
-# the guard must judge the repo git actually operates on, not the shell cwd.
-m = re.search(r'git\s+-C\s+' + pat_val, cmd)
-if not m:
-    m = re.match(r'^\s*cd\s+' + pat_val + r'\s*(?:&&|;)', cmd)
-d = m.group(1).strip(q1 + q2) if m else ""
-d = os.path.expanduser(os.path.expandvars(d))
-print(d if d and os.path.isdir(d) else "")
+def _resolve(m):
+    if not m:
+        return ""
+    d = os.path.expanduser(os.path.expandvars(m.group(1).strip(q1 + q2)))
+    return d if d and os.path.isdir(d) else ""
+
+# `git -C <dir>` wins over a leading `cd <dir> &&` (git resolves -C itself),
+# but only when its value is a real directory — a `git -C` appearing inside a
+# quoted string (e.g. an issue title) must not shadow a valid leading cd.
+d = _resolve(re.search(r'git\s+-C\s+' + pat_val, cmd))
+if not d:
+    d = _resolve(re.match(r'^\s*cd\s+' + pat_val + r'\s*(?:&&|;)', cmd))
+print(d)
 PY
 )
 git_ctx() {
@@ -35,12 +40,22 @@ git_ctx() {
 
 # cmd_norm: collapse git global options (-C <dir>, -c <k=v>, --no-pager) so the
 # commit pattern matches below cannot be dodged with `git -C <repo> commit`
-# (fail-open bypass). ctx_dir above still reads the ORIGINAL command.
-cmd_norm=$(printf '%s' "$cmd" | sed -E 's/git([[:space:]]+-C[[:space:]]+[^[:space:]]+|[[:space:]]+-c[[:space:]]+[^[:space:]]+|[[:space:]]+--no-pager)+[[:space:]]+/git /g')
+# (fail-open bypass). Quote-aware: -C "/path with spaces" collapses too.
+# ctx_dir above still reads the ORIGINAL command.
+cmd_norm=$(CMD="$cmd" python3 - <<'PY'
+import os, re
+cmd = os.environ.get("CMD", "")
+q1, q2 = chr(34), chr(39)
+val = r'(?:%s[^%s]*%s|%s[^%s]*%s|[^\s;&|]+)' % (q1, q1, q1, q2, q2, q2)
+opt = r'(?:\s+-C\s+' + val + r'|\s+-c\s+' + val + r'|\s+--no-pager)'
+print(re.sub(r'git' + opt + r'+(\s+)', r'git\g<1>', cmd), end="")
+PY
+)
 
 # Gate: run on any git commit that carries a message source (-m/--message/-F/--file).
 # -F/--file included so file-based messages are validated too (was unreachable before).
-if ! echo "$cmd_norm" | grep -qE 'git\s+commit\b.*(-m|--message|-F\b|--file\b)'; then
+# -F has no \b so the attached form (-F<file>) is gated too.
+if ! echo "$cmd_norm" | grep -qE 'git\s+commit\b.*(-m|--message|-F|--file\b)'; then
     exit 0
 fi
 
@@ -92,7 +107,7 @@ fi
 # Git allows multiple -m/--message flags and joins them as paragraphs. The
 # guard must validate the first paragraph as the subject while still accepting
 # issue references in later paragraphs.
-commit_msg=$(CMD="$cmd_norm" python3 - <<'PY'
+commit_msg=$(CMD="$cmd_norm" CTX_DIR="$ctx_dir" python3 - <<'PY'
 import os
 import re
 import shlex
@@ -157,9 +172,11 @@ for i in range(len(tokens) - 1):
             messages.append(token[2:])
             j += 1
             continue
-        # -F <path> / --file <path> / --file=<path>: read message from file.
-        # "-" (stdin) is skipped; unreadable files are ignored (fail-open,
-        # same as the existing behavior for empty messages).
+        # -F <path> / -F<path> / --file <path> / --file=<path>: read message
+        # from file. Relative paths resolve against CTX_DIR (the repo the
+        # command targets via cd/-C), not the hook cwd. "-" (stdin) is
+        # skipped; unreadable files are ignored (fail-open, same as the
+        # existing behavior for empty messages).
         file_path = None
         if token in {"-F", "--file"} and j + 1 < len(tokens):
             file_path = tokens[j + 1]
@@ -167,8 +184,14 @@ for i in range(len(tokens) - 1):
         elif token.startswith("--file="):
             file_path = token.split("=", 1)[1]
             j += 1
+        elif token.startswith("-F") and len(token) > 2 and not token.startswith("--file"):
+            file_path = token[2:]
+            j += 1
         if file_path is not None:
             if file_path != "-":
+                ctx = os.environ.get("CTX_DIR", "")
+                if ctx and not os.path.isabs(file_path):
+                    file_path = os.path.join(ctx, file_path)
                 try:
                     with open(os.path.expanduser(file_path)) as fh:
                         messages.append(fh.read())

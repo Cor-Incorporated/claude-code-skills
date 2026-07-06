@@ -17,14 +17,19 @@ import os, re
 cmd = os.environ.get("CMD", "")
 q1, q2 = chr(34), chr(39)
 pat_val = r'((?:%s[^%s]+%s)|(?:%s[^%s]+%s)|(?:[^\s;&|]+))' % (q1, q1, q1, q2, q2, q2)
-# `git -C <dir>` wins over a leading `cd <dir> &&`: git itself resolves -C, so
-# the guard must judge the repo git actually operates on, not the shell cwd.
-m = re.search(r'git\s+-C\s+' + pat_val, cmd)
-if not m:
-    m = re.match(r'^\s*cd\s+' + pat_val + r'\s*(?:&&|;)', cmd)
-d = m.group(1).strip(q1 + q2) if m else ""
-d = os.path.expanduser(os.path.expandvars(d))
-print(d if d and os.path.isdir(d) else "")
+def _resolve(m):
+    if not m:
+        return ""
+    d = os.path.expanduser(os.path.expandvars(m.group(1).strip(q1 + q2)))
+    return d if d and os.path.isdir(d) else ""
+
+# `git -C <dir>` wins over a leading `cd <dir> &&` (git resolves -C itself),
+# but only when its value is a real directory — a `git -C` appearing inside a
+# quoted string (e.g. an issue title) must not shadow a valid leading cd.
+d = _resolve(re.search(r'git\s+-C\s+' + pat_val, cmd))
+if not d:
+    d = _resolve(re.match(r'^\s*cd\s+' + pat_val + r'\s*(?:&&|;)', cmd))
+print(d)
 PY
 )
 git_ctx() {
@@ -33,8 +38,17 @@ git_ctx() {
 
 # cmd_norm: collapse git global options (-C <dir>, -c <k=v>, --no-pager) so the
 # push/commit pattern matches below cannot be dodged with `git -C <repo> push`
-# (fail-open bypass). ctx_dir above still reads the ORIGINAL command.
-cmd_norm=$(printf '%s' "$cmd" | sed -E 's/git([[:space:]]+-C[[:space:]]+[^[:space:]]+|[[:space:]]+-c[[:space:]]+[^[:space:]]+|[[:space:]]+--no-pager)+[[:space:]]+/git /g')
+# (fail-open bypass). Quote-aware: -C "/path with spaces" collapses too.
+# ctx_dir above still reads the ORIGINAL command.
+cmd_norm=$(CMD="$cmd" python3 - <<'PY'
+import os, re
+cmd = os.environ.get("CMD", "")
+q1, q2 = chr(34), chr(39)
+val = r'(?:%s[^%s]*%s|%s[^%s]*%s|[^\s;&|]+)' % (q1, q1, q1, q2, q2, q2)
+opt = r'(?:\s+-C\s+' + val + r'|\s+-c\s+' + val + r'|\s+--no-pager)'
+print(re.sub(r'git' + opt + r'+(\s+)', r'git\g<1>', cmd), end="")
+PY
+)
 
 # mentions_protected_ref <cmd> <branch>
 # Returns 0 if <branch> appears as a push ref token anywhere in <cmd>, tolerant
@@ -94,7 +108,7 @@ if echo "$cmd_norm" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b
    echo "$cmd_norm" | grep -qE 'git\s+push\s+-[a-zA-Z]*f'; then
     # Check explicit branch names in the command
     for branch in develop main master; do
-        if mentions_protected_ref "$cmd" "$branch"; then
+        if mentions_protected_ref "$cmd_norm" "$branch"; then
             cat >&2 <<ERRMSG
 [BLOCK] 共有ブランチ '${branch}' への force push を検出
 

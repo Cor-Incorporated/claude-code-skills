@@ -203,7 +203,10 @@ if [[ $# -eq 0 ]]; then
   # otherwise the PR-create gate rejects a review that actually ran.
   # codex must be in command position (not inside a quoted string of echo/grep etc.)
   # — otherwise a mere mention records a fake review (false evidence for PR gate).
-  echo "$COMMAND" | grep -qE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)?codex[[:space:]]+exec\b.*(review|レビュー)|codex-parallel\.sh[[:space:]]+--review' || exit 0
+  # BOTH alternatives are command-position-anchored, and the codex-exec wildcard
+  # is bounded to [^;&|] so it cannot cross command separators (e.g.
+  # `codex exec build && git review` must not record).
+  echo "$COMMAND" | grep -qE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)?(codex[[:space:]]+exec\b[^;&|]*(review|レビュー)|(bash[[:space:]]+)?[^[:space:]]*codex-parallel\.sh[[:space:]]+--review)' || exit 0
 
   BRANCH=$(echo "$CONTEXT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('branch',''))" 2>/dev/null || echo "")
   [[ -z "$BRANCH" ]] && exit 0
