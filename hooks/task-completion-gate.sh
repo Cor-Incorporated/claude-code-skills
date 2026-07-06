@@ -21,7 +21,7 @@
 # =========================================================================
 
 set -uo pipefail
-export GH_FORCE_TTY=0
+unset GH_FORCE_TTY
 export GH_NO_UPDATE_NOTIFIER=1
 
 _review_comment_set_hash_script() {

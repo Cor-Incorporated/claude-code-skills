@@ -9,7 +9,7 @@
 # Exit 0 = allow, Exit 2 = block
 set -uo pipefail
 export GH_NO_UPDATE_NOTIFIER=1
-export GH_FORCE_TTY=0
+unset GH_FORCE_TTY
 
 input=""
 [[ ! -t 0 ]] && input=$(cat)

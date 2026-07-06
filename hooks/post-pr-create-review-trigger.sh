@@ -17,7 +17,7 @@
 # =========================================================================
 
 set -euo pipefail
-export GH_FORCE_TTY=0
+unset GH_FORCE_TTY
 export GH_NO_UPDATE_NOTIFIER=1
 
 # Subagent exemption — subagents creating PRs is blocked by other hooks

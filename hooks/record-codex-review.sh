@@ -198,8 +198,10 @@ if [[ $# -eq 0 ]]; then
   CONTEXT_JSON=$(resolve_review_context)
   COMMAND=$(echo "$CONTEXT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('command',''))" 2>/dev/null || echo "")
 
-  # Only trigger on codex review commands
-  echo "$COMMAND" | grep -qE 'codex\s+exec.*review|codex-parallel\.sh\s+--review' || exit 0
+  # Only trigger on codex review commands.
+  # Japanese prompts say レビュー instead of "review" — both must record,
+  # otherwise the PR-create gate rejects a review that actually ran.
+  echo "$COMMAND" | grep -qE 'codex\s+exec.*(review|レビュー)|codex-parallel\.sh\s+--review' || exit 0
 
   BRANCH=$(echo "$CONTEXT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('branch',''))" 2>/dev/null || echo "")
   [[ -z "$BRANCH" ]] && exit 0

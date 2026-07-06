@@ -6,6 +6,29 @@ set -euo pipefail
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
+# --- Resolve git context dir: honor `cd <dir> && ...` and `git -C <dir>` ---
+# The hook process cwd is the SESSION cwd, not the repo the command targets.
+# Without this, the implicit-branch force-push check (git rev-parse HEAD) and
+# the pre-push lint checks (rev-parse --show-toplevel) evaluate whatever repo
+# the session happens to sit in — blocking pushes to repo B because repo A
+# has lint errors, or misreading the current branch entirely.
+ctx_dir=$(CMD="$cmd" python3 - <<'PY'
+import os, re
+cmd = os.environ.get("CMD", "")
+q1, q2 = chr(34), chr(39)
+pat_val = r'((?:%s[^%s]+%s)|(?:%s[^%s]+%s)|(?:[^\s;&|]+))' % (q1, q1, q1, q2, q2, q2)
+m = re.match(r'^\s*cd\s+' + pat_val + r'\s*(?:&&|;)', cmd)
+if not m:
+    m = re.search(r'git\s+-C\s+' + pat_val, cmd)
+d = m.group(1).strip(q1 + q2) if m else ""
+d = os.path.expanduser(os.path.expandvars(d))
+print(d if d and os.path.isdir(d) else "")
+PY
+)
+git_ctx() {
+  if [[ -n "$ctx_dir" ]]; then git -C "$ctx_dir" "$@"; else git "$@"; fi
+}
+
 # mentions_protected_ref <cmd> <branch>
 # Returns 0 if <branch> appears as a push ref token anywhere in <cmd>, tolerant
 # of process substitution `<(...)`, command chains, redirects and refspec forms
@@ -85,7 +108,7 @@ ERRMSG
     # Fallback: if no explicit push ref in command, check current branch
     # Catches: git push --force, git push --force origin (implicit branch)
     if ! has_explicit_push_ref "$cmd"; then
-        current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+        current_branch=$(git_ctx rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
         for branch in develop main master; do
             if [[ "$current_branch" == "$branch" ]]; then
                 cat >&2 <<ERRMSG
@@ -120,7 +143,7 @@ for branch in develop main master; do
 done
 
 # --- 3. Local CI check before push (AP-10 prevention) ---
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+project_root=$(git_ctx rev-parse --show-toplevel 2>/dev/null || echo "")
 if [ -n "$project_root" ]; then
     ci_failed=false
 

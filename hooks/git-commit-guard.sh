@@ -10,6 +10,28 @@ if ! echo "$cmd" | grep -qE 'git\s+commit\s+.*-m'; then
     exit 0
 fi
 
+# --- Resolve git context dir: honor `cd <dir> && ...` and `git -C <dir>` ---
+# The hook process cwd is the SESSION cwd, not the repo the command targets.
+# Without this, `cd ~/Developer/repo && git commit ...` issued from a non-repo
+# cwd makes `git branch --show-current` return "" → false "detached HEAD"
+# block, and the staged-file lint checks silently evaluate the wrong repo.
+ctx_dir=$(CMD="$cmd" python3 - <<'PY'
+import os, re
+cmd = os.environ.get("CMD", "")
+q1, q2 = chr(34), chr(39)
+pat_val = r'((?:%s[^%s]+%s)|(?:%s[^%s]+%s)|(?:[^\s;&|]+))' % (q1, q1, q1, q2, q2, q2)
+m = re.match(r'^\s*cd\s+' + pat_val + r'\s*(?:&&|;)', cmd)
+if not m:
+    m = re.search(r'git\s+-C\s+' + pat_val, cmd)
+d = m.group(1).strip(q1 + q2) if m else ""
+d = os.path.expanduser(os.path.expandvars(d))
+print(d if d and os.path.isdir(d) else "")
+PY
+)
+git_ctx() {
+    if [[ -n "$ctx_dir" ]]; then git -C "$ctx_dir" "$@"; else git "$@"; fi
+}
+
 # --- Rule 0: Block direct commits on non-base branches from main session ---
 # WHITELIST approach: only base branches (develop, main, master) allowed for main agent.
 # All other branches require delegation to subagent/TeamCreate.
@@ -31,9 +53,9 @@ fi
 if [[ "$IS_SUBAGENT" == "false" ]]; then
     # claude-code-skills repo exemption: this repo IS the hook infrastructure.
     # Blocking main agent commits causes circular dependencies when fixing hooks.
-    _remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+    _remote_url=$(git_ctx remote get-url origin 2>/dev/null || echo "")
     if [[ "$_remote_url" != *"/claude-code-skills"* ]]; then
-        current_branch=$(git branch --show-current 2>/dev/null || echo "")
+        current_branch=$(git_ctx branch --show-current 2>/dev/null || echo "")
         # Whitelist: only base branches are allowed for main agent commits
         case "$current_branch" in
             develop|main|master) ;; # allowed base branches
@@ -67,7 +89,15 @@ import sys
 cmd = os.environ.get("CMD", "")
 
 def heredoc_message(raw: str) -> str:
-    match = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", raw)
+    # Only treat a heredoc as the commit message when it feeds git commit
+    # (-m "$(cat <<EOF ...)" / -F - <<EOF). An unrelated heredoc elsewhere in
+    # the command (e.g. writing a file that merely mentions git commit) must
+    # not be validated as the commit subject.
+    match = re.search(
+        r"git\s+commit[^\n]*(?:\$\(\s*cat\s*|-F\s*-\s*|--file[= ]-\s*)"
+        r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?",
+        raw,
+    )
     if not match:
         return ""
     marker = match.group(1)
@@ -145,9 +175,9 @@ if ! echo "$commit_subject" | grep -qEi "^(chore|docs|ci|release|Merge|initial)"
 fi
 
 # --- 3. Zero-tolerance pre-commit (lint/type/format checks) ---
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+project_root=$(git_ctx rev-parse --show-toplevel 2>/dev/null || echo "")
 if [ -n "$project_root" ]; then
-    STAGED=$(git diff --cached --name-only 2>/dev/null || echo "")
+    STAGED=$(git_ctx diff --cached --name-only 2>/dev/null || echo "")
 
     # v1 frontend
     if echo "$STAGED" | grep -q "^frontend/" && [ -f "$project_root/frontend/package.json" ]; then
