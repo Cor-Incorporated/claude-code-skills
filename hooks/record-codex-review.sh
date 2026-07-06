@@ -201,7 +201,9 @@ if [[ $# -eq 0 ]]; then
   # Only trigger on codex review commands.
   # Japanese prompts say レビュー instead of "review" — both must record,
   # otherwise the PR-create gate rejects a review that actually ran.
-  echo "$COMMAND" | grep -qE 'codex\s+exec.*(review|レビュー)|codex-parallel\.sh\s+--review' || exit 0
+  # codex must be in command position (not inside a quoted string of echo/grep etc.)
+  # — otherwise a mere mention records a fake review (false evidence for PR gate).
+  echo "$COMMAND" | grep -qE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)?codex[[:space:]]+exec\b.*(review|レビュー)|codex-parallel\.sh[[:space:]]+--review' || exit 0
 
   BRANCH=$(echo "$CONTEXT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('branch',''))" 2>/dev/null || echo "")
   [[ -z "$BRANCH" ]] && exit 0
