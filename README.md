@@ -19,6 +19,19 @@ chmod +x setup.sh
 
 Restart Claude Code after installation.
 
+
+## API provider (Anthropic subscription ↔ z.ai)
+
+Claude Code can only use one API gateway per process. This repo ships `scripts/claude-provider.sh` so you can switch between the **official Claude subscription** (default, reliable for subagents/WebSearch) and **z.ai GLM**.
+
+```bash
+bash ~/.claude/scripts/claude-provider.sh status
+bash ~/.claude/scripts/claude-provider.sh anthropic   # default
+bash ~/.claude/scripts/claude-provider.sh zai
+```
+
+Details: [docs/runbooks/provider-switching.md](docs/runbooks/provider-switching.md).
+
 ## Repository Structure
 
 ```

@@ -120,6 +120,20 @@ else
   echo "  ↻ ui-ux-pro-max (already installed)"
 fi
 
+# Ensure provider profile directory exists (secrets stay local, never in repo settings.json)
+echo ""
+echo "Ensuring provider profile directory..."
+mkdir -p "$CLAUDE_DIR/providers"
+chmod 700 "$CLAUDE_DIR/providers" 2>/dev/null || true
+if [ -x "$SCRIPTS_DIR/claude-provider.sh" ]; then
+  echo "  Provider switcher: bash ~/.claude/scripts/claude-provider.sh status"
+  echo "  Profiles: anthropic (default/subscription) | zai"
+  # Non-fatal status for visibility
+  bash "$SCRIPTS_DIR/claude-provider.sh" status 2>/dev/null | head -20 || true
+else
+  echo "  ↻ claude-provider.sh not installed yet"
+fi
+
 echo ""
 echo "=== Setup Complete ==="
 echo "Restart Claude Code to apply changes."

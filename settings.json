@@ -119,6 +119,12 @@
           },
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/validate-provider-env.sh",
+            "timeout": 8,
+            "statusMessage": "Checking API provider routing (anthropic/z.ai)..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/enforce-branch-workflow.sh",
             "timeout": 15,
             "statusMessage": "Checking branch workflow..."
