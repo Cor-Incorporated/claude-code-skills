@@ -36,7 +36,7 @@ bash ~/.claude/scripts/claude-provider.sh zai
 claude-code-skills/
 ├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 6 グローバルルール (コーディング規約, Git, 品質, テスト, 委任, hookデプロイ)
-├── hooks/            # 17 hook スクリプト (ブロッキング 4 + advisory/infra 13); hooks/_unused/ に廃止済み56本 (ADR-006)
+├── hooks/            # 17 hook スクリプト (ブロッキング 4 + advisory/infra 13); hooks/_unused/ に廃止済み62本 (うち56本はADR-006)
 ├── scripts/          # 6 ユーティリティ (Codex 連携, プロバイダ切替, コンテキスト監視); scripts/_unused/ に廃止済みレビューパイプラインヘルパー
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
@@ -277,7 +277,7 @@ hook ごとの詳細（イベント、matcher、用途）は [hooks/README.md](h
 - `tool-failure-recovery.sh` — ツール失敗時のエラー回復ガイダンス（PostToolUseFailure）
 - `pre-compact-context-save.sh` — コンパクション前に重要コンテキストを保存（PreCompact）
 
-以前アクティブだった 56 スクリプト（レビュー/CI マージゲート一式、ファクトチェック群、コンテキスト予算群、Codex 単一呼び出しゲート、state-file 改ざん防止群など）と、旧 `hooks/gate-modes/` ディスパッチャ一式は `hooks/_unused/` へ廃止済みです。廃止リストと理由は
+ADR-006 で廃止した 56 スクリプト（レビュー/CI マージゲート一式、ファクトチェック群、コンテキスト予算群、Codex 単一呼び出しゲート、state-file 改ざん防止群など）と、旧 `hooks/gate-modes/` ディスパッチャ一式は `hooks/_unused/` へ移動済みです（過去の廃止分と合わせ計 62 本）。廃止リストと理由は
 [hooks/README.md#_unused-archive](hooks/README.md#_unused-archive) と ADR-006 を参照。
 
 ## Hook Matcher 構文

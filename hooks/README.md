@@ -38,7 +38,7 @@ runtime can execute them.
 | Active hooks | 17 |
 | Hard blocks (exit 2 possible) | 4 |
 | Advisory / infra hooks (never block) | 13 |
-| Archived in `_unused/` | 56 scripts + the whole former `gate-modes/` directory |
+| Archived in `_unused/` | 62 scripts (56 retired by ADR-006 + 6 from earlier retirements) + the whole former `gate-modes/` directory |
 
 There is no `Stop` or `TaskCompleted` hook registered — session-end and
 task-completion gating were retired (see ADR-006). Test verification and

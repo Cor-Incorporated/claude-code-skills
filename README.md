@@ -38,7 +38,7 @@ Details: [docs/runbooks/provider-switching.md](docs/runbooks/provider-switching.
 claude-code-skills/
 ├── skills/           # 27 custom skill definitions (SKILL.md + scripts + references)
 ├── rules/            # 6 global rule files (coding-style, git-workflow, quality, testing, delegation, hook-deployment)
-├── hooks/            # 17 hook scripts (4 blocking + 13 advisory/infra); hooks/_unused/ holds 56 retired scripts (ADR-006)
+├── hooks/            # 17 hook scripts (4 blocking + 13 advisory/infra); hooks/_unused/ holds 62 retired scripts, 56 via ADR-006
 ├── scripts/          # 6 utility scripts (Codex orchestration, provider switching, context monitoring); scripts/_unused/ holds retired review-pipeline helpers
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
