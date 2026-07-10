@@ -25,6 +25,7 @@
 | 003 | Feedback Speed Hierarchy | Accepted | 2026-03-23 |
 | 004 | Codex Large-Scale Delegation Model | Accepted | 2026-03-23 |
 | 005 | Plans.md JSON移行検討 | Rejected | 2026-03-23 |
+| 006 | Minimal Safety Net — Hook Reduction | Accepted | 2026-07-10 |
 
 ## Reference
 

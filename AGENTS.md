@@ -32,10 +32,19 @@ Do **not** echo the input JSON back on stdout at `exit 0`. All hooks in this rep
 
 ## Hook architecture
 
-- **64 standalone hooks** in `hooks/*.sh` + 1 Python helper (`inject-claude-review-helper.py`).
-- **7 gate-mode modules** in `hooks/gate-modes/` — sourced by `pr-ci-review-gate.sh` dispatcher (`GATE_MODE=<mode>` selects the module). Shared helpers live in `gate-modes/common.sh`.
-- **`hooks/_unused/`** contains retired hooks. Do not copy or register these.
-- **State files** live in `<project>/.claude/state/` (`review-status.json`, `pr-review-lock.json`). Gate-mode scripts check both project-scoped and global (`~/.claude/state/`) paths.
+- **17 active hooks** in `hooks/*.sh` (4 blocking + 13 advisory/infra). See
+  [hooks/README.md](hooks/README.md) for the full per-hook table and
+  [ADR-006](docs/adr/006-minimal-safety-net.md) for why the set is this
+  small — merge safety, review completeness, factchecking, context
+  budgeting, and Codex call cadence are no longer hook-enforced; they are
+  delegated to GitHub branch protection, the PR review workflow, and
+  agent judgement guided by `rules/*.md`.
+- **`hooks/_unused/`** contains 56 retired hooks + the former
+  `gate-modes/` dispatcher architecture (7 modules, previously sourced by
+  the now-retired `pr-ci-review-gate.sh`). Do not copy or register these.
+- **State files** live in `<project>/.claude/state/`. With the review
+  pipeline retired, `review-status.json` / `pr-review-lock.json` /
+  `pending-review-comments.json` are no longer read by any active hook.
 
 ## Verification commands (matches CI)
 
@@ -47,10 +56,13 @@ shellcheck -S error hooks/*.sh              # errors only (must pass)
 bash -n hooks/*.sh scripts/*.sh setup.sh    # syntax check each file
 python3 -m json.tool settings.json          # JSON validity
 python3 -m json.tool .claude/settings.local.json
-bash tests/test-*.sh                        # run all test suites
+bash tests/test-*.sh                        # run all test suites (10 remain; 47+ retired to tests/_unused/)
 ```
 
 Delivery quality score: `python3 scripts/delivery_score.py` (or `--json` for CI).
+Note: some of this script's inputs (e.g. review-pipeline state) describe
+a pipeline retired by ADR-006; treat its hook-coverage metric as
+referring to the current 17-hook set.
 
 ## Skills
 
@@ -67,7 +79,7 @@ Delivery quality score: `python3 scripts/delivery_score.py` (or `--json` for CI)
 | `rules/` | 6 global rule files (coding-style, git-workflow, quality, testing, delegation, hook-deployment) | Yes |
 | `skills/*/` | Repo-owned skill definitions | Yes |
 | `scripts/` | Utility scripts (codex orchestration, PR review, delivery scoring) | Yes |
-| `docs/adr/` | Architecture decision records (001–005) | Yes |
+| `docs/adr/` | Architecture decision records (001–006) | Yes |
 | `.claude/state/` | Hook runtime state files | Only for state/debug tasks |
 | `.opencode/` | Generated OpenCode files | No |
 

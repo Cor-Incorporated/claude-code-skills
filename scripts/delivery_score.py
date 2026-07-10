@@ -134,9 +134,9 @@ def score_soak_time_compliance(repo: str) -> dict:
     # For now, a simple heuristic: infra PRs need longer soak time
     # Full implementation would check timestamps between create and merge
     return {
-        "score": 100,  # Placeholder: soak time hook enforces this
+        "score": 100,  # Placeholder: soak time is no longer hook-enforced (ADR-006);
         "checked": len(prs),
-        "detail": "enforced by hook (enforce-soak-time.sh)",
+        "detail": "not hook-enforced since ADR-006 — soak time is now a rules/git-workflow.md guideline",
     }
 
 

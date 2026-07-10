@@ -4,9 +4,9 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 27 custom skills, 72 hook scripts (64 shell + 7 gate-mode modules + 1 Python), 6 rule sets, 8 utility scripts, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 27 custom skills, 17 hook scripts (4 blocking + 13 advisory/infra), 6 rule sets, 6 utility scripts, and integration with third-party skill frameworks.
 
-> **Design Philosophy**: This project implements the principles from [Harness Engineering Best Practices 2026](https://nyosegawa.com/posts/harness-engineering-best-practices-2026/) — deterministic quality gates via hooks, pointer-based documentation (ADR-002), and the feedback speed hierarchy (PostToolUse > pre-commit > CI > human review).
+> **Design Philosophy**: This project implements the principles from [Harness Engineering Best Practices 2026](https://nyosegawa.com/posts/harness-engineering-best-practices-2026/) — deterministic quality gates via hooks, pointer-based documentation (ADR-002), and the feedback speed hierarchy (PostToolUse > pre-commit > CI > human review). Since [ADR-006](docs/adr/006-minimal-safety-net.md), the hook set is deliberately minimal: hard blocks are reserved for destructive/irreversible operations, and merge safety is delegated to GitHub branch protection + PR review rather than local gates.
 
 ## Quick Start
 
@@ -38,8 +38,8 @@ Details: [docs/runbooks/provider-switching.md](docs/runbooks/provider-switching.
 claude-code-skills/
 ├── skills/           # 27 custom skill definitions (SKILL.md + scripts + references)
 ├── rules/            # 6 global rule files (coding-style, git-workflow, quality, testing, delegation, hook-deployment)
-├── hooks/            # 72 hook scripts (64 shell + 7 gate-mode modules + 1 Python) (quality gates, safety guards, workflow enforcement)
-├── scripts/          # 8 utility scripts (Codex orchestration, PR review, context monitoring)
+├── hooks/            # 17 hook scripts (4 blocking + 13 advisory/infra); hooks/_unused/ holds 56 retired scripts (ADR-006)
+├── scripts/          # 6 utility scripts (Codex orchestration, provider switching, context monitoring); scripts/_unused/ holds retired review-pipeline helpers
 ├── setup.sh          # One-command installation
 ├── settings.json     # Template settings (sanitized, no personal paths)
 └── README.md
@@ -56,6 +56,7 @@ Design decisions are recorded as ADRs in `docs/adr/`.
 | [003](docs/adr/003-feedback-speed-hierarchy.md) | Feedback Speed Hierarchy | Accepted |
 | [004](docs/adr/004-codex-delegation-model.md) | Codex Large-Scale Delegation Model | Accepted |
 | [005](docs/adr/005-plans-json-migration.md) | Plans.md → JSON Migration | Rejected |
+| [006](docs/adr/006-minimal-safety-net.md) | Minimal Safety Net — Hook Reduction | Accepted |
 
 To add a new ADR, use the [template](docs/adr/template.md).
 
@@ -84,7 +85,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (custom skills + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 57 hook scripts
+  code-reviewer, review-loop, e2e, bugfix + 17 hook scripts
 
 Reflect (gstack)
   /retro
@@ -170,30 +171,16 @@ The `agent-orchestrator` skill manages team composition, wave-based execution, a
 | **B: Handover** | Large implementation (requires user judgment) | Create handover doc → user passes to Codex |
 | **C: Parallel** | Independent tasks in isolated worktrees | `codex-parallel.sh` or `codex-orchestrate.sh` |
 
-### Context Budget Gate (Automatic)
+### Codex Delegation (Manual, Not Hook-Gated)
 
-Hook scripts automatically enforce delegation rules:
-
-```
-Task received
-├─ 2+ independent tasks? → Agent Team (TeamCreate)
-├─ 1 task + long-running + autonomous + large? → Codex CLI Route C (single task only)
-├─ <3 files to read? → Claude Code (self-execute)
-├─ Test/doc creation (single task)? → Codex CLI Route C
-├─ >5 expected turns (single task)? → Codex CLI Route C
-└─ Needs real-time judgment? → Claude Code (main)
-```
-
-**Important**: Codex CLI is limited to **one task at a time**. Multiple independent tasks must use Agent Team (TeamCreate), not Codex orchestration.
-
-| Hook | Trigger | Action |
-|------|---------|--------|
-| `context-budget-read-gate.sh` | Read tool | Warn at 3+ files, strong warn at 6+ |
-| `context-budget-write-gate.sh` | Write tool | Detect test/doc creation → suggest Codex |
-| `context-budget-edit-write-gate.sh` | Edit/Write | Block when too many source files read |
-| `context-budget-agent-gate.sh` | Agent tool | Block 2+ foreground impl agents, warn on 1st, enforce background/TeamCreate |
-| `codex-task-gate.sh` | Bash (Codex exec) | Block 2nd+ Codex CLI call (1 concurrent limit) |
-| `codex-task-release.sh` | PostToolUse Bash | Release Codex counter after task completes (enables sequential reuse) |
+Since [ADR-006](docs/adr/006-minimal-safety-net.md), Codex CLI usage and
+context-budget management are **not** enforced by hooks — the previous
+`context-budget-*-gate.sh` suite and the 1-concurrent-call
+`codex-task-gate.sh`/`codex-task-release.sh` pair were retired. Route
+selection (Agent Team vs. Codex vs. self-execute) is agent judgement
+guided by `rules/delegation.md`; `codex-parallel.sh` /
+`codex-orchestrate.sh` remain available as optional utilities invoked at
+will, with no concurrency limit enforced locally.
 
 ### Utility Scripts
 
@@ -201,82 +188,28 @@ Task received
 |--------|---------|
 | `codex-parallel.sh` | Single-task Codex execution with auto sandbox selection |
 | `codex-orchestrate.sh` | Multi-task parallel execution via worktrees (JSON or CSV input) |
-| `check-pr-reviews.sh` | Verify PR review timestamps against latest push |
-| `classify-review-state.sh` | Verified updater for `/classify-review` false-positive results |
-| `review-comment-set-hash.sh` | Deterministic current GitHub review comment-set hash |
-| `verify-pr-review.sh` | Validate review coverage before merge |
+| `claude-provider.sh` | Switch API gateway between Anthropic subscription and z.ai |
+| `sanitize-local-permissions.sh` | Strip stray `permissions` blocks from local settings files |
 | `delivery_score.py` | Quantitative delivery quality scoring (hook coverage, CI, reviews) |
 | `context-monitor.py` | Monitor context window usage and token consumption |
 
-## Review Pipeline (PR Merge Gate)
+`check-pr-reviews.sh`, `classify-review-state.sh`,
+`review-comment-set-hash.sh`, `review-evidence-status.sh`, and
+`verify-pr-review.sh` were retired to `scripts/_unused/` along with the
+review-pipeline hooks they supported (ADR-006).
 
-Every PR must pass a **multi-gate review pipeline** before merge is allowed. This is enforced automatically by hooks — no manual steps required.
+## Merge Safety (GitHub-Side, Not a Local Hook)
 
-```
-PR Ready to Merge?
-│
-├─ Gate 1: CI All Green? ──────────────── gate-modes/pre-merge.sh
-│  └─ All GitHub Actions checks must be ✅ (not pending, not failed)
-│
-├─ Gate 2: Review After Latest Push? ──── gate-modes/pre-merge.sh
-│  └─ review.submittedAt > last push timestamp (stale reviews rejected)
-│
-├─ Gate 3: Review Verified? ───────────── pr-ci-review-gate.sh (LIGHT tier 3-pass OR)
-│  ├─ Pass A: code-reviewer agent completed (review-status.json)
-│  ├─ Pass B: No CRITICAL/HIGH findings (pending-review-comments.json)
-│  └─ Pass C: Manual verification (pr-review-lock.json verified=true)
-│
-├─ Gate 4: Unresolved Comments? ────────── enforce-review-reading.sh
-│  └─ All CRITICAL/HIGH review findings must be addressed
-│
-└─ Gate 5: Review Injection ────────────── inject-claude-review-on-checks.sh
-   └─ Auto-fetches review comments on `gh pr checks` / `gh pr merge`
-```
-
-### Tiered Review System
-
-Review requirements are automatically adjusted based on what changed:
-
-| Tier | Target | Required Reviews | Detection |
-|------|--------|-----------------|-----------|
-| **FULL** | Source code changes | code-reviewer + Codex CLI | Changes in `src/`, `lib/`, `app/`, `*.ts`, `*.py`, etc. |
-| **LIGHT** | CI/config/docs only | code-reviewer only | Only `.github/workflows/`, `*.md`, `Dockerfile`, `*.yml`, etc. |
-| **EXEMPT** | Branch-based | None | `docs/*`, `chore/*`, `ci/*` branches |
-
-This prevents over-engineering review requirements. A CI workflow change doesn't need a Codex CLI second opinion.
-
-### When No External Review Exists
-
-If a PR has no GitHub review (e.g., solo development), the system falls back to a **local review pipeline**:
-
-1. **`code-reviewer` skill** — Automated PR analysis with OWASP security checks, quality scoring
-2. **Codex CLI Route A** (FULL tier only) — Independent second opinion: `codex exec review --base <branch>`
-3. **Both must pass** (FULL tier) or just step 1 (LIGHT tier) before the PR is considered reviewed
-
-This ensures every PR gets appropriate review depth based on the risk level of changes.
-
-### Housekeeping
-
-Merged or closed PRs are automatically cleaned from the lock state:
-
-- **STOP hook**: Auto-removes merged/closed PR entries via GitHub API
-- **Manual cleanup**: `GATE_MODE=CLEANUP bash hooks/pr-ci-review-gate.sh`
-
-When GitHub says a PR is mergeable but local hooks still block it, use the
-[GitHub mergeable vs local gate runbook](docs/runbooks/github-mergeable-vs-local-gate.md)
-to separate GitHub blockers from stale local review/base state.
-
-### PR Lifecycle Hooks
-
-| Phase | Hook | Action |
-|-------|------|--------|
-| **PR Create** | `pr-guard.sh` | Validate base branch, issue reference, conflict check |
-| **PR Create** | `pr-ci-review-gate.sh` (PRE_CREATE) | Check review pipeline readiness |
-| **Post Push** | `pr-ci-review-gate.sh` (POST_PUSH) | Set review lock (new push invalidates old reviews) |
-| **Pre Merge** | `pr-ci-review-gate.sh` (PRE_MERGE) | Block merge without CI green + review LGTM |
-| **Pre Merge** | All 5 gates above | Block merge unless all pass |
-| **Post Merge** | `post-merge-close-issues.sh` | Auto-close linked issues |
-| **Session Stop** | `pr-ci-review-gate.sh` (STOP) | Warn about unverified PRs |
+Prior to ADR-006, a multi-gate `pr-ci-review-gate.sh` + `gate-modes/`
+pipeline hard-blocked `gh pr create`/`gh pr merge` locally. That pipeline
+is retired. Merge safety is now the responsibility of **GitHub branch
+protection** (required status checks, required reviews, no force-push)
+configured on `main`/`develop`, plus the ordinary PR review workflow
+(`code-reviewer` skill, optional Codex CLI second opinion via
+`codex-review`). If branch protection is disabled or misconfigured on
+GitHub, there is no local backstop — see
+[ADR-006's consequences](docs/adr/006-minimal-safety-net.md#consequences)
+for the explicit operational requirement this creates.
 
 
 ## Design Philosophy
@@ -289,16 +222,18 @@ Based on [the article](https://nyosegawa.com/posts/harness-engineering-best-prac
 
 | Principle | Implementation | Coverage |
 |-----------|---------------|----------|
-| Deterministic tools over LLM prompts | 59 hook scripts + 7 gate-mode modules | 98%+ hook coverage |
+| Deterministic tools, minimally applied | 17 hook scripts (4 blocking + 13 advisory) | ADR-006 |
 | Feedback speed hierarchy | PostToolUse (ms) > pre-commit > CI (min) > review (hr) | ADR-003 |
 | Pointer-based documentation | Rules ≤50 lines each (total 122 lines), pointing to ADRs/hooks | ADR-002 |
-| Configuration protection | `protect-linter-config.sh` blocks agent rule relaxation | PreToolUse |
 | Plan-execute separation | Plans.md + plan mode + planner agent | TaskCreate/Update |
-| E2E test at Stop | `stop-test-gate.sh` runs change-related tests | Stop hook |
-| Git as cross-session bridge | `enforce-memory-update-on-commit.sh` | PostToolUse |
-| Claude Code + Codex hybrid | 60/40 split with automatic delegation | ADR-004 |
+| Git as cross-session bridge | `auto-commit-worktree-changes.sh` + memory files | PostToolUse |
+| Claude Code + Codex hybrid | 60/40 split, delegation now agent-judgement (not hook-gated) | ADR-004, ADR-006 |
 
-**Best practices article coverage: 88% (32/36 checkpoints)**
+Since ADR-006, this repository intentionally trades some of the original
+article's "deterministic tools over LLM prompts everywhere" guidance for a
+smaller, higher-signal hook set — see
+[docs/adr/006-minimal-safety-net.md](docs/adr/006-minimal-safety-net.md)
+for the false-positive-cost rationale.
 
 ### 2. Epic #130: "Implemented ≠ Working"
 
@@ -313,7 +248,8 @@ This principle is enforced through:
 - **CI/CD**: shellcheck + JSON validation + syntax checking on every PR
 
 **Before Epic #130**: Hook gate operation rate 39% (7/18)
-**After Epic #130**: Hook gate operation rate 98%+ (59/59 hooks registered + deployed)
+**After Epic #130, before ADR-006**: Hook gate operation rate 98%+ (59/59 hooks registered + deployed)
+**After ADR-006 (current)**: 17/17 hooks registered + deployed — the surviving set is smaller by design, not by drift; deploy-integrity verification still applies to all of it.
 
 ### 3. Delivery Quality Score
 
@@ -343,72 +279,39 @@ P2-MEDIUM issues #136-#147 resolved in subsequent PRs. Current open items:
 |-------|-------------|--------|
 | [#161](../../issues/161) | `delegation.md` 327→50 lines (ADR-002, #107 reopened) | Fixed in this release |
 
-## Hook System (59 Scripts + 7 Gate-Mode Modules)
+## Hook System (17 Scripts)
 
-### Session Initialization
-- `auto-init-permissions.sh` — Auto-initialize permissions on session start
-- `context-budget-reset.sh` — Reset all counters on session start (incl. `fg_impl_agent_count`)
-- `reset-factcheck.sh` — Reset fact-check state on session start
-- `enforce-branch-workflow.sh` — Auto-create develop branch, enforce feature branch workflow
-- `validate-no-local-hooks.sh` — Validate no hook overrides exist on session start
-- `enforce-hook-deploy-integrity.sh` — Verify all hooks are installed and registered in settings.json (auto-sync + orphan detection)
+Full per-hook reference (event, matcher, purpose): [hooks/README.md](hooks/README.md).
+Rationale for the reduction from 72 registered commands down to 17:
+[ADR-006](docs/adr/006-minimal-safety-net.md).
 
-### Quality Gates (Pre-merge)
-- `pr-ci-review-gate.sh` — 6-mode gate dispatcher (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) with tiered review
-- `gate-modes/pre-merge.sh` — Consolidated PR-merge 5-gate sequence (CI completed/green, comments exist, review_read, CRITICAL ack); absorbed block-merge-without-ci/review + pr-merge-claude-review-gate (Phase 3)
-- `inject-claude-review-on-checks.sh` — Auto-fetch review comments on `gh pr checks` (MODE1) + soft reminder (MODE3); merge hard-block moved to pre-merge.sh
-- `pr-guard.sh` — Base branch, issue ref, conflict checks
-- `task-completion-gate.sh` — Block premature task completion (CI pending or CRITICAL/HIGH findings)
-- `stop-test-gate.sh` — Run change-related test gate before session end (docs/config-only skip, full-suite fallback, stop_hook_active guard)
-
-### Safety Guards
+### Blocking (4 — hard PreToolUse block, exit 2)
+- `git-push-guard.sh` — Block force-push and direct push to protected branches
 - `protect-branches.sh` — Prevent deletion of protected branches
-- `block-manual-merge-ops.sh` — Block cherry-pick/merge/rebase (sync from main/master/develop is allowed)
-- `git-push-guard.sh` — Push safety checks
-- `git-commit-guard.sh` — Commit message and scope validation
-- `block-version-downgrade.sh` — Prevent dependency downgrades
-- `audit-docker-build-args.sh` — Check for http:// in Docker build args
-- `block-local-hooks-write.sh` — Prevent settings.local.json from overriding global hooks
-- `block-codex-mcp.sh` — Block Codex MCP usage, enforce CLI-only (PreToolUse)
-- `block-state-file-tampering.sh` — Prevent AI self-bypass of gate state files, including `pending-review-comments.json` (Write/Edit)
-- `block-state-file-tampering-bash.sh` — Prevent AI self-bypass of gate state files, including `pending-review-comments.json` (Bash)
-- `protect-linter-config.sh` — Prevent unauthorized linter config modifications
+- `block-local-hooks-write.sh` — Prevent `settings.local.json` from overriding global hooks
+- `validate-no-local-hooks.sh` — Warn/block at SessionStart if such an override already exists
 
-### Context Budget Management
-- `context-budget-read-gate.sh` — Warn/block after 3+ source file reads
-- `context-budget-write-gate.sh` — Detect test/doc creation for Codex delegation
-- `context-budget-edit-write-gate.sh` — Block edits when too many files read
-- `context-budget-agent-gate.sh` — Enforce foreground impl agent limits (Rule 2+4), background/TeamCreate governance
-- `codex-task-gate.sh` — Block 2nd+ Codex CLI call (1 concurrent limit)
-- `codex-task-release.sh` — Release Codex call counter after task completion (PostToolUse)
+### Advisory / infra (13 — informational, never block)
+- `auto-init-permissions.sh` — No-op; permissions live in `settings.json`
+- `auto-update-plugins.sh` — Update third-party plugins (24h cooldown)
+- `validate-provider-env.sh` — Check API provider routing (Anthropic/z.ai) at session start
+- `enforce-branch-workflow.sh` — Auto-create develop branch, warn on `main`/`develop`
+- `enforce-hook-deploy-integrity.sh` — Verify hooks are installed and registered (auto-sync + orphan detection)
+- `enforce-hook-deploy-after-merge.sh` — Auto-deploy hooks after a PR merge that touched `hooks/`
+- `verify-agent-output.sh` — Detect agent phantom completions (#173)
+- `auto-commit-worktree-changes.sh` — Auto-commit worktree agent changes after merge (#220)
+- `post-deploy-verify.sh` — Inject verification checklist after deploy commands
+- `post-lint-format.sh` — Post-write Quality Loop: auto-fix → residual check (ADR-001/003)
+- `notify-agent-failure.sh` — Propagate agent failure context (PostToolUseFailure)
+- `tool-failure-recovery.sh` — Error-recovery guidance on tool failure (PostToolUseFailure)
+- `pre-compact-context-save.sh` — Save critical context before compaction (PreCompact)
 
-### Workflow Enforcement
-- `enforce-git-freshness.sh` — Block edits if behind remote
-- `enforce-factcheck-before-edit.sh` — Require fact-check before modifying infra (non-code files like .yml/.md excluded)
-- `enforce-factcheck-before-user-request.sh` — Fact-check before asking user for manual ops
-- `enforce-factcheck-github-ops.sh` — Block `gh issue comment/create`, `gh pr create` without prior fact-check
-- `enforce-architecture-layers.sh` — Validate domain/core layer modifications
-- `enforce-domain-naming.sh` — DDD naming convention enforcement
-- `enforce-endpoint-dataflow.sh` — Full data flow verification for API changes
-- `enforce-seed-data-verification.sh` — Verify seed data against reference docs
-- `enforce-issue-close-verification.sh` — Check acceptance criteria before closing issues
-- `enforce-review-reading.sh` — Read all review comments before merge
-- `enforce-memory-update-on-commit.sh` — Warn if MEMORY.md is stale after commit
-- `enforce-doc-update-scope.sh` — Validate documentation update scope
-
-### Post-Action Hooks
-- `record-code-review.sh` — Record code review completion for merge gate tracking
-- `record-codex-review.sh` — Record Codex CLI review completion (called by codex-parallel.sh)
-- `mark-factcheck-done.sh` — Mark fact-check as completed after research
-- `track-agent-team.sh` — Track agent team spawning and completion
-- `post-merge-close-issues.sh` — Auto-close linked issues after merge
-- `post-deploy-verify.sh` — Post-deployment verification checks
-- `post-lint-format.sh` — Run lint and format checks after file edits (PostToolUse Quality Loop)
-- `post-pr-create-review-trigger.sh` — Auto-trigger code review after PR creation (PostToolUse)
-- `workflow-sync-guard.sh` — Sync workflow state after push
-- `verify-test-falsifiability.sh` — Verify tests actually detect declared bugs (PostToolUse)
-- `tool-failure-recovery.sh` — Error recovery guidance on tool failure (PostToolUseFailure)
-- `pre-compact-context-save.sh` — Save critical context (branch, PRs, review state) before compaction (PreCompact)
+56 previously-active scripts (the full review/CI merge-gate stack,
+factcheck suite, context-budget suite, Codex single-call gate, state-file
+tampering guards, and more) plus the entire former `hooks/gate-modes/`
+dispatcher architecture are retired to `hooks/_unused/`. See
+[hooks/README.md#_unused-archive](hooks/README.md#_unused-archive) for
+the full retired list and the rationale in ADR-006.
 
 ## Hook Matcher Syntax
 

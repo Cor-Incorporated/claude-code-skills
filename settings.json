@@ -89,27 +89,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/validate-no-local-permissions.sh",
-            "timeout": 5,
-            "statusMessage": "Validating settings.local.json has no permissions overrides..."
-          },
-          {
-            "type": "command",
             "command": "bash ~/.claude/hooks/auto-init-permissions.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/context-budget-reset.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/reset-factcheck.sh"
-          },
-          {
-            "type": "command",
-            "command": "CLAUDE_HOOK_EVENT=SessionStart bash ~/.claude/hooks/enforce-git-freshness.sh",
-            "timeout": 15,
-            "statusMessage": "Checking git freshness..."
           },
           {
             "type": "command",
@@ -146,36 +126,6 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/context-budget-agent-gate.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-codex-delegation.sh",
-            "timeout": 10,
-            "statusMessage": "Checking Codex delegation criteria..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-codex-for-impl.sh",
-            "timeout": 10,
-            "statusMessage": "Checking implementation task delegation (#189)..."
-          }
-        ]
-      },
-      {
-        "matcher": "AskUserQuestion",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-factcheck-before-user-request.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -187,142 +137,6 @@
             "type": "command",
             "command": "bash ~/.claude/hooks/git-push-guard.sh",
             "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/codex-task-gate.sh",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/block-manual-merge-ops.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/git-commit-guard.sh",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/audit-docker-build-args.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-issue-close-verification.sh",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-uat-evidence.sh",
-            "timeout": 10,
-            "statusMessage": "Checking UAT/UX/E2E/browser evidence..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-factcheck-github-ops.sh",
-            "timeout": 10,
-            "statusMessage": "Checking factcheck before GitHub write operation..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/block-state-file-tampering-bash.sh",
-            "timeout": 5,
-            "statusMessage": "Checking state file integrity..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-develop-base.sh",
-            "timeout": 10,
-            "statusMessage": "Checking branch base (develop enforcement)..."
-          },
-          {
-            "type": "command",
-            "command": "GATE_MODE=PRE_MERGE bash ~/.claude/hooks/pr-ci-review-gate.sh",
-            "timeout": 30,
-            "statusMessage": "Enforcing CI green + review gate before merge..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-review-reading.sh",
-            "timeout": 10,
-            "statusMessage": "Checking unresolved review findings..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-soak-time.sh",
-            "timeout": 15,
-            "statusMessage": "Checking soak time..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/block-subagent-github-write.sh",
-            "timeout": 10,
-            "statusMessage": "Checking subagent GitHub write safety..."
-          },
-          {
-            "type": "command",
-            "command": "GATE_MODE=PRE_CREATE bash ~/.claude/hooks/pr-ci-review-gate.sh",
-            "timeout": 30,
-            "statusMessage": "Checking review pipeline (code-reviewer + Codex)..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-deploy-verify-on-pr.sh",
-            "timeout": 15,
-            "statusMessage": "Verifying changed hooks/scripts are deployed..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-follow-up-limit.sh",
-            "timeout": 15,
-            "statusMessage": "Checking follow-up fix limit..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/pr-guard.sh",
-            "timeout": 30,
-            "statusMessage": "Checking PR guard (base branch, issue ref, conflicts)..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/inject-claude-review-on-checks.sh",
-            "timeout": 30,
-            "statusMessage": "Fetching claude-review comments..."
-          }
-        ]
-      },
-      {
-        "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/block-local-permissions-write.sh",
-            "timeout": 5,
-            "statusMessage": "Blocking settings.local.json permission overrides..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/block-state-file-tampering.sh",
-            "timeout": 5,
-            "statusMessage": "Checking state file integrity..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/context-budget-edit-write-gate.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-factcheck-before-edit.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/block-version-downgrade.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/protect-linter-config.sh",
-            "timeout": 5,
-            "statusMessage": "Checking linter config protection..."
           }
         ]
       },
@@ -331,37 +145,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/codex-task-gate.sh",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-architecture-layers.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-seed-data-verification.sh"
-          },
-          {
-            "type": "command",
-            "command": "CLAUDE_HOOK_EVENT=PreToolUse bash ~/.claude/hooks/enforce-git-freshness.sh",
-            "timeout": 15,
-            "statusMessage": "Checking git freshness..."
-          },
-          {
-            "type": "command",
             "command": "bash ~/.claude/hooks/block-local-hooks-write.sh",
             "timeout": 5,
             "statusMessage": "Checking settings.local.json for hooks override..."
-          }
-        ]
-      },
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/context-budget-read-gate.sh"
           }
         ]
       },
@@ -374,68 +160,12 @@
             "timeout": 5
           }
         ]
-      },
-      {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/block-local-permissions-write.sh",
-            "timeout": 5,
-            "statusMessage": "Blocking settings.local.json permission overrides..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/block-state-file-tampering.sh",
-            "timeout": 5,
-            "statusMessage": "Checking state file integrity..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/context-budget-edit-write-gate.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/context-budget-write-gate.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-factcheck-before-edit.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/protect-linter-config.sh",
-            "timeout": 5,
-            "statusMessage": "Checking linter config protection..."
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__codex__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/block-codex-mcp.sh",
-            "timeout": 5,
-            "statusMessage": "Checking Codex usage policy..."
-          }
-        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Agent",
         "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/track-agent-team.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/record-code-review.sh",
-            "timeout": 10,
-            "statusMessage": "Recording code review completion..."
-          },
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/verify-agent-output.sh",
@@ -455,30 +185,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/codex-task-release.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/verify-codex-output.sh",
-            "timeout": 5,
-            "statusMessage": "Verifying Codex CLI output..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/record-codex-review.sh",
-            "timeout": 10,
-            "statusMessage": "Recording Codex review completion..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/post-merge-close-issues.sh"
-          },
-          {
-            "type": "command",
             "command": "bash ~/.claude/hooks/post-deploy-verify.sh"
           },
           {
@@ -486,40 +192,6 @@
             "command": "bash ~/.claude/hooks/enforce-hook-deploy-after-merge.sh",
             "timeout": 30,
             "statusMessage": "Auto-deploying hooks after PR merge..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/verify-state-file-integrity.sh",
-            "timeout": 5,
-            "statusMessage": "Verifying state file integrity..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-memory-update-on-commit.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-post-merge-validation.sh",
-            "timeout": 15,
-            "statusMessage": "Checking post-merge validation requirements..."
-          },
-          {
-            "type": "command",
-            "command": "GATE_MODE=POST_PUSH bash ~/.claude/hooks/pr-ci-review-gate.sh",
-            "timeout": 15,
-            "statusMessage": "Setting review lock..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/workflow-sync-guard.sh",
-            "timeout": 10,
-            "statusMessage": "Checking workflow file sync..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/post-pr-create-review-trigger.sh",
-            "timeout": 15,
-            "statusMessage": "Checking if PR was created..."
           }
         ]
       },
@@ -528,61 +200,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/verify-test-falsifiability.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-domain-naming.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-endpoint-dataflow.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/enforce-doc-update-scope.sh"
-          },
-          {
-            "type": "command",
             "command": "bash ~/.claude/hooks/post-lint-format.sh",
             "timeout": 5,
             "statusMessage": "Running PostToolUse Quality Loop (lint + format)..."
-          }
-        ]
-      },
-      {
-        "matcher": "Grep",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "WebSearch|WebFetch",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__plugin_context7_context7__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/mark-factcheck-done.sh"
           }
         ]
       }
@@ -607,36 +227,6 @@
             "command": "bash ~/.claude/hooks/tool-failure-recovery.sh",
             "timeout": 5,
             "statusMessage": "Analyzing tool failure..."
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "GATE_MODE=STOP bash ~/.claude/hooks/pr-ci-review-gate.sh",
-            "timeout": 30,
-            "statusMessage": "Checking unverified PRs..."
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/stop-test-gate.sh",
-            "timeout": 75,
-            "statusMessage": "Running project tests before stop..."
-          }
-        ]
-      }
-    ],
-    "TaskCompleted": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/task-completion-gate.sh",
-            "timeout": 30,
-            "statusMessage": "Verifying CI and review status..."
           }
         ]
       }

@@ -2,7 +2,7 @@
 
 [Claude Code](https://claude.com/claude-code)（Anthropic 公式 CLI）のためのスキル・ルール・フック集です。
 
-27 のカスタムスキル、72 の hook スクリプト（64 シェル + 7 ゲートモードモジュール + 1 Python）、6 つのルールセット、8 つのユーティリティスクリプトを含む、本番環境レベルの Claude Code 設定を提供します。
+27 のカスタムスキル、17 の hook スクリプト（ブロッキング 4 + advisory/infra 13）、6 つのルールセット、6 つのユーティリティスクリプトを含む、本番環境レベルの Claude Code 設定を提供します。[ADR-006](docs/adr/006-minimal-safety-net.md) 以降、hook セットは意図的に最小化されています — ハードブロックは破壊的/不可逆操作のみに限定し、マージ安全性は GitHub branch protection + PR レビューに委譲しています。
 
 [English](README.md) | **日本語**
 
@@ -36,8 +36,8 @@ bash ~/.claude/scripts/claude-provider.sh zai
 claude-code-skills/
 ├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 6 グローバルルール (コーディング規約, Git, 品質, テスト, 委任, hookデプロイ)
-├── hooks/            # 72 hook スクリプト (64 シェル + 7 ゲートモードモジュール + 1 Python) (品質ゲート, 安全ガード, ワークフロー強制)
-├── scripts/          # 8 ユーティリティ (Codex 連携, PR レビュー, コンテキスト監視)
+├── hooks/            # 17 hook スクリプト (ブロッキング 4 + advisory/infra 13); hooks/_unused/ に廃止済み56本 (ADR-006)
+├── scripts/          # 6 ユーティリティ (Codex 連携, プロバイダ切替, コンテキスト監視); scripts/_unused/ に廃止済みレビューパイプラインヘルパー
 ├── setup.sh          # ワンコマンドインストール
 ├── settings.json     # 設定テンプレート (パス等サニタイズ済み)
 ├── README.md         # 英語版 README
@@ -55,6 +55,7 @@ claude-code-skills/
 | [003](docs/adr/003-feedback-speed-hierarchy.md) | Feedback Speed Hierarchy | Accepted |
 | [004](docs/adr/004-codex-delegation-model.md) | Codex Large-Scale Delegation Model | Accepted |
 | [005](docs/adr/005-plans-json-migration.md) | Plans.md → JSON Migration | Rejected |
+| [006](docs/adr/006-minimal-safety-net.md) | Minimal Safety Net — Hook Reduction | Accepted |
 
 新しい ADR を追加するには[テンプレート](docs/adr/template.md)を使用してください。
 
@@ -83,7 +84,7 @@ Think → Plan (gstack)
   /office-hours → /plan-ceo-review → /plan-eng-review → /plan-design-review
 
 Build → Review → Ship (カスタムスキル + hooks)
-  code-reviewer, review-loop, e2e, bugfix + 57 hook スクリプト
+  code-reviewer, review-loop, e2e, bugfix + 17 hook スクリプト
 
 Reflect (gstack)
   /retro
@@ -169,30 +170,9 @@ Codex CLI (40%) — 直列実装、運用、品質監査
 | **B: ハンドオーバー** | 大規模実装（ユーザー判断が必要） | ハンドオーバードキュメント作成 → ユーザーが Codex に渡す |
 | **C: 並列実行** | 独立タスクを分離 worktree で実行 | `codex-parallel.sh` または `codex-orchestrate.sh` |
 
-### コンテキスト予算ゲート（自動強制）
+### Codex 委任（手動、hook 非強制）
 
-hook スクリプトが委任ルールを自動的に強制します:
-
-```
-タスク受信
-├─ 2+ 独立タスク? → Agent Team（TeamCreate）
-├─ 1タスク + 長時間 + 自律的 + 大規模? → Codex CLI 経路C（1タスク限定）
-├─ 読み込みファイル 3 未満? → Claude Code（自力実行）
-├─ テスト/ドキュメント作成（単一タスク）? → Codex CLI 経路C
-├─ 予想 5 ターン超（単一タスク）? → Codex CLI 経路C
-└─ リアルタイム判断が必要? → Claude Code（メイン）
-```
-
-**重要**: Codex CLI は**1タスク限定**。複数の独立タスクは Agent Team (TeamCreate) を使用し、Codex には委任しない。
-
-| hook | トリガー | アクション |
-|------|---------|----------|
-| `context-budget-read-gate.sh` | Read ツール | 3+ ファイルで警告、6+ で強い警告 |
-| `context-budget-write-gate.sh` | Write ツール | テスト/ドキュメント作成検出 → Codex 提案 |
-| `context-budget-edit-write-gate.sh` | Edit/Write | 多数ソースファイル読み込み後の編集をブロック |
-| `context-budget-agent-gate.sh` | Agent ツール | foreground実装Agent 2つ目をブロック、1つ目に警告、background/TeamCreate強制 |
-| `codex-task-gate.sh` | Bash (Codex実行) | 2回目以降の Codex CLI 呼び出しをブロック（同時1タスク制限） |
-| `codex-task-release.sh` | PostToolUse Bash | Codex タスク完了後にカウンターを解放（順次再利用を可能に） |
+[ADR-006](docs/adr/006-minimal-safety-net.md) 以降、Codex CLI の使用とコンテキスト予算管理は hook で**強制されません** — 従来の `context-budget-*-gate.sh` 群と同時1タスク制限の `codex-task-gate.sh`/`codex-task-release.sh` は廃止されました。経路選択（Agent Team / Codex / 自力実行）は `rules/delegation.md` を指針とするエージェントの判断に委ねられます。`codex-parallel.sh` / `codex-orchestrate.sh` は任意ユーティリティとして引き続き利用可能で、ローカルでの同時実行数制限はありません。
 
 ### ユーティリティスクリプト
 
@@ -200,81 +180,16 @@ hook スクリプトが委任ルールを自動的に強制します:
 |-----------|------|
 | `codex-parallel.sh` | 単一タスク Codex 実行（sandbox 自動選択） |
 | `codex-orchestrate.sh` | マルチタスク並列実行（JSON/CSV 入力、worktree 分離） |
-| `check-pr-reviews.sh` | PR レビュータイムスタンプと最新 push の照合 |
-| `classify-review-state.sh` | `/classify-review` 偽陽性判定結果の検証済み state 更新 |
-| `review-comment-set-hash.sh` | 現在の GitHub レビューコメント集合 hash の決定論的計算 |
-| `verify-pr-review.sh` | マージ前のレビューカバレッジ検証 |
+| `claude-provider.sh` | API ゲートウェイを Anthropic サブスクと z.ai 間で切替 |
+| `sanitize-local-permissions.sh` | ローカル設定ファイルの不要な `permissions` ブロックを除去 |
+| `delivery_score.py` | 定量的デリバリー品質スコアリング（hookカバレッジ、CI、レビュー） |
 | `context-monitor.py` | コンテキストウィンドウ使用量とトークン消費の監視 |
 
-## レビューパイプライン（PR マージゲート）
+`check-pr-reviews.sh`、`classify-review-state.sh`、`review-comment-set-hash.sh`、`review-evidence-status.sh`、`verify-pr-review.sh` は、それらが支えていたレビューパイプライン hook と共に `scripts/_unused/` へ廃止されました（ADR-006）。
 
-全ての PR は**マルチゲートレビューパイプライン**を通過しなければマージできません。hook による自動強制のため、手動ステップは不要です。
+## マージ安全性（GitHub 側、ローカル hook ではない）
 
-```
-PR マージ可能？
-│
-├─ Gate 1: CI 全グリーン？ ──────────────── gate-modes/pre-merge.sh
-│  └─ 全 GitHub Actions チェックが ✅（pending/failed は不可）
-│
-├─ Gate 2: 最新 push 後のレビュー？ ──────── gate-modes/pre-merge.sh
-│  └─ review.submittedAt > 最終 push 時刻（古いレビューは拒否）
-│
-├─ Gate 3: レビュー検証済み？ ───────────── pr-ci-review-gate.sh (LIGHT tier 3-pass OR)
-│  ├─ Pass A: code-reviewer エージェント完了 (review-status.json)
-│  ├─ Pass B: CRITICAL/HIGH 指摘なし (pending-review-comments.json)
-│  └─ Pass C: 手動検証 (pr-review-lock.json verified=true)
-│
-├─ Gate 4: 未解決コメント？ ──────────────── enforce-review-reading.sh
-│  └─ 全 CRITICAL/HIGH レビュー指摘が対処済み
-│
-└─ Gate 5: レビュー注入 ────────────────── inject-claude-review-on-checks.sh
-   └─ `gh pr checks` / `gh pr merge` 時にレビューコメントを自動取得
-```
-
-### Tier 制レビューシステム
-
-レビュー要件は変更内容に応じて自動調整されます:
-
-| Tier | 対象 | 必要なレビュー | 判定基準 |
-|------|------|--------------|---------|
-| **FULL** | ソースコード変更 | code-reviewer + Codex CLI | `src/`, `lib/`, `app/`, `*.ts`, `*.py` 等の変更あり |
-| **LIGHT** | CI/設定/ドキュメントのみ | code-reviewer のみ | `.github/workflows/`, `*.md`, `Dockerfile`, `*.yml` 等のみ |
-| **EXEMPT** | ブランチ名で判定 | 不要 | `docs/*`, `chore/*`, `ci/*` ブランチ |
-
-CI ワークフローの変更に Codex CLI のセカンドオピニオンは不要です。
-
-### 外部レビューがない場合
-
-PR に GitHub レビューがない場合（ソロ開発など）、**ローカルレビューパイプライン**にフォールバックします:
-
-1. **`code-reviewer` スキル** — OWASP セキュリティチェック付き自動 PR 分析
-2. **Codex CLI 経路A**（FULL tier のみ） — 独立したセカンドオピニオン: `codex exec review --base <branch>`
-3. **両方パス**（FULL tier）または手順1のみ（LIGHT tier）でレビュー完了
-
-変更のリスクレベルに応じた適切なレビュー深度が保証されます。
-
-### ハウスキーピング
-
-マージ済み/クローズ済みの PR はロック状態から自動クリーンアップされます:
-
-- **STOP hook**: GitHub API で state 確認し、merge/closed エントリを自動除去
-- **手動クリーンアップ**: `GATE_MODE=CLEANUP bash hooks/pr-ci-review-gate.sh`
-
-GitHub 上では mergeable でも local hook が止める場合は、
-[GitHub mergeable と local gate の切り分け runbook](docs/runbooks/github-mergeable-vs-local-gate.md)
-で GitHub blocker と stale local review/base state を分離してください。
-
-### PR ライフサイクル hook
-
-| フェーズ | hook | アクション |
-|---------|------|----------|
-| **PR 作成** | `pr-guard.sh` | ベースブランチ、Issue 参照、コンフリクトチェック |
-| **PR 作成** | `pr-ci-review-gate.sh` (PRE_CREATE) | レビューパイプライン準備確認 |
-| **Push 後** | `pr-ci-review-gate.sh` (POST_PUSH) | レビューロック設定（新しい push で古いレビューを無効化） |
-| **マージ前** | `pr-ci-review-gate.sh` (PRE_MERGE) | CI green + レビュー LGTM なしでマージをブロック |
-| **マージ前** | 上記 5 ゲート全て | 全パスしなければマージをブロック |
-| **マージ後** | `post-merge-close-issues.sh` | リンクされた Issue を自動クローズ |
-| **セッション終了** | `pr-ci-review-gate.sh` (STOP) | 未検証 PR について警告 |
+ADR-006 以前は `pr-ci-review-gate.sh` + `gate-modes/` によるマルチゲートパイプラインが `gh pr create`/`gh pr merge` をローカルでハードブロックしていました。このパイプラインは廃止されました。マージ安全性は現在、**GitHub branch protection**（required status checks、required reviews、force-push禁止）を `main`/`develop` に設定することと、通常の PR レビューワークフロー（`code-reviewer` スキル、任意で Codex CLI セカンドオピニオン `codex-review`）の責務です。GitHub 上で branch protection が無効・誤設定の場合、ローカルのバックストップは存在しません — 詳細は [ADR-006 の Consequences](docs/adr/006-minimal-safety-net.md#consequences) を参照してください。
 
 
 ## 設計哲学
@@ -287,16 +202,15 @@ GitHub 上では mergeable でも local hook が止める場合は、
 
 | 原則 | 実装 | カバレッジ |
 |------|------|-----------|
-| LLMプロンプトより決定論的ツール | 59 hook スクリプト + 7 ゲートモードモジュール | 98%+ hook カバレッジ |
+| 決定論的ツールを最小限に適用 | 17 hook スクリプト（ブロッキング4 + advisory13） | ADR-006 |
 | フィードバック速度階層 | PostToolUse(ms) > pre-commit > CI(min) > レビュー(hr) | ADR-003 |
 | ポインタベースドキュメント | ルール各50行以内（合計122行）、ADR/hookへポインタ | ADR-002 |
-| 設定ファイル保護 | `protect-linter-config.sh` でエージェントのルール緩和をブロック | PreToolUse |
 | 計画-実行分離 | Plans.md + plan mode + planner エージェント | TaskCreate/Update |
-| Stop時E2Eテスト | `stop-test-gate.sh` で変更関連テスト実行 | Stop hook |
-| Git = セッション間ブリッジ | `enforce-memory-update-on-commit.sh` | PostToolUse |
-| Claude Code + Codex ハイブリッド | 60/40 分担、自動委任 | ADR-004 |
+| Git = セッション間ブリッジ | `auto-commit-worktree-changes.sh` + メモリファイル | PostToolUse |
+| Claude Code + Codex ハイブリッド | 60/40 分担、委任は現在 hook 強制ではなくエージェント判断 | ADR-004, ADR-006 |
 
-**ベストプラクティス記事カバー率: 88% (36項目中32項目)**
+ADR-006 以降、本リポジトリは元記事の「LLMプロンプトより決定論的ツールを徹底適用」という指針の一部を、より小さく高シグナルな hook セットのために意図的にトレードオフしています。偽陽性コストの根拠は
+[docs/adr/006-minimal-safety-net.md](docs/adr/006-minimal-safety-net.md) を参照。
 
 ### 2. Epic #130:「実装 ≠ 動作」
 
@@ -310,7 +224,7 @@ GitHub 上では mergeable でも local hook が止める場合は、
 - **`enforce-hook-deploy-integrity.sh`**: ソース ↔ デプロイ ↔ 登録の整合性チェック（auto-sync + orphan 検出）
 - **CI/CD**: shellcheck + JSON validation + syntax checking（全PR）
 
-**Epic #130 前**: hookゲート動作率 39% (7/18) → **後**: 98%+ (59/59 hooks 登録 + デプロイ済み)
+**Epic #130 前**: hookゲート動作率 39% (7/18) → **Epic #130 後・ADR-006 前**: 98%+ (59/59 hooks 登録 + デプロイ済み) → **ADR-006 後（現在）**: 17/17 hooks 登録 + デプロイ済み — 生き残ったセットは drift ではなく設計により小さい。デプロイ整合性検証は引き続き全 hook に適用。
 
 ### 3. Delivery Quality Score
 
@@ -337,72 +251,34 @@ P2-MEDIUM Issue #136-#147 も後続 PR で解決済みです。現在のオー�
 |-------|------|----------|
 | [#161](../../issues/161) | `delegation.md` 327→50行圧縮（ADR-002、#107 再オープン） | 本リリースで修正済み |
 
-## Hook システム（59 スクリプト + 7 ゲートモードモジュール）
+## Hook システム（17 スクリプト）
 
-### セッション初期化
-- `auto-init-permissions.sh` — セッション開始時にパーミッションを自動初期化
-- `context-budget-reset.sh` — セッション開始時にカウンターリセット（`fg_impl_agent_count` 含む）
-- `reset-factcheck.sh` — セッション開始時にファクトチェック状態をリセット
-- `enforce-branch-workflow.sh` — develop ブランチ自動作成、フィーチャーブランチワークフロー強制
-- `validate-no-local-hooks.sh` — セッション開始時に hook 上書きが存在しないことを検証
-- `enforce-hook-deploy-integrity.sh` — 全 hook のインストールと settings.json への登録を検証（auto-sync + orphan 検出）
+hook ごとの詳細（イベント、matcher、用途）は [hooks/README.md](hooks/README.md) を参照。
+72 登録コマンドから 17 への削減理由は [ADR-006](docs/adr/006-minimal-safety-net.md) を参照。
 
-### 品質ゲート（マージ前）
-- `pr-ci-review-gate.sh` — 6 モードゲートディスパッチャ (PRE_CREATE / PRE_MERGE / POST_PUSH / STOP / VERIFY / CLEANUP) Tier 制レビュー対応
-- `gate-modes/pre-merge.sh` — 統合 PR マージ 5-ゲートシーケンス（CI completed/green、comments exist、review_read、CRITICAL ack）。Phase 3 で block-merge-without-ci/review + pr-merge-claude-review-gate を吸収
-- `inject-claude-review-on-checks.sh` — `gh pr checks` 時にレビューコメント自動取得（MODE1）+ 軟提醒（MODE3）。マージ時 hard-block は pre-merge.sh に移管
-- `pr-guard.sh` — ベースブランチ、Issue 参照、コンフリクトチェック
-- `task-completion-gate.sh` — 早期タスク完了をブロック（CI pending または CRITICAL/HIGH 指摘あり）
-- `stop-test-gate.sh` — セッション終了前に change-related test gate 実行（docs/config-only はスキップ、必要時は full suite fallback、stop_hook_active ガード付き）
-
-### 安全ガード
+### ブロッキング（4 — PreToolUse ハードブロック、exit 2）
+- `git-push-guard.sh` — 保護ブランチへの force-push / 直接 push をブロック
 - `protect-branches.sh` — 保護ブランチの削除防止
-- `block-manual-merge-ops.sh` — cherry-pick/merge/rebase をブロック（main/master/develop からの同期は許可）
-- `git-push-guard.sh` — プッシュ安全チェック
-- `git-commit-guard.sh` — コミットメッセージとスコープ検証
-- `block-version-downgrade.sh` — 依存パッケージのダウングレード防止
-- `audit-docker-build-args.sh` — Docker build args の http:// チェック
 - `block-local-hooks-write.sh` — settings.local.json によるグローバル hook 上書きを防止
-- `block-codex-mcp.sh` — Codex MCP 使用をブロック、CLI 経由のみ強制 (PreToolUse)
-- `block-state-file-tampering.sh` — `pending-review-comments.json` を含む gate state の自己改ざん防止 (Write/Edit)
-- `block-state-file-tampering-bash.sh` — `pending-review-comments.json` を含む gate state の自己改ざん防止 (Bash)
-- `protect-linter-config.sh` — リンター設定の不正変更を防止
+- `validate-no-local-hooks.sh` — SessionStart で既存の上書きがないか検証
 
-### コンテキスト予算管理
-- `context-budget-read-gate.sh` — 3+ ソースファイル読み込みで警告/ブロック
-- `context-budget-write-gate.sh` — テスト/ドキュメント作成を検出し Codex 委任提案
-- `context-budget-edit-write-gate.sh` — 多数ファイル読み込み後の編集をブロック
-- `context-budget-agent-gate.sh` — foreground 実装 Agent の制限（2つ目ブロック）、background/TeamCreate 強制
-- `codex-task-gate.sh` — 2回目以降の Codex CLI 呼び出しをブロック（同時1タスク制限）
-- `codex-task-release.sh` — Codex タスク完了後にカウンター解放（PostToolUse）
-
-### ワークフロー強制
-- `enforce-git-freshness.sh` — リモートより遅れている場合に編集をブロック
-- `enforce-factcheck-before-edit.sh` — インフラ変更前にファクトチェック必須（.yml/.md 等の非コードファイルは除外）
-- `enforce-factcheck-before-user-request.sh` — 手動操作依頼前にファクトチェック必須
-- `enforce-factcheck-github-ops.sh` — `gh issue comment/create`、`gh pr create` 実行前にファクトチェック必須
-- `enforce-architecture-layers.sh` — domain/core レイヤー変更を検証
-- `enforce-domain-naming.sh` — DDD 命名規則の強制
-- `enforce-endpoint-dataflow.sh` — API 変更時のフルデータフロー検証
-- `enforce-seed-data-verification.sh` — シードデータの参照ドキュメント照合
-- `enforce-issue-close-verification.sh` — Issue クローズ前に受入基準チェック
-- `enforce-review-reading.sh` — マージ前に全レビューコメント読了
-- `enforce-memory-update-on-commit.sh` — コミット後の MEMORY.md 更新チェック
-- `enforce-doc-update-scope.sh` — ドキュメント更新スコープの検証
-
-### アクション後 hook
-- `record-code-review.sh` — コードレビュー完了をマージゲートトラッキング用に記録
-- `record-codex-review.sh` — Codex CLI レビュー完了を記録（codex-parallel.sh から呼び出し）
-- `mark-factcheck-done.sh` — リサーチ後にファクトチェック完了をマーク
-- `track-agent-team.sh` — エージェントチームの生成と完了を追跡
-- `post-merge-close-issues.sh` — マージ後にリンクされた Issue を自動クローズ
-- `post-deploy-verify.sh` — デプロイ後の検証チェック
-- `post-lint-format.sh` — ファイル編集後に lint/format チェック実行（PostToolUse Quality Loop）
-- `post-pr-create-review-trigger.sh` — PR 作成後にコードレビューを自動トリガー (PostToolUse)
-- `workflow-sync-guard.sh` — push 後のワークフロー状態同期
-- `verify-test-falsifiability.sh` — テストが宣言されたバグを実際に検出するか検証 (PostToolUse)
+### advisory / infra（13 — 情報提供のみ、ブロックしない）
+- `auto-init-permissions.sh` — no-op。パーミッションは settings.json が正
+- `auto-update-plugins.sh` — サードパーティプラグイン更新（24h クールダウン）
+- `validate-provider-env.sh` — セッション開始時に API プロバイダルーティング（Anthropic/z.ai）を確認
+- `enforce-branch-workflow.sh` — develop ブランチ自動作成、main/develop 上での警告
+- `enforce-hook-deploy-integrity.sh` — hook のインストール・登録を検証（auto-sync + orphan 検出）
+- `enforce-hook-deploy-after-merge.sh` — hooks/ を変更した PR マージ後に hook を自動デプロイ
+- `verify-agent-output.sh` — エージェントの phantom completion を検出（#173）
+- `auto-commit-worktree-changes.sh` — マージ後に worktree エージェント変更を自動コミット（#220）
+- `post-deploy-verify.sh` — デプロイコマンド後の検証チェックリスト注入
+- `post-lint-format.sh` — 編集後の Quality Loop：自動修正 → 残存チェック（ADR-001/003）
+- `notify-agent-failure.sh` — エージェント失敗コンテキストの伝播（PostToolUseFailure）
 - `tool-failure-recovery.sh` — ツール失敗時のエラー回復ガイダンス（PostToolUseFailure）
-- `pre-compact-context-save.sh` — コンパクション前に重要コンテキスト（ブランチ、PR、レビュー状態）を保存（PreCompact）
+- `pre-compact-context-save.sh` — コンパクション前に重要コンテキストを保存（PreCompact）
+
+以前アクティブだった 56 スクリプト（レビュー/CI マージゲート一式、ファクトチェック群、コンテキスト予算群、Codex 単一呼び出しゲート、state-file 改ざん防止群など）と、旧 `hooks/gate-modes/` ディスパッチャ一式は `hooks/_unused/` へ廃止済みです。廃止リストと理由は
+[hooks/README.md#_unused-archive](hooks/README.md#_unused-archive) と ADR-006 を参照。
 
 ## Hook Matcher 構文
 

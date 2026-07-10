@@ -2,7 +2,7 @@
 
 複数のエキスパートを `codex exec --sandbox read-only` で並列呼び出しするオーケストレーション手順。
 
-> **重要**: Codex MCP (`mcp__codex__*`) は `block-codex-mcp.sh` によりブロック。
+> **重要**: Codex MCP (`mcp__codex__*`) は使用禁止（運用ルール）。旧 `block-codex-mcp.sh` hook は `hooks/_unused/` へ退避済みで現在は発火しないため、hook 強制ではなく自己規律で遵守する。
 > Ref: delegation.md, ADR-004, Issue #72, Issue #197
 
 ## 並列実行の安全性（ADR-004 との整合）
@@ -57,7 +57,7 @@ Claude (オーケストレーター)
 
 | 禁止 | 理由 |
 |------|------|
-| `mcp__codex__codex` を使用 | `block-codex-mcp.sh` でブロック |
+| `mcp__codex__codex` を使用 | 禁止（運用ルール。旧 `block-codex-mcp.sh` hook は退避済みで現在は不発火）|
 | 1回で複数エキスパートをまとめる | 専門性が薄まる |
 | experts/*.md を読まずに汎用プロンプト | 専門知見が活かされない |
 

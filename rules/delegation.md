@@ -16,15 +16,15 @@
 - 経路B: ハンドオーバードキュメント → ユーザー経由
 - 経路C: `codex-parallel.sh` / `codex-orchestrate.sh` (実装)
 
-## 禁止事項 (hook強制)
-- 状態ファイル直接書き込み → `block-state-file-tampering*.sh`
-- Codex MCP使用 → `block-codex-mcp.sh`
-- コンテキスト予算超過 → `context-budget-*-gate.sh`
+## 禁止事項（ガイダンス）
+- 状態ファイルの直接書き込みは避ける
+- Codex MCPは使用せずCodex CLI経路を使う
+- コンテキスト予算を意識して不要な大量読み込みを避ける
 
-## レビューパイプライン (hook強制: `pr-ci-review-gate.sh`)
-- FULL: ソースコード変更 → code-reviewer + Codex CLI
-- LIGHT: CI/config/docs変更のみ → code-reviewer のみ
-- EXEMPT: docs/chore/ci ブランチ → 不要
+## レビューパイプライン（ガイダンス。マージ安全性はGitHub branch protectionが担保）
+- ソースコード変更 → code-reviewer + Codex CLI
+- CI/config/docs変更のみ → code-reviewer のみ
+- docs/chore/ci ブランチ → 省略可
 
 ## エージェント一覧
 planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, Explore, general-purpose/haiku

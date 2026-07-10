@@ -2,7 +2,7 @@
 
 `codex exec --sandbox read-only` を使用したレビュー実行手順。
 
-> **重要**: Codex MCP (`mcp__codex__*`) は使用禁止（`block-codex-mcp.sh`）。
+> **重要**: Codex MCP (`mcp__codex__*`) は使用禁止（運用ルール）。旧 `block-codex-mcp.sh` hook は `hooks/_unused/` へ退避済みで現在は発火しないため、この禁止は hook 強制ではなく自己規律で遵守する。
 > Ref: delegation.md, ADR-004, Issue #72, Issue #197
 
 ---
@@ -94,7 +94,7 @@ gtimeout 120 codex exec --sandbox read-only "..." || echo "Codex review timed ou
 |------|-----------|------------|
 | sandbox | なし | read-only/workspace-write |
 | worktree | 非対応 | 対応 |
-| hook 互換 | block-codex-mcp.sh でブロック | 正常動作 |
+| hook 互換 | 旧 block-codex-mcp.sh でブロック（現在は退避済みで不発火） | 正常動作 |
 | 並列安全性 | N/A | read-only で並列安全 |
 
 ---
@@ -102,5 +102,5 @@ gtimeout 120 codex exec --sandbox read-only "..." || echo "Codex review timed ou
 ## 関連ドキュメント
 
 - [codex-parallel-review.md](./codex-parallel-review.md) — 並列実行ガイド
-- `hooks/block-codex-mcp.sh` — MCP ブロック hook
+- `hooks/_unused/block-codex-mcp.sh` — 旧 MCP ブロック hook（hook削減により退避済み、現在不発火）
 - `docs/adr/004-codex-delegation-model.md` — Codex 委任モデル

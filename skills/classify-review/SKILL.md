@@ -135,7 +135,9 @@ exit code:
 | 1 | @terisuke | CRITICAL | false_positive | 承認メッセージ内の否定文脈 |
 
 Regex: CRITICAL=1 HIGH=1 → AI: CRITICAL=0 HIGH=0
-classify-review-state.sh による検証済み更新完了。マージゲートは解除されます。
+classify-review-state.sh による検証済み更新完了。state file (`pending-review-comments.json`) は更新済み。
+※ この severity 集計を読んでマージをブロックする hook（旧 pr-ci-review-gate.sh / block-merge-without-review.sh）は
+  hook削減により `hooks/_unused/` へ退避済みで現在は発火しない。マージ可否は現状レビュー内容を見て判断すること。
 ```
 
 ## 安全性保証
