@@ -146,11 +146,16 @@ effective_profile() {
   local marked inferred
   marked=$(active_profile_file)
   inferred=$(infer_profile)
-  if [[ -n "$marked" ]]; then
-    echo "$marked"
-  else
+  if [[ -z "$marked" ]]; then
     echo "$inferred"
+    return 0
   fi
+  # Prefer real routing when marker is stale (e.g. marker=zai but env is clean anthropic)
+  if [[ "$marked" != "$inferred" && "$inferred" != "custom" ]]; then
+    echo "$inferred"
+    return 0
+  fi
+  echo "$marked"
 }
 
 redact() {
@@ -236,18 +241,20 @@ apply_local_env() {
 
   backup_local
 
-  python3 - "$LOCAL_SETTINGS" "$mode" "$token" "$haiku" "$sonnet" "$opus" "$ZAI_BASE_URL" <<'PY'
+  # Token via env (not argv) to avoid process-list leakage
+  CLAUDE_PROVIDER_TOKEN="$token" python3 - "$LOCAL_SETTINGS" "$mode" "$haiku" "$sonnet" "$opus" "$ZAI_BASE_URL" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 mode = sys.argv[2]
-token = sys.argv[3]
-haiku = sys.argv[4]
-sonnet = sys.argv[5]
-opus = sys.argv[6]
-zai_base = sys.argv[7]
+token = os.environ.get("CLAUDE_PROVIDER_TOKEN", "")
+haiku = sys.argv[3]
+sonnet = sys.argv[4]
+opus = sys.argv[5]
+zai_base = sys.argv[6]
 
 routing_keys = {
     "ANTHROPIC_BASE_URL",
@@ -333,7 +340,9 @@ sanitize_global_settings_env() {
         (has("ANTHROPIC_API_KEY") and .ANTHROPIC_API_KEY != null and .ANTHROPIC_API_KEY != ""),
         ((.ANTHROPIC_DEFAULT_SONNET_MODEL // "") | test("glm"; "i")),
         ((.ANTHROPIC_DEFAULT_OPUS_MODEL // "") | test("glm"; "i")),
-        ((.ANTHROPIC_DEFAULT_HAIKU_MODEL // "") | test("glm"; "i"))
+        ((.ANTHROPIC_DEFAULT_HAIKU_MODEL // "") | test("glm"; "i")),
+        ((.CLAUDE_CODE_USE_VERTEX // "") == "1" or (.CLAUDE_CODE_USE_VERTEX // "") == "true"),
+        (has("ANTHROPIC_VERTEX_PROJECT_ID") and .ANTHROPIC_VERTEX_PROJECT_ID != null and .ANTHROPIC_VERTEX_PROJECT_ID != "")
       ] | any
   ' "$GLOBAL_SETTINGS" 2>/dev/null || echo "false")
 
@@ -355,7 +364,17 @@ sanitize_global_settings_env() {
         .ANTHROPIC_API_KEY,
         .ANTHROPIC_DEFAULT_SONNET_MODEL,
         .ANTHROPIC_DEFAULT_OPUS_MODEL,
-        .ANTHROPIC_SMALL_FAST_MODEL
+        .ANTHROPIC_SMALL_FAST_MODEL,
+        .CLAUDE_CODE_USE_VERTEX,
+        .ANTHROPIC_VERTEX_PROJECT_ID,
+        .CLOUD_ML_REGION,
+        .VERTEX_REGION_CLAUDE_3_5_HAIKU,
+        .VERTEX_REGION_CLAUDE_3_5_SONNET,
+        .VERTEX_REGION_CLAUDE_3_7_SONNET,
+        .VERTEX_REGION_CLAUDE_4_0_OPUS,
+        .VERTEX_REGION_CLAUDE_4_0_SONNET,
+        .VERTEX_REGION_CLAUDE_4_1_OPUS,
+        .VERTEX_REGION_CLAUDE_4_5_SONNET
       )
     | if (.env.ANTHROPIC_DEFAULT_HAIKU_MODEL // "" | test("glm"; "i"))
       then .env.ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-haiku-4-5-20251001"
@@ -371,6 +390,16 @@ migrate_secrets_from_settings() {
   ensure_dirs
   require_jq
 
+  # Never clobber a non-empty rotated token already in the secrets file
+  if [[ -f "$SECRETS_FILE" ]]; then
+    local existing
+    existing=$(jq -r '.ANTHROPIC_AUTH_TOKEN // empty' "$SECRETS_FILE" 2>/dev/null || true)
+    if [[ -n "$existing" ]]; then
+      echo "  secrets already present; nothing to migrate"
+      return 0
+    fi
+  fi
+
   local token=""
   # Prefer local, then global
   if [[ -f "$LOCAL_SETTINGS" ]]; then
@@ -378,10 +407,6 @@ migrate_secrets_from_settings() {
   fi
   if [[ -z "$token" && -f "$GLOBAL_SETTINGS" ]]; then
     token=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN // empty' "$GLOBAL_SETTINGS")
-  fi
-  if [[ -z "$token" && -f "$SECRETS_FILE" ]]; then
-    echo "  secrets already present; nothing to migrate"
-    return 0
   fi
   if [[ -z "$token" ]]; then
     echo "  no ANTHROPIC_AUTH_TOKEN found in settings to migrate" >&2
@@ -444,8 +469,8 @@ cmd_zai() {
   ensure_dirs
   require_jq
 
-  if [[ ! -f "$SECRETS_FILE" ]]; then
-    echo "  secrets missing; attempting migrate from settings..."
+  if [[ ! -f "$SECRETS_FILE" ]] || [[ -z "$(jq -r '.ANTHROPIC_AUTH_TOKEN // empty' "$SECRETS_FILE" 2>/dev/null || true)" ]]; then
+    echo "  secrets missing or empty; attempting migrate from settings..."
     if ! migrate_secrets_from_settings; then
       echo "error: no z.ai secrets. Create $SECRETS_FILE with ANTHROPIC_AUTH_TOKEN," >&2
       echo "  or put the token in settings.local.json env and re-run migrate-secrets." >&2

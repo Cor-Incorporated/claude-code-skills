@@ -203,6 +203,61 @@ else
   fail "T7: rc=$rc out=$out"
 fi
 
+
+# T8: migrate must not clobber existing non-empty secrets
+home5=$(make_home)
+mkdir -p "$home5/.claude/providers"
+cat > "$home5/.claude/providers/zai.secrets.json" <<'EOF'
+{"ANTHROPIC_AUTH_TOKEN":"good-rotated-token-999","ANTHROPIC_BASE_URL":"https://api.z.ai/api/anthropic"}
+EOF
+cat > "$home5/.claude/settings.local.json" <<'EOF'
+{"env":{"ANTHROPIC_AUTH_TOKEN":"stale-token-from-settings","ANTHROPIC_BASE_URL":"https://api.z.ai/api/anthropic"}}
+EOF
+CLAUDE_PROVIDER_HOME="$home5" bash "$SCRIPT" migrate-secrets >/dev/null
+tok=$(jq -r '.ANTHROPIC_AUTH_TOKEN' "$home5/.claude/providers/zai.secrets.json")
+if [[ "$tok" == "good-rotated-token-999" ]]; then
+  pass "T8: migrate does not clobber existing secrets"
+else
+  fail "T8: secrets clobbered to $tok"
+fi
+CLAUDE_PROVIDER_HOME="$home5" bash "$SCRIPT" anthropic >/dev/null
+tok=$(jq -r '.ANTHROPIC_AUTH_TOKEN' "$home5/.claude/providers/zai.secrets.json")
+if [[ "$tok" == "good-rotated-token-999" ]]; then
+  pass "T8b: anthropic switch keeps rotated secrets"
+else
+  fail "T8b: anthropic clobbered secrets to $tok"
+fi
+
+# T9: zai switch strips vertex from global so no conflict
+home6=$(make_home)
+mkdir -p "$home6/.claude/providers"
+cat > "$home6/.claude/providers/zai.secrets.json" <<'EOF'
+{"ANTHROPIC_AUTH_TOKEN":"zai-tok-abc","ANTHROPIC_DEFAULT_HAIKU_MODEL":"glm-4.5-air","ANTHROPIC_DEFAULT_SONNET_MODEL":"glm-5.2[1m]","ANTHROPIC_DEFAULT_OPUS_MODEL":"glm-5.2[1m]"}
+EOF
+cat > "$home6/.claude/settings.json" <<'EOF'
+{"env":{"CLAUDE_CODE_USE_VERTEX":"1","ANTHROPIC_VERTEX_PROJECT_ID":"proj","VERTEX_REGION_CLAUDE_4_5_SONNET":"global"},"hooks":{}}
+EOF
+echo '{}' > "$home6/.claude/settings.local.json"
+CLAUDE_PROVIDER_HOME="$home6" bash "$SCRIPT" zai >/dev/null
+if CLAUDE_PROVIDER_HOME="$home6" bash "$SCRIPT" doctor >/dev/null 2>&1; then
+  if jq -e '(.env.CLAUDE_CODE_USE_VERTEX // "") == ""' "$home6/.claude/settings.json" >/dev/null \
+    && jq -e '.env.ANTHROPIC_BASE_URL | test("z\\.ai")' "$home6/.claude/settings.local.json" >/dev/null; then
+    pass "T9: zai switch strips global vertex; doctor clean"
+  else
+    fail "T9: unexpected env after zai"
+  fi
+else
+  fail "T9: doctor failed after zai with prior global vertex"
+fi
+
+# T10: status redacts token when zai active (token in local env)
+out=$(CLAUDE_PROVIDER_HOME="$home6" bash "$SCRIPT" status 2>&1)
+if [[ "$out" != *zai-tok-abc* ]] && [[ "$out" == *ANTHROPIC_AUTH_TOKEN* ]]; then
+  pass "T10: status redacts live zai token"
+else
+  fail "T10: redaction failed: $out"
+fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed, $TOTAL total"
 if [[ "$FAIL" -gt 0 ]]; then

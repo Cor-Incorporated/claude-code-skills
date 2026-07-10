@@ -18,7 +18,6 @@ CLAUDE_DIR="${HOME}/.claude"
 GLOBAL_SETTINGS="${CLAUDE_DIR}/settings.json"
 LOCAL_SETTINGS="${CLAUDE_DIR}/settings.local.json"
 ACTIVE_FILE="${CLAUDE_DIR}/providers/active-profile"
-ZAI_BASE="https://api.z.ai/api/anthropic"
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -69,15 +68,19 @@ if [[ -z "$base" ]]; then
   fi
 fi
 
-# z.ai active notice + optional probe
-if [[ -n "$base" && "$base" == *z.ai* ]] || [[ "$profile" == "zai" ]]; then
+# z.ai active notice + optional probe (require real base URL; ignore stale marker alone)
+if [[ -n "$base" && "$base" == *z.ai* ]]; then
   info "Active provider routes through z.ai ($base)."
   info "  If Explore/Plan/WebSearch/Bash classifier fail, switch: bash ~/.claude/scripts/claude-provider.sh anthropic"
 
-  if command -v curl >/dev/null 2>&1 && [[ -n "$token" ]]; then
+  if command -v curl >/dev/null 2>&1; then
+    # Prefer unauthenticated reachability probe to avoid putting token on argv
     code=$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 5 \
-      "${base%/}/v1/models" \
-      -H "Authorization: Bearer ${token}" 2>/dev/null || echo "000")
+      "${base%/}/v1/models" 2>/dev/null || echo "000")
+    # 401/403 still means host is up; only fail hard on network/5xx
+    if [[ "$code" == "401" || "$code" == "403" ]]; then
+      code="200"
+    fi
     if [[ "$code" == "000" || "$code" =~ ^5 || "$code" == "401" || "$code" == "403" ]]; then
       warn "z.ai health probe returned HTTP ${code}. Gateway may be unstable."
       warn "  Recommended: bash ~/.claude/scripts/claude-provider.sh anthropic && restart Claude Code"
