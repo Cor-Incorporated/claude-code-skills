@@ -45,23 +45,15 @@ done
 echo "[4/9] Installing rules..."
 mkdir -p "$RULES_DIR"
 cp "$REPO_DIR"/rules/*.md "$RULES_DIR/"
-echo "  Copied $(ls "$REPO_DIR"/rules/*.md | wc -l | tr -d ' ') rule files"
+echo "  Copied $( (ls "$REPO_DIR"/rules/*.md 2>/dev/null || true) | wc -l | tr -d ' ') rule files"
 
 # 5. Copy hooks
 echo "[5/9] Installing hooks..."
 mkdir -p "$HOOKS_DIR"
 cp "$REPO_DIR"/hooks/*.sh "$HOOKS_DIR/"
-cp "$REPO_DIR"/hooks/*.py "$HOOKS_DIR/" 2>/dev/null || true
 chmod +x "$HOOKS_DIR"/*.sh
-if [ -d "$REPO_DIR/hooks/gate-modes" ]; then
-  mkdir -p "$HOOKS_DIR/gate-modes"
-  cp "$REPO_DIR"/hooks/gate-modes/*.sh "$HOOKS_DIR/gate-modes/"
-  chmod +x "$HOOKS_DIR"/gate-modes/*.sh
-fi
-SH_COUNT=$(ls "$REPO_DIR"/hooks/*.sh 2>/dev/null | wc -l | tr -d ' ')
-PY_COUNT=$(ls "$REPO_DIR"/hooks/*.py 2>/dev/null | wc -l | tr -d ' ')
-GATE_COUNT=$(ls "$REPO_DIR"/hooks/gate-modes/*.sh 2>/dev/null | wc -l | tr -d ' ')
-echo "  Copied ${SH_COUNT} shell + ${PY_COUNT} python hook scripts + ${GATE_COUNT} gate-mode modules"
+SH_COUNT=$( (ls "$REPO_DIR"/hooks/*.sh 2>/dev/null || true) | wc -l | tr -d ' ')
+echo "  Copied ${SH_COUNT} shell hook scripts"
 
 # 6. Copy scripts
 echo "[6/9] Installing scripts..."
@@ -70,50 +62,46 @@ for f in "$REPO_DIR"/scripts/*; do
   [ -f "$f" ] && cp "$f" "$SCRIPTS_DIR/"
 done
 chmod +x "$SCRIPTS_DIR"/*.sh 2>/dev/null || true
-echo "  Copied $(ls "$REPO_DIR"/scripts/* 2>/dev/null | wc -l | tr -d ' ') script files"
+echo "  Copied $( (ls "$REPO_DIR"/scripts/* 2>/dev/null || true) | wc -l | tr -d ' ') script files"
 
-# 7. Prune retired hooks/scripts/rules + gate state (ADR-006 minimal safety net)
+# 7. Prune retired hooks/scripts + gate state (ADR-006 minimal safety net)
 # setup.sh only ever COPIES; nothing else deletes stale deployed files. This
-# step is the single mechanism that removes hooks/scripts/rules retired from
-# the repo, and cleans up state owned by the gates we removed. Scoped strictly
-# to $HOOKS_DIR, $SCRIPTS_DIR, $RULES_DIR and the named state files below —
-# never touches anything else under $HOME.
-echo "[7/9] Pruning retired hooks/scripts/rules + gate state (ADR-006)..."
+# step is the single mechanism that removes hooks/scripts explicitly retired
+# from the repo (per the repo's own hooks/_unused/ and scripts/_unused/
+# manifests), and cleans up state owned by the gates we removed. Pruning is
+# manifest-based, NOT "delete anything not present in the repo" — a deployed
+# file is only removed when its basename is listed in the repo's own
+# retirement manifest, so unrelated user- or plugin-provided hooks/scripts
+# in $HOOKS_DIR / $SCRIPTS_DIR are never touched. No rule files were retired
+# (they were edited in place), so rules are not pruned. Scoped strictly to
+# $HOOKS_DIR, $SCRIPTS_DIR, and the named state files below — never touches
+# anything else under $HOME.
+echo "[7/9] Pruning retired hooks/scripts + gate state (ADR-006)..."
 
-# 7a. Deployed hooks not present in the repo hooks/ (excluding repo's _unused/)
-if [ -d "$HOOKS_DIR" ]; then
-  for f in "$HOOKS_DIR"/*.sh "$HOOKS_DIR"/*.py; do
+# 7a. Deployed hooks explicitly retired to the repo's hooks/_unused/ manifest
+if [ -d "$HOOKS_DIR" ] && [ -d "$REPO_DIR/hooks/_unused" ]; then
+  for f in "$REPO_DIR"/hooks/_unused/*.sh "$REPO_DIR"/hooks/_unused/*.py; do
     [ -e "$f" ] || continue
     base=$(basename "$f")
-    if [ ! -e "$REPO_DIR/hooks/$base" ]; then
-      rm -f "$f"
+    if [ -e "$HOOKS_DIR/$base" ]; then
+      rm -f "$HOOKS_DIR/$base"
       echo "  - pruned hook: $base"
     fi
   done
-  # gate-modes/ and _unused/ never belong on the deployed side
+fi
+# gate-modes/ and _unused/ never belong on the deployed side
+if [ -d "$HOOKS_DIR" ]; then
   rm -rf "$HOOKS_DIR/gate-modes" "$HOOKS_DIR/_unused" "$HOOKS_DIR/__pycache__"
 fi
 
-# 7b. Deployed scripts not present in the repo scripts/
-if [ -d "$SCRIPTS_DIR" ]; then
-  for f in "$SCRIPTS_DIR"/*; do
+# 7b. Deployed scripts explicitly retired to the repo's scripts/_unused/ manifest
+if [ -d "$SCRIPTS_DIR" ] && [ -d "$REPO_DIR/scripts/_unused" ]; then
+  for f in "$REPO_DIR"/scripts/_unused/*; do
     [ -f "$f" ] || continue
     base=$(basename "$f")
-    if [ ! -e "$REPO_DIR/scripts/$base" ]; then
-      rm -f "$f"
+    if [ -e "$SCRIPTS_DIR/$base" ]; then
+      rm -f "$SCRIPTS_DIR/$base"
       echo "  - pruned script: $base"
-    fi
-  done
-fi
-
-# 7c. Deployed rules not present in the repo rules/ (incl. stale .bak files)
-if [ -d "$RULES_DIR" ]; then
-  for f in "$RULES_DIR"/*.md "$RULES_DIR"/*.md.bak; do
-    [ -e "$f" ] || continue
-    base=$(basename "$f" .bak)
-    if [ ! -e "$REPO_DIR/rules/$base" ]; then
-      rm -f "$f"
-      echo "  - pruned rule: $(basename "$f")"
     fi
   done
 fi
@@ -210,4 +198,4 @@ echo ""
 echo "=== Setup Complete ==="
 echo "Restart Claude Code to apply changes."
 echo ""
-echo "Installed: $(ls -d "$SKILLS_DIR"/*/SKILL.md 2>/dev/null | wc -l | tr -d ' ') skills total"
+echo "Installed: $( (ls -d "$SKILLS_DIR"/*/SKILL.md 2>/dev/null || true) | wc -l | tr -d ' ') skills total"

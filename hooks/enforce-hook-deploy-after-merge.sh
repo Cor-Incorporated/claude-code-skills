@@ -50,11 +50,14 @@ HOOKS_SRC="${PROJECT_DIR}/hooks"
 HOOKS_DEST="${HOME}/.claude/hooks"
 
 # --- Check if merged PR contained hooks/ changes ---
+# Archived hooks (hooks/_unused/, hooks/gate-modes/) must never be
+# auto-deployed — they are retired on purpose, so changes to them
+# (including being moved into the archive) are excluded here.
 CHANGED_FILES=$(gh pr diff "$PR_NUM" --name-only 2>/dev/null || echo "")
-HOOK_FILES=$(echo "$CHANGED_FILES" | grep '^hooks/' || true)
+HOOK_FILES=$(echo "$CHANGED_FILES" | grep '^hooks/' | grep -vE '^hooks/(_unused|gate-modes)/' || true)
 
 if [ -z "$HOOK_FILES" ]; then
-  # No hooks/ changes in this PR
+  # No deployable hooks/ changes in this PR
   exit 0
 fi
 

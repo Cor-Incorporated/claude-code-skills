@@ -149,11 +149,12 @@ Not registered in `settings.json`. Invoke manually.
 
 > Project-wide automation scripts (not hook-scoped) live in
 > [`../scripts/`](../scripts/README.md) — e.g. `codex-parallel.sh`,
-> `codex-orchestrate.sh`, `sanitize-local-permissions.sh`. Five
-> review-pipeline helper scripts (`check-pr-reviews.sh`,
-> `classify-review-state.sh`, `review-comment-set-hash.sh`,
+> `codex-orchestrate.sh`, `sanitize-local-permissions.sh`. Three
+> review-pipeline helper scripts (`review-comment-set-hash.sh`,
 > `review-evidence-status.sh`, `verify-pr-review.sh`) were retired to
-> `scripts/_unused/` alongside this hook reduction.
+> `scripts/_unused/` alongside this hook reduction. `check-pr-reviews.sh`
+> and `classify-review-state.sh` remain in `scripts/` — they are still
+> invoked by the `review-loop` and `classify-review` skills.
 
 ---
 
