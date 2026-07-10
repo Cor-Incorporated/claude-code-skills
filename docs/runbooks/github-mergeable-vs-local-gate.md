@@ -1,5 +1,13 @@
 # GitHub mergeable と local gate の切り分け runbook
 
+> **[RETIRED / 歴史的記録]** このrunbookが前提とする `pr-ci-review-gate.sh` +
+> `gate-modes/*` のローカルマージゲートパイプラインは
+> [ADR-006](../adr/006-minimal-safety-net.md) により廃止され、
+> `hooks/_unused/` へ退避済みで現在は発火しません。マージ安全性は
+> GitHub branch protection + 通常の PR レビューフローに委譲されています。
+> 以下の手順・コマンド例はローカルゲートが稼働していた当時の記録として残していますが、
+> 現在の環境では実行しても対象の hook/state ファイルは存在しません。
+
 ## 目的
 
 GitHub の `mergeable` / `mergeStateStatus` と、Claude Code の local hook gate は別の判定です。

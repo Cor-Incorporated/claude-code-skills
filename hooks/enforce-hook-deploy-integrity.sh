@@ -18,17 +18,14 @@ set -uo pipefail
 
 # --- Known exclusions (not directly registered in settings.json) ---
 EXCLUDED_FROM_REGISTRATION=(
-  "context-budget-set-mode.sh"
-  "inject-claude-review-helper.py"
-  "record-codex-review.sh"
   "validate-hook-deployment.sh"
   "README.md"
 )
 
 # --- Known orphans (exist in ~/.claude/hooks/ but not in hooks/) ---
-KNOWN_ORPHANS=(
-  "pre-merge.sh"
-)
+# Empty as of ADR-006 (minimal safety net) — retired hooks/gate-modes are
+# pruned by setup.sh, not suppressed here.
+KNOWN_ORPHANS=()
 
 # --- Locate project hooks directory ---
 PROJECT_HOOKS_DIR=""
@@ -51,9 +48,6 @@ SETTINGS_FILE="$HOME/.claude/settings.json"
 # --- Helper: check if a filename is in the exclusion list ---
 is_excluded() {
   local filename="$1"
-  case "$filename" in
-    gate-modes/*) return 0 ;;
-  esac
   for excluded in "${EXCLUDED_FROM_REGISTRATION[@]}"; do
     if [[ "$filename" == "$excluded" ]]; then
       return 0
@@ -65,7 +59,8 @@ is_excluded() {
 # --- Helper: check if a filename is a known orphan ---
 is_known_orphan() {
   local filename="$1"
-  for orphan in "${KNOWN_ORPHANS[@]}"; do
+  for orphan in "${KNOWN_ORPHANS[@]:-}"; do
+    [[ -z "$orphan" ]] && continue
     if [[ "$filename" == "$orphan" ]]; then
       return 0
     fi

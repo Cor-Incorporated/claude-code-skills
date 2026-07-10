@@ -7,7 +7,7 @@
 
 ## TDD: RED→GREEN→IMPROVE→カバレッジ確認
 
-## 反証可能性 (hook: `verify-test-falsifiability.sh`)
-Bug X存在時にテスト失敗することを証明。詳細は `/test-falsify` スキル参照。
+## 反証可能性
+Bug X存在時にテスト失敗することを証明する。詳細は `/test-falsify` スキル参照。
 
 ## エージェント: tdd-guide(新機能), e2e-runner(Playwright)
