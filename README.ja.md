@@ -17,6 +17,19 @@ chmod +x setup.sh
 
 インストール後、Claude Code を再起動してください。
 
+
+## API プロバイダ（Claude 正規サブスク ↔ z.ai）
+
+Claude Code はプロセスごとに API ゲートウェイを1つしか使えません。`scripts/claude-provider.sh` で **正規サブスクリプション**（デフォルト・サブエージェント/WebSearch 向け）と **z.ai GLM** を切り替えます。
+
+```bash
+bash ~/.claude/scripts/claude-provider.sh status
+bash ~/.claude/scripts/claude-provider.sh anthropic   # デフォルト
+bash ~/.claude/scripts/claude-provider.sh zai
+```
+
+詳細: [docs/runbooks/provider-switching.md](docs/runbooks/provider-switching.md)
+
 ## リポジトリ構成
 
 ```

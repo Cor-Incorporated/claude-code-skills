@@ -36,3 +36,14 @@ bash ~/.claude/scripts/codex-orchestrate.sh --csv ~/Developer/<repo> tasks.csv "
   ]
 }
 ```
+
+## API provider switch (Anthropic ↔ z.ai)
+
+```bash
+bash ~/.claude/scripts/claude-provider.sh status
+bash ~/.claude/scripts/claude-provider.sh anthropic
+bash ~/.claude/scripts/claude-provider.sh zai
+```
+
+See [docs/runbooks/provider-switching.md](../docs/runbooks/provider-switching.md).
+
