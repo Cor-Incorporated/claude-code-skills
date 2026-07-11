@@ -198,28 +198,11 @@ if [[ "${1:-}" == "--review" ]]; then
     if [[ "$CODEX_EXIT" -ne 0 ]] && [[ "$_CRIT" -eq 0 ]] && [[ "$_HIGH" -eq 0 ]] && [[ "$_MED" -eq 0 ]] && [[ "$_LOW" -eq 0 ]]; then
       # Codex crashed with no parseable findings — fail-closed
       warn "Codex exec failed with exit code $CODEX_EXIT and no parseable severity data."
-      CURRENT_BRANCH=$(cd "$REPO_PATH" && git branch --show-current 2>/dev/null || echo "")
-      if [[ -n "$CURRENT_BRANCH" ]]; then
-        RECORD_SCRIPT="$(dirname "$0")/../hooks/record-codex-review.sh"
-        if [[ -x "$RECORD_SCRIPT" ]]; then
-          bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH"
-        fi
-      fi
       exit "$CODEX_EXIT"
     fi
 
     success "Review complete: ${OUTPUT_FILE}"
     cat "$OUTPUT_FILE"
-
-    # Record Codex review completion in state file
-    CURRENT_BRANCH=$(cd "$REPO_PATH" && git branch --show-current 2>/dev/null || echo "")
-    if [[ -n "$CURRENT_BRANCH" ]]; then
-        RECORD_SCRIPT="$(dirname "$0")/../hooks/record-codex-review.sh"
-        if [[ -x "$RECORD_SCRIPT" ]]; then
-            bash "$RECORD_SCRIPT" "$CURRENT_BRANCH" "$REPO_PATH" \
-              --critical "$_CRIT" --high "$_HIGH" --medium "$_MED" --low "$_LOW"
-        fi
-    fi
     exit 0
 fi
 
