@@ -1,7 +1,7 @@
 #!/bin/bash
 # enforce-hook-deploy-integrity.sh — SessionStart hook: enforce hook deployment integrity
 # =========================================================================
-# Replaces validate-hook-deployment.sh with enhanced checks:
+# Successor to validate-hook-deployment.sh (archived to hooks/_unused/ per ADR-006), with enhanced checks:
 #   1. MD5 comparison of hooks/*.sh vs ~/.claude/hooks/*.sh
 #   2. Auto-sync mismatched files (cp from repo to ~/.claude/hooks/)
 #   3. Detect orphan deployed hooks (in ~/.claude/hooks/ but not in hooks/)
@@ -18,7 +18,6 @@ set -uo pipefail
 
 # --- Known exclusions (not directly registered in settings.json) ---
 EXCLUDED_FROM_REGISTRATION=(
-  "validate-hook-deployment.sh"
   "README.md"
 )
 
