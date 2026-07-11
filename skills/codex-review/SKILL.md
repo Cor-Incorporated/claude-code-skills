@@ -11,7 +11,7 @@ OpenAI Codex CLI を使用してコードレビュー時にセカンドオピニ
 
 > **重要**: Codex MCP (`mcp__codex__*`) は使用禁止（delegation.md / Issue #72）。
 > 全ての Codex 呼び出しは `codex exec --sandbox read-only` で行う。
-> Ref: ADR-004, `hooks/block-codex-mcp.sh`
+> Ref: ADR-004。旧 `hooks/block-codex-mcp.sh` は hook削減により `hooks/_unused/` へ退避済みで現在は発火しない — この禁止事項は現在 hook 強制ではなく運用ルール（自己規律）として遵守すること。
 
 ## Do NOT Load For
 
@@ -74,7 +74,7 @@ review:
     prompt: "Review the code and output issues and improvement suggestions"
 ```
 
-> `execution_mode: mcp` はレガシー。`block-codex-mcp.sh` によりブロックされるため使用不可。
+> `execution_mode: mcp` はレガシー。以前は `block-codex-mcp.sh` hook でブロックされていたが、当該 hook は `hooks/_unused/` へ退避済みで現在は発火しない。それでも `codex exec --sandbox read-only` を使うことが推奨（hook強制ではなく運用ルール）。
 
 ## 注意事項
 
@@ -86,9 +86,11 @@ ADR-004「Max 1 concurrent Codex request」は Route C（実装・workspace-writ
 
 > **TODO**: この解釈は ADR-004 の amendment で正式に明文化すべき。
 
-### 発火検証結果（2026-03-29）
+### 発火検証結果（2026-03-29、履歴）
 
-| 検証項目 | 結果 |
+以下はhook削減前の検証記録。`block-codex-mcp.sh` は現在 `hooks/_unused/` へ退避済みで settings.json にも未登録のため発火しない（履歴として残置）。
+
+| 検証項目 | 結果（当時） |
 |---------|------|
 | `block-codex-mcp.sh` exit code | 2 (ブロック成功) |
 | stderr メッセージ | "[BLOCKED] Codex MCP..." 出力確認 |
@@ -103,4 +105,4 @@ ADR-004「Max 1 concurrent Codex request」は Route C（実装・workspace-writ
 
 - ADR-004: Codex大規模委任モデル (`docs/adr/004-codex-delegation-model.md`)
 - delegation.md: Codex CLI 経路 (`rules/delegation.md`)
-- block-codex-mcp.sh: MCP ブロック hook (`hooks/block-codex-mcp.sh`)
+- block-codex-mcp.sh: 旧 MCP ブロック hook（`hooks/_unused/block-codex-mcp.sh` へ退避済み、現在は未登録・不発火）

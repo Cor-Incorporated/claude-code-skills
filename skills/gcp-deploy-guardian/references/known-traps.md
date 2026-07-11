@@ -59,7 +59,7 @@ curl -sL https://<spa-url>/assets/*.js | grep -oE 'http://[a-zA-Z0-9._-]+' | sor
 
 ### 再発防止
 - `pre-deploy-check.sh` でビルド引数に `http://` がないか検査
-- `audit-docker-build-args.sh` PreToolUse hook でブロック
+- 旧 `audit-docker-build-args.sh` PreToolUse hook でのブロックは、hook削減により `hooks/_unused/` へ退避済みで現在は発火しない。`pre-deploy-check.sh` を手動/CIで実行して代替すること
 
 ---
 

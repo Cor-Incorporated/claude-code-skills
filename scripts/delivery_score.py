@@ -60,21 +60,13 @@ def score_hook_coverage(project_root: Path) -> dict:
                     if script_name.endswith(".sh"):
                         registered_hooks.add(script_name)
 
-    # Expected hooks: event hooks in hooks/ directory. Hook-side helpers are
-    # deployed with hooks but are intentionally invoked manually/by other hooks.
-    excluded_from_registration = {
-        "context-budget-set-mode.sh",
-        "inject-claude-review-helper.py",
-        "record-codex-review.sh",
-        "validate-hook-deployment.sh",
-    }
-
-    # Expected hooks: all .sh files in hooks/ directory minus helpers.
+    # Expected hooks: all .sh files in hooks/ directory (event hooks only;
+    # see ADR-006 for why the set is deliberately small and fully registered).
     hooks_dir = project_root / "hooks"
     expected_hooks = set()
     if hooks_dir.exists():
         for f in hooks_dir.iterdir():
-            if f.suffix == ".sh" and not f.name.startswith("_") and f.name not in excluded_from_registration:
+            if f.suffix == ".sh" and not f.name.startswith("_"):
                 expected_hooks.add(f.name)
 
     # Exclude _unused directory
@@ -134,9 +126,9 @@ def score_soak_time_compliance(repo: str) -> dict:
     # For now, a simple heuristic: infra PRs need longer soak time
     # Full implementation would check timestamps between create and merge
     return {
-        "score": 100,  # Placeholder: soak time hook enforces this
+        "score": 100,  # Placeholder: soak time is no longer hook-enforced (ADR-006);
         "checked": len(prs),
-        "detail": "enforced by hook (enforce-soak-time.sh)",
+        "detail": "not hook-enforced since ADR-006 — soak time is now a rules/git-workflow.md guideline",
     }
 
 

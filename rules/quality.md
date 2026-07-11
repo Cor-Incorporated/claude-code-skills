@@ -13,14 +13,14 @@
 ## Operationally Ready チェックリスト
 merge前確認: env var/secret記載、CORS/domain、Mixed Content、IAM権限、cron手動通過、migration rollback手順、Terraform plan貼付、Docker `--platform linux/amd64`
 
-## エンドポイント修正時の必須検証 (hook: `enforce-endpoint-dataflow.sh`)
-クライアント送信→APIルート処理→バックエンドaction_map→レスポンス形式、4点一致で「修正」
+## エンドポイント修正時の必須検証
+クライアント送信→APIルート処理→バックエンドaction_map→レスポンス形式、4点一致を確認してから「修正」と報告する
 
-## ドキュメント同時更新 (hook: `enforce-doc-update-scope.sh`)
-修正時は関連ドキュメントを同じPR/コミットで更新。grepで参照箇所を検索。
+## ドキュメント同時更新
+修正時は関連ドキュメントを同じPR/コミットで更新する。grepで参照箇所を検索する。
 
-## Issue完了判定 (hook: `enforce-issue-close-verification.sh`)
-受入基準を1つずつコード引用(file:line)+テスト結果で検証。全基準に証拠なければクローズしない。
+## Issue完了判定
+受入基準を1つずつコード引用(file:line)+テスト結果で検証する。全基準に証拠なければクローズしない。
 
-## 報告書の事実検証 (hook: `enforce-factcheck-*.sh`)
-事実主張はCLI出力・git diff・APIレスポンスで裏取り必須。推定は「（未検証）」明記。
+## 報告書の事実検証
+事実主張はCLI出力・git diff・APIレスポンスで裏取りする。推定は「（未検証）」と明記する。

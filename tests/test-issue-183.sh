@@ -1,6 +1,7 @@
 #!/bin/bash
 # test-issue-183.sh — Issue #183: Hook deployment integrity enforcement
-# Tests enforce-hook-deploy-integrity.sh, enforce-hook-deploy-after-merge.sh, gate-modes/stop.sh
+# Tests enforce-hook-deploy-integrity.sh, enforce-hook-deploy-after-merge.sh
+# (gate-modes/stop.sh coverage removed by ADR-006 — gate-modes retired entirely)
 set -uo pipefail
 
 PASS=0; FAIL=0
@@ -113,20 +114,6 @@ else
   echo "  FAIL (orphan not reported)"
 fi
 
-# --- T7b: gate-mode modules are dispatcher-sourced, not directly registered ---
-mkdir -p "${FAKE_PROJECT_HOOKS}/gate-modes" "${FAKE_INSTALLED_HOOKS}/gate-modes"
-echo '#!/bin/bash' > "${FAKE_PROJECT_HOOKS}/gate-modes/module.sh"
-cp "${FAKE_PROJECT_HOOKS}/gate-modes/module.sh" "${FAKE_INSTALLED_HOOKS}/gate-modes/module.sh"
-
-STDERR_OUT=$(CLAUDE_PROJECT_DIR="${TMPDIR_BASE}/project" bash "$PATCHED_H1" 2>&1 >/dev/null)
-if ! echo "$STDERR_OUT" | grep -q "NOT REGISTERED: gate-modes/module.sh"; then
-  PASS=$((PASS+1)); echo "--- T7b: gate-mode module registration check skipped ---"
-  echo "  PASS"
-else
-  FAIL=$((FAIL+1)); echo "--- T7b: gate-mode module registration check skipped ---"
-  echo "  FAIL (gate-mode module reported as unregistered)"
-fi
-
 echo ""
 echo "==================================="
 echo "Hook 2: enforce-hook-deploy-after-merge.sh"
@@ -154,78 +141,6 @@ check_exit 0 $? "T11: gh pr merge without PR number -> exit 0"
 # --- T12: Early exit for git commands (not gh) ---
 mk_json 'git merge main' | bash "$H2" >/dev/null 2>&1
 check_exit 0 $? "T12: git merge (not gh pr merge) -> exit 0"
-
-echo ""
-echo "==================================="
-echo "Hook 3: gate-modes/stop.sh (#181 fix)"
-echo "==================================="
-echo ""
-
-H3="${HOOK_DIR}/gate-modes/stop.sh"
-
-# --- Setup: Create temp state for stop.sh ---
-FAKE_STATE_DIR="${TMPDIR_BASE}/state"
-mkdir -p "$FAKE_STATE_DIR"
-FAKE_LOCK_STATE="${FAKE_STATE_DIR}/pr-review-lock.json"
-
-# Create a patched stop.sh that uses our fake state file
-PATCHED_STOP="${TMPDIR_BASE}/patched-stop.sh"
-{
-  echo '#!/bin/bash'
-  echo 'set -euo pipefail'
-  echo "trap 'exit 0' ERR"
-  echo "GATE_MODES_DIR=\"${HOOK_DIR}/gate-modes\""
-  echo "source \"\${GATE_MODES_DIR}/common.sh\" || true"
-  echo "LOCK_STATE=\"${FAKE_LOCK_STATE}\""
-  # Append the rest of stop.sh starting after the source line (line 33+)
-  tail -n +33 "$H3"
-} > "$PATCHED_STOP"
-chmod +x "$PATCHED_STOP"
-
-# --- T13: STOP mode exits 0 with pending CI ---
-cat > "$FAKE_LOCK_STATE" <<'JSONEOF'
-{
-  "999": {
-    "branch": "test-branch",
-    "ci_green": false,
-    "verified": false
-  }
-}
-JSONEOF
-
-bash "$PATCHED_STOP" </dev/null >/dev/null 2>&1
-check_exit 0 $? "T13: STOP mode exits 0 with CI pending"
-
-# --- T14: STOP mode exits 0 with unverified PR ---
-cat > "$FAKE_LOCK_STATE" <<'JSONEOF'
-{
-  "888": {
-    "branch": "failed-branch",
-    "ci_green": true,
-    "verified": false
-  }
-}
-JSONEOF
-
-bash "$PATCHED_STOP" </dev/null >/dev/null 2>&1
-check_exit 0 $? "T14: STOP mode exits 0 with unverified PR"
-
-# --- T15: STOP mode exits 0 with empty state ---
-echo '{}' > "$FAKE_LOCK_STATE"
-bash "$PATCHED_STOP" </dev/null >/dev/null 2>&1
-check_exit 0 $? "T15: STOP mode exits 0 with empty state"
-
-# --- T16: STOP mode exits 0 with mixed states ---
-cat > "$FAKE_LOCK_STATE" <<'JSONEOF'
-{
-  "111": {"branch": "feat-a", "ci_green": false, "verified": false},
-  "222": {"branch": "feat-b", "ci_green": true, "verified": false},
-  "333": {"branch": "feat-c", "ci_green": true, "verified": true}
-}
-JSONEOF
-
-bash "$PATCHED_STOP" </dev/null >/dev/null 2>&1
-check_exit 0 $? "T16: STOP mode exits 0 with mixed pending+unverified+verified"
 
 echo ""
 echo "===================================="
