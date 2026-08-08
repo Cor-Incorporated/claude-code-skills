@@ -44,6 +44,10 @@ bash "$REPO_DIR/scripts/sanitize-local-permissions.sh" \
 echo "[3/9] Installing skills..."
 for d in "$REPO_DIR"/skills/*/; do
   skill_name=$(basename "$d")
+  # never deploy retirement holding area
+  if [ "$skill_name" = "_unused" ]; then
+    continue
+  fi
   if [ -d "$SKILLS_DIR/$skill_name" ]; then
     echo "  ↻ $skill_name (updating)"
   else
@@ -120,6 +124,35 @@ if [ -d "$SCRIPTS_DIR" ] && [ -d "$REPO_DIR/scripts/_unused" ]; then
     if [ -e "$SCRIPTS_DIR/$base" ]; then
       rm -f "$SCRIPTS_DIR/$base"
       echo "  - pruned script: $base"
+    fi
+  done
+fi
+
+# 7c. Deployed skills retired to skills/_unused/ OR named in RETIRED_SKILLS (R-I4–R-I9)
+# setup copies skills/*/; without pruning, retired dirs remain forever under ~/.claude/skills.
+RETIRED_SKILLS=(
+  senior-architect
+  senior-backend
+  senior-frontend
+  senior-fullstack
+  changelog-generator
+  git-commit-helper
+)
+if [ -d "$SKILLS_DIR" ]; then
+  if [ -d "$REPO_DIR/skills/_unused" ]; then
+    for d in "$REPO_DIR"/skills/_unused/*/; do
+      [ -d "$d" ] || continue
+      base=$(basename "$d")
+      if [ -d "$SKILLS_DIR/$base" ]; then
+        rm -rf "$SKILLS_DIR/$base"
+        echo "  - pruned skill (manifest): $base"
+      fi
+    done
+  fi
+  for base in "${RETIRED_SKILLS[@]}"; do
+    if [ -d "$SKILLS_DIR/$base" ]; then
+      rm -rf "$SKILLS_DIR/$base"
+      echo "  - pruned skill (R-I list): $base"
     fi
   done
 fi
