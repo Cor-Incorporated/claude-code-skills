@@ -62,6 +62,13 @@ echo "  Copied $( (ls "$REPO_DIR"/rules/*.md 2>/dev/null || true) | wc -l | tr -
 echo "[5/9] Installing hooks..."
 mkdir -p "$HOOKS_DIR"
 cp "$REPO_DIR"/hooks/*.sh "$HOOKS_DIR/"
+# H6 ledger helper and any non-top-level hook support files
+if [ -d "$REPO_DIR/hooks/lib" ]; then
+  mkdir -p "$HOOKS_DIR/lib"
+  cp -R "$REPO_DIR"/hooks/lib/. "$HOOKS_DIR/lib/"
+  chmod +x "$HOOKS_DIR"/lib/*.sh 2>/dev/null || true
+  echo "  Copied hooks/lib support scripts"
+fi
 chmod +x "$HOOKS_DIR"/*.sh
 SH_COUNT=$( (ls "$REPO_DIR"/hooks/*.sh 2>/dev/null || true) | wc -l | tr -d ' ')
 echo "  Copied ${SH_COUNT} shell hook scripts"
