@@ -13,6 +13,17 @@ OPENCODE_CONFIG="$HOME/.config/opencode/opencode.jsonc"
 echo "=== Claude Code Skills Setup ==="
 echo ""
 
+# Branch guard (CC-D3 / ADR-006 rewind prevention):
+# main historically carried ~63 hook registrations. Copying from non-develop
+# rewinds the minimal safety net. Canonical deploy branch is develop only.
+# See docs/CANONICAL-STATE.md.
+current_branch="$(git -C "$REPO_DIR" branch --show-current 2>/dev/null || true)"
+if [ "$current_branch" != "develop" ]; then
+  echo "develop 以外から setup 禁止 (current: ${current_branch:-unknown})"
+  echo "  Checkout develop and re-run. Ref: docs/CANONICAL-STATE.md"
+  exit 1
+fi
+
 # 1. Copy settings
 # NOTE: settings.json is overwritten from master on every setup. Store env vars
 # (API tokens, model config, base URL) in settings.local.json — Claude Code merges
