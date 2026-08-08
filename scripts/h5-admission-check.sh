@@ -70,17 +70,55 @@ fi
 
 log "H5: guard/verifier PR detected — checking 3-point admission fee"
 
-body_lc="$(printf '%s' "$PR_BODY" | tr '[:upper:]' '[:lower:]')"
+# Ignore negation/meta lines so "missing 陰性テスト" does not count as evidence
+PR_BODY_EVIDENCE="$(printf '%s\n' "$PR_BODY" | grep -viE \
+  'intentionally missing|expect red|do not merge|falsification only|未記入|TODO 陰性|TODO 台帳|TODO 廃止' || true)"
+
 missing=()
 
-# (1) Negative test evidence (known-bad → red measured)
-if ! printf '%s' "$PR_BODY" | grep -qiE '陰性テスト|negative[[:space:]-]?test|red 実測|known-bad|inject.*red|fail.*実測|FT-11'; then
-  missing+=("negative-test-evidence")
-fi
+# Prefer explicit machine markers (H5-NEGATIVE: / H5-LEDGER: / H5-RETIRE:)
+# Fall back to Japanese/English section content of sufficient length.
+has_marker() {
+  local key="$1"
+  printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE "(^|[[:space:]])H5-${key}:[[:space:]]*\\S.{8,}"
+}
 
-# (2) H6 ledger wiring — in PR body or in changed hook sources
+has_section_content() {
+  local title_re="$1"
+  H5_SECTION_BODY="$PR_BODY_EVIDENCE" python3 -c "
+import re, os, sys
+title = sys.argv[1]
+body = os.environ.get('H5_SECTION_BODY', '')
+pat = re.compile(rf'(?im)^#{{1,3}}\\s*(?:{title})\\s*\$([\\s\\S]*?)(?=^#{{1,3}}\\s|\\Z)')
+m = pat.search(body)
+if not m:
+    sys.exit(1)
+content = m.group(1).strip()
+if len(content) < 20:
+    sys.exit(1)
+if re.fullmatch(r'[-*\\[\\] xX\\s]*', content):
+    sys.exit(1)
+sys.exit(0)
+" "$title_re" 2>/dev/null
+}
+
+# (1) Negative test evidence (known-bad → red measured)
+neg_ok=0
+has_marker "NEGATIVE" && neg_ok=1
+has_section_content '陰性テスト|negative[[:space:]-]?test' && neg_ok=1
+if [[ "$neg_ok" -eq 0 ]]; then
+  if printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE '(陰性テスト|negative[[:space:]-]?test)' \
+    && printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE '(red 実測|exit[[:space:]]*[12]|FAILED|known-bad|inject)'; then
+    neg_ok=1
+  fi
+fi
+[[ "$neg_ok" -eq 0 ]] && missing+=("negative-test-evidence")
+
+# (2) H6 ledger wiring — body marker/section or changed hook sources
 has_ledger_body=0
-printf '%s' "$PR_BODY" | grep -qiE '台帳|guard-ledger|aidd_ledger|H6|ledger wiring|防御台帳' && has_ledger_body=1
+has_marker "LEDGER" && has_ledger_body=1
+has_section_content '台帳|ledger|防御台帳' && has_ledger_body=1
+printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE 'aidd_ledger_append|guard-ledger\.jsonl' && has_ledger_body=1
 has_ledger_code=0
 while IFS= read -r f; do
   [[ -z "$f" || ! -f "$f" ]] && continue
@@ -89,10 +127,8 @@ while IFS= read -r f; do
     break
   fi
 done <<<"$(printf '%s\n' "$DIFF_FILES" | grep -E '^hooks/|^scripts/h5' || true)"
-# Workflow-only admission gate may declare ledger at CI layer in body
 if [[ "$has_ledger_body" -eq 0 && "$has_ledger_code" -eq 0 ]]; then
-  # Allow if this PR only adds the H5 gate itself and documents ledger requirement
-  if printf '%s\n' "$DIFF_FILES" | grep -q 'h5-admission' && printf '%s' "$PR_BODY" | grep -qiE '台帳|ledger'; then
+  if printf '%s\n' "$DIFF_FILES" | grep -q 'h5-admission' && printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE '台帳|ledger'; then
     has_ledger_body=1
   fi
 fi
@@ -101,9 +137,13 @@ if [[ "$has_ledger_body" -eq 0 && "$has_ledger_code" -eq 0 ]]; then
 fi
 
 # (3) Retirement condition declared
-if ! printf '%s' "$PR_BODY" | grep -qiE '廃止条件|retirement|90[[:space:]]*日|発火ゼロ|false.?positive|FP.?率|退役'; then
-  missing+=("retirement-condition")
+ret_ok=0
+has_marker "RETIRE" && ret_ok=1
+has_section_content '廃止条件|retirement' && ret_ok=1
+if printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE '(廃止条件|retirement).{0,80}(90|発火ゼロ|FP|false.?positive|退役)'; then
+  ret_ok=1
 fi
+[[ "$ret_ok" -eq 0 ]] && missing+=("retirement-condition")
 
 # Fail-open structural smell (warn only) on changed shell hooks
 while IFS= read -r f; do
