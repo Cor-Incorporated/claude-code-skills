@@ -28,6 +28,12 @@ migration/Terraform/release workflow変更後はpost-merge validation手順を�
 ## レビュー（ガイダンス）
 pushごとにreview.submittedAt > 最終push時刻を確認する。古いレビューのみでマージしない。
 
+## 並列作業の撤収（完了条件）
+- worker 成果の回収は定型コミット `chore(team): apply worker changes` で完了条件に含める
+- 完了報告 3 欄: 回収コミット SHA / 削除した worktree・ブランチ / 残す判断待ち在庫（理由つき）
+- 並列割当は handover に登録。未登録の第 2 経路を作らない
+- 機械掃除は「マージ済み + 7 日」限定（repo-clean skill / harness H11）。掃除 KPI は本数にしない
+
 ## スキル提案
 リクエスト受信時、フェーズ判断し関連スキルを提案（スキル指定済み/単純タスクは省略）
 フェーズ: 新規→A, 機能追加→B, バグ→C, 改善→D, テスト→E, デプロイ→F, レビュー→G, 設計→H, UI→I, ドキュメント→J, API→K, 認証/決済→L

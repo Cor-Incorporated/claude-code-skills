@@ -9,7 +9,10 @@
 - 詳細: `docs/adr/004-codex-delegation-model.md`
 
 ## 並列上限
-サブエージェント5-7 / Bash3-4 / Codex CLI **1** / Agent Team最大5 / 合計7以下
+サブエージェント5-7 / Bash3-4 / Codex CLI **1** / Agent Team最大5 / 合計7以下（根拠 = 当日中に検収できる量。検収実績で較正）。検収不能時間帯の完了は「完了候補」として翌朝の検収キューへ
+
+## 委任契約
+委任は handover skill の契約 6 欄必須。one-shot 委任（検収往復なし）は禁止
 
 ## Codex CLI 3経路 → `scripts/README.md`
 - 経路A: `codex exec review` (レビュー)
