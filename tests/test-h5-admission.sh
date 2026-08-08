@@ -39,11 +39,21 @@ run_case "complete-3set" 0 \
 ## 陰性テスト
 red 実測: echo '{"command":"git push origin main"}' | hook → exit 2
 ## 台帳
-aidd_ledger_append / guard-ledger.jsonl wiring
+aidd_ledger_append / guard-ledger.jsonl wiring present in hook
 ## 廃止条件
 90日発火ゼロ or FP率50%超で退役 issue
 EOF
 )" bash "$CHK"
+
+# Explicit markers form
+run_case "marker-3set" 0 \
+  env H5_DIFF_FILES="hooks/x.sh" H5_PR_BODY="H5-NEGATIVE: unit red exit 1 measured
+H5-LEDGER: aidd_ledger_append on block
+H5-RETIRE: 90 days zero fires -> retire" bash "$CHK"
+
+# Mention keywords while saying missing → still fail
+run_case "negation-not-evidence" 1 \
+  env H5_DIFF_FILES="hooks/git-push-guard.sh" H5_PR_BODY="H5-guard: yes. Intentionally missing 陰性テスト red log, 台帳 wiring, 廃止条件. Do not merge. Expect red." bash "$CHK"
 
 # Explicit skip
 run_case "explicit-skip" 0 \
