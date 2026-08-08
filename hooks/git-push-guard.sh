@@ -3,6 +3,16 @@
 # Blocks: force-push to protected branches, direct push to protected branches.
 set -euo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+_aidd_block() {
+  if declare -F aidd_ledger_append >/dev/null 2>&1; then
+    aidd_ledger_append "git-push-guard" "block" "deny" "${cmd:-${cmd_norm:-}}" "protected-push"
+  fi
+  exit 2
+}
+
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
@@ -122,7 +132,7 @@ if echo "$cmd_norm" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b
 
 Ref: Issue #17 — AI からの force push はブロック、ユーザー手動実行に限定
 ERRMSG
-            exit 2
+            _aidd_block
         fi
     done
 
@@ -143,7 +153,7 @@ ERRMSG
 
 Ref: Issue #28 — 差分有無にかかわらず共有ブランチへの force push をブロック
 ERRMSG
-                exit 2
+                _aidd_block
             fi
         done
     fi
@@ -161,7 +171,7 @@ for branch in develop main master; do
         if [ "$refspec" = "$branch" ] || echo "$refspec" | grep -qE ":${branch}$"; then
             echo "[BLOCKED] Direct push to '${branch}'. Use PR instead." >&2
             echo "  git push -u origin feat/xxx && gh pr create --base develop" >&2
-            exit 2
+            _aidd_block
         fi
     fi
 done

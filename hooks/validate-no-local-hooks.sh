@@ -5,6 +5,16 @@
 # 完全に上書きしてしまう。このスクリプトはセッション開始時に検出して警告する。
 # =================================================================
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+_aidd_block() {
+  if declare -F aidd_ledger_append >/dev/null 2>&1; then
+    aidd_ledger_append "validate-no-local-hooks" "block" "deny" "settings.local.json hooks" "local-hooks-present"
+  fi
+  exit 2
+}
+
 LOCAL_SETTINGS="$HOME/.claude/settings.local.json"
 
 if [[ ! -f "$LOCAL_SETTINGS" ]]; then
@@ -25,7 +35,7 @@ if command -v jq &>/dev/null; then
     echo "   2. settings.local.json から hooks セクションを削除" >&2
     echo "" >&2
     # Block session start to force fix
-    exit 2
+    _aidd_block
   fi
 fi
 

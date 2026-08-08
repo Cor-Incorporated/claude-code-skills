@@ -7,6 +7,16 @@
 
 set -euo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+_aidd_block() {
+  if declare -F aidd_ledger_append >/dev/null 2>&1; then
+    aidd_ledger_append "block-local-hooks-write" "block" "deny" "${FILE_PATH:-}" "local-hooks-write"
+  fi
+  exit 2
+}
+
 input=""
 if [[ ! -t 0 ]]; then
   input=$(cat 2>/dev/null || echo "")
@@ -45,7 +55,7 @@ if echo "$CONTENT" | grep -qE '"hooks"\s*:'; then
   echo "   理由: settings.local.json の hooks はグローバルの hooks を完全に上書きし、" >&2
   echo "         PR merge gate 等の保護が全て無効化されます。" >&2
   echo "" >&2
-  exit 2
+  _aidd_block
 fi
 
 exit 0
