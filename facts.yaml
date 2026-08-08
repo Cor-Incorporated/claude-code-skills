@@ -1,0 +1,11 @@
+# H4 declaration↔enforcement link pairs (aidd-governance)
+# Pair values must stay in sync; link test fails listing both sides.
+pairs:
+  - id: ccs-hook-registration-count
+    declaration: settings.json#hooks
+    enforcement: docs/CANONICAL-STATE.md#registered-hooks
+    note: "develop settings registrations must match CANONICAL-STATE 18"
+  - id: ccs-hard-block-four
+    declaration: docs/CANONICAL-STATE.md#hard-blocks
+    enforcement: hooks/git-push-guard.sh+hooks/protect-branches.sh+hooks/block-local-hooks-write.sh+hooks/validate-no-local-hooks.sh
+    note: "four hard blocks remain; ledger wiring required"

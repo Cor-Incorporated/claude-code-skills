@@ -22,6 +22,16 @@
 
 set -euo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+_aidd_block() {
+  if declare -F aidd_ledger_append >/dev/null 2>&1; then
+    aidd_ledger_append "protect-branches" "block" "deny" "${cmd:-}" "protect-branches"
+  fi
+  exit 2
+}
+
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
@@ -130,7 +140,7 @@ if echo "$cmd" | grep -qE '\bgit\s+push\b' && echo "$cmd" | grep -qE '\s--(all|m
   echo "[BLOCK] --all/--mirror 付き push を検出。" >&2
   echo "  WHY: 全ブランチ(保護ブランチ含む)の履歴が上書き/削除されます。" >&2
   echo "  FIX: 個別のブランチを指定して push してください。" >&2
-  exit 2
+  _aidd_block
 fi
 
 # --- Check 0b: Force push guard (fork-aware) (#192, #195, parser-gap fix) ---
@@ -162,7 +172,7 @@ if echo "$cmd" | grep -qE '\bgit\s+push\b' && is_force_push "$cmd"; then
       echo "  fork ワークフローでは upstream・保護ブランチへの force push は禁止です。" >&2
       echo "  WHY: 親リポジトリ/共有ブランチの履歴を書き換えると他の contributor に影響します。" >&2
       echo "  FIX: PR 経由でマージしてください。" >&2
-      exit 2
+      _aidd_block
     fi
     # origin = fork, allow with warning
     echo "[WARN] fork リモート '${push_remote}' への force push を検出。" >&2
@@ -173,7 +183,7 @@ if echo "$cmd" | grep -qE '\bgit\s+push\b' && is_force_push "$cmd"; then
       echo "[BLOCK] 保護ブランチ '${matched_protected}' への force push を検出。" >&2
       echo "  WHY: 共有ブランチの履歴書き換えは禁止です。" >&2
       echo "  FIX: feature ブランチで作業し、PR 経由でマージしてください。" >&2
-      exit 2
+      _aidd_block
     fi
     # No explicit protected ref: fall back to current branch (implicit push).
     target_branch=$(extract_push_branch "$cmd")
@@ -185,7 +195,7 @@ if echo "$cmd" | grep -qE '\bgit\s+push\b' && is_force_push "$cmd"; then
         echo "[BLOCK] 保護ブランチ '${branch}' への force push を検出（暗黙的ブランチ）。" >&2
         echo "  WHY: 共有ブランチの履歴書き換えは禁止です。" >&2
         echo "  FIX: feature ブランチで作業し、PR 経由でマージしてください。" >&2
-        exit 2
+        _aidd_block
       fi
     done
   fi
@@ -196,7 +206,7 @@ for branch in $PROTECTED_BRANCHES; do
     if echo "$cmd" | grep -qE "git\s+branch\s+-[dD]\s+.*\b${branch}\b"; then
         echo "[Hook] BLOCKED: Protected branch '${branch}' cannot be deleted locally." >&2
         echo "[Hook] develop/main/master branches are tied to CI/CD and must NEVER be deleted." >&2
-        exit 2
+        _aidd_block
     fi
 done
 
@@ -205,7 +215,7 @@ for branch in $PROTECTED_BRANCHES; do
     if echo "$cmd" | grep -qE "push\s+.*--delete\s+.*\b${branch}\b"; then
         echo "[Hook] BLOCKED: Protected branch '${branch}' cannot be deleted from remote." >&2
         echo "[Hook] develop/main/master branches are tied to CI/CD and must NEVER be deleted." >&2
-        exit 2
+        _aidd_block
     fi
 done
 
@@ -214,7 +224,7 @@ for branch in $PROTECTED_BRANCHES; do
     if echo "$cmd" | grep -qE "push\s+\S+\s+:${branch}([^A-Za-z0-9._/-]|$)"; then
         echo "[Hook] BLOCKED: Protected branch '${branch}' cannot be deleted from remote." >&2
         echo "[Hook] develop/main/master branches are tied to CI/CD and must NEVER be deleted." >&2
-        exit 2
+        _aidd_block
     fi
 done
 
@@ -236,7 +246,7 @@ if echo "$cmd" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
                     echo "[Hook] BLOCKED: PR #${PR_NUM} source branch is '${branch}' (protected)." >&2
                     echo "[Hook] --delete-branch would delete '${branch}', which is tied to CI/CD." >&2
                     echo "[Hook] Remove --delete-branch and run: gh pr merge ${PR_NUM} --merge" >&2
-                    exit 2
+                    _aidd_block
                 fi
             done
             # PR source branch is NOT protected - allow
@@ -251,7 +261,7 @@ if echo "$cmd" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
                 echo "[Hook] BLOCKED: Cannot determine PR source branch, and current branch '${branch}' is protected." >&2
                 echo "[Hook] --delete-branch could delete a protected branch." >&2
                 echo "[Hook] Remove --delete-branch flag and retry." >&2
-                exit 2
+                _aidd_block
             fi
         done
     fi
