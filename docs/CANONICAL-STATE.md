@@ -8,8 +8,8 @@
 
 | Item | Value |
 |---|---|
-| Registered hooks in `settings.json` | **18** |
-| Events | 5 (SessionStart / PreToolUse / PostToolUse / PostToolUseFailure / PreCompact) |
+| Registered hooks in `settings.json` | **19** (18 ADR-006 + H3 Stop evidence warn) |
+| Events | 6 (SessionStart / PreToolUse / PostToolUse / PostToolUseFailure / PreCompact / Stop) |
 | Hard-block PreToolUse | **4** (`git-push-guard`, `protect-branches`, `block-local-hooks-write`, plus SessionStart `validate-no-local-hooks`) |
 | Deploy path | `setup.sh` copies hooks/rules/skills/settings from **this repo's current branch** into `~/.claude` |
 

@@ -242,6 +242,18 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/aidd-h3-evidence-stop.sh",
+            "timeout": 8,
+            "statusMessage": "H3 evidence trailer check (warn only)..."
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {
