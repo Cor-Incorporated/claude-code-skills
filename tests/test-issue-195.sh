@@ -51,22 +51,11 @@ test_case "normal push (allow)" 0 "git push origin feat/test"
 test_case "remote delete develop" 2 "git push origin --delete develop"
 test_case "colon delete develop" 2 "git push origin :develop"
 
-echo "--- R6: heredoc/docs text must not trip --mirror (false-positive) ---"
-python3 - <<'PY' > /tmp/r6-protect-payload.json
-import json
-cmd = "python3 - <<'PY'\nprint('git clone --mirror example')\nPY\ngit push -u origin docs/backup-completion"
-print(json.dumps({"tool_input": {"command": cmd}}))
-PY
-actual_exit=0
-bash "$HOOK" < /tmp/r6-protect-payload.json >/dev/null 2>&1 || actual_exit=$?
-if [ "$actual_exit" -eq 0 ]; then
-  echo "  PASS: heredoc mentions --mirror but push has no flag (exit 0)"
-  PASS=$((PASS + 1))
-else
-  echo "  FAIL: heredoc false-positive (expected=0 actual=$actual_exit)"
-  FAIL=$((FAIL + 1))
-fi
-test_case "real --mirror flag still blocked" 2 "git push --mirror origin"
+echo "--- T1: canonical argv order must block (loop-break revert of R6) ---"
+test_case "git push origin --mirror blocked" 2 "git push origin --mirror"
+test_case "git push origin --all blocked" 2 "git push origin --all"
+test_case "git push --mirror origin blocked" 2 "git push --mirror origin"
+test_case "git push --all origin blocked" 2 "git push --all origin"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

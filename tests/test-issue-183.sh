@@ -61,13 +61,15 @@ chmod +x "${FAKE_PROJECT_HOOKS}/test-missing.sh"
 CLAUDE_PROJECT_DIR="${TMPDIR_BASE}/project" bash "$PATCHED_H1" >/dev/null 2>&1
 check_exit 0 $? "T1: always exits 0 (missing hook scenario)"
 
-# --- T2: Auto-synced missing hook to deploy dir ---
-if [ -f "${FAKE_INSTALLED_HOOKS}/test-missing.sh" ]; then
-  PASS=$((PASS+1)); echo "--- T2: Auto-synced missing hook to deploy dir ---"
+# --- T2: Does NOT auto-sync missing hook (loop-break T2: detect-only) ---
+STDERR_T2=$(CLAUDE_PROJECT_DIR="${TMPDIR_BASE}/project" bash "$PATCHED_H1" 2>&1 >/dev/null)
+if [ ! -f "${FAKE_INSTALLED_HOOKS}/test-missing.sh" ] \
+   && echo "$STDERR_T2" | grep -q "NOT INSTALLED.*test-missing.sh"; then
+  PASS=$((PASS+1)); echo "--- T2: Missing hook reported, not auto-copied ---"
   echo "  PASS"
 else
-  FAIL=$((FAIL+1)); echo "--- T2: Auto-synced missing hook to deploy dir ---"
-  echo "  FAIL (file not copied)"
+  FAIL=$((FAIL+1)); echo "--- T2: Missing hook reported, not auto-copied ---"
+  echo "  FAIL (exists=$( [ -f "${FAKE_INSTALLED_HOOKS}/test-missing.sh" ] && echo yes || echo no ); stderr has NOT INSTALLED=$(echo "$STDERR_T2" | grep -c NOT))"
 fi
 
 # --- T3: Detects MD5 mismatch ---
@@ -87,15 +89,15 @@ else
   echo "  FAIL (mismatch not reported)"
 fi
 
-# --- T5: Auto-syncs mismatched files (MD5 now matches after sync) ---
+# --- T5: Does NOT auto-sync MD5 mismatch (deploy stays different) ---
 REPO_MD5=$(md5 -q "${FAKE_PROJECT_HOOKS}/test-mismatch.sh" 2>/dev/null || md5sum "${FAKE_PROJECT_HOOKS}/test-mismatch.sh" | awk '{print $1}')
 DEPLOY_MD5=$(md5 -q "${FAKE_INSTALLED_HOOKS}/test-mismatch.sh" 2>/dev/null || md5sum "${FAKE_INSTALLED_HOOKS}/test-mismatch.sh" | awk '{print $1}')
-if [ "$REPO_MD5" = "$DEPLOY_MD5" ]; then
-  PASS=$((PASS+1)); echo "--- T5: Auto-synced mismatched hook (MD5 now matches) ---"
-  echo "  PASS"
+if [ "$REPO_MD5" != "$DEPLOY_MD5" ]; then
+  PASS=$((PASS+1)); echo "--- T5: MD5 mismatch left uncorrected (no auto-sync) ---"
+  echo "  PASS (repo=$REPO_MD5 deploy=$DEPLOY_MD5)"
 else
-  FAIL=$((FAIL+1)); echo "--- T5: Auto-synced mismatched hook (MD5 now matches) ---"
-  echo "  FAIL (repo=$REPO_MD5 deploy=$DEPLOY_MD5)"
+  FAIL=$((FAIL+1)); echo "--- T5: MD5 mismatch left uncorrected (no auto-sync) ---"
+  echo "  FAIL (unexpected equal repo=$REPO_MD5 deploy=$DEPLOY_MD5)"
 fi
 
 # --- T6: Detects orphan hooks ---
