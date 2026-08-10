@@ -134,9 +134,27 @@ extract_push_branch() {
   echo "$branch"
 }
 
-# --- Check 0a: --all/--mirror guard (independent of --force flag) (#195) ---
-# --mirror and --all push ALL refs, implying forced updates even without --force
-if echo "$cmd" | grep -qE '\bgit\s+push\b' && echo "$cmd" | grep -qE '\s--(all|mirror)\b'; then
+# --- Check 0a: --all/--mirror as argv flags of git push only (R6) ---
+# Do NOT match the words inside heredoc bodies, -m/--body strings, or docs text.
+# Incident: 2026-08-10-guard-false-positive-on-documentation.md
+push_has_all_or_mirror_flag() {
+  local c="$1"
+  # Strip heredoc bodies (<<EOF ... EOF / <<'PY' ... PY)
+  local stripped
+  stripped="$(printf '%s' "$c" | python3 -c '
+import re,sys
+s=sys.stdin.read()
+s=re.sub(r"<<-?\s*['\''\"]?(\w+)['\''\"]?.*?\n.*?(?:^|\n)\1\b", " ", s, flags=re.S|re.M)
+s=re.sub(r"'\''(?:\\\\'\''|[^'\''])*'\''", "''", s)
+s=re.sub(r"\"(?:\\\\\"|[^\"])*\"", "\"\"", s)
+sys.stdout.write(s)
+' 2>/dev/null || printf '%s' "$c")"
+  # Find git push invocations; only treat --all/--mirror as standalone tokens after push
+  printf '%s' "$stripped" | grep -qE '(^|[[:space:];|&])git[[:space:]]+push([[:space:]]|$)' || return 1
+  printf '%s' "$stripped" | grep -qE '(^|[[:space:];|&])git[[:space:]]+push([^;&\n|]*[[:space:]]--(all|mirror)([[:space:]]|$))'
+}
+
+if push_has_all_or_mirror_flag "$cmd"; then
   echo "[BLOCK] --all/--mirror 付き push を検出。" >&2
   echo "  WHY: 全ブランチ(保護ブランチ含む)の履歴が上書き/削除されます。" >&2
   echo "  FIX: 個別のブランチを指定して push してください。" >&2

@@ -5,7 +5,7 @@ on:
     types: [opened, edited, synchronize, reopened, ready_for_review]
 
 # Required check name (branch protection): h5-admission
-# Path scope (checklist 6-3): scripts/**|hooks/lib — enforced in scripts/h5-admission-check.sh structural triggers
+# Structural path scope is enforced in scripts/h5-admission-check.sh (not by comment strings).
 jobs:
   h5-admission:
     name: h5-admission
