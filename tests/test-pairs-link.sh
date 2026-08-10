@@ -22,17 +22,17 @@ def bad(msg: str, detail: str) -> None:
 
 repo = sorted(p.name for p in (ROOT / "hooks").glob("*.sh"))
 deploy_dir = Path.home() / ".claude" / "hooks"
-if deploy_dir.is_dir():
-    dep = sorted(p.name for p in deploy_dir.glob("*.sh"))
-    if repo == dep:
-        ok("pair1 repo_hooks == deployed_hooks")
-    else:
-        bad(
-            "pair1 repo_hooks != deployed_hooks",
-            f"repo={repo} deployed={dep}",
-        )
+dep = sorted(p.name for p in deploy_dir.glob("*.sh")) if deploy_dir.is_dir() else []
+# Local deploy pair: skip when no machine deploy (CI runners).
+if not dep:
+    ok("pair1 skipped (no local deploy hooks; CI/local-without-setup)")
+elif repo == dep:
+    ok("pair1 repo_hooks == deployed_hooks")
 else:
-    ok("pair1 skipped (no deploy dir)")
+    bad(
+        "pair1 repo_hooks != deployed_hooks",
+        f"repo={repo} deployed={dep}",
+    )
 
 settings_path = Path.home() / ".claude" / "settings.json"
 if settings_path.is_file():
@@ -54,23 +54,26 @@ if settings_path.is_file():
         )
 
 canon = ROOT / "docs" / "CANONICAL-STATE.md"
-if canon.is_file() and settings_path.is_file():
+repo_settings = ROOT / "settings.json"
+# Prefer repo settings.json so CI links declaration to SSOT (not machine deploy).
+settings_for_pair5 = repo_settings if repo_settings.is_file() else settings_path
+if canon.is_file() and settings_for_pair5.is_file():
     text = canon.read_text()
     m = re.search(
         r"Registered hooks in `settings\.json`\s*\|\s*\*\*(\d+)\*\*",
         text,
     )
     declared = int(m.group(1)) if m else None
-    s = json.loads(settings_path.read_text())
+    s = json.loads(settings_for_pair5.read_text())
     actual = sum(
         len(m.get("hooks", [])) for ms in s.get("hooks", {}).values() for m in ms
     )
     if declared == actual:
-        ok(f"pair5 CANONICAL declared={declared} settings={actual}")
+        ok(f"pair5 CANONICAL declared={declared} settings={actual} source={settings_for_pair5.name}")
     else:
         bad(
             "pair5 CANONICAL vs settings mismatch",
-            f"declared={declared} settings={actual}",
+            f"declared={declared} settings={actual} source={settings_for_pair5}",
         )
 
 wf = ROOT / ".github" / "workflows" / "h5-admission.yml"
@@ -80,7 +83,7 @@ else:
     bad("pair4 workflow missing", f"path={wf} exists={wf.is_file()}")
 
 unused = ROOT / "hooks" / "_unused"
-if unused.is_dir() and deploy_dir.is_dir():
+if unused.is_dir() and dep:
     bad_names = [
         f.name
         for f in unused.glob("*.sh")
@@ -90,6 +93,8 @@ if unused.is_dir() and deploy_dir.is_dir():
         ok("pair6 no _unused basenames deployed")
     else:
         bad("pair6 retired hooks still deployed", f"deployed_retired={bad_names}")
+elif unused.is_dir():
+    ok("pair6 skipped (no local deploy)")
 
 print(f"--- {PASS} passed, {FAIL} failed ---")
 sys.exit(0 if FAIL == 0 else 1)
