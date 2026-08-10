@@ -15,6 +15,10 @@
 
 set -euo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+
 input=$(cat)
 command=$(echo "$input" | jq -r '.tool_input.command // ""')
 
@@ -38,6 +42,10 @@ fi
 # Only inject context for deployment commands
 if ! $IS_CLOUD_RUN_DEPLOY && ! $IS_DOCKER_PUSH && ! $IS_KUBECTL_APPLY; then
     exit 0
+fi
+
+if declare -F aidd_ledger_append >/dev/null 2>&1; then
+  aidd_ledger_append "post-deploy-verify" "measure" "allow" "deploy-cmd" "deploy-checklist-injected"
 fi
 
 # Extract service/image info for context

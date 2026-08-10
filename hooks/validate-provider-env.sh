@@ -11,6 +11,10 @@
 #   bash ~/.claude/scripts/claude-provider.sh anthropic|zai
 set -euo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+
 # Never block session start
 trap 'exit 0' EXIT
 
@@ -48,6 +52,9 @@ profile=""
 
 warn() {
   echo "⚠️  [provider] $*" >&2
+  if declare -F aidd_ledger_append >/dev/null 2>&1; then
+    aidd_ledger_append "validate-provider-env" "warn" "warn" "provider" "provider-env-warn"
+  fi
 }
 
 info() {
