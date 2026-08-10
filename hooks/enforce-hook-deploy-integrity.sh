@@ -1,11 +1,11 @@
 #!/bin/bash
 # enforce-hook-deploy-integrity.sh — SessionStart hook: enforce hook deployment integrity
 # =========================================================================
-# Successor to validate-hook-deployment.sh (archived to hooks/_unused/ per ADR-006), with enhanced checks:
-#   1. MD5 comparison of hooks/*.sh vs ~/.claude/hooks/*.sh
-#   2. Auto-sync mismatched files (cp from repo to ~/.claude/hooks/)
-#   3. Detect orphan deployed hooks (in ~/.claude/hooks/ but not in hooks/)
-#   4. Check settings.json registration
+# Successor to validate-hook-deployment.sh (archived to hooks/_unused/ per ADR-006):
+#   1. MD5 comparison of hooks/*.sh vs ~/.claude/hooks/*.sh (report only)
+#   2. Detect orphan deployed hooks (in ~/.claude/hooks/ but not in hooks/)
+#   3. Check settings.json registration
+#   NO auto-sync (loop-break T2): never cp from checkout branch into deploy dir
 #
 # SessionStart hook — cannot block (exit 0 always)
 # stdout: JSON additionalContext (when issues found)
@@ -89,7 +89,6 @@ compute_md5() {
 }
 
 issues=()
-synced=()
 
 # --- Phase 1: Collect project hook files ---
 project_files=()
@@ -99,36 +98,24 @@ while IFS= read -r -d '' filepath; do
   project_files+=("$rel_path")
 done < <(find "$PROJECT_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 
-# --- Phase 2: MD5 compare + auto-sync ---
-mkdir -p "$INSTALLED_HOOKS_DIR"
+# --- Phase 2: MD5 compare + report only (NO auto-sync cp) ---
+# loop-break T2: auto-sync copied from whichever branch was checked out at
+# SessionStart and re-deployed retired hooks (main 52 → disk 63). Detect only.
 for rel_path in "${project_files[@]}"; do
   repo_file="$PROJECT_HOOKS_DIR/$rel_path"
   deployed_file="$INSTALLED_HOOKS_DIR/$rel_path"
 
   if [[ ! -f "$deployed_file" ]]; then
-    # Not installed at all — create parent dir and copy it
-    mkdir -p "$(dirname "$deployed_file")"
-    if cp "$repo_file" "$deployed_file" 2>/dev/null && chmod +x "$deployed_file" 2>/dev/null; then
-      issues+=("NOT INSTALLED: $rel_path (auto-synced)")
-      synced+=("$rel_path")
-    else
-      issues+=("NOT INSTALLED: $rel_path (SYNC FAILED)")
-    fi
+    issues+=("NOT INSTALLED: $rel_path (detect-only; run setup.sh from develop)")
     continue
   fi
 
-  # Both files exist — compare MD5
+  # Both files exist — compare MD5 (do not copy)
   repo_md5=$(compute_md5 "$repo_file")
   deployed_md5=$(compute_md5 "$deployed_file")
 
   if [[ "$repo_md5" != "$deployed_md5" ]]; then
-    mkdir -p "$(dirname "$deployed_file")"
-    if cp "$repo_file" "$deployed_file" 2>/dev/null && chmod +x "$deployed_file" 2>/dev/null; then
-      issues+=("MD5 MISMATCH: $rel_path (repo=${repo_md5} deployed=${deployed_md5}, auto-synced)")
-      synced+=("$rel_path")
-    else
-      issues+=("MD5 MISMATCH: $rel_path (repo=${repo_md5} deployed=${deployed_md5}, SYNC FAILED)")
-    fi
+    issues+=("MD5 MISMATCH: $rel_path (repo=${repo_md5} deployed=${deployed_md5}; no auto-sync)")
   fi
 done
 
@@ -185,13 +172,12 @@ if [[ -f "$SETTINGS_FILE" ]]; then
   done < <(find "$INSTALLED_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' -not -path '*/lib/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 fi
 
-# --- Phase 5: Output results ---
+# --- Phase 5: Output results (warn only; never mutate deploy dir) ---
 if [[ ${#issues[@]} -gt 0 ]]; then
   issue_count=${#issues[@]}
-  sync_count=${#synced[@]}
 
   if declare -F aidd_ledger_append >/dev/null 2>&1; then
-    aidd_ledger_append "enforce-hook-deploy-integrity" "warn" "warn" "issues=${issue_count} synced=${sync_count}" "hook-deploy-integrity"
+    aidd_ledger_append "enforce-hook-deploy-integrity" "warn" "warn" "issues=${issue_count}" "hook-deploy-integrity"
   fi
 
   # stderr: diagnostic output
@@ -199,19 +185,14 @@ if [[ ${#issues[@]} -gt 0 ]]; then
   for issue in "${issues[@]}"; do
     echo "  - ${issue}" >&2
   done
-  if [[ $sync_count -gt 0 ]]; then
-    echo "[Hook Deploy Integrity] Auto-synced ${sync_count} file(s)." >&2
-  fi
+  echo "[Hook Deploy Integrity] detect-only (no auto-sync). Fix: checkout develop && bash setup.sh" >&2
 
   # Build warning message for additionalContext
   warning_lines=""
   for issue in "${issues[@]}"; do
     warning_lines="${warning_lines}\\n- ${issue}"
   done
-  message="[Hook Deploy Integrity] ${issue_count} issues found:${warning_lines}"
-  if [[ $sync_count -gt 0 ]]; then
-    message="${message}\\n[Auto-synced ${sync_count} file(s) from repo to ~/.claude/hooks/]"
-  fi
+  message="[Hook Deploy Integrity] ${issue_count} issues found:${warning_lines}\\n(detect-only; no auto-sync)"
 
   # stdout: JSON additionalContext
   python3 -c "
