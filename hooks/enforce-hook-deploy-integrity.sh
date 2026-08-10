@@ -16,9 +16,18 @@
 # =========================================================================
 set -uo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+
 # --- Known exclusions (not directly registered in settings.json) ---
+# aidd-h3-evidence-check.sh: CLI helper (stdin/file report); Stop path is aidd-h3-evidence-stop.sh
+# lib/*: support libraries sourced by hooks, not SessionStart/PreToolUse entries
 EXCLUDED_FROM_REGISTRATION=(
   "README.md"
+  "aidd-h3-evidence-check.sh"
+  "lib/aidd-ledger.sh"
+  "aidd-ledger.sh"
 )
 
 # --- Known orphans (exist in ~/.claude/hooks/ but not in hooks/) ---
@@ -129,9 +138,12 @@ if [[ -d "$INSTALLED_HOOKS_DIR" ]]; then
     rel_path="${filepath#$INSTALLED_HOOKS_DIR/}"
     filename=$(basename "$filepath")
 
-    # Skip non-script files
+    # Skip non-script files and support libs (not standalone hooks)
     case "$filename" in
       README.md|*.pyc) continue ;;
+    esac
+    case "$rel_path" in
+      lib/*) continue ;;
     esac
 
     # Check if this deployed file exists in project hooks
@@ -142,7 +154,7 @@ if [[ -d "$INSTALLED_HOOKS_DIR" ]]; then
         issues+=("UNKNOWN ORPHAN: $rel_path (in ~/.claude/hooks/ but not in hooks/)")
       fi
     fi
-  done < <(find "$INSTALLED_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
+  done < <(find "$INSTALLED_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' -not -path '*/lib/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 fi
 
 # --- Phase 4: Check settings.json registration ---
@@ -153,9 +165,12 @@ if [[ -f "$SETTINGS_FILE" ]]; then
     rel_path="${filepath#$INSTALLED_HOOKS_DIR/}"
     filename=$(basename "$filepath")
 
-    # Skip non-script files
+    # Skip non-script files and support libs
     case "$filename" in
       README.md|*.pyc) continue ;;
+    esac
+    case "$rel_path" in
+      lib/*) continue ;;
     esac
 
     # Skip known exclusions
@@ -167,13 +182,17 @@ if [[ -f "$SETTINGS_FILE" ]]; then
     if ! echo "$settings_content" | grep -q "~/.claude/hooks/$rel_path"; then
       issues+=("NOT REGISTERED: $rel_path (not in settings.json)")
     fi
-  done < <(find "$INSTALLED_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
+  done < <(find "$INSTALLED_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' -not -path '*/lib/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 fi
 
 # --- Phase 5: Output results ---
 if [[ ${#issues[@]} -gt 0 ]]; then
   issue_count=${#issues[@]}
   sync_count=${#synced[@]}
+
+  if declare -F aidd_ledger_append >/dev/null 2>&1; then
+    aidd_ledger_append "enforce-hook-deploy-integrity" "warn" "warn" "issues=${issue_count} synced=${sync_count}" "hook-deploy-integrity"
+  fi
 
   # stderr: diagnostic output
   echo "[Hook Deploy Integrity] ${issue_count} issues found:" >&2

@@ -120,6 +120,12 @@
             "command": "bash ~/.claude/hooks/auto-update-plugins.sh",
             "timeout": 60,
             "statusMessage": "Updating third-party plugins (24h cooldown)..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/dns-self-heal.sh",
+            "timeout": 15,
+            "statusMessage": "Checking DNS reachability (negative-cache self-heal)..."
           }
         ]
       }

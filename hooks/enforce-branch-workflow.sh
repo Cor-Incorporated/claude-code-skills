@@ -14,6 +14,10 @@
 
 set -euo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+
 # Only run in git repos
 git rev-parse --show-toplevel >/dev/null 2>&1 || exit 0
 
@@ -48,6 +52,9 @@ case "$CURRENT_BRANCH" in
     CONTEXT_LINES+=("[branch-workflow] 現在 $CURRENT_BRANCH ブランチです。直接編集は禁止です。")
     CONTEXT_LINES+=("  作業開始前に: git checkout -b feat/<description> develop")
     echo "[branch-workflow] WARNING: $CURRENT_BRANCH ブランチ上です。feature ブランチに切り替えてください。" >&2
+    if declare -F aidd_ledger_append >/dev/null 2>&1; then
+      aidd_ledger_append "enforce-branch-workflow" "warn" "warn" "branch=${CURRENT_BRANCH}" "on-protected-branch"
+    fi
     ;;
   develop)
     CONTEXT_LINES+=("[branch-workflow] 現在 develop ブランチです。")
