@@ -50,17 +50,25 @@ else
 fi
 
 is_guard_pr=0
-# Structural triggers: hooks scripts, settings hooks surface, workflows (CI gates)
-if printf '%s\n' "$DIFF_FILES" | grep -qE '^(hooks/[^/]+\.sh|settings\.json|\.github/workflows/)'; then
+# Structural triggers (handover 2026-08-10 §3-1 #3): hooks/, hooks/lib/, scripts/, settings, workflows
+# NOTE: pattern must remain greppable as scripts/**|hooks/lib for checklist 6-3
+# paths: hooks/** | hooks/lib/** | scripts/** | settings.json | .github/workflows/**
+if printf '%s\n' "$DIFF_FILES" | grep -qE '^(hooks/|hooks/lib/|scripts/|settings\.json|\.github/workflows/)'; then
   is_guard_pr=1
 fi
 # Self-declaration (PR template)
 if printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*yes|ブロック権限|完了判定検証器|block-capable guard'; then
   is_guard_pr=1
 fi
-# Explicit opt-out for pure docs/advisory
-if printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*no|H5:\s*not-applicable|H5-skip'; then
-  is_guard_pr=0
+# Explicit non-guard declaration only (H5-skip self-exemption REMOVED — handover §3-1 #1)
+# A structural touch + "H5-guard: no" still requires human-visible declaration but does NOT
+# bypass if H5-guard: yes is also present. Pure advisory: H5-guard: no alone.
+if printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*no' \
+  && ! printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*yes'; then
+  # Only allow opt-out when no hooks/lib or settings hook surface is added/changed
+  if ! printf '%s\n' "$DIFF_FILES" | grep -qE '^(hooks/[^/]+\.sh|hooks/lib/|settings\.json)'; then
+    is_guard_pr=0
+  fi
 fi
 
 if [[ "$is_guard_pr" -eq 0 ]]; then
@@ -144,6 +152,31 @@ if printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE '(廃止条件|retirement).{0,80}
   ret_ok=1
 fi
 [[ "$ret_ok" -eq 0 ]] && missing+=("retirement-condition")
+
+# ADR-002 subtraction gate: require retire PR MERGED (state, not string-only) OR explicit N/A
+sub_ok=0
+if printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE 'H5-SUBTRACTION:\s*N/?A'; then
+  sub_ok=1
+fi
+retire_pr="$(printf '%s' "$PR_BODY" | grep -oiE 'H5-RETIRE-PR:[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+' || true)"
+if [[ -n "$retire_pr" ]]; then
+  if command -v gh >/dev/null 2>&1; then
+    st="$(gh pr view "$retire_pr" --json state -q .state 2>/dev/null || echo UNKNOWN)"
+    if [[ "$st" == "MERGED" ]]; then
+      sub_ok=1
+      log "H5: subtraction PR #$retire_pr state=MERGED"
+    else
+      fail "subtraction PR #$retire_pr state=$st (need MERGED)"
+      missing+=("subtraction-pr-not-merged")
+    fi
+  else
+    warn "gh unavailable; cannot verify H5-RETIRE-PR:$retire_pr state"
+    missing+=("subtraction-pr-unverified")
+  fi
+fi
+if [[ "$sub_ok" -eq 0 ]] && ! printf '%s' "${missing[*]}" | grep -q subtraction; then
+  missing+=("subtraction-gate")
+fi
 
 # Fail-open structural smell (warn only) on changed shell hooks
 while IFS= read -r f; do
