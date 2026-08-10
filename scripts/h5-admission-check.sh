@@ -50,23 +50,23 @@ else
 fi
 
 is_guard_pr=0
-# Structural triggers (handover 2026-08-10 §3-1 #3): hooks/, hooks/lib/, scripts/, settings, workflows
-# NOTE: pattern must remain greppable as scripts/**|hooks/lib for checklist 6-3
-# paths: hooks/** | hooks/lib/** | scripts/** | settings.json | .github/workflows/**
-if printf '%s\n' "$DIFF_FILES" | grep -qE '^(hooks/|hooks/lib/|scripts/|settings\.json|\.github/workflows/)'; then
+# Structural triggers: any path that can change guard force projection.
+# Keep this set and the H5-guard:no exemption-denylist (below) IDENTICAL.
+# Ref: aidd-governance handover 2026-08-11 R1 / VERDICT.md §1 根拠1
+_H5_STRUCT_RE='^(hooks/|hooks/lib/|scripts/|settings\.json|\.github/workflows/)'
+if printf '%s\n' "$DIFF_FILES" | grep -qE "$_H5_STRUCT_RE"; then
   is_guard_pr=1
 fi
 # Self-declaration (PR template)
 if printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*yes|ブロック権限|完了判定検証器|block-capable guard'; then
   is_guard_pr=1
 fi
-# Explicit non-guard declaration only (H5-skip self-exemption REMOVED — handover §3-1 #1)
-# A structural touch + "H5-guard: no" still requires human-visible declaration but does NOT
-# bypass if H5-guard: yes is also present. Pure advisory: H5-guard: no alone.
+# H5-guard: no may only clear the flag when NO structural path is touched.
+# Previously the denylist was a subset (hooks/*.sh|hooks/lib|settings) so
+# scripts/** and .github/workflows/** could self-exempt — that hole is closed.
 if printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*no' \
   && ! printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*yes'; then
-  # Only allow opt-out when no hooks/lib or settings hook surface is added/changed
-  if ! printf '%s\n' "$DIFF_FILES" | grep -qE '^(hooks/[^/]+\.sh|hooks/lib/|settings\.json)'; then
+  if ! printf '%s\n' "$DIFF_FILES" | grep -qE "$_H5_STRUCT_RE"; then
     is_guard_pr=0
   fi
 fi

@@ -83,9 +83,22 @@ H5-SUBTRACTION: N/A — tightens existing hard block only, net +0 guards
 EOF
 )" bash "$CHK"
 
-# H5-guard: no alone without hook sh change can pass (workflow-only docs)
-run_case "advisory-no-on-workflow" 0 \
+# R1: H5-guard: no MUST NOT exempt structural paths (symmetric with triggers)
+run_case "no-exempt-workflow" 1 \
+  env H5_DIFF_FILES=".github/workflows/h5-admission.yml" H5_PR_BODY="H5-guard: no" bash "$CHK"
+
+run_case "no-exempt-script" 1 \
+  env H5_DIFF_FILES="scripts/h5-admission-check.sh" H5_PR_BODY="H5-guard: no" bash "$CHK"
+
+run_case "no-exempt-hooks-subdir" 1 \
+  env H5_DIFF_FILES="hooks/sub/x.sh" H5_PR_BODY="H5-guard: no" bash "$CHK"
+
+run_case "no-exempt-ci-workflow" 1 \
   env H5_DIFF_FILES=".github/workflows/ci.yml" H5_PR_BODY="H5-guard: no — docs only workflow rename" bash "$CHK"
+
+# Non-structural path + H5-guard: no still passes (not a guard PR)
+run_case "advisory-no-on-readme" 0 \
+  env H5_DIFF_FILES="README.md" H5_PR_BODY="H5-guard: no" bash "$CHK"
 
 echo "--- $pass passed, $fail failed ---"
 [[ "$fail" -eq 0 ]]
