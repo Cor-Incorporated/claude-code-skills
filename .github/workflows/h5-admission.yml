@@ -5,6 +5,7 @@ on:
     types: [opened, edited, synchronize, reopened, ready_for_review]
 
 # Required check name (branch protection): h5-admission
+# Path scope (checklist 6-3): scripts/**|hooks/lib — enforced in scripts/h5-admission-check.sh structural triggers
 jobs:
   h5-admission:
     name: h5-admission
@@ -22,9 +23,8 @@ jobs:
           H5_BASE_REF: origin/${{ github.base_ref }}
           H5_HEAD_REF: HEAD
           H5_PR_NUMBER: ${{ github.event.pull_request.number }}
+          # PR body is read from GITHUB_EVENT_PATH inside the script (no body expression in yml).
           GH_TOKEN: ${{ github.token }}
         run: |
           chmod +x scripts/h5-admission-check.sh
-          # Prefer event payload body (works without extra permissions)
-          export H5_PR_BODY="${{ github.event.pull_request.body }}"
           bash scripts/h5-admission-check.sh
