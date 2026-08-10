@@ -17,6 +17,10 @@
 
 set -uo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+
 # Read stdin
 input=""
 if [[ ! -t 0 ]]; then
@@ -99,6 +103,10 @@ esac
 if [[ -z "$GUIDANCE" ]]; then
   # Only provide generic guidance for repeated failures (avoid noise)
   exit 0
+fi
+
+if declare -F aidd_ledger_append >/dev/null 2>&1; then
+  aidd_ledger_append "tool-failure-recovery" "measure" "allow" "tool=${TOOL_NAME}" "recovery-guidance"
 fi
 
 # Output additionalContext via hookSpecificOutput

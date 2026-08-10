@@ -8,6 +8,10 @@
 
 set -uo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+
 input=""
 if [[ ! -t 0 ]]; then
   input=$(cat 2>/dev/null || echo "")
@@ -64,6 +68,10 @@ STATE_DIR="$HOME/.claude/state"
 STATE_FILE="$STATE_DIR/agent-failure-last.json"
 mkdir -p "$STATE_DIR"
 printf '%s\n' "$summary" > "$STATE_FILE"
+
+if declare -F aidd_ledger_append >/dev/null 2>&1; then
+  aidd_ledger_append "notify-agent-failure" "measure" "allow" "stage=${failure_stage}" "agent-failure"
+fi
 
 context=$(python3 - <<'PY' "$summary"
 import json, sys

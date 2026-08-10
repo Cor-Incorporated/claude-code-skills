@@ -22,6 +22,10 @@
 
 set -uo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+
 # --- Read stdin ---
 input=""
 if [[ ! -t 0 ]]; then
@@ -141,6 +145,9 @@ fi
 # =========================================================================
 
 if [[ -n "$WARNINGS" ]]; then
+  if declare -F aidd_ledger_append >/dev/null 2>&1; then
+    aidd_ledger_append "verify-agent-output" "warn" "warn" "subagent=${subagent_type:-unknown}" "phantom-or-unverified-claim"
+  fi
   MSG=$(printf '%b' "$WARNINGS")
   jq -n --arg ctx "$MSG" '{
     "hookSpecificOutput": {

@@ -10,6 +10,10 @@
 # Exit: always 0 (PostToolUse hooks must not block)
 set -uo pipefail
 
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
+
 # --- Dependency check: jq required ---
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -111,6 +115,9 @@ done <<< "$HOOK_FILES"
 
 # --- Report results to stderr ---
 if [ "$DEPLOYED" -gt 0 ] || [ "$FAILED" -gt 0 ]; then
+  if declare -F aidd_ledger_append >/dev/null 2>&1; then
+    aidd_ledger_append "enforce-hook-deploy-after-merge" "measure" "allow" "pr=${PR_NUM} deployed=${DEPLOYED} failed=${FAILED}" "hook-auto-deploy"
+  fi
   echo "" >&2
   echo "=== [Hook Auto-Deploy] PR #${PR_NUM} ===" >&2
   printf "%b" "$RESULTS" >&2
