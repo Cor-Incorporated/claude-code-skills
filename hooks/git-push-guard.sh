@@ -160,15 +160,28 @@ ERRMSG
 fi
 
 # --- 2. Protected branch direct push check ---
+# Destination is protected if refspec is bare branch, refs/heads/<branch>,
+# or *:<branch> / *:refs/heads/<branch> (Phase 3 T3-1 coverage repair:
+# HEAD:refs/heads/main and refs/heads/main previously slipped through
+# because only ":${branch}$" / exact "${branch}" were matched).
+_is_protected_push_dest() {
+  local refspec="$1" branch="$2"
+  [ "$refspec" = "$branch" ] && return 0
+  [ "$refspec" = "refs/heads/${branch}" ] && return 0
+  echo "$refspec" | grep -qE ":(refs/heads/)?${branch}$" && return 0
+  return 1
+}
 for branch in develop main master; do
     # Exclude only pure delete refspecs (`--delete` or a bare leading `:branch`
     # with no source ref before the colon) — `HEAD:branch` / `feat:branch` are
     # real pushes to the protected branch and must still be caught below.
-    if echo "$cmd_norm" | grep -qE "git\s+push\s+.*\b${branch}\b" && \
-       ! echo "$cmd_norm" | grep -qE "(--delete|(^|[[:space:]]):${branch}\b)"; then
+    # Also match refs/heads/<branch> (word-boundary alone is insufficient for
+    # the dest equality check below; still used as a cheap prefilter).
+    if echo "$cmd_norm" | grep -qE "git\s+push\s+.*(refs/heads/)?${branch}([^A-Za-z0-9._-]|$)" && \
+       ! echo "$cmd_norm" | grep -qE "(--delete|(^|[[:space:]]):(refs/heads/)?${branch}\b)"; then
         push_target=$(echo "$cmd_norm" | grep -oE "push\s+[^|;&)<>]*" | sed 's/push\s*//' | sed 's/\s*-[a-zA-Z-]*//g' | xargs)
         refspec=$(echo "$push_target" | awk '{print $NF}')
-        if [ "$refspec" = "$branch" ] || echo "$refspec" | grep -qE ":${branch}$"; then
+        if _is_protected_push_dest "$refspec" "$branch"; then
             echo "[BLOCKED] Direct push to '${branch}'. Use PR instead." >&2
             echo "  git push -u origin feat/xxx && gh pr create --base develop" >&2
             _aidd_block

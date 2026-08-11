@@ -87,6 +87,59 @@ test_case "git log"                        allow 'git log --oneline -5'
 test_case "commit message with plus"       allow 'git commit -m "fix: a+b"'
 test_case "git fetch"                      allow 'git fetch origin'
 
+# ---------------------------------------------------------------------------
+# Phase 3 T3-1: refs/heads/ 被覆（CC が Cursor/Codex と揃う）
+# 軸: ref 表記 × +有無 × 保護ブランチ × -u
+# protect-branches + git-push-guard の複合（設定上の PreToolUse 順と同一）
+# ---------------------------------------------------------------------------
+HOOK_GUARD="$SCRIPT_DIR/../hooks/git-push-guard.sh"
+
+test_composite() {
+  local name="$1" expect="$2" cmd="$3"
+  local rc1=0 rc2=0
+  printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$(json_escape "$cmd")" \
+    | bash "$HOOK" >/dev/null 2>&1 || rc1=$?
+  printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$(json_escape "$cmd")" \
+    | bash "$HOOK_GUARD" >/dev/null 2>&1 || rc2=$?
+  local blocked=0
+  [ "$rc1" -ne 0 ] && blocked=1
+  [ "$rc2" -ne 0 ] && blocked=1
+  local ok
+  if [ "$expect" = "block" ]; then
+    [ "$blocked" -eq 1 ] && ok=1 || ok=0
+  else
+    [ "$blocked" -eq 0 ] && ok=1 || ok=0
+  fi
+  if [ "$ok" -eq 1 ]; then
+    echo "  PASS: $name (rc_pb=$rc1 rc_gpg=$rc2)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $name (expect=$expect rc_pb=$rc1 rc_gpg=$rc2) :: $cmd"; FAIL=$((FAIL + 1))
+  fi
+}
+
+echo ""
+echo "=== Phase 3 T3-1: refs/heads/ coverage (composite protect-branches + git-push-guard) ==="
+echo "--- ref 表記 × + × 保護ブランチ × -u ---"
+for b in main master develop; do
+  test_composite "bare $b"                    block "git push origin $b"
+  test_composite "refs/heads/$b"              block "git push origin refs/heads/$b"
+  test_composite "HEAD:$b"                    block "git push origin HEAD:$b"
+  test_composite "HEAD:refs/heads/$b"         block "git push origin HEAD:refs/heads/$b"
+  test_composite "+HEAD:$b"                   block "git push origin +HEAD:$b"
+  test_composite "+refs/heads/$b"             block "git push origin +refs/heads/$b"
+  test_composite "+HEAD:refs/heads/$b"        block "git push origin +HEAD:refs/heads/$b"
+  test_composite "-u bare $b"                 block "git push -u origin $b"
+  test_composite "-u HEAD:refs/heads/$b"      block "git push -u origin HEAD:refs/heads/$b"
+  test_composite "-u refs/heads/$b"           block "git push -u origin refs/heads/$b"
+done
+
+echo "--- T3-1 偽陽性（複合） ---"
+test_composite "feat/x"                       allow 'git push origin feat/x'
+test_composite "feat/a+b"                     allow 'git push origin feat/a+b'
+test_composite "status"                       allow 'git status'
+test_composite "fetch origin"                 allow 'git fetch origin'
+test_composite "HEAD:feat/x"                  allow 'git push origin HEAD:feat/x'
+
 echo ""
 echo "=== PASS=$PASS FAIL=$FAIL ==="
 [ "$FAIL" -eq 0 ] || exit 1
