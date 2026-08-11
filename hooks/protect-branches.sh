@@ -134,20 +134,49 @@ extract_push_branch() {
   echo "$branch"
 }
 
+# --- 入力正規化（loop-break T1 follow-up・F1 18 ケース列挙で発見した 3 クラスの穴）---
+# 実測（2026-08-11）: 18 破壊形のうち 8 形が通過していた。
+#   (1) 引用形  `git push origin "--mirror"` / `'--mirror'`
+#       → 空白アンカー `\s--` が引用符の直後にマッチせず素通り
+#   (2) refspec force  `git push origin +main` / `+main:main` / `HEAD:+main`
+#       → クラス丸ごと未被覆。`+<ref>` は --force と等価の標準記法
+#   (3) git グローバルオプション前置  `git -c foo=bar push origin --mirror`
+#       → `\bgit\s+push\b` が `git` と `push` の隣接を要求していた
+# 対処: 引用符を除去した正規化文字列に対して照合し、push 検出はグローバル
+# オプションを許容する。この 3 軸は F1 マトリクスで固定してある
+# （tests/test-destructive-push-forms.sh — 破壊形 20 + 偽陽性 7 = 27 ケース）。
+# cmd_norm / _GIT_PUSH_RE / Check 0a / Check 0a2 を触ったら必ず再実行すること。
+# 修正前の版に対して 9 件 red になることを確認済み（2026-08-11）。
+cmd_norm=$(printf '%s' "$cmd" | tr -d "\"'")
+
+# `git [global-opts...] push` — `git -c k=v push` / `git --no-pager push` を含む
+_GIT_PUSH_RE='(^|[^[:alnum:]_-])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*push([^[:alnum:]_-]|$)'
+
 # --- Check 0a: --all/--mirror guard (independent of --force flag) (#195) ---
 # Reverted from R6 flag-position parser (loop-break T1): that parser missed the
 # canonical argv order `git push origin --mirror` / `git push origin --all`.
 # False positives on documentation text are accepted; broken protection is worse.
 # --mirror and --all push ALL refs, implying forced updates even without --force
-if echo "$cmd" | grep -qE '\bgit\s+push\b' && echo "$cmd" | grep -qE '\s--(all|mirror)\b'; then
+if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE" && echo "$cmd_norm" | grep -qE '[[:space:]]--(all|mirror)([^[:alnum:]_-]|$)'; then
   echo "[BLOCK] --all/--mirror 付き push を検出。" >&2
   echo "  WHY: 全ブランチ(保護ブランチ含む)の履歴が上書き/削除されます。" >&2
   echo "  FIX: 個別のブランチを指定して push してください。" >&2
   _aidd_block
 fi
 
+# --- Check 0a2: refspec force `+<ref>` guard (loop-break T1 follow-up) ---
+# `git push origin +main` は `--force` を伴わずに保護ブランチの履歴を上書きする。
+# `+` は refspec の先頭にのみ意味を持つため、空白または `:` の直後に限定して
+# 照合する（`git push origin feat/a+b` のようなブランチ名は誤検知しない）。
+if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE" && echo "$cmd_norm" | grep -qE '[[:space:]:]\+[A-Za-z0-9_./-]'; then
+  echo "[BLOCK] refspec force (+<ref>) 付き push を検出。" >&2
+  echo "  WHY: '+' 接頭辞は --force と等価で、保護ブランチの履歴を上書きします。" >&2
+  echo "  FIX: '+' を外し、通常の push を行ってください。" >&2
+  _aidd_block
+fi
+
 # --- Check 0b: Force push guard (fork-aware) (#192, #195, parser-gap fix) ---
-if echo "$cmd" | grep -qE '\bgit\s+push\b' && is_force_push "$cmd"; then
+if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE" && is_force_push "$cmd_norm"; then
   # Position-independent protected-branch detection: a protected branch ref
   # appearing anywhere in a force-push command is caught, even when hidden in
   # process substitution `cat <(git push --force origin main)`, command chains
