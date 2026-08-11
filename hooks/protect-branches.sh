@@ -257,13 +257,35 @@ for branch in $PROTECTED_BRANCHES; do
 done
 
 # --- Check 3: Remote branch deletion (git push origin :branch) ---
+# Also :refs/heads/<branch> (Phase 3 T3-1 — bare :main was covered; full ref was not).
 for branch in $PROTECTED_BRANCHES; do
-    if echo "$cmd" | grep -qE "push\s+\S+\s+:${branch}([^A-Za-z0-9._/-]|$)"; then
+    if echo "$cmd_norm" | grep -qE "push[[:space:]]+[^[:space:]]+[[:space:]]+:(refs/heads/)?${branch}([^A-Za-z0-9._/-]|$)"; then
         echo "[Hook] BLOCKED: Protected branch '${branch}' cannot be deleted from remote." >&2
         echo "[Hook] develop/main/master branches are tied to CI/CD and must NEVER be deleted." >&2
         _aidd_block
     fi
 done
+
+# --- Check 3b: Direct push to protected (non-force) including refs/heads/ forms ---
+# Primary owner is git-push-guard.sh; this is coverage repair so protect-branches
+# alone also blocks HEAD:refs/heads/main and refs/heads/main (Cursor/Codex parity).
+# False positives on feat/* and docs that merely mention main are excluded by
+# requiring a git push match + destination token equality (not bare substring).
+if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE"; then
+  push_target=$(echo "$cmd_norm" | grep -oE "push[[:space:]]+[^|;&)<>]*" | head -1 \
+    | sed 's/^push[[:space:]]*//' | sed -E 's/[[:space:]]+-(u|f|q|-force|-force-with-lease|--set-upstream|--quiet)([^[:space:]]*)?//g' | xargs)
+  refspec=$(echo "$push_target" | awk '{print $NF}')
+  for branch in $PROTECTED_BRANCHES; do
+    if [ "$refspec" = "$branch" ] \
+       || [ "$refspec" = "refs/heads/${branch}" ] \
+       || echo "$refspec" | grep -qE ":(refs/heads/)?${branch}$"; then
+      echo "[BLOCK] 保護ブランチ '${branch}' への直接 push を検出。" >&2
+      echo "  WHY: 共有ブランチへの直接 push は禁止です（refs/heads/ 表記含む）。" >&2
+      echo "  FIX: feature ブランチで作業し、PR 経由でマージしてください。" >&2
+      _aidd_block
+    fi
+  done
+fi
 
 # --- Check 4: gh pr merge --delete-branch (most dangerous!) ---
 if echo "$cmd" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
