@@ -2,6 +2,11 @@
 # =============================================================================
 # Protected Branch Guard Hook
 # =============================================================================
+# 4ツール横断の強制点の 1 つ。他: git-push-guard.sh /
+# ~/.cursor/hooks/git-guard.sh / ~/.codex/rules/default.rules /
+# ~/.config/opencode/opencode.jsonc permission
+# 片方だけ変えない（tests/test-cross-tool-force-matrix.sh）
+# =============================================================================
 # Prevents deletion of protected branches (develop, main, master) via:
 #   - gh pr merge --delete-branch (checks PR source branch)
 #   - git branch -d/-D <protected>
