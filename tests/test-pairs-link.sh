@@ -96,6 +96,92 @@ if unused.is_dir() and dep:
 elif unused.is_dir():
     ok("pair6 skipped (no local deploy)")
 
+# ---- T7-3: 4-agent pairs (facts.yaml ids must all be exercised) ----
+# Local-only pairs: skip when the target machine files are absent (CI-safe).
+home = Path.home()
+
+# pair7: codex hooks.json registrations ↔ deployed scripts
+cj = home / ".codex" / "hooks.json"
+if not cj.is_file():
+    ok("pair7 codex hooks.json skipped (no Codex install)")
+else:
+    reg = json.loads(cj.read_text())
+    cmds = [
+        h.get("command", "")
+        for ms in reg.get("hooks", {}).values()
+        for m in ms
+        for h in m.get("hooks", [])
+    ]
+    scripts = [
+        c.split()[-1]
+        for c in cmds
+        if ".sh" in c
+    ]
+    missing_scripts = [s for s in scripts if not Path(s).expanduser().is_file()]
+    if not missing_scripts:
+        ok(f"pair7 codex hooks.json registrations exist on disk ({len(scripts)} registered)")
+    else:
+        bad(
+            "pair7 codex hooks.json registered script missing",
+            f"registered={scripts} missing={missing_scripts}",
+        )
+
+# pair8: codex AGENTS.md force-push protection ↔ default.rules forbidden rules
+rules = home / ".codex" / "rules" / "default.rules"
+if not rules.is_file():
+    ok("pair8 codex execpolicy skipped (no default.rules)")
+else:
+    rule_text = rules.read_text()
+    ops = [
+        ('["git", "push", "--force"]', "force-push"),
+        ('["git", "push", "origin", "main"]', "direct push main"),
+        ('["git", "push", "origin", "master"]', "direct push master"),
+        ('["git", "push", "origin", "develop"]', "direct push develop"),
+        ('["git", "push", "--mirror"]', "mirror push"),
+    ]
+    absent = [label for pat, label in ops if f'prefix_rule(pattern={pat}, decision="forbidden")' not in rule_text]
+    if not absent:
+        ok("pair8 codex execpolicy covers AGENTS.md force-push/direct-push declaration")
+    else:
+        bad(
+            "pair8 codex execpolicy missing forbidden rules",
+            f"declared_in_AGENTS=force-push+direct-push missing_in_rules={absent}",
+        )
+
+# pair9: cursor guard hook ↔ its ledger (hook exists ⇒ ledger exists)
+cg = home / ".cursor" / "hooks" / "git-guard.sh"
+cl = home / ".cursor" / "hooks" / "guard-ledger.jsonl"
+if not cg.is_file():
+    ok("pair9 cursor guard hook skipped (no Cursor hook)")
+elif cl.is_file():
+    ok("pair9 cursor guard hook + ledger present")
+else:
+    bad(
+        "pair9 cursor guard hook without ledger",
+        f"hook={cg} ledger={cl} exists=False",
+    )
+
+# pair10: opencode team.ts blanket allow must be 0 (comments excluded)
+oc_team = home / "Developer" / "opencode" / "packages" / "guardrails" / "profile" / "plugins" / "team.ts"
+if not oc_team.is_file():
+    ok("pair10 opencode team.ts skipped (no opencode checkout)")
+else:
+    text = oc_team.read_text()
+    # count actual rule lines, excluding comment/doc lines
+    blanket = [
+        line.strip()
+        for line in text.splitlines()
+        if re.search(r'permission:\s*"\*",\s*pattern:\s*"\*",\s*action:\s*"allow"', line)
+        and not line.lstrip().startswith(("*", "//", "/*", " *"))
+    ]
+    if not blanket:
+        ok("pair10 opencode team.ts has zero blanket-allow rules")
+    else:
+        bad(
+            "pair10 opencode team.ts blanket allow present",
+            f"declared=0 actual={blanket}",
+        )
+
 print(f"--- {PASS} passed, {FAIL} failed ---")
 sys.exit(0 if FAIL == 0 else 1)
 PY
