@@ -1,38 +1,76 @@
 #!/usr/bin/env bash
-# T9-3: リポ横断の C11 着地計数（PR テンプレの大文字小文字**両対応**）
+# T9-3 + T10-1: リポ横断の C11 着地計数（正本計数器）
 #
-# 監督の測定器（旧）は .github/pull_request_template.md（小文字）しか見ず、
-# persona-village-v2 の大文字 PULL_REQUEST_TEMPLATE.md を数え落としていた。
-# 本計測器は両ファイル名を確認する。--legacy-lowercase-only で旧挙動を再現できる。
+# C11 着地数は**本計数器の出力のみを正**とする（監督も手元コマンドを使わない —
+# design/ops/c11-counter-ssot.md 参照）。集合は引数で明示し、既定値を隠さない。
 #
-# 対象: Cor-Incorporated org のリポ × デフォルトブランチ
+# 引数:
+#   --scope=all       全 Cor-Incorporated リポ（既定）
+#   --scope=active90  ~/Developer 直下かつ直近 90 日に commit があるリポのみ
+#   --branch=default  デフォルトブランチのみ（既定）
+#   --branch=any      main / develop / dev のいずれかで着地していれば 1
+#   --legacy-lowercase-only  旧測定器の挙動（小文字のみ）を再現（red 実測用）
+#
+# 既定: --scope=all --branch=default（両対応）。既定値は出力に常に表示する。
+#
 # 判定: .github/pull_request_template.md または .github/PULL_REQUEST_TEMPLATE.md に
-#       「実環境貫通」が 1 以上あるか
+#       「実環境貫通」が 1 以上あるか（大文字小文字両対応）
 set -uo pipefail
 
+SCOPE="all"
+BRANCH="default"
 LEGACY=0
-[[ "${1:-}" == "--legacy-lowercase-only" ]] && LEGACY=1
+for a in "$@"; do
+  case "$a" in
+    --scope=all) SCOPE="all" ;;
+    --scope=active90) SCOPE="active90" ;;
+    --branch=default) BRANCH="default" ;;
+    --branch=any) BRANCH="any" ;;
+    --legacy-lowercase-only) LEGACY=1 ;;
+    *) echo "unknown arg: $a" >&2; exit 2 ;;
+  esac
+done
+
+# active90: ~/Developer 直下かつ直近 90 日 commit あり
+active90() {
+  local repo="$1" d
+  d="$HOME/Developer/$repo"
+  [[ -d "$d/.git" ]] || return 1
+  git -C "$d" log -1 --format=%ct --since="90 days ago" >/dev/null 2>&1 || return 1
+  return 0
+}
 
 count=0
 declare -a HITS=()
 for repo in $(gh repo list Cor-Incorporated --limit 100 --json name --jq '.[].name' 2>/dev/null); do
-  br=$(gh api "repos/Cor-Incorporated/$repo" --jq '.default_branch' 2>/dev/null) || continue
+  [[ "$SCOPE" == "active90" ]] && ! active90 "$repo" && continue
+
+  if [[ "$BRANCH" == "default" ]]; then
+    branches=("$(gh api "repos/Cor-Incorporated/$repo" --jq '.default_branch' 2>/dev/null || true)")
+    [[ -z "${branches[0]}" ]] && continue
+  else
+    branches=("main" "develop" "dev")
+  fi
+
   if [[ "$LEGACY" -eq 1 ]]; then
     tmpls=("pull_request_template.md")
   else
     tmpls=("pull_request_template.md" "PULL_REQUEST_TEMPLATE.md")
   fi
-  for tmpl in "${tmpls[@]}"; do
-    hit=$(gh api "repos/Cor-Incorporated/$repo/contents/.github/$tmpl?ref=$br" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | grep -c "実環境貫通")
-    if [[ "$hit" -ge 1 ]] 2>/dev/null; then
-      HITS+=("$repo/$br/$tmpl")
-      count=$((count + 1))
-      break
-    fi
+
+  for br in "${branches[@]}"; do
+    for tmpl in "${tmpls[@]}"; do
+      hit=$(gh api "repos/Cor-Incorporated/$repo/contents/.github/$tmpl?ref=$br" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | grep -c "実環境貫通")
+      if [[ "$hit" -ge 1 ]] 2>/dev/null; then
+        HITS+=("$repo/$br/$tmpl")
+        count=$((count + 1))
+        break 2
+      fi
+    done
   done
 done
 
 if [[ "${VERBOSE:-0}" -eq 1 ]]; then
   printf '%s\n' "${HITS[@]}"
 fi
-echo "C11_default_branch_landed=$count (mode=$([ "$LEGACY" -eq 1 ] && echo legacy-lowercase-only || echo both-cases))"
+echo "C11_landed=$count scope=$SCOPE branch=$BRANCH case=$([ "$LEGACY" -eq 1 ] && echo lowercase-only || echo both-cases)"
