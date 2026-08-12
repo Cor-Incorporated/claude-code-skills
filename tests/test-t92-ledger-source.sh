@@ -17,7 +17,7 @@ trap 'rm -rf "$SB"' EXIT
 check_row() {  # $1=expected source, $2=ledger path
   local expect="$1" ledger="$2"
   local got
-  got=$(tail -1 "$ledger" | /Users/teradakousuke/.pyenv/versions/3.12.9/bin/python3 -c "import json,sys; print(json.loads(sys.stdin.read())['source'])" 2>/dev/null || echo MISSING)
+  got=$(tail -1 "$ledger" | python3 -c "import json,sys; print(json.loads(sys.stdin.read())['source'])" 2>/dev/null || echo MISSING)
   if [[ "$got" == "$expect" ]]; then
     ok "ledger row source=$expect (got $got)"
   else
