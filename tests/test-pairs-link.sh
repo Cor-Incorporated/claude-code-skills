@@ -2,6 +2,8 @@
 # T5 link tests: both values printed on failure (runbook.md rule B)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export AIDD_LEDGER_SOURCE=test  # T9-2: ledger rows from test harness are source=test
+
 python3 - "$ROOT" <<'PY'
 import json, os, re, sys
 from pathlib import Path

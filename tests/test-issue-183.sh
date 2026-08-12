@@ -4,6 +4,8 @@
 # (gate-modes/stop.sh coverage removed by ADR-006 — gate-modes retired entirely)
 set -uo pipefail
 
+
+export AIDD_LEDGER_SOURCE=test  # T9-2: ledger rows from test harness are source=test
 PASS=0; FAIL=0
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOK_DIR="${SCRIPT_DIR}/../hooks"

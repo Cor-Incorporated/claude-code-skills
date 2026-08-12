@@ -6,6 +6,8 @@
 # Run with HOME=fake so the real ~/.claude/hooks ledger is never touched.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export AIDD_LEDGER_SOURCE=test  # T9-2: ledger rows from test harness are source=test
+
 HOOK="$ROOT/hooks/enforce-hook-deploy-integrity.sh"
 chmod +x "$HOOK"
 
