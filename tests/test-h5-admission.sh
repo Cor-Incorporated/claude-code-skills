@@ -100,5 +100,63 @@ run_case "no-exempt-ci-workflow" 1 \
 run_case "advisory-no-on-readme" 0 \
   env H5_DIFF_FILES="README.md" H5_PR_BODY="H5-guard: no" bash "$CHK"
 
+# --- H8 requirement inventory gate (T7-1) ---
+H8_FIX="$ROOT/docs/handover/.h8-fixtures"
+mkdir -p "$H8_FIX"
+cat > "$H8_FIX/2026-08-12-empty.md" <<'EOF'
+# Handover: fixture empty
+
+## 委任契約（必須）
+1. 停止条件: 既定 10
+
+## 一次資料
+## 要求インベントリ
+## 突合表
+## 標準質問
+## 北極星
+EOF
+cat > "$H8_FIX/2026-08-12-full.md" <<'EOF'
+# Handover: fixture full
+
+## 委任契約（必須）
+1. 停止条件: 既定 10
+
+## 一次資料
+- 原指示: repos/_session-zero.md（要求の出典）
+
+## 要求インベントリ
+1. 委任契約に要求インベントリ欄が空のまま発射しようとしたら止まる
+2. 台帳に inventory-field-empty が 1 行以上記録される
+
+## 突合表
+| # | 要求 | 受入基準 |
+|---|---|---|
+| 1 | 空欄で止まる | red 実測 |
+
+## 標準質問
+- ユーザー像: 監督エージェントと実装エージェント
+- 安全境界: 台帳以外に書き込まない
+
+## 北極星
+- メトリクス: H8 台帳発火数 / 測定周期: 日次
+EOF
+
+H8_LEDGER=$(mktemp)
+run_case "h8-empty-red" 1 \
+  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/2026-08-12-empty.md" H5_PR_BODY="" bash "$CHK"
+run_case "h8-full-green" 0 \
+  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/2026-08-12-full.md" H5_PR_BODY="" bash "$CHK"
+run_case "h8-nondelegation-doc" 0 \
+  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="README.md" H5_PR_BODY="" bash "$CHK"
+
+if grep -q '"rule":"inventory-field-empty"' "$H8_LEDGER"; then
+  echo "PASS: h8 ledger row present (inventory-field-empty)"
+  pass=$((pass + 1))
+else
+  echo "FAIL: h8 ledger row missing (inventory-field-empty)"
+  fail=$((fail + 1))
+fi
+rm -rf "$H8_FIX" "$H8_LEDGER"
+
 echo "--- $pass passed, $fail failed ---"
 [[ "$fail" -eq 0 ]]
