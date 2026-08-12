@@ -33,10 +33,12 @@ done
 
 # active90: ~/Developer 直下かつ直近 90 日 commit あり
 active90() {
-  local repo="$1" d
+  local repo="$1" d out
   d="$HOME/Developer/$repo"
   [[ -d "$d/.git" ]] || return 1
-  git -C "$d" log -1 --format=%ct --since="90 days ago" >/dev/null 2>&1 || return 1
+  # git log はマッチなしでも exit 0 を返す — 出力の有無で判定する（T11-1 で発見）
+  out=$(git -C "$d" log -1 --format=%ct --since="90 days ago" 2>/dev/null) || return 1
+  [[ -n "$out" ]] || return 1
   return 0
 }
 
