@@ -1,5 +1,8 @@
 # H4 declaration↔enforcement link pairs (aidd-governance)
 # Pair values must stay in sync; link test fails listing both sides.
+# T7-3: 照合範囲を 4 エージェントへ拡張（Claude Code / Codex / Cursor / OpenCode）。
+# ローカル専用 pair（~/.codex, ~/.cursor, ~/Developer/opencode 依存）は
+# 対象ファイルが無ければ test-pairs-link.sh がスキップする（CI-safe）。
 pairs:
   - id: ccs-hook-registration-count
     declaration: settings.json#hooks
@@ -9,3 +12,19 @@ pairs:
     declaration: docs/CANONICAL-STATE.md#hard-blocks
     enforcement: hooks/git-push-guard.sh+hooks/protect-branches.sh+hooks/block-local-hooks-write.sh+hooks/validate-no-local-hooks.sh
     note: "four hard blocks remain; ledger wiring required"
+  - id: codex-hooks-json-vs-deploy
+    declaration: ~/.codex/hooks.json#PreToolUse
+    enforcement: ~/.codex/hooks/*.sh (deployed scripts)
+    note: "hooks.json に登録された hook スクリプトが実在し、hook 数の一致を pair7 で照合（2026-08-12 実測: 登録1=配備1）"
+  - id: codex-execpolicy-forbidden
+    declaration: ~/.codex/AGENTS.md#force-push-protection
+    enforcement: ~/.codex/rules/default.rules#forbidden
+    note: "AGENTS.md が宣言する保護ブランチ操作（--force / origin main / origin master / origin develop / --mirror）が forbidden prefix_rule に実在することを pair8 で照合（2026-08-12 実測: 28 件）"
+  - id: cursor-guard-hook-and-ledger
+    declaration: ~/.cursor/hooks/git-guard.sh
+    enforcement: ~/.cursor/hooks/guard-ledger.jsonl
+    note: "Cursor guard hook が存在するなら台帳（hook の出力先）も存在することを pair9 で照合（2026-08-12 実測: 両方実在）"
+  - id: opencode-team-blanket-allow-zero
+    declaration: ~/Developer/opencode/packages/guardrails/profile/plugins/team.ts#permit
+    enforcement: team-permission.test.ts#isBlanketAllow
+    note: "T5-1 後、blanket allow ルール（permission:* pattern:* action:allow）は 0 であること。コメント行は数えない。pair10 で照合（2026-08-12 実測: 0）"
