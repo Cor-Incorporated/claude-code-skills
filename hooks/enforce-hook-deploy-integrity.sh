@@ -47,6 +47,52 @@ for candidate in \
   fi
 done
 
+# --- Phase 0: H1 no-progress visibility (T7-2) ---
+# NOT a block: the stall signal lives outside agent turns, so no same-turn
+# consequence is possible (proposition-enforcement-narrowing.md 区分D).
+# Visibility only — heartbeat row every SessionStart; if the previous H1 row
+# is >= 45 min old, append a no-progress-timeout warn row first.
+# Spec: aidd-governance design/harness-spec.md H1
+_H1_LEDGER="${HOME}/.claude/hooks/ledger/guard-ledger.jsonl"
+mkdir -p "$(dirname "$_H1_LEDGER")" 2>/dev/null || true
+_H1_LAST_TS=""
+if [[ -f "$_H1_LEDGER" ]]; then
+  _H1_LAST_TS="$(python3 - "$_H1_LEDGER" <<'PY'
+import json, sys
+last = ""
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    try:
+        row = json.loads(line)
+    except Exception:
+        continue
+    if row.get("component") == "H1":
+        last = row.get("ts", "")
+print(last)
+PY
+)"
+  if [[ -n "$_H1_LAST_TS" ]]; then
+    _H1_AGE="$(python3 - "$_H1_LAST_TS" <<'PY'
+import sys
+from datetime import datetime, timezone
+try:
+    last = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+except Exception:
+    print("-1")
+    sys.exit(0)
+print(int((datetime.now(timezone.utc) - last).total_seconds()))
+PY
+)"
+    if [[ "${_H1_AGE:-0}" -ge 2700 ]]; then
+      _h1_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+      printf '{"ts":"%s","component":"H1","event":"warn","rule":"no-progress-timeout","detail":"%ss since last H1 heartbeat (45min threshold)","subject":{},"agent":"claude-code"}\n' \
+        "$_h1_ts" "${_H1_AGE}" >>"$_H1_LEDGER" 2>/dev/null || true
+    fi
+  fi
+fi
+_h1_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+printf '{"ts":"%s","component":"H1","event":"measure","rule":"heartbeat","detail":"session start HB","subject":{},"agent":"claude-code"}\n' \
+  "$_h1_ts" >>"$_H1_LEDGER" 2>/dev/null || true
+
 # If no project hooks dir found, skip silently
 [[ -z "$PROJECT_HOOKS_DIR" ]] && exit 0
 
