@@ -4,7 +4,7 @@ pairs:
   - id: ccs-hook-registration-count
     declaration: settings.json#hooks
     enforcement: docs/CANONICAL-STATE.md#registered-hooks
-    note: "develop settings registrations must match CANONICAL-STATE 18"
+    note: "develop settings registrations must match CANONICAL-STATE registered-hooks count (2026-08-12 実測: 20). 数値は test-pairs-link.sh が照合する — この note の数値は参考であり判定には使わない"
   - id: ccs-hard-block-four
     declaration: docs/CANONICAL-STATE.md#hard-blocks
     enforcement: hooks/git-push-guard.sh+hooks/protect-branches.sh+hooks/block-local-hooks-write.sh+hooks/validate-no-local-hooks.sh
