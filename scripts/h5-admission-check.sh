@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # H5 — Admission fee for block-capable guards / completion verifiers (required check).
 # Spec: aidd-governance design/harness-spec.md H5, design/ops/harness/h5-negative-test-gate.md
+# H8 — requirement inventory field gate (T7-1): delegation/handover docs in the
+# diff must carry the 5 P3 fields; empty → exit 1 + ledger inventory-field-empty.
+# Spec: aidd-governance design/harness-spec.md H8
 #
 # Exit 0: not a guard PR, or 3-point set present
 # Exit 1: guard PR missing negative-test evidence / ledger wiring / retirement condition
@@ -70,6 +73,69 @@ if printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*no' \
   if ! printf '%s\n' "$DIFF_FILES" | grep -qE "$_H5_STRUCT_RE"; then
     is_guard_pr=0
   fi
+fi
+
+# ============ H8: requirement inventory field check (T7-1) ============
+# Spec: aidd-governance design/harness-spec.md H8
+# P3 装置欄: (1) 一次資料パス (2) 要求インベントリ (3) 突合表 (4) 標準質問 5 問 (5) 北極星
+# Delegation/handover docs in the diff are inspected; a doc counts as a
+# delegation contract only when it carries 委任契約/要求インベントリ marker
+# (avoids false hits on ordinary prose). Empty section = red + ledger row.
+_H8_DOC_RE='^(docs/handover/|delegation/|.*delegation.*\.md$|.*handover.*\.md$)'
+_H8_FIELDS=(
+  "一次資料|references|一次資料パス"
+  "要求インベントリ|要件インベントリ"
+  "突合表|受入基準"
+  "標準質問|ユーザー像|審美|LLM 挙動境界|安全境界|セキュリティ境界"
+  "北極星|メトリクス|測定周期"
+)
+h8_docs=()
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  if printf '%s' "$f" | grep -qE "$_H8_DOC_RE" && [[ -f "$f" ]]; then
+    h8_docs+=("$f")
+  fi
+done <<<"$(printf '%s\n' "$DIFF_FILES")"
+
+h8_missing=()
+for f in "${h8_docs[@]}"; do
+  grep -qE '委任契約|要求インベントリ' "$f" || continue
+  for field in "${_H8_FIELDS[@]}"; do
+    if ! python3 - "$f" "$field" <<'PY'
+import re, sys
+doc, pat = sys.argv[1], sys.argv[2]
+text = open(doc, encoding="utf-8").read()
+m = re.search(rf'(?im)^#{{1,4}}\s*(?:{pat})[^\n]*\n([\s\S]*?)(?=^#{{1,4}}\s|\Z)', text)
+if not m:
+    sys.exit(1)
+content = m.group(1).strip()
+if len(content) < 20 or re.fullmatch(r'[-*\s\[\]xX]*', content):
+    sys.exit(1)
+sys.exit(0)
+PY
+    then
+      h8_missing+=("$f: ${field%%|*}")
+    fi
+  done
+done
+
+if [[ ${#h8_missing[@]} -gt 0 ]]; then
+  fail "H8: requirement inventory incomplete (inventory-field-empty)"
+  printf '  %s\n' "${h8_missing[@]}" >&2
+  if [[ -n "$LEDGER_PATH" ]]; then
+    mkdir -p "$(dirname "$LEDGER_PATH")" 2>/dev/null || true
+    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    for m in "${h8_missing[@]}"; do
+      doc="${m%%:*}"
+      miss="${m#*: }"
+      printf '{"ts":"%s","component":"H8","event":"warn","rule":"inventory-field-empty","subject":{"doc":"%s","missing":["%s"]},"agent":"ci"}\n' \
+        "$ts" "$doc" "$miss" >>"$LEDGER_PATH" 2>/dev/null || true
+    done
+  fi
+  exit 1
+fi
+if [[ ${#h8_docs[@]} -gt 0 ]]; then
+  log "H8-PASS: inventory fields present in ${#h8_docs[@]} delegation doc(s)"
 fi
 
 if [[ "$is_guard_pr" -eq 0 ]]; then
