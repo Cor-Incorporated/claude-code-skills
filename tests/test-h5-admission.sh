@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Unit falsification for H5 admission script (no network)
 set -euo pipefail
+export AIDD_LEDGER_SOURCE=test  # T9-2: ledger rows from test harness are source=test
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHK="$ROOT/scripts/h5-admission-check.sh"
 chmod +x "$CHK"
