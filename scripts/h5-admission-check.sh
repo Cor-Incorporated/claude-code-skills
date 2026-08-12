@@ -52,8 +52,9 @@ fi
 is_guard_pr=0
 # Structural triggers: any path that can change guard force projection.
 # Keep this set and the H5-guard:no exemption-denylist (below) IDENTICAL.
-# Ref: aidd-governance handover 2026-08-11 R1 / VERDICT.md §1 根拠1
-_H5_STRUCT_RE='^(hooks/|hooks/lib/|scripts/|settings\.json|\.github/workflows/)'
+# Phase 5 T5-2: must cover hooks/lib/** and scripts/** (.+\.sh), not only hooks/[^/]+\.sh
+# Checklist S9 expects this form (hooks/.+\.sh includes hooks/lib/*.sh).
+_H5_STRUCT_RE='^(hooks/.+\.sh|scripts/.+\.sh|settings\.json|\.github/workflows/)'
 if printf '%s\n' "$DIFF_FILES" | grep -qE "$_H5_STRUCT_RE"; then
   is_guard_pr=1
 fi
