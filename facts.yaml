@@ -28,3 +28,7 @@ pairs:
     declaration: ~/Developer/opencode/packages/guardrails/profile/plugins/team.ts#permit
     enforcement: team-permission.test.ts#isBlanketAllow
     note: "T5-1 後、blanket allow ルール（permission:* pattern:* action:allow）は 0 であること。コメント行は数えない。pair10 で照合（2026-08-12 実測: 0）"
+  - id: codex-hook-source-vs-deploy
+    declaration: hooks/codex/protect-branches-codex.sh
+    enforcement: ~/.codex/hooks/protect-branches-codex.sh
+    note: "repo source と deployed hook の MD5 が一致すること。pair11 は不一致時に両側の値を出力する"
