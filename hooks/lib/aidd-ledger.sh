@@ -9,6 +9,8 @@ aidd_ledger_append() {
   local decision="${3:-deny}"
   local cmd_head="${4:-}"
   local rule="${5:-}"
+  local component="${6:-H6}"
+  local agent="${7:-claude-code}"
   local source="${AIDD_LEDGER_SOURCE:-real}"
   local ledger_dir="${HOME}/.claude/hooks/ledger"
   local ledger="${ledger_dir}/guard-ledger.jsonl"
@@ -17,6 +19,11 @@ aidd_ledger_append() {
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
   local safe_cmd
   safe_cmd="$(printf '%s' "$cmd_head" | head -c 120 | tr '"' "'" | tr '\n' ' ')"
-  printf '{"ts":"%s","component":"H6","hook":"%s","event":"%s","decision":"%s","rule":"%s","cmd_head":"%s","source":"%s","agent":"claude-code"}\n' \
-    "$ts" "$hook" "$event" "$decision" "$rule" "$safe_cmd" "$source" >>"$ledger" 2>/dev/null || true
+  if [[ "$component" == "H1" ]]; then
+    printf '{"ts":"%s","component":"H1","event":"%s","rule":"%s","detail":"%s","subject":{},"source":"%s","agent":"%s"}\n' \
+      "$ts" "$event" "$rule" "$safe_cmd" "$source" "$agent" >>"$ledger" 2>/dev/null || true
+  else
+    printf '{"ts":"%s","component":"%s","hook":"%s","event":"%s","decision":"%s","rule":"%s","cmd_head":"%s","source":"%s","agent":"%s"}\n' \
+      "$ts" "$component" "$hook" "$event" "$decision" "$rule" "$safe_cmd" "$source" "$agent" >>"$ledger" 2>/dev/null || true
+  fi
 }

@@ -36,6 +36,17 @@ _aidd_block() {
   fi
   exit 2
 }
+_aidd_ask() {
+  local reason="$1"
+  if declare -F aidd_ledger_append >/dev/null 2>&1; then
+    aidd_ledger_append "protect-branches" "warn" "warn" "${cmd:-}" "foreign-pr-repo"
+  fi
+  jq -n --arg reason "$reason" \
+    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:$reason}}' \
+    2>/dev/null \
+    || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"foreign PR repository owner differs from origin"}}\n'
+  exit 0
+}
 
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
@@ -153,6 +164,36 @@ extract_push_branch() {
 # cmd_norm / _GIT_PUSH_RE / Check 0a / Check 0a2 を触ったら必ず再実行すること。
 # 修正前の版に対して 9 件 red になることを確認済み（2026-08-11）。
 cmd_norm=$(printf '%s' "$cmd" | tr -d "\"'")
+
+# --- Foreign repository PR target gate (Phase 15 T15-1) ---
+# `--repo` is explicit user intent. When its owner differs from origin's owner,
+# ask instead of block because legitimate OSS contributions are allowed after
+# human confirmation. No --repo means gh's configured default and is out of
+# scope here (OC-D8 owns that path).
+if printf '%s' "$cmd_norm" | grep -qE '(^|[^[:alnum:]_/-])gh[[:space:]]+pr[[:space:]]+(create|merge)([^[:alnum:]_-]|$)'; then
+  pr_repo=$(printf '%s\n' "$cmd_norm" | awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "--repo" && i < NF) { print $(i + 1); exit }
+        if ($i ~ /^--repo=/) { sub(/^--repo=/, "", $i); print $i; exit }
+      }
+    }
+  ')
+  if [[ -n "$pr_repo" ]]; then
+    origin_url=$(git remote get-url origin 2>/dev/null || true)
+    origin_slug=$(printf '%s' "$origin_url" \
+      | sed -E 's#^git@[^:]+:##; s#^ssh://git@[^/]+/##; s#^https?://[^/]+/##; s#\.git$##')
+    origin_owner="${origin_slug%%/*}"
+    target_slug=$(printf '%s' "$pr_repo" \
+      | sed -E 's#^https?://github\.com/##; s#^github\.com/##; s#\.git$##')
+    target_owner="${target_slug%%/*}"
+    origin_owner_lc=$(printf '%s' "$origin_owner" | tr '[:upper:]' '[:lower:]')
+    target_owner_lc=$(printf '%s' "$target_owner" | tr '[:upper:]' '[:lower:]')
+    if [[ -n "$origin_owner_lc" && -n "$target_owner_lc" && "$origin_owner_lc" != "$target_owner_lc" ]]; then
+      _aidd_ask "PR target owner '${target_owner}' differs from origin owner '${origin_owner}'. Confirm this cross-repository contribution."
+    fi
+  fi
+fi
 
 # `git [global-opts...] push` — `git -c k=v push` / `git --no-pager push` を含む
 _GIT_PUSH_RE='(^|[^[:alnum:]_-])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*push([^[:alnum:]_-]|$)'

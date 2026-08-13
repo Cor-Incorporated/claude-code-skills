@@ -66,10 +66,20 @@ if [[ "$npt" -ge 1 ]]; then
 else
   bad "expected no-progress-timeout row, got $npt"
 fi
+missing_source=$(python3 - "$LEDGER" <<'PY'
+import json, sys
+print(sum(1 for line in open(sys.argv[1]) if (row := json.loads(line)).get("component") == "H1" and row.get("source") != "test"))
+PY
+)
+if [[ "$missing_source" -eq 0 ]]; then
+  ok "all H1 test rows carry source=test"
+else
+  bad "H1 rows without source=test: $missing_source"
+fi
 grep '"rule":"no-progress-timeout"' "$LEDGER" | python3 -c "
 import json, sys
 row = json.loads(sys.stdin.readline())
-assert row['component'] == 'H1' and row['event'] == 'warn', row
+assert row['component'] == 'H1' and row['event'] == 'warn' and row['source'] == 'test', row
 print('PASS: warn row shape', json.dumps(row, ensure_ascii=False)[:120])
 " && pass=$((pass + 1)) || { bad "warn row shape"; }
 
