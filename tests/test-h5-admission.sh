@@ -5,6 +5,10 @@ export AIDD_LEDGER_SOURCE=test  # T9-2: ledger rows from test harness are source
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHK="$ROOT/scripts/h5-admission-check.sh"
 chmod +x "$CHK"
+# The outer CI admission job exports the real PR context. Unit fixtures must
+# not inherit it, or an empty H5_PR_BODY silently reloads the live PR body and
+# turns non-guard H8/README cases into guard cases.
+unset H5_PR_NUMBER GITHUB_EVENT_PATH
 H5_TEST_LEDGER=$(mktemp)
 export H5_LEDGER_PATH="$H5_TEST_LEDGER"
 trap 'rm -f "$H5_TEST_LEDGER"' EXIT
