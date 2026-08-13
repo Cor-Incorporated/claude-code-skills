@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export AIDD_LEDGER_SOURCE=test  # T9-2: ledger rows from test harness are source=test
 
 python3 - "$ROOT" <<'PY'
-import json, os, re, sys
+import hashlib, json, os, re, sys
 from pathlib import Path
 
 ROOT = Path(sys.argv[1])
@@ -182,6 +182,35 @@ else:
         bad(
             "pair10 opencode team.ts blanket allow present",
             f"declared=0 actual={blanket}",
+        )
+
+# pair11: version-controlled Codex hook source ↔ deployed hook MD5
+codex_source = ROOT / "hooks" / "codex" / "protect-branches-codex.sh"
+codex_deployed = Path(
+    os.environ.get(
+        "AIDD_CODEX_HOOK_DEPLOYED",
+        str(home / ".codex" / "hooks" / "protect-branches-codex.sh"),
+    )
+).expanduser()
+if not codex_deployed.is_file():
+    ok("pair11 Codex deployed hook skipped (no local deploy)")
+elif not codex_source.is_file():
+    bad(
+        "pair11 Codex repo source missing",
+        f"declaration={codex_source} enforcement={codex_deployed}",
+    )
+else:
+    declaration_md5 = hashlib.md5(codex_source.read_bytes()).hexdigest()
+    enforcement_md5 = hashlib.md5(codex_deployed.read_bytes()).hexdigest()
+    if declaration_md5 == enforcement_md5:
+        ok(
+            "pair11 Codex hook MD5 match "
+            f"declaration={declaration_md5} enforcement={enforcement_md5}"
+        )
+    else:
+        bad(
+            "pair11 Codex hook MD5 mismatch",
+            f"declaration={declaration_md5} enforcement={enforcement_md5}",
         )
 
 print(f"--- {PASS} passed, {FAIL} failed ---")

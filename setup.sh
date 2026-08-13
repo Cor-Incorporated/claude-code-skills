@@ -6,6 +6,7 @@ CLAUDE_DIR="$HOME/.claude"
 SKILLS_DIR="$HOME/.claude/skills"
 RULES_DIR="$HOME/.claude/rules"
 HOOKS_DIR="$HOME/.claude/hooks"
+CODEX_HOOKS_DIR="$HOME/.codex/hooks"
 SCRIPTS_DIR="$HOME/.claude/scripts"
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 OPENCODE_CONFIG="$HOME/.config/opencode/opencode.jsonc"
@@ -76,6 +77,10 @@ fi
 chmod +x "$HOOKS_DIR"/*.sh
 SH_COUNT=$( (ls "$REPO_DIR"/hooks/*.sh 2>/dev/null || true) | wc -l | tr -d ' ')
 echo "  Copied ${SH_COUNT} shell hook scripts"
+mkdir -p "$CODEX_HOOKS_DIR"
+cp "$REPO_DIR/hooks/codex/protect-branches-codex.sh" "$CODEX_HOOKS_DIR/protect-branches-codex.sh"
+chmod +x "$CODEX_HOOKS_DIR/protect-branches-codex.sh"
+echo "  Copied Codex protect-branches hook"
 
 # 6. Copy scripts
 echo "[6/9] Installing scripts..."
