@@ -32,3 +32,7 @@ pairs:
     declaration: hooks/codex/protect-branches-codex.sh
     enforcement: ~/.codex/hooks/protect-branches-codex.sh
     note: "repo source と deployed hook の MD5 が一致すること。pair11 は不一致時に両側の値を出力する"
+  - id: cursor-hook-source-vs-deploy
+    declaration: hooks/cursor/git-guard.sh
+    enforcement: ~/.cursor/hooks/git-guard.sh
+    note: "repo source と deployed hook の MD5 が一致すること。pair12 は不一致時に両側の値を出力する"

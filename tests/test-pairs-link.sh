@@ -213,6 +213,35 @@ else:
             f"declaration={declaration_md5} enforcement={enforcement_md5}",
         )
 
+# pair12: version-controlled Cursor hook source ↔ deployed hook MD5
+cursor_source = ROOT / "hooks" / "cursor" / "git-guard.sh"
+cursor_deployed = Path(
+    os.environ.get(
+        "AIDD_CURSOR_HOOK_DEPLOYED",
+        str(home / ".cursor" / "hooks" / "git-guard.sh"),
+    )
+).expanduser()
+if not cursor_deployed.is_file():
+    ok("pair12 Cursor deployed hook skipped (no local deploy)")
+elif not cursor_source.is_file():
+    bad(
+        "pair12 Cursor repo source missing",
+        f"declaration={cursor_source} enforcement={cursor_deployed}",
+    )
+else:
+    declaration_md5 = hashlib.md5(cursor_source.read_bytes()).hexdigest()
+    enforcement_md5 = hashlib.md5(cursor_deployed.read_bytes()).hexdigest()
+    if declaration_md5 == enforcement_md5:
+        ok(
+            "pair12 Cursor hook MD5 match "
+            f"declaration={declaration_md5} enforcement={enforcement_md5}"
+        )
+    else:
+        bad(
+            "pair12 Cursor hook MD5 mismatch",
+            f"declaration={declaration_md5} enforcement={enforcement_md5}",
+        )
+
 print(f"--- {PASS} passed, {FAIL} failed ---")
 sys.exit(0 if FAIL == 0 else 1)
 PY
