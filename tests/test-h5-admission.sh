@@ -5,6 +5,9 @@ export AIDD_LEDGER_SOURCE=test  # T9-2: ledger rows from test harness are source
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHK="$ROOT/scripts/h5-admission-check.sh"
 chmod +x "$CHK"
+H5_TEST_LEDGER=$(mktemp)
+export H5_LEDGER_PATH="$H5_TEST_LEDGER"
+trap 'rm -f "$H5_TEST_LEDGER"' EXIT
 
 pass=0
 fail=0
@@ -155,6 +158,21 @@ if grep -q '"rule":"inventory-field-empty"' "$H8_LEDGER"; then
   pass=$((pass + 1))
 else
   echo "FAIL: h8 ledger row missing (inventory-field-empty)"
+  fail=$((fail + 1))
+fi
+
+if python3 - "$H5_TEST_LEDGER" <<'PY'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1])]
+assert rows, "no H5 rows"
+assert any(row.get("component") == "H5" for row in rows), rows
+assert all(row.get("source") == "test" for row in rows), rows
+PY
+then
+  echo "PASS: H5 test rows are isolated and source=test"
+  pass=$((pass + 1))
+else
+  echo "FAIL: H5 test ledger source/isolation"
   fail=$((fail + 1))
 fi
 rm -rf "$H8_FIX" "$H8_LEDGER"
