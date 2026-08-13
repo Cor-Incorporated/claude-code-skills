@@ -33,6 +33,7 @@ for h in "${HOOKS[@]}"; do
     LED="$SB/real-$h-$ev.jsonl"
     (
       export HOME="$SB"
+      unset AIDD_LEDGER_SOURCE
       . "$LIB"
       aidd_ledger_append "$h" "$ev" deny "test cmd" "test-rule" >>/dev/null 2>&1
     ) 2>/dev/null
@@ -51,17 +52,23 @@ for h in "${HOOKS[@]}"; do
 done
 
 # --- 実 hook 経路（enforce-hook-deploy-integrity.sh — SessionStart） ---
-# env なし → source=real（H1 直接 printf は対象外だが、hook が aidd_ledger_append を
-# 呼ぶ経路があれば source=real になることを確認）
+# env なし → H1 heartbeat 自体が source=real になることを確認。
 LEDGER_PATH="$SB/.claude/hooks/ledger/guard-ledger.jsonl"
-if env HOME="$SB" bash "$ROOT/hooks/enforce-hook-deploy-integrity.sh" >/dev/null 2>&1; then
-  if grep -q '"source":"real"' "$LEDGER_PATH" 2>/dev/null; then
-    ok "real hook run writes source=real"
+if env -u AIDD_LEDGER_SOURCE HOME="$SB" bash "$ROOT/hooks/enforce-hook-deploy-integrity.sh" >/dev/null 2>&1; then
+  if python3 - "$LEDGER_PATH" <<'PY'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1])]
+assert rows, "no ledger rows"
+assert all(row.get("source") == "real" for row in rows), rows
+assert any(row.get("component") == "H1" for row in rows), rows
+PY
+  then
+    ok "real H1 hook run writes source=real with no unattributed rows"
   else
-    ok "real hook run wrote H1 rows (direct printf, no source field — documented T9-2 scope)"
+    bad "real H1 hook run produced missing/non-real source"
   fi
 else
-  ok "enforce-hook ran without error"
+  bad "enforce-hook failed"
 fi
 
 echo "--- $pass passed, $fail failed ---"

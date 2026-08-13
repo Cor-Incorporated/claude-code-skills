@@ -83,15 +83,18 @@ print(int((datetime.now(timezone.utc) - last).total_seconds()))
 PY
 )"
     if [[ "${_H1_AGE:-0}" -ge 2700 ]]; then
-      _h1_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
-      printf '{"ts":"%s","component":"H1","event":"warn","rule":"no-progress-timeout","detail":"%ss since last H1 heartbeat (45min threshold)","subject":{},"agent":"claude-code"}\n' \
-        "$_h1_ts" "${_H1_AGE}" >>"$_H1_LEDGER" 2>/dev/null || true
+      if declare -F aidd_ledger_append >/dev/null 2>&1; then
+        aidd_ledger_append "enforce-hook-deploy-integrity" "warn" "warn" \
+          "${_H1_AGE}s since last H1 heartbeat (45min threshold)" \
+          "no-progress-timeout" "H1"
+      fi
     fi
   fi
 fi
-_h1_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
-printf '{"ts":"%s","component":"H1","event":"measure","rule":"heartbeat","detail":"session start HB","subject":{},"agent":"claude-code"}\n' \
-  "$_h1_ts" >>"$_H1_LEDGER" 2>/dev/null || true
+if declare -F aidd_ledger_append >/dev/null 2>&1; then
+  aidd_ledger_append "enforce-hook-deploy-integrity" "measure" "allow" \
+    "session start HB" "heartbeat" "H1"
+fi
 
 # If no project hooks dir found, skip silently
 [[ -z "$PROJECT_HOOKS_DIR" ]] && exit 0
