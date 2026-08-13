@@ -18,6 +18,7 @@ HEAD_REF="${H5_HEAD_REF:-HEAD}"
 PR_BODY="${H5_PR_BODY:-}"
 EVENT_NAME="${GITHUB_EVENT_NAME:-}"
 LEDGER_PATH="${H5_LEDGER_PATH:-$HOME/.claude/hooks/ledger/guard-ledger.jsonl}"
+LEDGER_SOURCE="${AIDD_LEDGER_SOURCE:-real}"
 
 log() { printf '%s\n' "$*"; }
 warn() { printf 'H5-WARN: %s\n' "$*" >&2; }
@@ -128,8 +129,8 @@ if [[ ${#h8_missing[@]} -gt 0 ]]; then
     for m in "${h8_missing[@]}"; do
       doc="${m%%:*}"
       miss="${m#*: }"
-      printf '{"ts":"%s","component":"H8","event":"warn","rule":"inventory-field-empty","subject":{"doc":"%s","missing":["%s"]},"agent":"ci"}\n' \
-        "$ts" "$doc" "$miss" >>"$LEDGER_PATH" 2>/dev/null || true
+      printf '{"ts":"%s","component":"H8","event":"warn","rule":"inventory-field-empty","subject":{"doc":"%s","missing":["%s"]},"source":"%s","agent":"ci"}\n' \
+        "$ts" "$doc" "$miss" "$LEDGER_SOURCE" >>"$LEDGER_PATH" 2>/dev/null || true
     done
   fi
   exit 1
@@ -263,8 +264,8 @@ if ((${#missing[@]} > 0)); then
   if [[ -n "$LEDGER_PATH" ]]; then
     mkdir -p "$(dirname "$LEDGER_PATH")" 2>/dev/null || true
     ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
-    printf '{"ts":"%s","component":"H5","event":"block","rule":"negative-test-missing","detail":"%s","agent":"ci"}\n' \
-      "$ts" "${missing[*]}" >>"$LEDGER_PATH" 2>/dev/null || true
+    printf '{"ts":"%s","component":"H5","event":"block","rule":"negative-test-missing","detail":"%s","source":"%s","agent":"ci"}\n' \
+      "$ts" "${missing[*]}" "$LEDGER_SOURCE" >>"$LEDGER_PATH" 2>/dev/null || true
   fi
   exit 1
 fi
