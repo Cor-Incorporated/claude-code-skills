@@ -64,6 +64,53 @@ Note: some of this script's inputs (e.g. review-pipeline state) describe
 a pipeline retired by ADR-006; treat its hook-coverage metric as
 referring to the current 17-hook set.
 
+## AI-created PR body contract (H5)
+
+Before creating a PR, inspect the changed paths and write the H5 declarations
+from evidence already collected. Do not wait for the first CI failure to learn
+the input format, and do not copy claims that were not actually measured.
+
+H5 applies when a change touches any of these structural paths:
+
+- `hooks/**/*.sh` (including direct children such as `hooks/foo.sh`)
+- `scripts/**/*.sh` (including direct children such as `scripts/foo.sh`)
+- `settings.json`
+- `.github/workflows/**`
+- any path matched by a repository-root `.aidd-e2e-paths` declaration
+
+For every applicable PR, add exactly one of these execution-boundary forms:
+
+```text
+H5-E2E: none
+```
+
+Use `none` only when the change has no real execution environment. Otherwise
+provide both lines; `H5-E2E-OUT` must contain at least 20 characters of raw
+output or a stable log path.
+
+```text
+H5-E2E: <command actually run>
+H5-E2E-OUT: <raw output summary or log path, 20+ characters>
+```
+
+Changes under the four built-in structural paths are also guard/verifier PRs.
+Their body must contain all of the following machine-readable declarations in
+addition to substantive template sections:
+
+```text
+H5-guard: yes
+H5-NEGATIVE: <known-bad input and measured red/exit result>
+H5-LEDGER: <how each fire reaches aidd_ledger_append or guard-ledger.jsonl>
+H5-RETIRE: <measurable retirement condition>
+H5-SUBTRACTION: N/A
+```
+
+Replace the final line with `H5-RETIRE-PR: <number>` only when that retirement
+PR is already merged. `H5-guard: no` can describe a non-structural PR, but it
+does not exempt any built-in structural path. These declarations enforce form
+and honest visibility; they do not prove that the reported command or output is
+truthful.
+
 ## Skills
 
 - **Repo-owned** (28): `skills/*/SKILL.md` — each has YAML frontmatter + markdown body, following Anthropic progressive-disclosure structure.
