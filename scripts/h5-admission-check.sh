@@ -23,6 +23,14 @@ LEDGER_SOURCE="${AIDD_LEDGER_SOURCE:-real}"
 log() { printf '%s\n' "$*"; }
 warn() { printf 'H5-WARN: %s\n' "$*" >&2; }
 fail() { printf 'H5-FAIL: %s\n' "$*" >&2; }
+append_h5_block() {
+  local rule="$1" detail="$2" ts
+  [[ -z "$LEDGER_PATH" ]] && return 0
+  mkdir -p "$(dirname "$LEDGER_PATH")" 2>/dev/null || true
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+  printf '{"ts":"%s","component":"H5","event":"block","rule":"%s","detail":"%s","source":"%s","agent":"ci"}\n' \
+    "$ts" "$rule" "$detail" "$LEDGER_SOURCE" >>"$LEDGER_PATH" 2>/dev/null || true
+}
 
 # --- Collect PR body (CI or local override) ---
 if [[ -z "$PR_BODY" && -n "${GITHUB_EVENT_PATH:-}" && -f "${GITHUB_EVENT_PATH}" ]]; then
@@ -202,6 +210,7 @@ PY
   if [[ "$e2e_rc" -ne 0 ]]; then
     fail "H5-E2E declaration incomplete: $e2e_reason"
     fail "Required: H5-E2E: none OR H5-E2E: <command> + H5-E2E-OUT: <20+ chars output/log path>"
+    append_h5_block "e2e-declaration-incomplete" "$e2e_reason"
     exit 1
   fi
   log "H5-E2E-PASS: execution-boundary declaration present"
@@ -328,13 +337,7 @@ if ((${#missing[@]} > 0)); then
   fail "admission fee incomplete: ${missing[*]}"
   fail "Required: (1) 陰性テスト red 実測記録 (2) H6 台帳配線 (3) 廃止条件宣言 — in PR body and/or code"
   fail "See design/ops/harness/h5-negative-test-gate.md"
-  # Optional local ledger (does not affect CI if path missing)
-  if [[ -n "$LEDGER_PATH" ]]; then
-    mkdir -p "$(dirname "$LEDGER_PATH")" 2>/dev/null || true
-    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
-    printf '{"ts":"%s","component":"H5","event":"block","rule":"negative-test-missing","detail":"%s","source":"%s","agent":"ci"}\n' \
-      "$ts" "${missing[*]}" "$LEDGER_SOURCE" >>"$LEDGER_PATH" 2>/dev/null || true
-  fi
+  append_h5_block "negative-test-missing" "${missing[*]}"
   exit 1
 fi
 

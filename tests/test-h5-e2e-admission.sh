@@ -94,4 +94,14 @@ assert_case 'docs-only-no-false-positive' 0 'docs/guide.md' 'ordinary documentat
 assert_case 'declared-file-change-needs-marker' 1 '.aidd-e2e-paths' 'update declared scope'
 
 printf 'RESULT\tpass=%s\tfail=%s\n' "$pass" "$fail"
+python3 - "$LEDGER" <<'PY'
+import json
+import sys
+
+rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+e2e = [row for row in rows if row.get("rule") == "e2e-declaration-incomplete"]
+assert len(e2e) == 8, len(e2e)
+assert all(row.get("source") == "test" for row in e2e), e2e
+print("PASS\tledger/e2e-block/source-test\trows=8")
+PY
 [[ "$fail" -eq 0 ]]
