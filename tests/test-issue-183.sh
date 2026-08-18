@@ -30,8 +30,11 @@ mk_json() {
 TMPDIR_BASE=$(mktemp -d)
 FAKE_PROJECT_HOOKS="${TMPDIR_BASE}/project/hooks"
 FAKE_INSTALLED_HOOKS="${TMPDIR_BASE}/installed/hooks"
+FAKE_CODEX_HOOKS="${TMPDIR_BASE}/installed/codex-hooks"
+FAKE_CURSOR_HOOKS="${TMPDIR_BASE}/installed/cursor-hooks"
 FAKE_SETTINGS="${TMPDIR_BASE}/settings.json"
-mkdir -p "$FAKE_PROJECT_HOOKS" "$FAKE_INSTALLED_HOOKS"
+mkdir -p "$FAKE_PROJECT_HOOKS" "$FAKE_INSTALLED_HOOKS" \
+  "$FAKE_CODEX_HOOKS" "$FAKE_CURSOR_HOOKS"
 
 # Create a minimal settings.json that references our test hooks
 echo '{"hooks":{"SessionStart":[{"hooks":[{"command":"bash ~/.claude/hooks/test-missing.sh"}]}]}}' > "$FAKE_SETTINGS"
@@ -52,6 +55,8 @@ H1="${HOOK_DIR}/enforce-hook-deploy-integrity.sh"
 PATCHED_H1="${TMPDIR_BASE}/patched-integrity.sh"
 sed \
   -e "s|INSTALLED_HOOKS_DIR=.*|INSTALLED_HOOKS_DIR=\"${FAKE_INSTALLED_HOOKS}\"|" \
+  -e "s|CODEX_HOOKS_DIR=.*|CODEX_HOOKS_DIR=\"${FAKE_CODEX_HOOKS}\"|" \
+  -e "s|CURSOR_HOOKS_DIR=.*|CURSOR_HOOKS_DIR=\"${FAKE_CURSOR_HOOKS}\"|" \
   -e "s|SETTINGS_FILE=.*|SETTINGS_FILE=\"${FAKE_SETTINGS}\"|" \
   "$H1" > "$PATCHED_H1"
 chmod +x "$PATCHED_H1"
@@ -118,6 +123,44 @@ else
   echo "  FAIL (orphan not reported)"
 fi
 
+# --- T8: Matching Codex/Cursor hooks use their own deploy roots ---
+mkdir -p "${FAKE_PROJECT_HOOKS}/codex" "${FAKE_PROJECT_HOOKS}/cursor"
+printf '#!/bin/bash\necho codex\n' > "${FAKE_PROJECT_HOOKS}/codex/test-codex-match.sh"
+cp "${FAKE_PROJECT_HOOKS}/codex/test-codex-match.sh" "${FAKE_CODEX_HOOKS}/test-codex-match.sh"
+printf '#!/bin/bash\necho cursor\n' > "${FAKE_PROJECT_HOOKS}/cursor/test-cursor-match.sh"
+cp "${FAKE_PROJECT_HOOKS}/cursor/test-cursor-match.sh" "${FAKE_CURSOR_HOOKS}/test-cursor-match.sh"
+
+STDERR_CROSS_TOOL=$(CLAUDE_PROJECT_DIR="${TMPDIR_BASE}/project" bash "$PATCHED_H1" 2>&1 >/dev/null)
+if ! echo "$STDERR_CROSS_TOOL" | grep -qE "(NOT INSTALLED|MD5 MISMATCH): (codex/test-codex-match|cursor/test-cursor-match)"; then
+  PASS=$((PASS+1)); echo "--- T8: Matching cross-tool hooks resolve to tool-specific roots ---"
+  echo "  PASS"
+else
+  FAIL=$((FAIL+1)); echo "--- T8: Matching cross-tool hooks resolve to tool-specific roots ---"
+  echo "  FAIL (cross-tool hook was checked against the wrong deploy root)"
+fi
+
+# --- T9: Codex mismatch still reports both hashes and the correct target ---
+printf '# deployed drift\n' >> "${FAKE_CODEX_HOOKS}/test-codex-match.sh"
+STDERR_CODEX_MISMATCH=$(CLAUDE_PROJECT_DIR="${TMPDIR_BASE}/project" bash "$PATCHED_H1" 2>&1 >/dev/null)
+if echo "$STDERR_CODEX_MISMATCH" | grep -q "MD5 MISMATCH: codex/test-codex-match.sh (repo=.*deployed=.*target=${FAKE_CODEX_HOOKS}/test-codex-match.sh"; then
+  PASS=$((PASS+1)); echo "--- T9: Codex mismatch reports repo/deployed values and target ---"
+  echo "  PASS"
+else
+  FAIL=$((FAIL+1)); echo "--- T9: Codex mismatch reports repo/deployed values and target ---"
+  echo "  FAIL (mismatch evidence or target missing)"
+fi
+
+# --- T10: Cursor missing deployment reports the Cursor target ---
+rm "${FAKE_CURSOR_HOOKS}/test-cursor-match.sh"
+STDERR_CURSOR_MISSING=$(CLAUDE_PROJECT_DIR="${TMPDIR_BASE}/project" bash "$PATCHED_H1" 2>&1 >/dev/null)
+if echo "$STDERR_CURSOR_MISSING" | grep -q "NOT INSTALLED: cursor/test-cursor-match.sh (target=${FAKE_CURSOR_HOOKS}/test-cursor-match.sh"; then
+  PASS=$((PASS+1)); echo "--- T10: Cursor missing deployment reports Cursor target ---"
+  echo "  PASS"
+else
+  FAIL=$((FAIL+1)); echo "--- T10: Cursor missing deployment reports Cursor target ---"
+  echo "  FAIL (wrong or missing Cursor target)"
+fi
+
 echo ""
 echo "==================================="
 echo "Hook 2: enforce-hook-deploy-after-merge.sh"
@@ -126,25 +169,25 @@ echo ""
 
 H2="${HOOK_DIR}/enforce-hook-deploy-after-merge.sh"
 
-# --- T8: Early exit for non-merge commands ---
+# --- T11: Early exit for non-merge commands ---
 mk_json 'ls -la' | bash "$H2" >/dev/null 2>&1
-check_exit 0 $? "T8: non-merge command (ls -la) -> exit 0"
+check_exit 0 $? "T11: non-merge command (ls -la) -> exit 0"
 
-# --- T9: Early exit for non-gh commands ---
+# --- T12: Early exit for non-gh commands ---
 mk_json 'echo "hello world"' | bash "$H2" >/dev/null 2>&1
-check_exit 0 $? "T9: non-gh command (echo) -> exit 0"
+check_exit 0 $? "T12: non-gh command (echo) -> exit 0"
 
-# --- T10: Early exit for gh command without merge ---
+# --- T13: Early exit for gh command without merge ---
 mk_json 'gh pr list' | bash "$H2" >/dev/null 2>&1
-check_exit 0 $? "T10: gh pr list (not merge) -> exit 0"
+check_exit 0 $? "T13: gh pr list (not merge) -> exit 0"
 
-# --- T11: Early exit when PR number cannot be extracted ---
+# --- T14: Early exit when PR number cannot be extracted ---
 mk_json 'gh pr merge' | bash "$H2" >/dev/null 2>&1
-check_exit 0 $? "T11: gh pr merge without PR number -> exit 0"
+check_exit 0 $? "T14: gh pr merge without PR number -> exit 0"
 
-# --- T12: Early exit for git commands (not gh) ---
+# --- T15: Early exit for git commands (not gh) ---
 mk_json 'git merge main' | bash "$H2" >/dev/null 2>&1
-check_exit 0 $? "T12: git merge (not gh pr merge) -> exit 0"
+check_exit 0 $? "T15: git merge (not gh pr merge) -> exit 0"
 
 echo ""
 echo "===================================="
