@@ -335,6 +335,9 @@ done <<<"$(printf '%s\n' "$DIFF_FILES")"
 
 if ((${#missing[@]} > 0)); then
   fail "admission fee incomplete: ${missing[*]}"
+  if printf '%s' "${missing[*]}" | grep -q 'subtraction'; then
+    fail "Required subtraction declaration: H5-SUBTRACTION: N/A OR H5-RETIRE-PR: <merged PR number>"
+  fi
   fail "Required: (1) 陰性テスト red 実測記録 (2) H6 台帳配線 (3) 廃止条件宣言 — in PR body and/or code"
   fail "See design/ops/harness/h5-negative-test-gate.md"
   append_h5_block "negative-test-missing" "${missing[*]}"
