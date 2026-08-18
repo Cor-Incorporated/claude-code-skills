@@ -76,6 +76,30 @@ if printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*no' \
   fi
 fi
 
+# H5-E2E applies to the existing structural scope by default. Repositories may
+# opt additional, repo-relative paths into the form gate through one glob per
+# line in .aidd-e2e-paths. This does not turn application code into a guard PR:
+# the existing three-point guard fee remains scoped by is_guard_pr.
+is_e2e_pr="$is_guard_pr"
+E2E_PATHS_FILE="$ROOT/.aidd-e2e-paths"
+if [[ -f "$E2E_PATHS_FILE" ]]; then
+  while IFS= read -r raw_pattern || [[ -n "$raw_pattern" ]]; do
+    pattern="${raw_pattern%$'\r'}"
+    [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+    while IFS= read -r changed_path; do
+      [[ -z "$changed_path" ]] && continue
+      # shellcheck disable=SC2053 # RHS is intentionally a repository-declared glob.
+      if [[ "$changed_path" == $pattern ]]; then
+        is_e2e_pr=1
+        break 2
+      fi
+    done <<<"$DIFF_FILES"
+  done <"$E2E_PATHS_FILE"
+fi
+if printf '%s\n' "$DIFF_FILES" | grep -qxF '.aidd-e2e-paths'; then
+  is_e2e_pr=1
+fi
+
 # ============ H8: requirement inventory field check (T7-1) ============
 # Spec: aidd-governance design/harness-spec.md H8
 # P3 装置欄: (1) 一次資料パス (2) 要求インベントリ (3) 突合表 (4) 標準質問 5 問 (5) 北極星
@@ -139,16 +163,60 @@ if [[ ${#h8_docs[@]} -gt 0 ]]; then
   log "H8-PASS: inventory fields present in ${#h8_docs[@]} delegation doc(s)"
 fi
 
+# Ignore negation/meta lines so "missing 陰性テスト" does not count as evidence.
+# H5-E2E remains a form declaration only: this script cannot prove that the
+# command or output is truthful (T8-4).
+PR_BODY_EVIDENCE="$(printf '%s\n' "$PR_BODY" | grep -viE \
+  'intentionally missing|expect red|do not merge|falsification only|未記入|TODO 陰性|TODO 台帳|TODO 廃止' || true)"
+
+if [[ "$is_e2e_pr" -eq 1 ]]; then
+  set +e
+  e2e_reason="$(H5_E2E_BODY="$PR_BODY_EVIDENCE" python3 - <<'PY'
+import os
+import re
+
+body = os.environ.get("H5_E2E_BODY", "")
+markers = re.findall(r"(?im)^\s*H5-E2E:\s*(.*?)\s*$", body)
+if not markers:
+    print("e2e-marker-missing")
+    raise SystemExit(1)
+
+value = markers[0].strip()
+if value.casefold() == "none":
+    raise SystemExit(0)
+if not value:
+    print("e2e-command-empty")
+    raise SystemExit(1)
+
+outputs = re.findall(r"(?im)^\s*H5-E2E-OUT:\s*(.*?)\s*$", body)
+if not outputs:
+    print("e2e-output-missing")
+    raise SystemExit(1)
+if len(outputs[0].strip()) < 20:
+    print("e2e-output-too-short")
+    raise SystemExit(1)
+PY
+)"
+  e2e_rc=$?
+  set -e
+  if [[ "$e2e_rc" -ne 0 ]]; then
+    fail "H5-E2E declaration incomplete: $e2e_reason"
+    fail "Required: H5-E2E: none OR H5-E2E: <command> + H5-E2E-OUT: <20+ chars output/log path>"
+    exit 1
+  fi
+  log "H5-E2E-PASS: execution-boundary declaration present"
+fi
+
 if [[ "$is_guard_pr" -eq 0 ]]; then
-  log "H5-PASS: not a guard/verifier PR (no structural trigger / declared N/A)"
+  if [[ "$is_e2e_pr" -eq 1 ]]; then
+    log "H5-PASS: repository-declared E2E path (guard three-point fee not applicable)"
+  else
+    log "H5-PASS: not a guard/verifier PR (no structural trigger / declared N/A)"
+  fi
   exit 0
 fi
 
 log "H5: guard/verifier PR detected — checking 3-point admission fee"
-
-# Ignore negation/meta lines so "missing 陰性テスト" does not count as evidence
-PR_BODY_EVIDENCE="$(printf '%s\n' "$PR_BODY" | grep -viE \
-  'intentionally missing|expect red|do not merge|falsification only|未記入|TODO 陰性|TODO 台帳|TODO 廃止' || true)"
 
 missing=()
 
