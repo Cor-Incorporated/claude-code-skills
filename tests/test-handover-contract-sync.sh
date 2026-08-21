@@ -18,6 +18,9 @@ CLAUDE_RULE="$ROOT/rules/delegation.md"
 AIDD_ROOT="${AIDD_GOVERNANCE_ROOT:-$HOME/Developer/aidd-governance}"
 OPENCODE_PROFILE="${OPENCODE_PROFILE_PATH:-$HOME/Developer/opencode/packages/guardrails/profile/AGENTS.md}"
 HANDOVER_DIR="${HANDOVER_DIR:-$HOME/Developer/aidd-governance/design/ops/handover}"
+CODEX_DEPLOYED="${CODEX_DEPLOYED_PATH:-$HOME/.codex/AGENTS.md}"
+OPENCODE_DEPLOYED="${OPENCODE_DEPLOYED_PATH:-$HOME/.config/opencode/AGENTS.md}"
+CURSOR_RULES="${CURSOR_RULES_DIR:-$HOME/.cursor/rules}"
 SYNC_TMP="$(mktemp -d)"
 trap 'rm -rf "$SYNC_TMP"' EXIT
 
@@ -144,6 +147,72 @@ compare_named_section() {
   fi
 }
 
+extract_present_contract_fields() {
+  local path="$1" field
+  while IFS= read -r field; do
+    [ -z "$field" ] && continue
+    field_present "$field" "$path" && printf '%s\n' "$field"
+  done < <(extract_canon_fields)
+  while IFS= read -r field; do
+    [ -z "$field" ] && continue
+    field_present "$field" "$path" && printf '%s\n' "$field"
+  done < <(extract_h8_fields)
+}
+
+compare_contract_field_set() {
+  local key="$1" left_name="$2" left_path="$3" right_name="$4" right_path="$5"
+  local left="$SYNC_TMP/${key}.left" right="$SYNC_TMP/${key}.right"
+  local left_count right_count
+  if [ ! -f "$left_path" ] || [ ! -f "$right_path" ]; then
+    echo "  SKIP: 契約欄同期 $left_name ↔ $right_name（片側不在）"
+    SKIP=$((SKIP + 1))
+    return 0
+  fi
+  extract_present_contract_fields "$left_path" >"$left"
+  extract_present_contract_fields "$right_path" >"$right"
+  left_count="$(wc -l <"$left" | tr -d ' ')"
+  right_count="$(wc -l <"$right" | tr -d ' ')"
+  if [ "$left_count" -eq 17 ] && [ "$right_count" -eq 17 ] && cmp -s "$left" "$right"; then
+    echo "  PASS: 契約欄同期 $left_name(17) == $right_name(17)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: 契約欄同期 $left_name($left_count) != $right_name($right_count)（両側の値）"
+    sed "s/^/    $left_name: /" "$left"
+    sed "s/^/    $right_name: /" "$right"
+    diff -u "$left" "$right" | sed 's/^/    /' || true
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+compare_section_pair() {
+  local key="$1" heading="$2" left_name="$3" left_path="$4" right_name="$5" right_path="$6"
+  local left="$SYNC_TMP/${key}.left-section" right="$SYNC_TMP/${key}.right-section"
+  if [ ! -f "$left_path" ] || [ ! -f "$right_path" ]; then
+    echo "  SKIP: $heading $left_name ↔ $right_name（片側不在）"
+    SKIP=$((SKIP + 1))
+    return 0
+  fi
+  if ! extract_named_section "$left_path" "$heading" >"$left"; then
+    echo "  FAIL: $heading $left_name($left_path) に同名節が無い"
+    FAIL=$((FAIL + 1))
+    return 0
+  fi
+  if ! extract_named_section "$right_path" "$heading" >"$right"; then
+    echo "  FAIL: $heading $right_name($right_path) に同名節が無い"
+    FAIL=$((FAIL + 1))
+    return 0
+  fi
+  if cmp -s "$left" "$right"; then
+    echo "  PASS: $heading $left_name == $right_name"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $heading $left_name != $right_name（両側の SHA-256 と diff）"
+    shasum -a 256 "$left" "$right" | sed 's/^/    /'
+    diff -u "$left" "$right" | sed 's/^/    /' || true
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 echo "=== handover 契約・H8・可視化文面の横断同期 ==="
 echo "正本: $CANON"
 echo ""
@@ -175,13 +244,43 @@ fi
 if [ "${HANDOVER_SYNC_DEPLOYED:-0}" = "1" ]; then
   echo ""
   echo "--- 方向1c: 正本 10+7 → home 配備先（source 同期と別計数） ---"
-  check_source_all_fields "Codex deployed" "$HOME/.codex/AGENTS.md"
-  check_source_all_fields "OpenCode deployed" "$HOME/.config/opencode/AGENTS.md"
+  check_source_all_fields "Codex deployed" "$CODEX_DEPLOYED"
+  check_source_all_fields "OpenCode deployed" "$OPENCODE_DEPLOYED"
   CURSOR_CAT="$SYNC_TMP/cursor-deployed.mdc"
-  if [ -d "$HOME/.cursor/rules" ]; then
-    find "$HOME/.cursor/rules" -type f -name '*.mdc' -exec cat {} + >"$CURSOR_CAT"
+  if [ -d "$CURSOR_RULES" ]; then
+    find "$CURSOR_RULES" -type f -name '*.mdc' -exec cat {} + >"$CURSOR_CAT"
   fi
   check_source_all_fields "Cursor deployed" "$CURSOR_CAT"
+
+  echo ""
+  echo "--- 方向1d: version-controlled payload → home 配備先 ---"
+  compare_contract_field_set "codex-payload-home" "Codex payload" \
+    "$AIDD_ROOT/design/ops/payloads/codex-AGENTS-append.md" "Codex home" "$CODEX_DEPLOYED"
+  compare_contract_field_set "cursor-payload-home" "Cursor payload" \
+    "$AIDD_ROOT/design/ops/payloads/cursor-aidd-delegation.mdc" "Cursor home" "$CURSOR_CAT"
+  compare_contract_field_set "opencode-payload-home" "OpenCode payload" \
+    "$AIDD_ROOT/design/ops/payloads/opencode-AGENTS-append.md" "OpenCode home" "$OPENCODE_DEPLOYED"
+  for section_entry in \
+    "diagnostic:## 診断プロトコル（可視化のみ）" \
+    "agent-lane:## Git 履歴のツール帰属（可視化のみ）"; do
+    section_key="${section_entry%%:*}"
+    section_heading="${section_entry#*:}"
+    compare_section_pair "codex-${section_key}" "$section_heading" "Codex payload" \
+      "$AIDD_ROOT/design/ops/payloads/codex-AGENTS-append.md" "Codex home" "$CODEX_DEPLOYED"
+    compare_section_pair "cursor-${section_key}" "$section_heading" "Cursor payload" \
+      "$AIDD_ROOT/design/ops/payloads/cursor-aidd-delegation.mdc" "Cursor home" "$CURSOR_CAT"
+    compare_section_pair "opencode-${section_key}" "$section_heading" "OpenCode payload" \
+      "$AIDD_ROOT/design/ops/payloads/opencode-AGENTS-append.md" "OpenCode home" "$OPENCODE_DEPLOYED"
+  done
+
+  echo ""
+  echo "--- 方向1e: OpenCode home 配備版 → 実 wrapper profile ---"
+  compare_contract_field_set "opencode-home-profile" "OpenCode home" \
+    "$OPENCODE_DEPLOYED" "OpenCode profile" "$OPENCODE_PROFILE"
+  compare_section_pair "opencode-home-profile-diagnostic" "## 診断プロトコル（可視化のみ）" \
+    "OpenCode home" "$OPENCODE_DEPLOYED" "OpenCode profile" "$OPENCODE_PROFILE"
+  compare_section_pair "opencode-home-profile-agent-lane" "## Git 履歴のツール帰属（可視化のみ）" \
+    "OpenCode home" "$OPENCODE_DEPLOYED" "OpenCode profile" "$OPENCODE_PROFILE"
 else
   echo "  NOTICE: HANDOVER_SYNC_DEPLOYED=1 未指定。home 配備は未証明。"
 fi
