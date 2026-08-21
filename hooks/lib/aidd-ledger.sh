@@ -30,3 +30,69 @@ aidd_ledger_append() {
       "$ts" "$component" "$hook" "$event" "$decision" "$rule" "$safe_cmd" "$source" "$safe_session" "$agent" >>"$ledger" 2>/dev/null || true
   fi
 }
+
+# Append a structured measurement without truncating nested JSON values.
+#
+# Usage:
+#   aidd_ledger_append_record '{"component":"H2","event":"measure",...}' [agent]
+#
+# Unlike aidd_ledger_append, this function reports validation and write errors to
+# its caller.  Existing hook call sites intentionally keep using the legacy,
+# best-effort helper above.
+aidd_ledger_append_record() {
+  local record_json="${1:-}"
+  local agent="${2:-${AIDD_LEDGER_AGENT:-claude-code}}"
+  local source="${AIDD_LEDGER_SOURCE:-real}"
+  local session="${AIDD_LEDGER_SESSION:-unset}"
+  local ledger="${AIDD_LEDGER_PATH:-${HOME}/.claude/hooks/ledger/guard-ledger.jsonl}"
+  local ledger_dir
+  ledger_dir="$(dirname "$ledger")"
+
+  if ! mkdir -p "$ledger_dir"; then
+    printf 'aidd-ledger: cannot create ledger directory: %s\n' "$ledger_dir" >&2
+    return 1
+  fi
+
+  python3 - "$ledger" "$record_json" "$source" "$session" "$agent" <<'PY'
+import datetime
+import json
+import os
+import sys
+
+ledger, raw, source, session, agent = sys.argv[1:]
+try:
+    record = json.loads(raw)
+except json.JSONDecodeError as exc:
+    print(f"aidd-ledger: invalid JSON record: {exc}", file=sys.stderr)
+    raise SystemExit(2)
+
+if not isinstance(record, dict):
+    print("aidd-ledger: structured record must be a JSON object", file=sys.stderr)
+    raise SystemExit(2)
+for field in ("component", "event"):
+    if not isinstance(record.get(field), str) or not record[field].strip():
+        print(f"aidd-ledger: missing non-empty string field: {field}", file=sys.stderr)
+        raise SystemExit(2)
+
+record["source"] = source
+record["session"] = session
+record["agent"] = agent
+record.setdefault(
+    "ts",
+    datetime.datetime.now(datetime.timezone.utc)
+    .replace(microsecond=0)
+    .isoformat()
+    .replace("+00:00", "Z"),
+)
+line = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+
+try:
+    fd = os.open(ledger, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as stream:
+        stream.write(line)
+        stream.flush()
+except OSError as exc:
+    print(f"aidd-ledger: append failed: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
