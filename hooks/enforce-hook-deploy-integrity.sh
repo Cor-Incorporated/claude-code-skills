@@ -100,7 +100,22 @@ fi
 [[ -z "$PROJECT_HOOKS_DIR" ]] && exit 0
 
 INSTALLED_HOOKS_DIR="$HOME/.claude/hooks"
+CODEX_HOOKS_DIR="$HOME/.codex/hooks"
+CURSOR_HOOKS_DIR="$HOME/.cursor/hooks"
 SETTINGS_FILE="$HOME/.claude/settings.json"
+
+# --- Helper: resolve each repository hook to its tool-specific deploy root ---
+# hooks/codex/* and hooks/cursor/* are version-controlled beside Claude hooks,
+# but setup.sh deploys them to their own tool homes.  They must not be checked
+# as if the nested directory also existed below ~/.claude/hooks.
+deployed_hook_path() {
+  local rel_path="$1"
+  case "$rel_path" in
+    codex/*) printf '%s/%s\n' "$CODEX_HOOKS_DIR" "${rel_path#codex/}" ;;
+    cursor/*) printf '%s/%s\n' "$CURSOR_HOOKS_DIR" "${rel_path#cursor/}" ;;
+    *) printf '%s/%s\n' "$INSTALLED_HOOKS_DIR" "$rel_path" ;;
+  esac
+}
 
 # --- Helper: check if a filename is in the exclusion list ---
 is_excluded() {
@@ -152,10 +167,10 @@ done < <(find "$PROJECT_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pyca
 # SessionStart and re-deployed retired hooks (main 52 → disk 63). Detect only.
 for rel_path in "${project_files[@]}"; do
   repo_file="$PROJECT_HOOKS_DIR/$rel_path"
-  deployed_file="$INSTALLED_HOOKS_DIR/$rel_path"
+  deployed_file=$(deployed_hook_path "$rel_path")
 
   if [[ ! -f "$deployed_file" ]]; then
-    issues+=("NOT INSTALLED: $rel_path (detect-only; run setup.sh from develop)")
+    issues+=("NOT INSTALLED: $rel_path (target=${deployed_file}; detect-only; run setup.sh from develop)")
     continue
   fi
 
@@ -164,7 +179,7 @@ for rel_path in "${project_files[@]}"; do
   deployed_md5=$(compute_md5 "$deployed_file")
 
   if [[ "$repo_md5" != "$deployed_md5" ]]; then
-    issues+=("MD5 MISMATCH: $rel_path (repo=${repo_md5} deployed=${deployed_md5}; no auto-sync)")
+    issues+=("MD5 MISMATCH: $rel_path (repo=${repo_md5} deployed=${deployed_md5} target=${deployed_file}; no auto-sync)")
   fi
 done
 
