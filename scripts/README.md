@@ -45,5 +45,27 @@ bash ~/.claude/scripts/claude-provider.sh anthropic
 bash ~/.claude/scripts/claude-provider.sh zai
 ```
 
-See [docs/runbooks/provider-switching.md](../docs/runbooks/provider-switching.md).
+## H2 / H10 measurement
 
+These scripts append measurement records through the existing H6 ledger helper.
+They do not install hooks, block commands, or create required checks.
+
+```bash
+# Review-ready PRs and local worktree pressure. Warnings still exit 0.
+bash scripts/wip-inventory.sh --repo="$PWD" --github=Cor-Incorporated/claude-code-skills
+
+# Activity and landed outcomes in the start-inclusive, end-exclusive window.
+bash scripts/stage-landing.sh \
+  --github=Cor-Incorporated/Grift \
+  --from=2026-08-20T10:16:58Z \
+  --to=2026-08-21T00:16:58Z \
+  --cd-workflow=v2-alpha-cd.yml
+```
+
+`wip-inventory.sh` records `active_lanes: null`; there is no machine-readable
+lane registry. `stage-landing.sh` likewise records
+`issue_closeable_reached: null` because historical closeability transitions
+have no repository SSOT. `Agent-Lane` attribution requires exactly one valid
+commit trailer and never guesses from author names or `Co-Authored-By` lines.
+
+See [docs/runbooks/provider-switching.md](../docs/runbooks/provider-switching.md).
