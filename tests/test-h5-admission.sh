@@ -147,7 +147,9 @@ run_case "advisory-no-on-readme" 0 \
   env H5_DIFF_FILES="README.md" H5_PR_BODY="H5-guard: no" bash "$CHK"
 
 # --- H8 requirement inventory gate (T7-1) ---
-H8_FIX=$(mktemp -d "$ROOT/docs/handover/.h8-fixtures.XXXXXX")
+# CI の shallow checkout には docs/handover が存在しない場合があるため、
+# fixture は repository tree ではなく OS の一時ディレクトリへ隔離する。
+H8_FIX=$(mktemp -d "${TMPDIR:-/tmp}/handover-fixtures.XXXXXX")
 H8_LEDGER=$(mktemp)
 H8_NAMES=(
   "一次資料"
