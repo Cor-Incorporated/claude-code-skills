@@ -147,59 +147,116 @@ run_case "advisory-no-on-readme" 0 \
   env H5_DIFF_FILES="README.md" H5_PR_BODY="H5-guard: no" bash "$CHK"
 
 # --- H8 requirement inventory gate (T7-1) ---
-H8_FIX="$ROOT/docs/handover/.h8-fixtures"
-mkdir -p "$H8_FIX"
-cat > "$H8_FIX/2026-08-12-empty.md" <<'EOF'
-# Handover: fixture empty
-
-## 委任契約（必須）
-1. 停止条件: 既定 10
-
-## 一次資料
-## 要求インベントリ
-## 突合表
-## 標準質問
-## 北極星
-EOF
-cat > "$H8_FIX/2026-08-12-full.md" <<'EOF'
-# Handover: fixture full
-
-## 委任契約（必須）
-1. 停止条件: 既定 10
-
-## 一次資料
-- 原指示: repos/_session-zero.md（要求の出典）
-
-## 要求インベントリ
-1. 委任契約に要求インベントリ欄が空のまま発射しようとしたら止まる
-2. 台帳に inventory-field-empty が 1 行以上記録される
-
-## 突合表
-| # | 要求 | 受入基準 |
-|---|---|---|
-| 1 | 空欄で止まる | red 実測 |
-
-## 標準質問
-- ユーザー像: 監督エージェントと実装エージェント
-- 安全境界: 台帳以外に書き込まない
-
-## 北極星
-- メトリクス: H8 台帳発火数 / 測定周期: 日次
-EOF
-
+# CI の shallow checkout には docs/handover が存在しない場合があるため、
+# fixture は repository tree ではなく OS の一時ディレクトリへ隔離する。
+H8_FIX=$(mktemp -d "${TMPDIR:-/tmp}/handover-fixtures.XXXXXX")
 H8_LEDGER=$(mktemp)
-run_case "h8-empty-red" 1 \
-  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/2026-08-12-empty.md" H5_PR_BODY="" bash "$CHK"
-run_case "h8-full-green" 0 \
-  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/2026-08-12-full.md" H5_PR_BODY="" bash "$CHK"
+H8_NAMES=(
+  "一次資料"
+  "要求インベントリ"
+  "突合表"
+  "標準質問"
+  "北極星"
+  "反証軸"
+  "撤収"
+)
+H8_VALUES=(
+  "- 原指示: repos/_session-zero.md（要求と受入基準の出典）"
+  "1. 委任契約の空欄発射を止め、欠落欄名を台帳に記録する"
+  "| 要求 | 受入基準 | 証跡 |\n|---|---|---|\n| 空欄を止める | exit 1 | 生ログ |"
+  "- ユーザー像と安全境界とセキュリティ境界を実装前に明文化する"
+  "- メトリクス: H8 欠落欄の台帳発火数 / 測定周期: 日次"
+  "F1 の軸と真理値表を実装前に列挙し、欠落入力が red になることを測る"
+  "active: 作業中の worktree は完了コミットの回収先が決まるまで保持する"
+)
+
+write_h8_fixture() {
+  local path="$1" omit_indexes="$2" short_index="$3" falsification="$4" withdrawal="$5"
+  local i value
+  {
+    printf '%s\n\n' '# Handover: H8 truth-table fixture'
+    printf '%s\n' '## 委任契約（必須）'
+    printf '%s\n\n' '1. 停止条件と最大反復: 既定 10 回で止めて監督へ報告する'
+    for ((i = 0; i < ${#H8_NAMES[@]}; i++)); do
+      case ",$omit_indexes," in
+        *",$i,"*) continue ;;
+      esac
+      value="${H8_VALUES[$i]}"
+      [[ "$i" -eq 5 ]] && value="$falsification"
+      [[ "$i" -eq 6 ]] && value="$withdrawal"
+      [[ "$i" -eq "$short_index" ]] && value="短文"
+      printf '## %s\n%s\n\n' "${H8_NAMES[$i]}" "$value"
+    done
+  } >"$path"
+}
+
+H8_F1="${H8_VALUES[5]}"
+H8_F2="F2 の事故入力と再現入力を実装前に固定し、既知の欠落が red になることを測る"
+H8_F3="F3 の片側変異を実装前に固定し、対の一方だけを変える mutation が red になることを測る"
+H8_ACTIVE="${H8_VALUES[6]}"
+H8_RECOVER="recover: 検収後は成果 commit を回収用 branch へ取り込み、作業 worktree は後続検査まで保持する"
+H8_PRESERVE="preserve: 完了コミットの証跡を再検査するため、専用 worktree と branch を明示的に残す"
+H8_RETIRE="retire: 完了コミットが PR に回収された後、利用中でない worktree と branch を廃止候補にする"
+
+# 修正前は通った既存 5 欄だけの契約を、修正後は拒否する。
+write_h8_fixture "$H8_FIX/five-fields-only.md" "5,6" -1 "$H8_F1" "$H8_ACTIVE"
+run_case "h8-five-fields-only-red" 1 \
+  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/five-fields-only.md" H5_PR_BODY="" bash "$CHK"
+
+# 軸 1: 7 欄のうち、見出しが 1 つでも無ければ red。
+for h8_i in 0 1 2 3 4 5 6; do
+  write_h8_fixture "$H8_FIX/missing-$h8_i.md" "$h8_i" -1 "$H8_F1" "$H8_ACTIVE"
+  run_case "h8-missing-${H8_NAMES[$h8_i]}-red" 1 \
+    env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/missing-$h8_i.md" H5_PR_BODY="" bash "$CHK"
+done
+
+# 軸 2: 見出しがあっても各欄 20 文字未満は red。
+for h8_i in 0 1 2 3 4 5 6; do
+  write_h8_fixture "$H8_FIX/short-$h8_i.md" "" "$h8_i" "$H8_F1" "$H8_ACTIVE"
+  run_case "h8-short-${H8_NAMES[$h8_i]}-red" 1 \
+    env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/short-$h8_i.md" H5_PR_BODY="" bash "$CHK"
+done
+
+# 軸 3: 反証軸 F1/F2/F3 と撤収 4 値の受理。
+write_h8_fixture "$H8_FIX/f1-active.md" "" -1 "$H8_F1" "$H8_ACTIVE"
+run_case "h8-f1-active-green" 0 \
+  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/f1-active.md" H5_PR_BODY="" bash "$CHK"
+write_h8_fixture "$H8_FIX/f2-recover.md" "" -1 "$H8_F2" "$H8_RECOVER"
+run_case "h8-f2-recover-green" 0 \
+  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/f2-recover.md" H5_PR_BODY="" bash "$CHK"
+write_h8_fixture "$H8_FIX/f3-preserve.md" "" -1 "$H8_F3" "$H8_PRESERVE"
+run_case "h8-f3-preserve-green" 0 \
+  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/f3-preserve.md" H5_PR_BODY="" bash "$CHK"
+write_h8_fixture "$H8_FIX/f1-retire.md" "" -1 "$H8_F1" "$H8_RETIRE"
+run_case "h8-f1-retire-green" 0 \
+  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/f1-retire.md" H5_PR_BODY="" bash "$CHK"
+
+# 「テスト green」のみ、および inactive の active 部分一致は拒否する。
+write_h8_fixture "$H8_FIX/falsification-invalid.md" "" -1 \
+  "この作業ではテスト green を確認して完了と報告する予定である" "$H8_ACTIVE"
+run_case "h8-test-green-only-red" 1 \
+  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/falsification-invalid.md" H5_PR_BODY="" bash "$CHK"
+write_h8_fixture "$H8_FIX/withdrawal-invalid.md" "" -1 "$H8_F1" \
+  "inactive: 作業が終わったら worktree の取り扱いは後続セッションが任意に判断する"
+run_case "h8-withdrawal-invalid-red" 1 \
+  env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="$H8_FIX/withdrawal-invalid.md" H5_PR_BODY="" bash "$CHK"
+
 run_case "h8-nondelegation-doc" 0 \
   env H5_LEDGER_PATH="$H8_LEDGER" H5_DIFF_FILES="README.md" H5_PR_BODY="" bash "$CHK"
 
-if grep -q '"rule":"inventory-field-empty"' "$H8_LEDGER"; then
-  echo "PASS: h8 ledger row present (inventory-field-empty)"
+if python3 - "$H8_LEDGER" <<'PY'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1])]
+assert rows, "no H8 rows"
+assert all(row.get("component") == "H8" for row in rows), rows
+assert all(row.get("source") == "test" for row in rows), rows
+assert all(row.get("rule") == "inventory-field-empty" for row in rows), rows
+PY
+then
+  echo "PASS: H8 ledger rows are isolated and source=test"
   pass=$((pass + 1))
 else
-  echo "FAIL: h8 ledger row missing (inventory-field-empty)"
+  echo "FAIL: H8 ledger source/isolation"
   fail=$((fail + 1))
 fi
 
