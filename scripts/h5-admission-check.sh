@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # H5 — Admission fee for block-capable guards / completion verifiers (required check).
 # Spec: aidd-governance design/harness-spec.md H5, design/ops/harness/h5-negative-test-gate.md
-# H8 — requirement inventory field gate (T7-1): delegation/handover docs in the
-# diff must carry the 5 P3 fields; empty → exit 1 + ledger inventory-field-empty.
+# H8 — requirement inventory field gate (T7-1 / Phase 20): delegation/handover
+# docs in the diff must carry the 5 P3 fields plus the falsification/withdrawal
+# declarations; empty or malformed → exit 1 + ledger inventory-field-empty.
 # Spec: aidd-governance design/harness-spec.md H8
 #
 # Exit 0: not a guard PR, or 3-point set present
@@ -111,6 +112,7 @@ fi
 # ============ H8: requirement inventory field check (T7-1) ============
 # Spec: aidd-governance design/harness-spec.md H8
 # P3 装置欄: (1) 一次資料パス (2) 要求インベントリ (3) 突合表 (4) 標準質問 5 問 (5) 北極星
+# Phase 20 補助欄: (6) 反証軸 (7) 撤収。委任契約の既存 10 欄とは別枠。
 # Delegation/handover docs in the diff are inspected; a doc counts as a
 # delegation contract only when it carries 委任契約/要求インベントリ marker
 # (avoids false hits on ordinary prose). Empty section = red + ledger row.
@@ -121,6 +123,17 @@ _H8_FIELDS=(
   "突合表|受入基準"
   "標準質問|ユーザー像|審美|LLM 挙動境界|安全境界|セキュリティ境界"
   "北極星|メトリクス|測定周期"
+  "反証軸"
+  "撤収"
+)
+_H8_FIELD_NAMES=(
+  "一次資料"
+  "要求インベントリ"
+  "突合表"
+  "標準質問"
+  "北極星"
+  "反証軸"
+  "撤収"
 )
 h8_docs=()
 while IFS= read -r f; do
@@ -134,10 +147,12 @@ h8_missing=()
 if [[ -n "${h8_docs[*]-}" ]]; then
   for f in "${h8_docs[@]}"; do
     grep -qE '委任契約|要求インベントリ' "$f" || continue
-    for field in "${_H8_FIELDS[@]}"; do
-      if ! python3 - "$f" "$field" <<'PY'
+    for ((h8_i = 0; h8_i < ${#_H8_FIELDS[@]}; h8_i++)); do
+      field="${_H8_FIELDS[$h8_i]}"
+      field_name="${_H8_FIELD_NAMES[$h8_i]}"
+      if ! python3 - "$f" "$field" "$field_name" <<'PY'
 import re, sys
-doc, pat = sys.argv[1], sys.argv[2]
+doc, pat, field_name = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(doc, encoding="utf-8").read()
 m = re.search(rf'(?im)^#{{1,4}}\s*(?:{pat})[^\n]*\n([\s\S]*?)(?=^#{{1,4}}\s|\Z)', text)
 if not m:
@@ -145,10 +160,29 @@ if not m:
 content = m.group(1).strip()
 if len(content) < 20 or re.fullmatch(r'[-*\s\[\]xX]*', content):
     sys.exit(1)
+if field_name == "反証軸":
+    valid = (
+        re.search(r"F1", content, re.I)
+        and re.search(r"軸|真理値|×", content, re.I)
+    ) or (
+        re.search(r"F2", content, re.I)
+        and re.search(r"事故入力|再現入力|既知入力", content, re.I)
+    ) or (
+        re.search(r"F3", content, re.I)
+        and re.search(r"片側|変異|mutation", content, re.I)
+    )
+    if not valid:
+        sys.exit(1)
+if field_name == "撤収" and not re.search(
+    r"(?<![A-Za-z0-9_-])(active|recover|preserve|retire)(?![A-Za-z0-9_-])",
+    content,
+    re.I,
+):
+    sys.exit(1)
 sys.exit(0)
 PY
       then
-        h8_missing+=("$f: ${field%%|*}")
+        h8_missing+=("$f: $field_name")
       fi
     done
   done
