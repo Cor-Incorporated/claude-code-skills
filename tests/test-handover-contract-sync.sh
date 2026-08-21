@@ -5,7 +5,7 @@
 # デフォルトはこの repo 内の正本 ↔ Claude rule を検査する。
 # HANDOVER_SYNC_CROSS_REPO=1 で aidd payload 3 本と OpenCode profile、
 # HANDOVER_SYNC_DEPLOYED=1 で home 配備 3 面をそれぞれ別計数する。
-# HANDOVER_SYNC_TOOL=codex|cursor|opencode で自レーンだけを検査できる。
+# HANDOVER_SYNC_TOOL=claude|codex|cursor|opencode で自レーンだけを検査できる。
 # 対象の無い CI での SKIP は「同期済み」に数えない。
 set -uo pipefail
 
@@ -20,6 +20,7 @@ AIDD_ROOT="${AIDD_GOVERNANCE_ROOT:-$HOME/Developer/aidd-governance}"
 OPENCODE_PROFILE="${OPENCODE_PROFILE_PATH:-$HOME/Developer/opencode/packages/guardrails/profile/AGENTS.md}"
 HANDOVER_DIR="${HANDOVER_DIR:-$HOME/Developer/aidd-governance/design/ops/handover}"
 CODEX_DEPLOYED="${CODEX_DEPLOYED_PATH:-$HOME/.codex/AGENTS.md}"
+CLAUDE_DEPLOYED="${CLAUDE_DEPLOYED_PATH:-$HOME/.claude/rules/delegation.md}"
 OPENCODE_DEPLOYED="${OPENCODE_DEPLOYED_PATH:-$HOME/.config/opencode/AGENTS.md}"
 CURSOR_RULES="${CURSOR_RULES_DIR:-$HOME/.cursor/rules}"
 SYNC_TOOL="${HANDOVER_SYNC_TOOL:-all}"
@@ -27,7 +28,7 @@ SYNC_TMP="$(mktemp -d)"
 trap 'rm -rf "$SYNC_TMP"' EXIT
 
 case "$SYNC_TOOL" in
-  all|codex|cursor|opencode) ;;
+  all|claude|codex|cursor|opencode) ;;
   *) echo "FAIL: unknown HANDOVER_SYNC_TOOL=$SYNC_TOOL"; exit 2 ;;
 esac
 
@@ -262,17 +263,22 @@ fi
 
 if [ "${HANDOVER_SYNC_DEPLOYED:-0}" = "1" ]; then
   echo ""
-  echo "--- 方向1c: 正本 10+7 → home 配備先（tool=$SYNC_TOOL、source 同期と別計数） ---"
+  echo "--- 方向1c: 正本 10+7 → home 配備先（tool=${SYNC_TOOL}、source 同期と別計数） ---"
   CURSOR_CAT="$SYNC_TMP/cursor-deployed.mdc"
   if wants_tool cursor && [ -d "$CURSOR_RULES" ]; then
     find "$CURSOR_RULES" -type f -name '*.mdc' -exec cat {} + >"$CURSOR_CAT"
   fi
+  if wants_tool claude; then check_source_all_fields "Claude deployed" "$CLAUDE_DEPLOYED"; fi
   if wants_tool codex; then check_source_all_fields "Codex deployed" "$CODEX_DEPLOYED"; fi
   if wants_tool cursor; then check_source_all_fields "Cursor deployed" "$CURSOR_CAT"; fi
   if wants_tool opencode; then check_source_all_fields "OpenCode deployed" "$OPENCODE_DEPLOYED"; fi
 
   echo ""
   echo "--- 方向1d: version-controlled payload → home 配備先 ---"
+  if wants_tool claude; then
+    compare_contract_field_set "claude-rule-home" "Claude rule" "$CLAUDE_RULE" \
+      "Claude home" "$CLAUDE_DEPLOYED"
+  fi
   if wants_tool codex; then
     compare_contract_field_set "codex-payload-home" "Codex payload" \
       "$AIDD_ROOT/design/ops/payloads/codex-AGENTS-append.md" "Codex home" "$CODEX_DEPLOYED"
@@ -291,6 +297,10 @@ if [ "${HANDOVER_SYNC_DEPLOYED:-0}" = "1" ]; then
     "agent-lane:## Git 履歴のツール帰属（可視化のみ）"; do
     section_key="${section_entry%%:*}"
     section_heading="${section_entry#*:}"
+    if wants_tool claude; then
+      compare_section_pair "claude-${section_key}" "$section_heading" "Claude rule" \
+        "$CLAUDE_RULE" "Claude home" "$CLAUDE_DEPLOYED"
+    fi
     if wants_tool codex; then
       compare_section_pair "codex-${section_key}" "$section_heading" "Codex payload" \
         "$AIDD_ROOT/design/ops/payloads/codex-AGENTS-append.md" "Codex home" "$CODEX_DEPLOYED"
