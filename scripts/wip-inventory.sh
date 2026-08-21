@@ -73,8 +73,21 @@ if ! git -C "$REPO_PATH" worktree list --porcelain >"$TMP_DIR/worktrees.txt" 2>"
   emit_error "git worktree list failed: $(tr '\n' ' ' <"$TMP_DIR/git.err")"
 fi
 
-grep '^worktree ' "$TMP_DIR/worktrees.txt" | sed 's/^worktree //' >"$TMP_DIR/paths.txt" || true
+awk -v active="$TMP_DIR/paths.txt" -v skipped="$TMP_DIR/prunable.txt" '
+  function flush() {
+    if (path == "") return
+    if (prunable) print path >> skipped
+    else print path >> active
+    path=""; prunable=0
+  }
+  /^worktree / { flush(); path=substr($0, 10); next }
+  /^prunable([[:space:]]|$)/ { prunable=1; next }
+  /^$/ { flush() }
+  END { flush() }
+' "$TMP_DIR/worktrees.txt"
+touch "$TMP_DIR/paths.txt" "$TMP_DIR/prunable.txt"
 WORKTREE_COUNT="$(wc -l <"$TMP_DIR/paths.txt" | tr -d ' ')"
+PRUNABLE_COUNT="$(wc -l <"$TMP_DIR/prunable.txt" | tr -d ' ')"
 DIRTY_COUNT=0
 while IFS= read -r worktree; do
   [[ -n "$worktree" ]] || continue
@@ -121,9 +134,9 @@ if (( DIRTY_COUNT > DIRTY_WARN_THRESHOLD )); then
   WARN_REASONS="${WARN_REASONS:+${WARN_REASONS},}dirty_worktrees"
 fi
 
-RECORD="$(python3 - "$GITHUB_REPO" "$EVENT" "$PR_COUNT" "$WORKTREE_COUNT" "$DIRTY_COUNT" "$WARN_REASONS" <<'PY'
+RECORD="$(python3 - "$GITHUB_REPO" "$EVENT" "$PR_COUNT" "$WORKTREE_COUNT" "$DIRTY_COUNT" "$PRUNABLE_COUNT" "$WARN_REASONS" <<'PY'
 import json, sys
-repo, event, prs, worktrees, dirty, reasons = sys.argv[1:]
+repo, event, prs, worktrees, dirty, prunable, reasons = sys.argv[1:]
 record = {
     "component": "H2",
     "event": event,
@@ -133,6 +146,7 @@ record = {
         "review_ready_open_prs": int(prs),
         "worktrees": int(worktrees),
         "dirty_worktrees": int(dirty),
+        "prunable_worktrees_skipped": int(prunable),
         "active_lanes": None,
         "thresholds": {
             "review_ready_open_prs_warn_at": 2,
