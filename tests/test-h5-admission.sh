@@ -32,6 +32,23 @@ run_case() {
   fi
 }
 
+run_case_stderr_contains() {
+  local name="$1" expect="$2" needle="$3"
+  shift 3
+  set +e
+  "$@" >/tmp/h5-out.txt 2>/tmp/h5-err.txt
+  code=$?
+  set -e
+  if [[ "$code" -eq "$expect" ]] && grep -qF "$needle" /tmp/h5-err.txt; then
+    echo "PASS: $name (exit $code; diagnostic present)"
+    pass=$((pass + 1))
+  else
+    echo "FAIL: $name expected exit $expect and diagnostic: $needle"
+    cat /tmp/h5-err.txt || true
+    fail=$((fail + 1))
+  fi
+}
+
 # Non-guard PR → pass
 run_case "non-guard" 0 \
   env H5_DIFF_FILES="README.md" H5_PR_BODY="docs only" bash "$CHK"
@@ -98,6 +115,15 @@ H5-SUBTRACTION: N/A — tightens existing hard block only, net +0 guards
 H5-E2E: none
 EOF
 )" bash "$CHK"
+
+# A missing subtraction declaration must name both accepted recovery forms.
+run_case_stderr_contains "missing-subtraction-diagnostic" 1 \
+  "H5-SUBTRACTION: N/A OR H5-RETIRE-PR: <merged PR number>" \
+  env H5_DIFF_FILES="hooks/git-push-guard.sh" H5_PR_BODY="H5-guard: yes
+H5-E2E: none
+H5-NEGATIVE: unit red exit 1 measured
+H5-LEDGER: aidd_ledger_append on every fire
+H5-RETIRE: 90 days zero fires then retire" bash "$CHK"
 
 # R1: H5-guard: no MUST NOT exempt structural paths (symmetric with triggers)
 run_case "no-exempt-workflow" 1 \
