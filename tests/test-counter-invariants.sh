@@ -105,8 +105,15 @@ printf '{"ts":"2026-08-12T00:00:01Z","component":"H6","source":"real","hook":"d"
 printf '{"ts":"2026-08-12T00:00:01Z","component":"H6","source":"real","hook":"e"}\n' >>"$LED"
 printf '{"ts":"2026-08-12T00:00:01Z","component":"H6","source":"real","hook":"f"}\n' >>"$LED"
 
-sout=$(env AIDD_LEDGER_PATH="$LED" bash "$SUMMARY")
-for want in "total=" "source_real=4" "source_test=1" "source_none=1"; do
+TP1="$SB/guardrail-fires-a.jsonl"
+TP2="$SB/guardrail-fires-b.jsonl"
+printf '{"schema_version":"guardrail-fire.v1","ts":"2026-08-12T00:00:02Z","rule_id":"RUNTIME_FLOOR:secret-read","decision":"deny"}\n' >"$TP1"
+printf '{"schema_version":"guardrail-fire.v1","ts":"2026-08-12T00:00:03Z","rule_id":"RUNTIME_FLOOR:egress","decision":"deny"}\n' >"$TP2"
+printf '{"schema_version":"unrelated.v1","ts":"2026-08-12T00:00:04Z"}\n' >>"$TP2"
+
+sout=$(env AIDD_LEDGER_PATH="$LED" AIDD_THIRD_PARTY_LEDGER_PATHS="$TP1:$TP2:$TP1" bash "$SUMMARY")
+for want in "total=6" "source_real=4" "source_test=1" "source_none=1" \
+  "source_third_party=2" "total_with_third_party=8" "third_party_files=2"; do
   if echo "$sout" | grep -q "$want"; then
     ok "ledger-summary $want"
   else
