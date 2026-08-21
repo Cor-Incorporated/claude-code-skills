@@ -26,7 +26,7 @@ case "${FAKE_MODE:-metrics}" in
     echo "synthetic API failure" >&2
     exit 1
     ;;
-  wip-pr-boundary|wip-worktree-above|wip-dirty-above|wip-local-boundary)
+  wip-pr-boundary|wip-worktree-above|wip-dirty-above|wip-local-boundary|wip-prunable)
     if [[ "$1 $2" == "pr list" ]]; then
       if [[ "$FAKE_MODE" == "wip-pr-boundary" ]]; then
         cat <<'JSON'
@@ -86,6 +86,12 @@ cat >"$SB/bin/git" <<'EOF'
 #!/usr/bin/env bash
 mode="${FAKE_MODE:-wip-ok}"
 if [[ "$*" == *"worktree list --porcelain"* ]]; then
+  if [[ "$mode" == "wip-prunable" ]]; then
+    printf 'worktree %s/wt-1\nHEAD deadbeef\nbranch refs/heads/test-1\n\n' "${FAKE_ROOT:?}"
+    printf 'worktree %s/wt-2\nHEAD deadbeef\nbranch refs/heads/test-2\n\n' "${FAKE_ROOT:?}"
+    printf 'worktree %s/stale\nHEAD deadbeef\nprunable gitdir file points to non-existent location\n\n' "${FAKE_ROOT:?}"
+    exit 0
+  fi
   count=2
   case "$mode" in
     wip-pr-boundary|wip-dirty-above|wip-local-boundary) count=63 ;;
@@ -99,6 +105,10 @@ if [[ "$*" == *"worktree list --porcelain"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"status --porcelain"* ]]; then
+  if [[ "$mode" == "wip-prunable" && "$*" == *"/stale"* ]]; then
+    echo "fatal: not a git repository" >&2
+    exit 1
+  fi
   if [[ "$mode" == "wip-pr-boundary" || "$mode" == "wip-local-boundary" || "$mode" == "wip-worktree-above" || "$mode" == "wip-dirty-above" ]]; then
     path=""
     prev=""
@@ -192,6 +202,14 @@ if [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["event"])' "
   ok "H2 below thresholds records measure"
 else
   bad "H2 below thresholds did not record measure"
+fi
+
+export FAKE_MODE=wip-prunable
+WIP_PRUNABLE="$(bash "$ROOT/scripts/wip-inventory.sh" --repo="$SB/repo" --github=Cor/Test)"
+if python3 -c 'import json,sys; d=json.loads(sys.argv[1])["detail"]; assert (d["worktrees"],d["dirty_worktrees"],d["prunable_worktrees_skipped"])==(2,0,1)' "$WIP_PRUNABLE"; then
+  ok "H2 skips one prunable worktree and reports the skipped count"
+else
+  bad "H2 prunable worktree axis mismatch"
 fi
 
 export FAKE_MODE=api-error

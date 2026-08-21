@@ -1,10 +1,11 @@
 #!/bin/bash
 # リンクテスト: Route B/C の既存 10 欄、H8 補助 7 欄、
-# および Phase 20 の可視化文面を両側照合する。
+# Phase 20 の可視化文面、Phase 21 の H5 書式節を両側照合する。
 #
 # デフォルトはこの repo 内の正本 ↔ Claude rule を検査する。
 # HANDOVER_SYNC_CROSS_REPO=1 で aidd payload 3 本と OpenCode profile、
 # HANDOVER_SYNC_DEPLOYED=1 で home 配備 3 面をそれぞれ別計数する。
+# HANDOVER_SYNC_TOOL=codex|cursor|opencode で自レーンだけを検査できる。
 # 対象の無い CI での SKIP は「同期済み」に数えない。
 set -uo pipefail
 
@@ -21,8 +22,18 @@ HANDOVER_DIR="${HANDOVER_DIR:-$HOME/Developer/aidd-governance/design/ops/handove
 CODEX_DEPLOYED="${CODEX_DEPLOYED_PATH:-$HOME/.codex/AGENTS.md}"
 OPENCODE_DEPLOYED="${OPENCODE_DEPLOYED_PATH:-$HOME/.config/opencode/AGENTS.md}"
 CURSOR_RULES="${CURSOR_RULES_DIR:-$HOME/.cursor/rules}"
+SYNC_TOOL="${HANDOVER_SYNC_TOOL:-all}"
 SYNC_TMP="$(mktemp -d)"
 trap 'rm -rf "$SYNC_TMP"' EXIT
+
+case "$SYNC_TOOL" in
+  all|codex|cursor|opencode) ;;
+  *) echo "FAIL: unknown HANDOVER_SYNC_TOOL=$SYNC_TOOL"; exit 2 ;;
+esac
+
+wants_tool() {
+  [ "$SYNC_TOOL" = "all" ] || [ "$SYNC_TOOL" = "$1" ]
+}
 
 PASS=0
 FAIL=0
@@ -237,50 +248,73 @@ if [ "${HANDOVER_SYNC_CROSS_REPO:-0}" = "1" ]; then
     compare_named_section "diagnostic" "## 診断プロトコル（可視化のみ）" "$source_name" "$source_path"
     compare_named_section "agent-lane" "## Git 履歴のツール帰属（可視化のみ）" "$source_name" "$source_path"
   done
+  for payload_entry in \
+    "Codex-payload:$AIDD_ROOT/design/ops/payloads/codex-AGENTS-append.md" \
+    "Cursor-payload:$AIDD_ROOT/design/ops/payloads/cursor-aidd-delegation.mdc" \
+    "OpenCode-payload:$AIDD_ROOT/design/ops/payloads/opencode-AGENTS-append.md"; do
+    payload_name="${payload_entry%%:*}"
+    payload_path="${payload_entry#*:}"
+    compare_named_section "h5-marker" "## AI作成PR本文のH5マーカー書式" "$payload_name" "$payload_path"
+  done
 else
   echo "  NOTICE: HANDOVER_SYNC_CROSS_REPO=1 未指定。リポ横断の source 同期は未証明。"
 fi
 
 if [ "${HANDOVER_SYNC_DEPLOYED:-0}" = "1" ]; then
   echo ""
-  echo "--- 方向1c: 正本 10+7 → home 配備先（source 同期と別計数） ---"
-  check_source_all_fields "Codex deployed" "$CODEX_DEPLOYED"
-  check_source_all_fields "OpenCode deployed" "$OPENCODE_DEPLOYED"
+  echo "--- 方向1c: 正本 10+7 → home 配備先（tool=$SYNC_TOOL、source 同期と別計数） ---"
   CURSOR_CAT="$SYNC_TMP/cursor-deployed.mdc"
-  if [ -d "$CURSOR_RULES" ]; then
+  if wants_tool cursor && [ -d "$CURSOR_RULES" ]; then
     find "$CURSOR_RULES" -type f -name '*.mdc' -exec cat {} + >"$CURSOR_CAT"
   fi
-  check_source_all_fields "Cursor deployed" "$CURSOR_CAT"
+  if wants_tool codex; then check_source_all_fields "Codex deployed" "$CODEX_DEPLOYED"; fi
+  if wants_tool cursor; then check_source_all_fields "Cursor deployed" "$CURSOR_CAT"; fi
+  if wants_tool opencode; then check_source_all_fields "OpenCode deployed" "$OPENCODE_DEPLOYED"; fi
 
   echo ""
   echo "--- 方向1d: version-controlled payload → home 配備先 ---"
-  compare_contract_field_set "codex-payload-home" "Codex payload" \
-    "$AIDD_ROOT/design/ops/payloads/codex-AGENTS-append.md" "Codex home" "$CODEX_DEPLOYED"
-  compare_contract_field_set "cursor-payload-home" "Cursor payload" \
-    "$AIDD_ROOT/design/ops/payloads/cursor-aidd-delegation.mdc" "Cursor home" "$CURSOR_CAT"
-  compare_contract_field_set "opencode-payload-home" "OpenCode payload" \
-    "$AIDD_ROOT/design/ops/payloads/opencode-AGENTS-append.md" "OpenCode home" "$OPENCODE_DEPLOYED"
+  if wants_tool codex; then
+    compare_contract_field_set "codex-payload-home" "Codex payload" \
+      "$AIDD_ROOT/design/ops/payloads/codex-AGENTS-append.md" "Codex home" "$CODEX_DEPLOYED"
+  fi
+  if wants_tool cursor; then
+    compare_contract_field_set "cursor-payload-home" "Cursor payload" \
+      "$AIDD_ROOT/design/ops/payloads/cursor-aidd-delegation.mdc" "Cursor home" "$CURSOR_CAT"
+  fi
+  if wants_tool opencode; then
+    compare_contract_field_set "opencode-payload-home" "OpenCode payload" \
+      "$AIDD_ROOT/design/ops/payloads/opencode-AGENTS-append.md" "OpenCode home" "$OPENCODE_DEPLOYED"
+  fi
   for section_entry in \
+    "h5-marker:## AI作成PR本文のH5マーカー書式" \
     "diagnostic:## 診断プロトコル（可視化のみ）" \
     "agent-lane:## Git 履歴のツール帰属（可視化のみ）"; do
     section_key="${section_entry%%:*}"
     section_heading="${section_entry#*:}"
-    compare_section_pair "codex-${section_key}" "$section_heading" "Codex payload" \
-      "$AIDD_ROOT/design/ops/payloads/codex-AGENTS-append.md" "Codex home" "$CODEX_DEPLOYED"
-    compare_section_pair "cursor-${section_key}" "$section_heading" "Cursor payload" \
-      "$AIDD_ROOT/design/ops/payloads/cursor-aidd-delegation.mdc" "Cursor home" "$CURSOR_CAT"
-    compare_section_pair "opencode-${section_key}" "$section_heading" "OpenCode payload" \
-      "$AIDD_ROOT/design/ops/payloads/opencode-AGENTS-append.md" "OpenCode home" "$OPENCODE_DEPLOYED"
+    if wants_tool codex; then
+      compare_section_pair "codex-${section_key}" "$section_heading" "Codex payload" \
+        "$AIDD_ROOT/design/ops/payloads/codex-AGENTS-append.md" "Codex home" "$CODEX_DEPLOYED"
+    fi
+    if wants_tool cursor; then
+      compare_section_pair "cursor-${section_key}" "$section_heading" "Cursor payload" \
+        "$AIDD_ROOT/design/ops/payloads/cursor-aidd-delegation.mdc" "Cursor home" "$CURSOR_CAT"
+    fi
+    if wants_tool opencode; then
+      compare_section_pair "opencode-${section_key}" "$section_heading" "OpenCode payload" \
+        "$AIDD_ROOT/design/ops/payloads/opencode-AGENTS-append.md" "OpenCode home" "$OPENCODE_DEPLOYED"
+    fi
   done
 
-  echo ""
-  echo "--- 方向1e: OpenCode home 配備版 → 実 wrapper profile ---"
-  compare_contract_field_set "opencode-home-profile" "OpenCode home" \
-    "$OPENCODE_DEPLOYED" "OpenCode profile" "$OPENCODE_PROFILE"
-  compare_section_pair "opencode-home-profile-diagnostic" "## 診断プロトコル（可視化のみ）" \
-    "OpenCode home" "$OPENCODE_DEPLOYED" "OpenCode profile" "$OPENCODE_PROFILE"
-  compare_section_pair "opencode-home-profile-agent-lane" "## Git 履歴のツール帰属（可視化のみ）" \
-    "OpenCode home" "$OPENCODE_DEPLOYED" "OpenCode profile" "$OPENCODE_PROFILE"
+  if wants_tool opencode; then
+    echo ""
+    echo "--- 方向1e: OpenCode home 配備版 → 実 wrapper profile ---"
+    compare_contract_field_set "opencode-home-profile" "OpenCode home" \
+      "$OPENCODE_DEPLOYED" "OpenCode profile" "$OPENCODE_PROFILE"
+    compare_section_pair "opencode-home-profile-diagnostic" "## 診断プロトコル（可視化のみ）" \
+      "OpenCode home" "$OPENCODE_DEPLOYED" "OpenCode profile" "$OPENCODE_PROFILE"
+    compare_section_pair "opencode-home-profile-agent-lane" "## Git 履歴のツール帰属（可視化のみ）" \
+      "OpenCode home" "$OPENCODE_DEPLOYED" "OpenCode profile" "$OPENCODE_PROFILE"
+  fi
 else
   echo "  NOTICE: HANDOVER_SYNC_DEPLOYED=1 未指定。home 配備は未証明。"
 fi

@@ -53,6 +53,42 @@ F1 の軸・真理値、F2 の事故入力・再現入力、F3 の片側変異�
 
 これは宣言形式の強制であり、内容の真実性や実装前に書かれたことまでは機械判定できない。
 
+## AI作成PR本文のH5マーカー書式
+
+PRを作る前に変更パスを確認し、初版本文へ次の機械可読マーカーを証跡から記入する。最初のCI失敗を待って書式を学ばない。これは既存 `h5-admission` の入力契約を可視化する節であり、強制点そのものは変更しない。
+
+実行環境を持たない変更は次の1行を使う。
+
+```text
+H5-E2E: none
+```
+
+実行環境を持つ変更はコマンドと20文字以上の生出力要約または安定ログパスを対にする。
+
+```text
+H5-E2E: <実際に実行したコマンド>
+H5-E2E-OUT: <生出力要約または安定ログパス、20文字以上>
+```
+
+`hooks/**/*.sh`、`scripts/**/*.sh`、`settings.json`、`.github/workflows/**` の変更はguard/verifier PRとして、実測した内容を次の形で全て書く。
+
+```text
+H5-guard: yes
+H5-NEGATIVE: <既知の事故入力と修正前red/exit結果>
+H5-LEDGER: <発火がaidd_ledger_appendまたはguard-ledger.jsonlへ届く経路>
+H5-RETIRE: <測定可能な撤収条件>
+H5-SUBTRACTION: N/A
+```
+
+既存装置を廃止する場合だけ `H5-SUBTRACTION: N/A` の代わりに `H5-RETIRE-PR: <merge済みPR番号>` を使う。宣言と強制のpairを変更する場合は両側と片側変異を記録し、変更しない場合は該当なしを明示する。
+
+```text
+H5-PAIR: <宣言側> ↔ <強制側>; mutation=<片側変異のred結果>
+H5-PAIR: N/A
+```
+
+「該当なし」を使えるのは `H5-E2E: none`（実行環境なし）、`H5-SUBTRACTION: N/A`（装置純増・廃止なし）、`H5-PAIR: N/A`（pair変更なし）だけである。構造パス変更の `H5-NEGATIVE` / `H5-LEDGER` / `H5-RETIRE` をN/Aで埋めてはならない。非構造PRでは不要なguardマーカーを省略する。`H5-PAIR` は可視化欄であり、現行h5の合否入力ではない。
+
 ## 診断プロトコル（可視化のみ）
 
 これは可視化であり、hook・workflow・required check による強制ではない（C9 適用限界）。
