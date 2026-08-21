@@ -131,10 +131,11 @@ while IFS= read -r f; do
 done <<<"$(printf '%s\n' "$DIFF_FILES")"
 
 h8_missing=()
-for f in "${h8_docs[@]}"; do
-  grep -qE '委任契約|要求インベントリ' "$f" || continue
-  for field in "${_H8_FIELDS[@]}"; do
-    if ! python3 - "$f" "$field" <<'PY'
+if [[ -n "${h8_docs[*]-}" ]]; then
+  for f in "${h8_docs[@]}"; do
+    grep -qE '委任契約|要求インベントリ' "$f" || continue
+    for field in "${_H8_FIELDS[@]}"; do
+      if ! python3 - "$f" "$field" <<'PY'
 import re, sys
 doc, pat = sys.argv[1], sys.argv[2]
 text = open(doc, encoding="utf-8").read()
@@ -146,13 +147,14 @@ if len(content) < 20 or re.fullmatch(r'[-*\s\[\]xX]*', content):
     sys.exit(1)
 sys.exit(0)
 PY
-    then
-      h8_missing+=("$f: ${field%%|*}")
-    fi
+      then
+        h8_missing+=("$f: ${field%%|*}")
+      fi
+    done
   done
-done
+fi
 
-if [[ ${#h8_missing[@]} -gt 0 ]]; then
+if [[ -n "${h8_missing[*]-}" ]]; then
   fail "H8: requirement inventory incomplete (inventory-field-empty)"
   printf '  %s\n' "${h8_missing[@]}" >&2
   if [[ -n "$LEDGER_PATH" ]]; then
@@ -167,7 +169,7 @@ if [[ ${#h8_missing[@]} -gt 0 ]]; then
   fi
   exit 1
 fi
-if [[ ${#h8_docs[@]} -gt 0 ]]; then
+if [[ -n "${h8_docs[*]-}" ]]; then
   log "H8-PASS: inventory fields present in ${#h8_docs[@]} delegation doc(s)"
 fi
 
@@ -319,7 +321,7 @@ if [[ -n "$retire_pr" ]]; then
     missing+=("subtraction-pr-unverified")
   fi
 fi
-if [[ "$sub_ok" -eq 0 ]] && ! printf '%s' "${missing[*]}" | grep -q subtraction; then
+if [[ "$sub_ok" -eq 0 ]] && ! printf '%s' "${missing[*]-}" | grep -q subtraction; then
   missing+=("subtraction-gate")
 fi
 
@@ -333,8 +335,11 @@ while IFS= read -r f; do
   fi
 done <<<"$(printf '%s\n' "$DIFF_FILES")"
 
-if ((${#missing[@]} > 0)); then
+if [[ -n "${missing[*]-}" ]]; then
   fail "admission fee incomplete: ${missing[*]}"
+  if printf '%s' "${missing[*]}" | grep -q 'subtraction'; then
+    fail "Required subtraction declaration: H5-SUBTRACTION: N/A OR H5-RETIRE-PR: <merged PR number>"
+  fi
   fail "Required: (1) 陰性テスト red 実測記録 (2) H6 台帳配線 (3) 廃止条件宣言 — in PR body and/or code"
   fail "See design/ops/harness/h5-negative-test-gate.md"
   append_h5_block "negative-test-missing" "${missing[*]}"
