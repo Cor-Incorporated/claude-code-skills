@@ -82,6 +82,11 @@ mkdir -p "$CODEX_HOOKS_DIR"
 cp "$REPO_DIR/hooks/codex/protect-branches-codex.sh" "$CODEX_HOOKS_DIR/protect-branches-codex.sh"
 chmod +x "$CODEX_HOOKS_DIR/protect-branches-codex.sh"
 echo "  Copied Codex protect-branches hook"
+# H1 非進捗ランタイム (block half). Both Codex PreToolUse hooks must run; this
+# one is additional to protect-branches-codex.sh, never a replacement.
+cp "$REPO_DIR/hooks/codex/h1-stall-runtime.sh" "$CODEX_HOOKS_DIR/h1-stall-runtime.sh"
+chmod +x "$CODEX_HOOKS_DIR/h1-stall-runtime.sh"
+echo "  Copied Codex H1 stall-runtime hook"
 mkdir -p "$CURSOR_HOOKS_DIR"
 cp "$REPO_DIR/hooks/cursor/git-guard.sh" "$CURSOR_HOOKS_DIR/git-guard.sh"
 chmod +x "$CURSOR_HOOKS_DIR/git-guard.sh"
@@ -93,6 +98,13 @@ mkdir -p "$SCRIPTS_DIR"
 for f in "$REPO_DIR"/scripts/*; do
   [ -f "$f" ] && cp "$f" "$SCRIPTS_DIR/"
 done
+# scripts/lib/* are sourced by the wrappers; the loop above skips directories.
+if [ -d "$REPO_DIR/scripts/lib" ]; then
+  mkdir -p "$SCRIPTS_DIR/lib"
+  cp -R "$REPO_DIR"/scripts/lib/. "$SCRIPTS_DIR/lib/"
+  chmod +x "$SCRIPTS_DIR"/lib/*.sh 2>/dev/null || true
+  echo "  Copied scripts/lib support scripts"
+fi
 chmod +x "$SCRIPTS_DIR"/*.sh 2>/dev/null || true
 echo "  Copied $( (ls "$REPO_DIR"/scripts/* 2>/dev/null || true) | wc -l | tr -d ' ') script files"
 

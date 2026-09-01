@@ -242,6 +242,60 @@ else:
             f"declaration={declaration_md5} enforcement={enforcement_md5}",
         )
 
+# pair14: delegation contract stop conditions ↔ H1 runtime block enforcement.
+# Declaration = skills/handover/SKILL.md 委任契約 欄1-3.
+# Enforcement = hooks/codex/h1-stall-runtime.sh env-overridable defaults.
+# Every declared stop condition must have a machine strong-point, and 欄1's
+# "既定 10" is fixed on both sides so its number is compared directly.
+# Known unreconciled divergences (欄2 2h vs 45min, 欄3 $10 vs $5) are recorded
+# in facts.yaml and deliberately NOT asserted here — see that note.
+contract = ROOT / "skills" / "handover" / "SKILL.md"
+h1_hook = ROOT / "hooks" / "codex" / "h1-stall-runtime.sh"
+if not contract.is_file() or not h1_hook.is_file():
+    bad(
+        "pair14 H1 contract/enforcement file missing",
+        f"declaration={contract} (exists={contract.is_file()}) "
+        f"enforcement={h1_hook} (exists={h1_hook.is_file()})",
+    )
+else:
+    contract_text = contract.read_text(encoding="utf-8")
+    hook_text = h1_hook.read_text(encoding="utf-8")
+    fields = [
+        ("停止条件と最大反復", "CODEX_H1_MAX_ITERATIONS"),
+        ("報告間隔 / 無進捗タイムアウト", "CODEX_H1_NO_PROGRESS_SEC"),
+        ("課金上限", "CODEX_H1_BUDGET_USD"),
+    ]
+    unenforced = [
+        (label, var)
+        for label, var in fields
+        if label not in contract_text or f'env_num("{var}"' not in hook_text
+    ]
+    declared_iter = re.search(r"停止条件と最大反復:\s*既定\s*(\d+)", contract_text)
+    enforced_iter = re.search(
+        r'env_num\("CODEX_H1_MAX_ITERATIONS",\s*([0-9.]+)\)', hook_text
+    )
+    declared_n = declared_iter.group(1) if declared_iter else "MISSING"
+    enforced_n = (
+        str(int(float(enforced_iter.group(1)))) if enforced_iter else "MISSING"
+    )
+    if unenforced:
+        bad(
+            "pair14 delegation contract stop condition without H1 enforcement",
+            f"declaration={contract} enforcement={h1_hook} "
+            f"unenforced={[f'{a}->{b}' for a, b in unenforced]}",
+        )
+    elif declared_n != enforced_n or declared_n == "MISSING":
+        bad(
+            "pair14 max-iterations mismatch",
+            f"declaration={contract}#委任契約欄1 max_iterations={declared_n} "
+            f"enforcement={h1_hook}#CODEX_H1_MAX_ITERATIONS max_iterations={enforced_n}",
+        )
+    else:
+        ok(
+            "pair14 delegation contract 欄1-3 all have H1 enforcement "
+            f"declaration=max_iterations {declared_n} enforcement=max_iterations {enforced_n}"
+        )
+
 print(f"--- {PASS} passed, {FAIL} failed ---")
 sys.exit(0 if FAIL == 0 else 1)
 PY
