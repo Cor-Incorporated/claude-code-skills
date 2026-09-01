@@ -8,9 +8,10 @@
 
 | Item | Value |
 |---|---|
-| Registered hooks in `settings.json` | **20** (ADR-006 base + H3 Stop evidence warn + dns-self-heal SessionStart) |
+| Registered hooks in `settings.json` | **22** (ADR-006 base + H3 Stop evidence warn + dns-self-heal SessionStart + async-work 持ち越し 2 本) |
 | Events | 6 (SessionStart / PreToolUse / PostToolUse / PostToolUseFailure / PreCompact / Stop) |
 | Hard-block PreToolUse | **4** (`git-push-guard`, `protect-branches`, `block-local-hooks-write`, plus SessionStart `validate-no-local-hooks`) |
+| Turn-boundary block (Stop) | **1** (`aidd-turn-boundary-stop.sh` — 未完了の非同期作業を残したままターンを終えさせない。PreToolUse ではないので上の hard-block 4 には数えない。aidd-governance#96 / #95) |
 | Deploy path | `setup.sh` copies hooks/rules/skills/settings from **this repo's current branch** into `~/.claude` |
 
 ### Hard blocks (tail-risk; keep)
