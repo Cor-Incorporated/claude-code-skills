@@ -24,7 +24,20 @@ cmd=${cmd:-}
 PROTECTED="main master develop"
 LEDGER="${CODEX_GUARD_LEDGER:-$HOME/.codex/hooks/guard-ledger.jsonl}"
 
-cmd_norm=$(printf '%s' "$cmd" | tr -d "\"'")
+# Normalise before matching. cmd_norm is used ONLY for detection, never for
+# execution, so it is safe to be aggressive here — the failure direction that
+# matters is a guard that silently misses, not one that inspects too much.
+#
+# 2026-09-02 実測: Codex Desktop は UI 由来のテキストを Markdown エスケープした
+# まま hook へ渡す。実物は ["/bin/zsh","-lc","echo AIDD\_CODEX\_HOOK\_SPIKE\_MARKER"]。
+# 素の文字列比較だと `\-\-repo` が `--repo` に一致せず、他所リポへの PR 検出が
+# ALLOW に転んでいた（保護ブランチ判定は main/master/develop に punctuation が
+# 無いため影響を受けていなかった）。
+# 対策: 引用符の除去に加えて、Markdown がエスケープしうる記号の前の
+# バックスラッシュを外してから照合する。
+cmd_norm=$(printf '%s' "$cmd" \
+  | tr -d "\"'" \
+  | sed -E 's/\\([_*`~|[:punct:]])/\1/g')
 _GIT_PUSH_RE='(^|[^[:alnum:]_-])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*push([^[:alnum:]_-]|$)'
 
 emit_deny() {

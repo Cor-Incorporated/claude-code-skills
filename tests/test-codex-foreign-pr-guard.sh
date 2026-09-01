@@ -24,6 +24,37 @@ actual_for() {
   fi
 }
 
+# --- Markdown-escape axis (2026-09-02) ---------------------------------------
+# Codex Desktop passes UI text through to the hook with Markdown escaping still
+# applied. The real payload observed was:
+#   ["/bin/zsh","-lc","echo AIDD\_CODEX\_HOOK\_SPIKE\_MARKER"]
+# A bare string comparison then fails to see `\-\-repo` as `--repo`, so the
+# foreign-PR guard returned ALLOW on a command it must block.
+# Falsifiable: drop the sed unescape from cmd_norm and the escaped rows go allow.
+esc_fail=0
+printf '\nescape_case\texpected\tactual\tverdict\n'
+while IFS='|' read -r label command expected; do
+  [ -z "$label" ] && continue
+  actual="$(actual_for "$command")"
+  if [ "$actual" = "$expected" ]; then verdict=PASS; else verdict=FAIL; esc_fail=$((esc_fail + 1)); fi
+  printf '%s\t%s\t%s\t%s\n' "$label" "$expected" "$actual" "$verdict"
+done <<'CASES'
+foreign-pr-escaped|gh pr create \-\-repo anomalyco/opencode \-\-base dev|block
+foreign-pr-plain|gh pr create --repo anomalyco/opencode --base dev|block
+spike-marker-escaped|echo AIDD\_CODEX\_HOOK\_SPIKE\_MARKER|block
+spike-marker-plain|echo AIDD_CODEX_HOOK_SPIKE_MARKER|block
+force-push-escaped|git push \-\-force origin main|block
+mirror-push-escaped|git push \-\-mirror origin|block
+benign-escaped|echo hello\_world|allow
+benign-underscore-branch|git push origin develop\_x|allow
+CASES
+if [ "$esc_fail" -ne 0 ]; then
+  printf 'FAIL: markdown-escape axis mismatches=%s\n' "$esc_fail"
+  fail=$((fail + esc_fail))
+else
+  printf 'PASS: markdown-escape axis mismatches=0\n'
+fi
+
 fail=0
 printf 'repo_axis\toperation\texpected\tactual\tverdict\n'
 for repo_axis in foreign same none; do
