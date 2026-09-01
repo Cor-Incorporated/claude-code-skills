@@ -4,7 +4,7 @@
 GitHub Issue #130: hookデプロイメント検証の構造的欠陥
 - hook追加時は「スクリプト作成 + ~/.claude/hooks/コピー + settings.json登録」を1 PRに含める
 - 「コードがある」≠「動作する」— デプロイ検証はコード品質検証と独立したチェックポイント
-- 正本: `docs/CANONICAL-STATE.md`（20 登録 / hard block 4 / ADR-006）
+- 正本: `docs/CANONICAL-STATE.md`（22 登録 / hard block 4 / ADR-006）
   この数値は `tests/test-pairs-link.sh` の pair13 が CANONICAL-STATE.md と機械照合する。
   片方だけ変えると両側の値を挙げて落ちる（2026-09-01: 本行が 18 のまま正本 20 と乖離していた）。
 
