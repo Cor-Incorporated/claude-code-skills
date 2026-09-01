@@ -189,7 +189,7 @@ build_codex_exec_args() {
     # interactive Codex (still needs a real trust decision, so H1 is inactive
     # there). Set CODEX_H1_BYPASS_TRUST=0 to force it off.
     if [[ "${CODEX_REVIEW_MODE:-}" != "1" && "${CODEX_H1_BYPASS_TRUST:-1}" == "1" ]] \
-        && codex exec --help 2>/dev/null | grep -q -- '--dangerously-bypass-hook-trust' \
+        && codex --help 2>/dev/null | grep -q -- '--dangerously-bypass-hook-trust' \
         && hooks_verified_against_repo; then
         CODEX_EXEC_ARGS+=(--dangerously-bypass-hook-trust)
     fi
