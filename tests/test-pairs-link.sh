@@ -303,31 +303,44 @@ else:
         for label, var in fields
         if label not in contract_text or f'env_num("{var}"' not in hook_text
     ]
-    declared_iter = re.search(r"停止条件と最大反復:\s*既定\s*(\d+)", contract_text)
-    enforced_iter = re.search(
-        r'env_num\("CODEX_H1_MAX_ITERATIONS",\s*([0-9.]+)\)', hook_text
-    )
-    declared_n = declared_iter.group(1) if declared_iter else "MISSING"
-    enforced_n = (
-        str(int(float(enforced_iter.group(1)))) if enforced_iter else "MISSING"
-    )
+    # 2026-09-01: 欄2/欄3 の宣言 (2h / $10) は H1 spec と実装 (45min / $5) と食い違って
+    # いたため、欄1 のみ数値照合していた。正本を H1 spec 側に寄せる決定
+    # (aidd-governance ADR-005) により、3 欄すべてを数値照合へ広げる。
+    # 宣言の単位は分・ドル、強制側は秒・ドル。単位を揃えてから比べる。
+    numeric = [
+        ("欄1 max_iterations", r"停止条件と最大反復:\s*既定\s*(\d+)",
+         r'env_num\("CODEX_H1_MAX_ITERATIONS",\s*([0-9.]+)\)', 1),
+        ("欄2 no_progress_sec", r"無進捗タイムアウト:\s*既定\s*\d+\s*分\s*/\s*(\d+)\s*分",
+         r'env_num\("CODEX_H1_NO_PROGRESS_SEC",\s*([0-9.]+)\)', 60),
+        ("欄3 budget_usd", r"課金上限:\s*\$<[^>]*既定\s*\$(\d+(?:\.\d+)?)>",
+         r'env_num\("CODEX_H1_BUDGET_USD",\s*([0-9.]+)\)', 1),
+    ]
+    mismatches = []
+    for label, dpat, epat, scale in numeric:
+        dm = re.search(dpat, contract_text)
+        em = re.search(epat, hook_text)
+        dv = float(dm.group(1)) * scale if dm else None
+        ev = float(em.group(1)) if em else None
+        if dv is None or ev is None or dv != ev:
+            mismatches.append(
+                f"{label}: declaration={dm.group(1) if dm else 'MISSING'}"
+                f"(={dv}) enforcement={em.group(1) if em else 'MISSING'}(={ev})"
+            )
     if unenforced:
         bad(
             "pair14 delegation contract stop condition without H1 enforcement",
             f"declaration={contract} enforcement={h1_hook} "
             f"unenforced={[f'{a}->{b}' for a, b in unenforced]}",
         )
-    elif declared_n != enforced_n or declared_n == "MISSING":
+    elif mismatches:
         bad(
-            "pair14 max-iterations mismatch",
-            f"declaration={contract}#委任契約欄1 max_iterations={declared_n} "
-            f"enforcement={h1_hook}#CODEX_H1_MAX_ITERATIONS max_iterations={enforced_n}",
+            "pair14 contract/enforcement numeric mismatch",
+            f"declaration={contract}#委任契約欄1-3 "
+            f"enforcement={h1_hook} :: " + " | ".join(mismatches),
         )
     else:
-        ok(
-            "pair14 delegation contract 欄1-3 all have H1 enforcement "
-            f"declaration=max_iterations {declared_n} enforcement=max_iterations {enforced_n}"
-        )
+        ok("pair14 delegation contract 欄1-3 match H1 enforcement numerically "
+           "(10 iterations / 2700s / $5.0)")
 
 print(f"--- {PASS} passed, {FAIL} failed ---")
 sys.exit(0 if FAIL == 0 else 1)

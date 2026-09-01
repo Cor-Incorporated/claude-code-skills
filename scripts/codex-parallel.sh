@@ -18,6 +18,9 @@
 #   CODEX_ENABLE_MCP         — 1 のとき MCP を明示 opt-in
 #   CODEX_PERSIST_SESSION    — 1 のとき --ephemeral を外す
 #   CODEX_TIMEOUT_SEC        — 実装タスク timeout 秒 (default: 3600)
+#   CODEX_H1_BYPASS_TRUST    — 1(default) のとき、登録 hook が全て検証済みなら
+#                              --dangerously-bypass-hook-trust を付けて H1 を発火させる。
+#                              0 で無効化。--review では常に無効
 #   CODEX_REVIEW_TIMEOUT_SEC — review timeout 秒 (default: 1800)
 #
 # H1 非進捗ランタイム — stop conditions beyond the wall-clock timeout:
@@ -97,6 +100,56 @@ capture_mcp_snapshot() {
     } > "$snapshot_file"
 }
 
+# Vet every hook Codex would run before asking it to skip its trust prompt.
+# Returns 0 only when EVERY *.sh registered in ~/.codex/hooks.json is a known
+# AIDD hook AND (when the checkout is reachable) is byte-identical to its
+# version-controlled source. Anything unknown or drifted => 1 => no bypass.
+CODEX_VETTED_HOOKS="protect-branches-codex.sh h1-stall-runtime.sh"
+hooks_verified_against_repo() {
+    local hooks_json="$HOME/.codex/hooks.json"
+    [[ -f "$hooks_json" ]] || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+
+    local registered
+    registered=$(python3 - "$hooks_json" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+for ms in d.get("hooks", {}).values():
+    for m in ms:
+        for h in m.get("hooks", []):
+            for tok in h.get("command", "").split():
+                if tok.endswith(".sh"):
+                    print(tok)
+PY
+    )
+    [[ -n "$registered" ]] || return 1
+
+    local src_dir="" cand
+    for cand in "$HOME/Developer/claude-code-skills/hooks/codex" \
+                "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/hooks/codex"; do
+        if [[ -f "$cand/protect-branches-codex.sh" ]]; then src_dir="$cand"; break; fi
+    done
+
+    local path base
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        base=$(basename "$path")
+        case " $CODEX_VETTED_HOOKS " in
+            *" $base "*) ;;
+            *) return 1 ;;   # unknown hook registered — do not bypass trust
+        esac
+        [[ -f "$path" ]] || return 1
+        if [[ -n "$src_dir" && -f "$src_dir/$base" ]]; then
+            [[ "$(md5 -q "$path" 2>/dev/null || md5sum "$path" | awk '{print $1}')" \
+               == "$(md5 -q "$src_dir/$base" 2>/dev/null || md5sum "$src_dir/$base" | awk '{print $1}')" ]] || return 1
+        fi
+    done <<<"$registered"
+    return 0
+}
+
 build_codex_exec_args() {
     CODEX_EXEC_ARGS=()
 
@@ -113,6 +166,33 @@ build_codex_exec_args() {
     fi
 
     CODEX_EXEC_ARGS+=(-c 'approval_policy="never"')
+
+    # H1 activation for the implementation lane.
+    #
+    # Codex persists hook trust in ~/.codex/config.toml keyed by POSITION
+    # ("hooks.json:pre_tool_use:<matcher>:<hook>"), not by script path. A hook
+    # with no trust entry is skipped SILENTLY — no error, no log. Measured
+    # 2026-09-01: h1-stall-runtime.sh was deployed, registered and MD5-matched,
+    # yet created no state file and no ledger row until trust was bypassed.
+    # (Worse: inserting a hook at index 0 invalidated the entry that used to be
+    # there, silently disabling protect-branches-codex too — the ledger stayed
+    # at 302 until the order was restored, then advanced to 303.)
+    #
+    # The flag's own help scopes it to "automation that already vets hook
+    # sources", so we actually vet them here rather than blanket-bypassing:
+    # every *.sh registered in hooks.json must be byte-identical to its
+    # version-controlled source in this repo. If any deployed hook is unknown or
+    # has drifted, we do NOT bypass — an untrusted-but-unverified hook set is
+    # exactly what the trust prompt exists to catch.
+    #
+    # Not applied to --review (read-only; no H1 budget to enforce) and not to
+    # interactive Codex (still needs a real trust decision, so H1 is inactive
+    # there). Set CODEX_H1_BYPASS_TRUST=0 to force it off.
+    if [[ "${CODEX_REVIEW_MODE:-}" != "1" && "${CODEX_H1_BYPASS_TRUST:-1}" == "1" ]] \
+        && codex --help 2>/dev/null | grep -q -- '--dangerously-bypass-hook-trust' \
+        && hooks_verified_against_repo; then
+        CODEX_EXEC_ARGS+=(--dangerously-bypass-hook-trust)
+    fi
 
     if [[ "${CODEX_ENABLE_MCP:-}" == "1" ]]; then
         CODEX_EXEC_ARGS+=(
@@ -166,6 +246,7 @@ run_codex_with_timeout() {
 
 # --- Review mode ---
 if [[ "${1:-}" == "--review" ]]; then
+    CODEX_REVIEW_MODE=1   # read-only lane: no H1 budget to enforce, so no trust bypass
     REPO_PATH="${2:?repo-path required}"
     shift 2
     BASE_BRANCH="develop"
