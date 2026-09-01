@@ -3,6 +3,22 @@
 # T9-2: "source":"real"|"test" — AIDD_LEDGER_SOURCE=test なら test、未設定なら real
 #（既定は安全側 = real。テストハーネスが hook を叩く箇所で export すること）
 # shellcheck disable=SC2034
+# Truncate to at most N bytes WITHOUT leaving a half-written UTF-8 character.
+# `head -c` cuts bytes, so a multi-byte character (Japanese command text, for
+# example) can be sliced in half and the row becomes invalid UTF-8.
+# 2026-09-01 実測: 本番台帳 4841 行のうち 2 行 (2026-08-10) がこれで壊れていた。
+# 実害は限定的 — /usr/bin/grep も scripts/ledger-summary.sh (python3) も正常に
+# 読める。ただし監査ログに不正なバイト列を残す理由はない。
+# iconv -c は末尾の不完全シーケンスを落とす。iconv が無い環境では従来動作。
+_aidd_truncate_utf8() {
+  local limit="${1:-120}"
+  if command -v iconv >/dev/null 2>&1; then
+    head -c "$limit" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null
+  else
+    head -c "$limit"
+  fi
+}
+
 aidd_ledger_append() {
   local hook="${1:-unknown}"
   local event="${2:-block}"
@@ -19,9 +35,9 @@ aidd_ledger_append() {
   local ts
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
   local safe_cmd
-  safe_cmd="$(printf '%s' "$cmd_head" | head -c 120 | tr '"' "'" | tr '\n' ' ')"
+  safe_cmd="$(printf '%s' "$cmd_head" | _aidd_truncate_utf8 120 | tr '"' "'" | tr '\n' ' ')"
   local safe_session
-  safe_session="$(printf '%s' "$session" | head -c 80 | tr '"' "'" | tr '\n' ' ')"
+  safe_session="$(printf '%s' "$session" | _aidd_truncate_utf8 80 | tr '"' "'" | tr '\n' ' ')"
   if [[ "$component" == "H1" ]]; then
     printf '{"ts":"%s","component":"H1","event":"%s","rule":"%s","detail":"%s","subject":{},"source":"%s","session":"%s","agent":"%s"}\n' \
       "$ts" "$event" "$rule" "$safe_cmd" "$source" "$safe_session" "$agent" >>"$ledger" 2>/dev/null || true
