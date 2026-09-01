@@ -54,7 +54,18 @@ if [[ -n "${H5_DIFF_FILES:-}" ]]; then
   # newline or space separated override (tests)
   DIFF_FILES="$(printf '%s\n' $H5_DIFF_FILES)"
 else
-  git fetch --no-tags --depth=1 origin "$(echo "$BASE_REF" | sed 's#^origin/##')" 2>/dev/null || true
+  # `--depth=1` truncates the local repository, not just this fetch: it writes
+  # .git/shallow and every later merge-base against the base ref fails. CI starts
+  # from a shallow checkout so the flag costs nothing there, but running this gate
+  # locally against a full clone destroys history. Measured 2026-08-27 in Grift:
+  # doing so made PR #2140 report "refusing to merge unrelated histories".
+  # Ported from Cor-Incorporated/Grift eb6df7415 (PR #2152). Ref: aidd-governance#89
+  h5_base_branch="$(echo "$BASE_REF" | sed 's#^origin/##')"
+  if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]]; then
+    git fetch --no-tags --depth=1 origin "$h5_base_branch" 2>/dev/null || true
+  else
+    git fetch --no-tags origin "$h5_base_branch" 2>/dev/null || true
+  fi
   if git rev-parse --verify "$BASE_REF" >/dev/null 2>&1; then
     DIFF_FILES="$(git diff --name-only "$BASE_REF"...$HEAD_REF 2>/dev/null || git diff --name-only "$BASE_REF" $HEAD_REF 2>/dev/null || true)"
   else
