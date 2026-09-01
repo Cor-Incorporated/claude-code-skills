@@ -30,6 +30,45 @@ These are C14 tail-risk type: absence of catastrophe is passive proof. Ledger wi
 | Unregistered scripts only under `~/.claude/hooks/` | Deploy/reality drift (C12) |
 | Regex-era large PreToolUse surface | ADR-006 retired to `_unused/` |
 
+## Branch policy — `main` is frozen
+
+`develop` is the single source of truth and the repository's default branch.
+**`main` is a frozen archive. Do not sync `develop` into it.**
+
+2026-09-02 実測:
+
+| | `develop` | `main` |
+|---|---|---|
+| Total files | 299 | 127 |
+| `hooks/` | 96 | **0**（意図的に削除済み） |
+| Release tags | — | **0** |
+| Default branch | **yes** | no |
+| Last updated | 継続中 | 2026-08-12 |
+
+`main` を薄くしたのは事故ではなく設計判断である:
+
+- `fc7aa3e chore(hooks): remove hooks/ from main (loop-break T4; SSOT is develop)`
+- `1d6ea0f fix(setup): add branch guard to main's setup.sh (T12-2 CC-D3)`
+
+`main` にしか存在しないファイル 31 件は**全て develop で退役済み**であり、
+救出対象は無い（`changelog-generator` / `git-commit-helper` → `git-conventions`、
+`senior-{architect,backend,frontend,fullstack}` → `dev-guidelines`、
+`scripts/verify-pr-review.sh` → `check-pr-reviews.sh` / `classify-review-state.sh`）。
+
+### なぜ同期してはいけないか
+
+`develop` → `main` の同期は、意図的に空にした `hooks/` 96 本を含む
+**+28,056 行**を `main` に戻す。これは上表 "Non-canonical states" の
+「`main` で `setup.sh` を走らせると ADR-006 が巻き戻る」に直結する。
+
+PR #280「chore: sync develop into main」は 2026-09-02 にこの理由で close した。
+**同種の PR を再度作らないこと。**
+
+### `main` を再び使いたくなったら
+
+その時点で「何のために使うか」を先に決める。リリース tag も deploy 経路も
+現在は `main` を参照していないので、用途が無いまま同期だけ行う理由は無い。
+
 ## Deploy rule
 
 ```text
