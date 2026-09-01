@@ -229,7 +229,9 @@ else
   bad "budget mutation target not found — falsifiability unproven"
 fi
 
-if mutate_hook 'int(state["iterations"]) > int(state["max_iterations"])' "$MUT/iter.sh"; then
+# #87 で上限判定が epoch 基準線からの差分 (effective) に変わった。判定は同じ場所に
+# 1 つだけあるので、needle を現行の式へ追随させる。
+if mutate_hook 'effective > int(state["max_iterations"])' "$MUT/iter.sh"; then
   for _ in 1 2 3 4 5; do m3=$(run "$MUT/iter.sh" m3 "rg --files" CODEX_H1_MAX_ITERATIONS=3); done
   [[ "$(decision_of "$m3")" == "allow" ]] \
     && ok "mutant without the iteration condition allows (rule was load-bearing)" \
