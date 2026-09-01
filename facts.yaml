@@ -40,3 +40,15 @@ pairs:
     declaration: hooks/cursor/git-guard.sh
     enforcement: ~/.cursor/hooks/git-guard.sh
     note: "repo source と deployed hook の MD5 が一致すること。pair12 は不一致時に両側の値を出力する"
+  - id: h1-delegation-contract-vs-runtime-block
+    declaration: skills/handover/SKILL.md#委任契約 欄1-3（最大反復 / 無進捗タイムアウト / 課金上限）
+    enforcement: hooks/codex/h1-stall-runtime.sh (CODEX_H1_MAX_ITERATIONS / CODEX_H1_NO_PROGRESS_SEC / CODEX_H1_BUDGET_USD)
+    note: |
+      委任契約が宣言する 3 つの停止条件それぞれに、H1 block hook 側の強制点（env で上書き可能な
+      既定値）が実在することを pair14 で照合する。契約欄 1 の「既定 10」は両側が同じ数値を
+      固定しているので数値一致まで照合する（2026-09-01 実測: 宣言 10 = 強制 10）。
+      未解決の乖離（pair14 は検出しない。人間判断待ち）:
+        欄2 無進捗タイムアウト  宣言 2h  vs  強制 45 分 (2700s)
+        欄3 課金上限            宣言 $10 vs  強制 $5
+      強制側は H1 spec (aidd-governance design/harness-spec.md "### H1.") の 45 分 / $5 に従う。
+      どちらを正本にするかは未決 — 決まり次第この pair を数値照合まで広げる。
