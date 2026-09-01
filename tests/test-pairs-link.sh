@@ -242,6 +242,39 @@ else:
             f"declaration={declaration_md5} enforcement={enforcement_md5}",
         )
 
+# pair13: rules/hook-deployment.md 正本 pin ↔ docs/CANONICAL-STATE.md declared count
+# 2026-09-01: the rule file pinned "18 登録" while CANONICAL-STATE declared 20.
+# pair5 links CANONICAL↔settings.json, so nothing caught the rule file drifting.
+# Both sides are declarations; that is exactly why a machine link is required
+# (runbook.md 宣言と実体の二重管理 rule B — a "keep in sync" comment is not a fix).
+rules_pin = ROOT / "rules" / "hook-deployment.md"
+if not (rules_pin.is_file() and canon.is_file()):
+    bad(
+        "pair13 source file missing",
+        f"declaration={rules_pin} exists={rules_pin.is_file()} "
+        f"enforcement={canon} exists={canon.is_file()}",
+    )
+else:
+    m_rule = re.search(r"`docs/CANONICAL-STATE\.md`\D*(\d+)\s*登録", rules_pin.read_text())
+    m_canon = re.search(
+        r"Registered hooks in `settings\.json`\s*\|\s*\*\*(\d+)\*\*", canon.read_text()
+    )
+    rule_n = int(m_rule.group(1)) if m_rule else None
+    canon_n = int(m_canon.group(1)) if m_canon else None
+    if rule_n is None or canon_n is None:
+        bad(
+            "pair13 could not parse a side",
+            f"declaration(rules/hook-deployment.md)={rule_n} "
+            f"enforcement(docs/CANONICAL-STATE.md)={canon_n}",
+        )
+    elif rule_n == canon_n:
+        ok(f"pair13 rules pin == CANONICAL declared (both {rule_n})")
+    else:
+        bad(
+            "pair13 rules pin != CANONICAL declared",
+            f"rules/hook-deployment.md={rule_n} docs/CANONICAL-STATE.md={canon_n}",
+        )
+
 print(f"--- {PASS} passed, {FAIL} failed ---")
 sys.exit(0 if FAIL == 0 else 1)
 PY

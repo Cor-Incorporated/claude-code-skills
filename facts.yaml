@@ -28,6 +28,10 @@ pairs:
     declaration: ~/Developer/opencode/packages/guardrails/profile/plugins/team.ts#permit
     enforcement: team-permission.test.ts#isBlanketAllow
     note: "T5-1 後、blanket allow ルール（permission:* pattern:* action:allow）は 0 であること。コメント行は数えない。pair10 で照合（2026-08-12 実測: 0）"
+  - id: ccs-rules-pin-vs-canonical
+    declaration: rules/hook-deployment.md#正本-registered-count
+    enforcement: docs/CANONICAL-STATE.md#registered-hooks
+    note: "rules/hook-deployment.md の「N 登録」pin が CANONICAL-STATE の宣言数と一致すること。pair13 が両側の値を挙げて照合する（2026-09-01 実測: rules=18 / canonical=20 の乖離を検出し rules を 20 へ是正）"
   - id: codex-hook-source-vs-deploy
     declaration: hooks/codex/protect-branches-codex.sh
     enforcement: ~/.codex/hooks/protect-branches-codex.sh
