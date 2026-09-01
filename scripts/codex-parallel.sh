@@ -20,6 +20,15 @@
 #   CODEX_TIMEOUT_SEC        — 実装タスク timeout 秒 (default: 3600)
 #   CODEX_REVIEW_TIMEOUT_SEC — review timeout 秒 (default: 1800)
 #
+# H1 非進捗ランタイム — stop conditions beyond the wall-clock timeout:
+#   CODEX_H1_BUDGET_USD      — 委任あたり課金上限 USD (default: 5)
+#   CODEX_H1_MAX_ITERATIONS  — 反復上限 (default: 10)
+#   CODEX_H1_NO_PROGRESS_SEC — 無進捗タイムアウト秒 (default: 2700 = 45分)
+#   CODEX_H1_DELEGATION      — 委任 ID (default: codex-parallel:<branch>)
+#   CODEX_H1_WRAPPER_ENFORCE — 0 で watchdog 無効化（hook 側の block は残る）
+#   Counters are written by hooks/codex/h1-stall-runtime.sh (PreToolUse) and
+#   only read here, so the two halves never double-count.
+#
 # IMPORTANT:
 #   - Do NOT checkout the target branch in the main repo before running this script.
 #     This script creates a git worktree for the branch, which fails if the branch
@@ -28,6 +37,20 @@
 #     config MCP bootstrap. Set CODEX_ENABLE_MCP=1 only when a task needs MCP.
 
 set -euo pipefail
+
+# --- H1 非進捗ランタイム (shared with hooks/codex/h1-stall-runtime.sh) ---
+_H1_LIB="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/lib/h1-runtime.sh"
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=lib/h1-runtime.sh
+[ -f "$_H1_LIB" ] && . "$_H1_LIB"
+set -euo pipefail  # the library relaxes errexit; restore this script's mode
+if ! declare -F h1_init >/dev/null 2>&1; then
+    # Library missing (partial install): run unguarded rather than failing.
+    h1_init() { :; }
+    h1_start_watchdog() { :; }
+    h1_stop_watchdog() { :; }
+    h1_summary() { printf 'H1: runtime library not installed\n'; }
+fi
 
 # --- Color ---
 RED='\033[0;31m'
@@ -169,6 +192,11 @@ if [[ "${1:-}" == "--review" ]]; then
     if [[ -n "${CODEX_MODEL:-}" ]]; then
         MODEL_ARGS=(-m "$CODEX_MODEL")
     fi
+    # H1: review runs get the same stop conditions as implementation runs.
+    H1_ID="${CODEX_H1_DELEGATION:-codex-review:${REPO_NAME}}"
+    h1_init "$H1_ID" "$REPO_PATH"
+    h1_start_watchdog "$H1_ID" "$$"
+
     set +e
     run_codex_with_timeout "$CODEX_REVIEW_TIMEOUT_SEC" "$CODEX_EVENT_LOG" "$CODEX_SNAPSHOT_FILE" \
         codex exec \
@@ -181,6 +209,8 @@ if [[ "${1:-}" == "--review" ]]; then
         ${CUSTOM_PROMPT:+"$CUSTOM_PROMPT"}
     CODEX_EXIT=${PIPESTATUS[0]}
     set -e
+    h1_stop_watchdog
+    log "$(h1_summary "$H1_ID")"
 
     # Parse severity from structured review output (#203)
     # Use OUTPUT_FILE (structured -o output) instead of raw stdout/stderr
@@ -344,6 +374,11 @@ if [[ -n "${CODEX_MODEL:-}" ]]; then
     MODEL_ARGS=(-m "$CODEX_MODEL")
 fi
 
+# H1: budget / iteration / no-progress stop conditions for this delegation.
+H1_ID="${CODEX_H1_DELEGATION:-codex-parallel:${BRANCH_NAME}}"
+h1_init "$H1_ID" "$WORKTREE_PATH"
+h1_start_watchdog "$H1_ID" "$$"
+
 set +e
 run_codex_with_timeout "$CODEX_TIMEOUT_SEC" "$CODEX_EVENT_LOG" "$CODEX_SNAPSHOT_FILE" \
     codex exec \
@@ -356,6 +391,8 @@ run_codex_with_timeout "$CODEX_TIMEOUT_SEC" "$CODEX_EVENT_LOG" "$CODEX_SNAPSHOT_
 
 EXIT_CODE=$?
 set -e
+h1_stop_watchdog
+log "$(h1_summary "$H1_ID")"
 
 if [[ $EXIT_CODE -eq 0 ]]; then
     success "Codex completed: ${BRANCH_NAME}"

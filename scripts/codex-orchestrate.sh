@@ -40,8 +40,30 @@
 #   CODEX_ENABLE_MCP        — 1 のとき MCP を明示 opt-in
 #   CODEX_PERSIST_SESSION   — 1 のとき --ephemeral を外す
 #   CODEX_TIMEOUT_SEC       — CSV fan-out timeout 秒 (default: 3600)
+#
+# H1 非進捗ランタイム — stop conditions beyond the wall-clock timeout:
+#   CODEX_H1_BUDGET_USD      — 委任あたり課金上限 USD (default: 5)
+#   CODEX_H1_MAX_ITERATIONS  — 反復上限 (default: 10)
+#   CODEX_H1_NO_PROGRESS_SEC — 無進捗タイムアウト秒 (default: 2700 = 45分)
+#   CODEX_H1_WRAPPER_ENFORCE — 0 で watchdog 無効化（hook 側の block は残る）
+#   CSV fan-out は自前で 1 委任として計上する。JSON worktree モードは
+#   codex-parallel.sh へ委譲するので、そちらが per-branch に計上する。
 
 set -euo pipefail
+
+# --- H1 非進捗ランタイム (shared with hooks/codex/h1-stall-runtime.sh) ---
+_H1_LIB="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/lib/h1-runtime.sh"
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=lib/h1-runtime.sh
+[ -f "$_H1_LIB" ] && . "$_H1_LIB"
+set -euo pipefail  # the library relaxes errexit; restore this script's mode
+if ! declare -F h1_init >/dev/null 2>&1; then
+    # Library missing (partial install): run unguarded rather than failing.
+    h1_init() { :; }
+    h1_start_watchdog() { :; }
+    h1_stop_watchdog() { :; }
+    h1_summary() { printf 'H1: runtime library not installed\n'; }
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -201,6 +223,11 @@ CSVEOF
         MODEL_ARGS=(-m "$CODEX_MODEL")
     fi
 
+    # H1: the CSV fan-out is one Codex process, so it is one delegation.
+    H1_ID="${CODEX_H1_DELEGATION:-codex-csv:$(basename "$CSV_FILE")}"
+    h1_init "$H1_ID" "$REPO_PATH"
+    h1_start_watchdog "$H1_ID" "$$"
+
     set +e
     run_codex_with_timeout "$CODEX_TIMEOUT_SEC" "$CODEX_EVENT_LOG" "$CODEX_SNAPSHOT_FILE" \
         codex exec \
@@ -212,6 +239,8 @@ CSVEOF
         "$FULL_PROMPT"
     EXIT_CODE=$?
     set -e
+    h1_stop_watchdog
+    log "$(h1_summary "$H1_ID")"
     if [[ $EXIT_CODE -eq 0 ]]; then
         success "CSV fan-out complete: ${OUTPUT_FILE}"
     else
