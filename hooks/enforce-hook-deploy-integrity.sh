@@ -36,12 +36,23 @@ EXCLUDED_FROM_REGISTRATION=(
 KNOWN_ORPHANS=()
 
 # --- Locate project hooks directory ---
+# DANGER (2026-09-01): a bare -d test matches ANY repo that happens to own a
+# directory named `hooks/`. aidd-governance ships `hooks/pre-commit` for
+# `git config core.hooksPath` — a *git* hooks dir, not a Claude Code one. With
+# CLAUDE_PROJECT_DIR pointing there, the first candidate won, every correctly
+# deployed hook failed the Phase 3 `-f` test, and this hook reported
+# "UNKNOWN ORPHAN" x20 plus the remedy "checkout develop && bash setup.sh".
+# Acting on that remedy re-enacts the 2026-07-22 hook-loss incident
+# (aidd-governance design/reduction-proposals.md:171-176), which is why
+# reduction-proposals.md:47 already labelled this hook a 誤診生産装置.
+# A directory only counts as a Claude Code hooks dir if it carries this sentinel.
+HOOKS_DIR_SENTINEL="git-push-guard.sh"
 PROJECT_HOOKS_DIR=""
 for candidate in \
   "${CLAUDE_PROJECT_DIR:-}/hooks" \
   "$HOME/Developer/claude-code-skills/hooks" \
 ; do
-  if [[ -d "$candidate" ]]; then
+  if [[ -d "$candidate" && -f "$candidate/$HOOKS_DIR_SENTINEL" ]]; then
     PROJECT_HOOKS_DIR="$candidate"
     break
   fi
@@ -96,8 +107,13 @@ if declare -F aidd_ledger_append >/dev/null 2>&1; then
     "session start HB" "heartbeat" "H1"
 fi
 
-# If no project hooks dir found, skip silently
-[[ -z "$PROJECT_HOOKS_DIR" ]] && exit 0
+# No sentinel-bearing hooks dir => no baseline to diff against. Skip, but say so:
+# a silent skip is indistinguishable from a clean run, and "clean" is the one
+# conclusion we must not imply when the comparison never happened.
+if [[ -z "$PROJECT_HOOKS_DIR" ]]; then
+  echo "[Hook Deploy Integrity] SKIPPED — no Claude Code hooks dir found (sentinel '${HOOKS_DIR_SENTINEL}' absent in '${CLAUDE_PROJECT_DIR:-unset}/hooks' and '$HOME/Developer/claude-code-skills/hooks'). No conclusion about deploy integrity." >&2
+  exit 0
+fi
 
 INSTALLED_HOOKS_DIR="$HOME/.claude/hooks"
 CODEX_HOOKS_DIR="$HOME/.codex/hooks"
@@ -155,6 +171,7 @@ compute_md5() {
 issues=()
 
 # --- Phase 1: Collect project hook files ---
+# PROJECT_HOOKS_DIR is guaranteed non-empty here (sentinel check + exit above).
 project_files=()
 while IFS= read -r -d '' filepath; do
   # Preserve relative path from PROJECT_HOOKS_DIR (e.g. gate-modes/stop.sh)

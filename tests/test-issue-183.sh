@@ -36,6 +36,14 @@ FAKE_SETTINGS="${TMPDIR_BASE}/settings.json"
 mkdir -p "$FAKE_PROJECT_HOOKS" "$FAKE_INSTALLED_HOOKS" \
   "$FAKE_CODEX_HOOKS" "$FAKE_CURSOR_HOOKS"
 
+# The hook only treats a directory as a Claude Code hooks dir when it carries the
+# git-push-guard.sh sentinel (2026-09-01: a bare -d test matched aidd-governance's
+# unrelated *git* hooks dir and reported all 20 deployed hooks as orphans).
+# The fixture must therefore look like a real hooks dir, not just be named one.
+# Deployed on both sides so it never itself shows up as a diff in these tests.
+printf '#!/bin/bash\n# sentinel\n' > "${FAKE_PROJECT_HOOKS}/git-push-guard.sh"
+cp "${FAKE_PROJECT_HOOKS}/git-push-guard.sh" "${FAKE_INSTALLED_HOOKS}/git-push-guard.sh"
+
 # Create a minimal settings.json that references our test hooks
 echo '{"hooks":{"SessionStart":[{"hooks":[{"command":"bash ~/.claude/hooks/test-missing.sh"}]}]}}' > "$FAKE_SETTINGS"
 
@@ -159,6 +167,46 @@ if echo "$STDERR_CURSOR_MISSING" | grep -q "NOT INSTALLED: cursor/test-cursor-ma
 else
   FAIL=$((FAIL+1)); echo "--- T10: Cursor missing deployment reports Cursor target ---"
   echo "  FAIL (wrong or missing Cursor target)"
+fi
+
+# --- T10b/T10c: sentinel guard — a dir merely NAMED hooks/ must not be adopted ---
+# Regression for 2026-09-01: aidd-governance ships hooks/pre-commit for
+# `git config core.hooksPath`. The old bare `-d` test adopted that *git* hooks
+# dir, so all 20 correctly deployed hooks failed the Phase 3 orphan check and the
+# hook printed "UNKNOWN ORPHAN" x20 plus the remedy "checkout develop && bash
+# setup.sh" — which re-enacts the 2026-07-22 hook-loss incident.
+# Fully sandboxed via HOME (pattern from test-h1-no-progress.sh) so neither the
+# real ~/.claude/hooks nor the $HOME/Developer/claude-code-skills fallback
+# participates; the only candidate is the decoy.
+# Falsifiable: drop `-f "$candidate/$HOOKS_DIR_SENTINEL"` from the hook and the
+# decoy gets adopted, turning all 3 sandbox-deployed hooks into orphans.
+SB_SENTINEL="${TMPDIR_BASE}/sentinel-home"
+mkdir -p "${SB_SENTINEL}/.claude/hooks" "${SB_SENTINEL}/gitproj/hooks"
+for h in alpha bravo charlie; do
+  printf '#!/bin/bash\n# deployed\n' > "${SB_SENTINEL}/.claude/hooks/${h}.sh"
+done
+printf '#!/bin/bash\n# a git hook, not a Claude Code hook\n' > "${SB_SENTINEL}/gitproj/hooks/pre-commit"
+
+STDERR_SENTINEL=$(env HOME="$SB_SENTINEL" CLAUDE_PROJECT_DIR="${SB_SENTINEL}/gitproj" \
+  bash "${HOOK_DIR}/enforce-hook-deploy-integrity.sh" 2>&1 >/dev/null)
+ORPHANS=$(printf '%s' "$STDERR_SENTINEL" | grep -c 'UNKNOWN ORPHAN' || true)
+
+echo "--- T10b: git-hooks decoy rejected by sentinel (no orphan storm) ---"
+if [ "$ORPHANS" -eq 0 ] && printf '%s' "$STDERR_SENTINEL" | grep -q 'SKIPPED'; then
+  PASS=$((PASS+1)); echo "  PASS"
+else
+  FAIL=$((FAIL+1))
+  echo "  FAIL (orphans=${ORPHANS}, expected 0 plus a SKIPPED notice)"
+  echo "  stderr: ${STDERR_SENTINEL}"
+fi
+
+# A silent skip is indistinguishable from a clean run — the one conclusion this
+# hook must never imply when the comparison did not happen.
+echo "--- T10c: skip is announced on stderr, not silent ---"
+if [ -n "$STDERR_SENTINEL" ]; then
+  PASS=$((PASS+1)); echo "  PASS"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL (stderr empty)"
 fi
 
 echo ""
