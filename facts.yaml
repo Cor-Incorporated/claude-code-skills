@@ -32,6 +32,17 @@ pairs:
     declaration: rules/hook-deployment.md#正本-registered-count
     enforcement: docs/CANONICAL-STATE.md#registered-hooks
     note: "rules/hook-deployment.md の「N 登録」pin が CANONICAL-STATE の宣言数と一致すること。pair13 が両側の値を挙げて照合する（2026-09-01 実測: rules=18 / canonical=20 の乖離を検出し rules を 20 へ是正）"
+  - id: codex-registration-vs-trust-state
+    declaration: ~/.codex/hooks.json#PreToolUse
+    enforcement: ~/.codex/config.toml#[hooks.state."...:<event>:<matcher>:<hook>"].enabled
+    note: |
+      hooks.json に登録された各 hook が、config.toml に有効な trust エントリを持つことを
+      pair15 で照合する。Codex の trust は「位置」キーなので、hook を配列の前に挿入すると
+      既存エントリの hash が合わなくなり、そこに居たガードごと無言で停止する。
+      2026-09-01 実測: protect-branches-codex.sh は配備 3 要件（repo 存在 / コピー /
+      hooks.json 登録）を全て満たし MD5 も一致していたが、`enabled = false` のため
+      19 日間発火ゼロだった。pair7 と pair11 はその間ずっと PASS していた
+      （どちらも trust を見ないため）。片側だけ変えると pair15 が両側の値を挙げて red。
   - id: codex-hook-source-vs-deploy
     declaration: hooks/codex/protect-branches-codex.sh
     enforcement: ~/.codex/hooks/protect-branches-codex.sh

@@ -253,6 +253,25 @@ if [[ -f "$SETTINGS_FILE" ]]; then
   done < <(find "$INSTALLED_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' -not -path '*/lib/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 fi
 
+# --- Phase 4b: Codex hook trust state (Issue #103) ---
+# The three deploy requirements (file exists / copied into ~/.codex/hooks /
+# registered in hooks.json) are NOT sufficient for Codex. config.toml carries a
+# per-position trust entry, and a registered hook without active trust is skipped
+# SILENTLY -- no error, no log line.
+# 2026-09-01: protect-branches-codex.sh satisfied all three requirements and still
+# fired zero times for 19 days, because its entry said `enabled = false`.
+# Trust is keyed by POSITION ("<event>:<matcher>:<hook>"), so inserting a hook also
+# invalidates whatever used to occupy that index.
+# Warn only -- this hook never mutates another tool's configuration.
+_CODEX_HOOKS_JSON="$HOME/.codex/hooks.json"
+_CODEX_CONFIG="$HOME/.codex/config.toml"
+if [[ -f "$_CODEX_HOOKS_JSON" && -f "$_CODEX_CONFIG" ]] && command -v python3 >/dev/null 2>&1; then
+  while IFS= read -r _line; do
+    [[ -n "$_line" ]] && issues+=("$_line")
+  done < <(python3 "$(dirname "${BASH_SOURCE[0]}")/lib/codex-trust-state.py" \
+             "$_CODEX_HOOKS_JSON" "$_CODEX_CONFIG" 2>/dev/null || true)
+fi
+
 # --- Phase 5: Output results (warn only; never mutate deploy dir) ---
 if [[ ${#issues[@]} -gt 0 ]]; then
   issue_count=${#issues[@]}
