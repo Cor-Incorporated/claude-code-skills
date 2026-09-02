@@ -42,6 +42,17 @@ if [ -z "$ASYNC_SH" ]; then
   exit 0
 fi
 
+# ハーネス共通のテスト規約。テスト実行が共有状態を汚し、他セッションのターンを
+# 止めるのを防ぐ。**登録はする**（「テスト実行があった」ことを追えるようにする）が、
+# source を test 系にして停止判定の入力から外す。黙って捨てると、テストが台帳へ
+# 書けているのかどうかが分からなくなる。
+# 由来: 2026-09-02、cluster-c と本レーンのテスト検体が監督の共有台帳へ入り、
+# 監督のターンが Stop hook で止まった。
+REGISTER_SOURCE="posttooluse-auto"
+case "${AIDD_LEDGER_SOURCE:-}" in
+  test | test:*) REGISTER_SOURCE="test:posttooluse-auto" ;;
+esac
+
 input="$(cat 2>/dev/null || true)"
 command -v python3 >/dev/null 2>&1 || exit 0
 
@@ -136,7 +147,7 @@ PY
 while IFS=$'\t' read -r kind ident detail; do
   [ -n "$ident" ] || continue
   bash "$ASYNC_SH" register --id "$ident" --kind "$kind" --detail "$detail" \
-    --source posttooluse-auto >/dev/null 2>&1 || continue
+    --source "$REGISTER_SOURCE" >/dev/null 2>&1 || continue
   printf '[async-work] 持ち越し登録: %s (%s)\n' "$ident" "$detail" >&2
   if declare -F aidd_ledger_append_record >/dev/null 2>&1; then
     python3 - "$kind" "$ident" "$detail" <<'PY' | while IFS= read -r row; do
