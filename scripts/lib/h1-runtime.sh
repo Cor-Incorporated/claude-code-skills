@@ -61,7 +61,7 @@ h1_init() {
         export CODEX_H1_CWD
     fi
     python3 - "$file" "$delegation" \
-        "${CODEX_H1_BUDGET_USD:-5}" \
+        "${CODEX_H1_BUDGET_USD:-25}" \
         "${CODEX_H1_MAX_ITERATIONS:-10}" \
         "${CODEX_H1_NO_PROGRESS_SEC:-2700}" <<'PY' 2>/dev/null || true
 import json, sys, time
@@ -96,6 +96,23 @@ now = int(time.time())
 no_progress = int(s.get("no_progress_sec") or 2700)
 if s.get("last_block_rule"):
     print(s["last_block_rule"]); raise SystemExit(0)
+
+# 2026-09-02: hook 側と同じく、停止はモデルで絞る。一律の上限は実作業を止めた
+# （通常セッションが 301 tool call で spend=$5.34 に達して block）。model は
+# hook が rollout から読んで同じ state ファイルへ書く。読めていない（空）なら
+# 止めない — 「分からないから止める」が事故の形だった。
+restricted_tokens = [
+    token.strip().lower()
+    for token in (os.environ.get("CODEX_H1_RESTRICTED_MODELS") or "sol").split(",")
+    if token.strip()
+]
+model_name = str(s.get("model") or "").lower()
+restricted = ("*" in restricted_tokens) or bool(
+    model_name and any(token in model_name for token in restricted_tokens)
+)
+if not restricted:
+    raise SystemExit(0)
+
 budget = float(s.get("budget_usd") or 0)
 if budget > 0 and float(s.get("spend_usd") or 0) >= budget:
     print("budget-cap"); raise SystemExit(0)
