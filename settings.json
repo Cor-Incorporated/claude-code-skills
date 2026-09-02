@@ -126,6 +126,12 @@
             "command": "bash ~/.claude/hooks/dns-self-heal.sh",
             "timeout": 15,
             "statusMessage": "Checking DNS reachability (negative-cache self-heal)..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/aidd-carryover-reconcile.sh",
+            "timeout": 10,
+            "statusMessage": "Reconciling carried-over async work..."
           }
         ]
       }
