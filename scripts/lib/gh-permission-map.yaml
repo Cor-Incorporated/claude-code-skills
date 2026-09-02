@@ -17,6 +17,14 @@
 #   達成可能性は実測済み: 3 リポとも自ブランチで exit=0。
 #   未宣言は UNDECIDABLE-PERMS として一覧に出し、strict では exit 1 にする。
 
+# 廃止条件（aidd-governance#94 ③）
+#   正本は aidd-governance `design/ops/workflow-permission-scan-limits.md` の
+#   「廃止条件」節。ここには複製しない（値を 2 箇所に置くと二重管理になる）。
+#   要旨のみ: 一次条件は「GitHub 側が step の権限不足を静的に警告するようになった時点」。
+#   自動検知の手段は無く、四半期レビューで governance maintainer が既知の欠陥検体を
+#   actionlint / GitHub に食わせて確認する。2026-09-02 実測では actionlint 1.7.12 は
+#   flag しない（exit=0）ため、条件は成立していない。
+
 # evidence の種別:
 #   measured:<ref>  実際に 403 / 200 を観測した記録がある
 #   docs:<url>      GitHub の fine-grained PAT 権限リファレンスで確認した
