@@ -146,7 +146,12 @@ def env_num(name, default, cast=float):
     return value if value >= 0 else default
 
 
-BUDGET_USD = env_num("CODEX_H1_BUDGET_USD", 5.0)
+# 既定 $5 は 2026-09-02 に通常作業を止めた（301 tool call で spend=$5.34）。
+# block は RESTRICTED_MODELS のみに掛かるようになったが、その最上位モデルも
+# PRICES に無く MAX_RATE で見積もられるため、$5 のままでは制限対象モデルの
+# 正当な作業まで止まる。通常セッション実測 $5.34 の約 5 倍を既定にし、
+# 暴走（2026-09-01 は 1 レーンで 88.8M tokens）は依然捕まえる。
+BUDGET_USD = env_num("CODEX_H1_BUDGET_USD", 25.0)
 MAX_ITERATIONS = int(env_num("CODEX_H1_MAX_ITERATIONS", 10.0))
 NO_PROGRESS_SEC = int(env_num("CODEX_H1_NO_PROGRESS_SEC", 2700.0))
 HEARTBEAT_SEC = int(env_num("CODEX_H1_HEARTBEAT_SEC", 900.0))
@@ -170,6 +175,45 @@ PRICES = {
 }
 # Unknown model → most expensive known rate.  Never silently treat it as free.
 MAX_RATE = max(PRICES.values(), key=lambda rate: rate[2])
+
+# --- どのモデルを止めるか（2026-09-02 のインシデントで設計変更） -----------------
+# 当初は全モデルに一律 $5 の上限をかけていた。実測でそれが通常作業を止めた:
+# 通常の Codex セッションが 301 tool call で spend=$5.34 に達して block し、
+# Google Drive の再読込とローカルファイル操作の直前で作業が停止した。
+#
+# 原因は 2 つが重なったこと。
+#   (1) この機械の Codex は gpt-5.6-luna を動かすが PRICES に無く、unknown-model
+#       経路が MAX_RATE（既知で最も高い単価）で見積もる。上のコメント自身が
+#       「unknown-model 経路は normal path であって edge case ではない」と
+#       書いているのに、その normal path を最高単価で評価していた。
+#   (2) そもそも全モデルを止める必要が無い。実際に予算を溶かしたのは常に
+#       最上位モデル（gpt-5.6-sol の ultra）であって、それ以外ではない。
+#
+# したがって block はモデルで絞る。既定は名前に "sol" を含むモデル。
+# 一致しないモデル（未検出を含む）では block 条件を一切評価せず、measure と
+# warn だけ残す。未検出で止めないのは意図的である — 「分からないから止める」は
+# 今回まさに実作業を止めた側であり、暴走の実績があるのは最上位モデルだけ。
+RESTRICTED_MODELS = [
+    token.strip().lower()
+    for token in (os.environ.get("CODEX_H1_RESTRICTED_MODELS") or "sol").split(",")
+    if token.strip()
+]
+
+
+def is_restricted(model):
+    """True only when the model is one we deliberately cap.
+
+    "*" restricts every model including an undetected one. It exists so the
+    falsification suite can still exercise the block rules directly, and as an
+    opt-in for anyone who wants the old blanket behaviour back. It is NOT the
+    default: a blanket cap is what stopped real work on 2026-09-02.
+    """
+    if "*" in RESTRICTED_MODELS:
+        return True
+    name = (model or "").lower()
+    if not name:
+        return False
+    return any(token in name for token in RESTRICTED_MODELS)
 
 WRITE_VERB_RE = re.compile(
     r"(?:^|[;&|]\s*|\s)(?:"
@@ -344,11 +388,12 @@ def measure_spend(tool_calls, started_ts):
             except ValueError:
                 usage = {}
             if usage:
-                usd, note = usd_from(usage, models[-1] if models else "")
+                model = models[-1] if models else ""
+                usd, note = usd_from(usage, model)
                 source = "rollout:total_token_usage"
                 if note:
                     source += "+" + note
-                return int(usage.get("total_tokens", 0) or 0), usd, source
+                return int(usage.get("total_tokens", 0) or 0), usd, source, model
     # Fallback: no transcript.  Estimate from tool calls at a documented rough
     # per-call token figure and label the number as an estimate everywhere.
     # 20k tokens/call is calibrated on the 2026-09-01 measurement: 790,087,141
@@ -364,7 +409,7 @@ def measure_spend(tool_calls, started_ts):
     (rate_in, _cached, _rate_out), _note = rate_for("")
     rate_in = env_num("CODEX_H1_PRICE_IN", rate_in)
     usd = round(tokens * rate_in / 1_000_000.0, 6)
-    return tokens, usd, "proxy:toolcalls"
+    return tokens, usd, "proxy:toolcalls", ""
 
 
 def subject_of(state):
@@ -377,6 +422,11 @@ def subject_of(state):
         "iterations": state["iterations"],
         "tool_calls": state["tool_calls"],
         "same_cmd_streak": state["same_cmd_streak"],
+        # どのモデルだったか / block 対象だったかを台帳から後で読めるようにする。
+        # 空文字は「rollout から検出できなかった」であり、"制限外" と同義ではない
+        # ことが分かるよう restricted と別欄で出す。
+        "model": state.get("model", ""),
+        "restricted": is_restricted(state.get("model")),
     }
     # #87 要求 4「既存作用点へ統合する」— 意味分類が宣言されている委任では、
     # 台帳行に fingerprint / oracle / classification / epoch / close_target /
@@ -443,7 +493,15 @@ def record(state, event, rule, detail):
 
 
 def decide(state):
-    """Return (rule, detail) for the first tripped block rule, else (None, None)."""
+    """Return (rule, detail) for the first tripped block rule, else (None, None).
+
+    block は RESTRICTED_MODELS に一致するモデルでのみ評価する。それ以外では
+    どの条件も評価せず (None, None) を返す。measure / warn は従来どおり出るので
+    消費は台帳から追える。制限対象を広げたいときは
+    CODEX_H1_RESTRICTED_MODELS に カンマ区切りで部分文字列を渡す。
+    """
+    if not is_restricted(state.get("model")):
+        return (None, None)
     gap = NOW - int(state["last_progress_ts"])
     if gap > int(state["no_progress_sec"]) and int(state["same_cmd_streak"]) >= SAME_CMD_THRESHOLD:
         return (
@@ -567,7 +625,8 @@ def main():
     state["delegation"] = delegation
     advance_counters(state)
 
-    tokens, usd, source = measure_spend(state["tool_calls"], int(state["started_ts"]))
+    tokens, usd, source, model = measure_spend(state["tool_calls"], int(state["started_ts"]))
+    state["model"] = model
     state["spend_tokens"] = tokens
     state["spend_usd"] = usd
     state["budget_source"] = source
