@@ -185,7 +185,7 @@ post_payload() {
   python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$1"
 }
 post_payload 'gh workflow run v2-alpha-cd.yml --ref develop' \
-  | env AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$REG_HOOK" >/dev/null 2>&1
+  | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$REG_HOOK" >/dev/null 2>&1
 n=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
 [[ "$n" -ge 1 ]] \
   && ok "case8 gh workflow run が自動登録された（監督が忘れても登録される）" \
@@ -197,7 +197,7 @@ run_stop "$STOP_HOOK" false AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
 
 reset_state c8b
 post_payload 'nohup ./scripts/fire-cd.sh > /tmp/fire.log 2>&1 &' \
-  | env AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$REG_HOOK" >/dev/null 2>&1
+  | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$REG_HOOK" >/dev/null 2>&1
 n=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
 [[ "$n" -ge 1 ]] \
   && ok "case8 nohup が自動登録された（#96 の起点コマンド形）" \
@@ -213,6 +213,47 @@ n=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; print(len(json.load(
 [[ "$n" -eq 0 ]] \
   && ok "case9 読み取り専用 4 種は 1 件も登録しない（ターン終了を無駄に止めない）" \
   || bad "case9 誤検知 $n 件"
+
+echo
+echo "=== case 10: テスト実行が共有状態を汚さない（ハーネス共通のテスト規約） ==="
+echo "    由来 2026-09-02: 別レーンのテスト検体が監督の共有台帳へ入り、監督のターンが"
+echo "    Stop hook で止まった。register hook が AIDD_LEDGER_SOURCE を見ていなかった。"
+reset_state c10
+post_payload() {
+  python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$1"
+}
+post_payload 'gh workflow run v2-alpha-cd.yml --ref develop' \
+  | env AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" AIDD_LEDGER_SOURCE=test bash "$REG_HOOK" >/dev/null 2>&1
+n_all=$(bash "$ASYNC" unresolved --include-test | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+n_gate=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+[[ "$n_all" -eq 1 ]] \
+  && ok "case10 test 実行でも登録はする（テスト実行があったことを追える）" \
+  || bad "case10 test 実行が登録されない（黙って捨てている）"
+[[ "$n_gate" -eq 0 ]] \
+  && ok "case10 test 系 source は停止判定の入力に現れない" \
+  || bad "case10 test 登録が停止判定に現れた（$n_gate 件）"
+src=$(bash "$ASYNC" unresolved --include-test | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["source"])')
+[[ "$src" == test:* ]] \
+  && ok "case10 source が test 系として記録される（${src}）" \
+  || bad "case10 source が test 系でない: $src"
+run_stop "$STOP_HOOK" false AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+[[ "$?" -eq 0 ]] \
+  && ok "case10 test 登録だけならターンを止めない" \
+  || bad "case10 test 登録でターンが止まった"
+
+echo "--- 濾しすぎ検査: 未設定なら従来どおり止める ---"
+reset_state c10b
+post_payload 'gh workflow run v2-alpha-cd.yml --ref develop' \
+  | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$REG_HOOK" >/dev/null 2>&1
+n_gate=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+[[ "$n_gate" -eq 1 ]] \
+  && ok "case10 未設定の登録は従来どおり停止判定に現れる（本物を見逃していない）" \
+  || bad "case10 濾しすぎて本物が消えた"
+run_stop "$STOP_HOOK" false AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+[[ "$?" -eq 2 ]] \
+  && ok "case10 未設定の登録は従来どおりターンを止める" \
+  || bad "case10 本物でターンが止まらなくなった"
+
 
 echo
 echo "=== 変異体: 条件を外すと同じシナリオが素通しすることの実測 ==="
@@ -277,6 +318,21 @@ text = open(sys.argv[1], encoding="utf-8").read()
 assert "常駐 daemon" in text, "no daemon limitation note"
 assert "Stop hook では原理的に代替できない" in text, "limitation not stated as principled"
 PY
+
+echo "--- 変異体: source 濾過を外すと test 登録が停止判定へ戻る ---"
+MUTA="$SB/mut-async.sh"
+if mutate "$ASYNC" 'if not include_test and (source == "test" or source.startswith("test:")):' \
+   'if False:' "$MUTA"; then
+  reset_state c10c
+  post_payload 'gh workflow run v2-alpha-cd.yml' \
+    | env AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" AIDD_LEDGER_SOURCE=test bash "$REG_HOOK" >/dev/null 2>&1
+  n_mut=$(bash "$MUTA" unresolved | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+  [[ "$n_mut" -eq 1 ]] \
+    && ok "変異(source 濾過除去) test 登録が停止判定へ戻る = 濾過は効いていた" \
+    || bad "変異(source 濾過除去) 何も変わらない = case10 は別条件が出していた"
+else
+  bad "変異(source 濾過除去) 対象が見つからない — 反証不能"
+fi
 
 echo
 echo "--- $pass passed, $fail failed ---"

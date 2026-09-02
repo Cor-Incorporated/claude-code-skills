@@ -149,6 +149,25 @@ assert "async-work.sh" in t, "does not read the registry"
 PY
 
 echo
+echo "=== case 7: テスト実行の登録は次ターン冒頭にも出さない ==="
+echo "    濾過は scripts/async-work.sh unresolved の 1 箇所。停止判定と冒頭照合が同時に揃う。"
+reset_state c7
+bash "$ASYNC" register --id run-test-1 --kind cd-run --detail "test fixture" \
+  --source "test:posttooluse-auto" >/dev/null
+run_hook "$HOOK" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+[[ ! -s "$SB/out" ]] \
+  && ok "case7 test 系 source は冒頭照合に出さない" \
+  || bad "case7 test 登録が冒頭照合に出た: $(cat "$SB/out")"
+bash "$ASYNC" register --id run-real-1 --kind cd-run --detail "real carry-over" >/dev/null
+run_hook "$HOOK" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+grep -q "run-real-1" "$SB/out" \
+  && ok "case7 本物の持ち越しは従来どおり出す（濾しすぎていない）" \
+  || bad "case7 本物まで濾過された"
+grep -q "run-test-1" "$SB/out" \
+  && bad "case7 test 登録が混ざった" \
+  || ok "case7 同時に存在しても test 系だけが除かれる"
+
+echo
 echo "=== 変異体: 条件を外すと同じシナリオが黙る／誤って主張する ==="
 MUT="$SB/mut"; mkdir -p "$MUT"
 mutate() {
