@@ -8,7 +8,7 @@
 
 | Item | Value |
 |---|---|
-| Registered hooks in `settings.json` | **23** (ADR-006 base + H3 Stop evidence warn + dns-self-heal SessionStart + async-work 持ち越し 2 本 + lane 発射ゲート) |
+| Registered hooks in `settings.json` | **24** (ADR-006 base + H3 Stop evidence warn + dns-self-heal SessionStart + async-work 持ち越し 2 本 + lane 発射ゲート + 持ち越し照合) |
 | Events | 6 (SessionStart / PreToolUse / PostToolUse / PostToolUseFailure / PreCompact / Stop) |
 | Hard-block PreToolUse | **4** (`git-push-guard`, `protect-branches`, `block-local-hooks-write`, plus SessionStart `validate-no-local-hooks`) |
 | Lane launch gate (PreToolUse:Bash) | **1** (`lane-launch-gate.sh` — 基点が古い / 同族修理が N=3 に達したレーンの発射を止める。tail-risk ではなく双方可逆なので既定は網ではなくコマンド位置同定。aidd-governance#91 / #88) |
