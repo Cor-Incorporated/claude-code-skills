@@ -8,9 +8,10 @@
 
 | Item | Value |
 |---|---|
-| Registered hooks in `settings.json` | **22** (ADR-006 base + H3 Stop evidence warn + dns-self-heal SessionStart + async-work 持ち越し 2 本) |
+| Registered hooks in `settings.json` | **23** (ADR-006 base + H3 Stop evidence warn + dns-self-heal SessionStart + async-work 持ち越し 2 本 + lane 発射ゲート) |
 | Events | 6 (SessionStart / PreToolUse / PostToolUse / PostToolUseFailure / PreCompact / Stop) |
 | Hard-block PreToolUse | **4** (`git-push-guard`, `protect-branches`, `block-local-hooks-write`, plus SessionStart `validate-no-local-hooks`) |
+| Lane launch gate (PreToolUse:Bash) | **1** (`lane-launch-gate.sh` — 基点が古い / 同族修理が N=3 に達したレーンの発射を止める。tail-risk ではなく双方可逆なので既定は網ではなくコマンド位置同定。aidd-governance#91 / #88) |
 | Turn-boundary block (Stop) | **1** (`aidd-turn-boundary-stop.sh` — 未完了の非同期作業を残したままターンを終えさせない。PreToolUse ではないので上の hard-block 4 には数えない。aidd-governance#96 / #95) |
 | Deploy path | `setup.sh` copies hooks/rules/skills/settings from **this repo's current branch** into `~/.claude` |
 
