@@ -194,6 +194,33 @@ else
     && ok "case6 拒否理由が #88 の家系反復であると明示する" \
     || bad "case6 拒否理由が不明瞭"
 
+  echo "--- Grift #2070-#2098 retrodiction: 実インシデント台帳をゲートに通す ---"
+  # cluster-a が #88 の完了条件用に作った実データ。PR #2073 の発射時点で N=3 に
+  # 達しており、再裁定エントリがあれば解除される。判定は breaker が持つので、
+  # ここで確かめるのは「ゲートがその判定を正しく通しているか」だけである。
+  GRIFT_LEDGER="$(dirname "$BREAKER")/../design/ops/readjudication/fixtures/grift-2070-2098.jsonl"
+  GRIFT_ENTRY="$(dirname "$BREAKER")/../design/ops/readjudication/fixtures/entry-valid.md"
+  if [ -f "$GRIFT_LEDGER" ] && [ -f "$GRIFT_ENTRY" ]; then
+    run_gate "$HOOK" "git -C $REPO worktree add $REPO/.worktrees/a/g1 -b feat/g1 origin/trunk" \
+      LANE_BASE=trunk HOME="$HOME" \
+      LANE_PATHS="services/control-api/internal/migrationbootstrap/x.go" \
+      LANE_BREAKER_SH="$BREAKER" LANE_REPAIR_LEDGER="$GRIFT_LEDGER"
+    [[ "$?" -eq 2 ]] \
+      && ok "case6 Grift 実台帳: 再裁定なしの 4 本目レーンを止めた（16 サイクルの起点）" \
+      || bad "case6 Grift 実台帳で止まらなかった"
+    if run_gate "$HOOK" "git -C $REPO worktree add $REPO/.worktrees/a/g2 -b feat/g2 origin/trunk" \
+        LANE_BASE=trunk HOME="$HOME" \
+        LANE_PATHS="services/control-api/internal/migrationbootstrap/x.go" \
+        LANE_BREAKER_SH="$BREAKER" LANE_REPAIR_LEDGER="$GRIFT_LEDGER" \
+        LANE_READJ_ENTRY="$GRIFT_ENTRY"; then
+      ok "case6 Grift 実台帳: 有効な再裁定エントリで解除される（永久ブロックではない）"
+    else
+      bad "case6 再裁定エントリがあっても解除されない"
+    fi
+  else
+    echo "SKIP: Grift fixture 不在（$GRIFT_LEDGER）"
+  fi
+
   echo "--- LANE_PATHS 未宣言なら #88 判定は省略される（黙って通さない） ---"
   if run_gate "$HOOK" "git -C $REPO worktree add $REPO/.worktrees/a/p3 -b feat/p3 origin/trunk" \
       LANE_BASE=trunk HOME="$HOME" LANE_BREAKER_SH="$BREAKER" LANE_REPAIR_LEDGER="$RLED"; then
