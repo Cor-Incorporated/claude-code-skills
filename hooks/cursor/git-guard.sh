@@ -99,6 +99,49 @@ ref_targets_protected() {
   printf '%s' "$1" | grep -qE '(^|[[:space:]:/])(main|master|develop)([[:space:]]|$)'
 }
 
+# push segment の**宛先**ブランチを返す。決められない（= 暗黙 push）なら空文字。
+#
+#   git push                    -> ""      refspec 無し。current を押す
+#   git push origin             -> ""      同上
+#   git push --force            -> ""      同上
+#   git push origin HEAD        -> ""      HEAD は current に解決する = 暗黙
+#   git push origin feat/x      -> feat/x
+#   git push -u origin docs/y   -> docs/y
+#   git push origin HEAD:feat/x -> feat/x  dst 側を採る
+#   git push origin +main:main  -> main
+#
+# 空文字のときだけ current branch へ倒す。これは hooks/protect-branches.sh の
+#   "No explicit protected ref: fall back to current branch (implicit push)"
+# と同じ設計である。4 ツール横断で cursor 側だけがこの限定を持っていなかった。
+push_destination() {
+  printf '%s' "$1" | awk '
+    {
+      pi = 0
+      for (i = 1; i <= NF; i++) if ($i == "push") { pi = i; break }
+      if (pi == 0) { print ""; exit }
+      n = 0
+      for (i = pi + 1; i <= NF; i++) {
+        t = $i
+        if (substr(t, 1, 1) == "-") {
+          # 値を取るフラグは次の語も飛ばす（飛ばさないと値を refspec と誤読する）
+          if (t == "-o" || t == "--push-option" || t == "--repo" || t == "--receive-pack") i++
+          continue
+        }
+        n++
+        positional[n] = t
+      }
+      # positional[1] = remote, positional[2] = refspec
+      if (n < 2) { print ""; exit }
+      ref = positional[2]
+      sub(/^\+/, "", ref)
+      if (index(ref, ":") > 0) sub(/^[^:]*:/, "", ref)
+      sub(/^refs\/heads\//, "", ref)
+      if (ref == "HEAD") { print ""; exit }
+      print ref
+    }
+  '
+}
+
 # merge: 保護ブランチ上での直接マージを禁止
 if printf '%s' "$cmd_norm" | grep -qE '\bgit[[:space:]]+merge\b'; then
   if is_protected "$current"; then
@@ -124,8 +167,29 @@ while IFS= read -r push_segment; do
     fi
   fi
   # 保護ブランチへの直接 push（force 問わず）
-  if ref_targets_protected "$push_segment" || is_protected "$current"; then
+  #
+  # 2026-09-03: current branch を **明示の宛先が無いときのフォールバックに限定**
+  # した。従来は `|| is_protected "$current"` を無条件に当てていたため、
+  # develop 上の `git push origin feat/x` を落としていた。この push は
+  # refs/heads/feat/x しか触らず develop の ref を動かさないので過剰ブロックである。
+  #
+  # 実測の裏づけ: tests/test-cross-tool-force-matrix.sh の GOOD 配列
+  # （4 強制点すべてが allow すべき正常形）を develop 上で回すと
+  #   正常形 3 件中の偽陽性: ClaudeCode=0  Cursor=2  Codex=0
+  # となり、Claude Code と Codex は通し **Cursor だけが落としていた**。
+  # 「片方だけ変えない」対の、cursor 側が崩れていた側である。
+  #
+  # 緩めていないことの担保:
+  #   - 明示的に保護 ref を名指す形は ref_targets_protected が先に落とす
+  #     （`origin feat/x develop` の複数 refspec、`HEAD:refs/heads/main` を含む）
+  #   - 暗黙 push（refspec 無し / `HEAD`）は従来どおり current で落とす
+  #   - force 判定（上のブロック）は無条件のまま。触っていない
+  # tests/test-cursor-git-guard-segments.sh が保護 / 非保護の両方で固定する。
+  if ref_targets_protected "$push_segment"; then
     deny "保護ブランチ(main/master/develop)への直接 push は禁止です。feature ブランチで作業し PR を出してください。"
+  fi
+  if [[ -z "$(push_destination "$push_segment")" ]] && is_protected "$current"; then
+    deny "保護ブランチ '${current}' からの暗黙 push は禁止です。押す先を明示するか、feature ブランチで作業してください。"
   fi
 done <<< "$push_segments"
 
