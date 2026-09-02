@@ -75,11 +75,50 @@ fi
 
 is_guard_pr=0
 # Structural triggers: any path that can change guard force projection.
-# Keep this set and the H5-guard:no exemption-denylist (below) IDENTICAL.
-# Phase 5 T5-2: must cover hooks/lib/** and scripts/** (.+\.sh), not only hooks/[^/]+\.sh
-# Checklist S9 expects this form (hooks/.+\.sh includes hooks/lib/*.sh).
-_H5_STRUCT_RE='^(hooks/.+\.sh|scripts/.+\.sh|settings\.json|\.github/workflows/)'
-if printf '%s\n' "$DIFF_FILES" | grep -qE "$_H5_STRUCT_RE"; then
+# Keep this set and the H5-guard:no exemption-denylist (below) IDENTICAL — both
+# go through h5_is_structural_path(), so they cannot drift apart.
+#
+# **極性は「除外を列挙する」側である。** 以前は逆で、カバーする拡張子を
+# `hooks/.+\.sh|scripts/.+\.sh` と列挙していた。その形は**新しい拡張子を黙って
+# 免除する。** 実測 (2026-09-02, aidd-governance#137):
+#   hooks/pre-commit                   → 免除（aidd-governance に実在する git hook）
+#   hooks/pre-push                     → 免除（同上）
+#   hooks/lib/h1-iteration-class.py    → 免除
+#   scripts/workflow-permission-scan.py → 免除
+#   scripts/lib/gh-permission-map.yaml → 免除
+# いずれも block 権限または完了判定に関与するのに guard fee の外に出ていた。
+# `.ts` の hook helper を足せば、やはり誰も気づかないまま外に出る。
+#
+# したがって hooks/ と scripts/ の配下は**既定で構造パス**とし、文書だけを
+# 明示的に除外する。ERE に否定先読みは無いので、単一 regex へ押し込まず
+# 「前方一致 → 除外条件」の 2 段で引く。そのほうが読んで検証できる。
+#
+# 除外してよいのは在庫で確認した文書系だけである（`.md`）。**`.py` `.yaml`
+# 拡張子なしは除外しない。** 除外を増やすときは、そのファイルが block 権限にも
+# 完了判定にも関与しないことを在庫で示すこと。
+_H5_STRUCT_RE='^(hooks/|scripts/|settings\.json|\.github/workflows/)'
+# 文書のみの除外。ここを空にすると scripts/README.md が block へ戻る（片側変異）。
+_H5_STRUCT_DOC_RE='\.md$'
+
+# 1 パスが構造パスかを判定する。前方一致してから文書除外を引く 2 段。
+h5_is_structural_path() {
+  local p="$1"
+  printf '%s' "$p" | grep -qE "$_H5_STRUCT_RE" || return 1
+  printf '%s' "$p" | grep -qiE "$_H5_STRUCT_DOC_RE" && return 1
+  return 0
+}
+
+# DIFF_FILES に構造パスが 1 本でもあるか。
+h5_diff_has_structural_path() {
+  local f
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    h5_is_structural_path "$f" && return 0
+  done <<<"$(printf '%s\n' "$DIFF_FILES")"
+  return 1
+}
+
+if h5_diff_has_structural_path; then
   is_guard_pr=1
 fi
 # Self-declaration (PR template)
@@ -91,7 +130,7 @@ fi
 # scripts/** and .github/workflows/** could self-exempt — that hole is closed.
 if printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*no' \
   && ! printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*yes'; then
-  if ! printf '%s\n' "$DIFF_FILES" | grep -qE "$_H5_STRUCT_RE"; then
+  if ! h5_diff_has_structural_path; then
     is_guard_pr=0
   fi
 fi
