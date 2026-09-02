@@ -73,17 +73,57 @@ def ident(prefix, seed):
 
 
 # gh workflow run <wf> — 発射した。conclusion はターンの外で決まる。
-for m in re.finditer(r"gh\s+workflow\s+run\s+([^\s;|&]+)", cmd):
+# --- 実行と引用の区別 (aidd-governance#100) ---------------------------------
+# 2026-09-02 実測: 文字列として `gh workflow run v2-alpha-cd.yml` を含むだけの
+# コマンドが持ち越しとして登録され、Stop hook がターンを止めた。実際には Grift の
+# Alpha CD は発射されておらず（直近 run は 5 時間前の別物）、登録は誤検知だった。
+#
+# 誤検知した 3 形（すべて再現済み）:
+#   grep -rn 'gh workflow run v2-alpha-cd.yml' design/
+#   cat <<'EOF' > doc.md ... gh workflow run v2-alpha-cd.yml ... EOF
+#   echo "手順: gh workflow run v2-alpha-cd.yml"
+#
+# #100 が言う「承認の有無でなくパターンでゲートを引く誤分類」そのものである。
+# 対策は 2 つ。(1) heredoc の本文を照合対象から外す。(2) コマンド位置
+# （文頭 / 改行後 / ; && || | ( { の直後）に現れたものだけを実行とみなす。
+#
+# **意図的な取りこぼし**: `bash -c "gh workflow run x"` のように引用符の内側から
+# 起動する形は登録されない。これは本 hook が block ではなく登録（可視化）であり、
+# 見落とし 1 件より「毎ターン止まる」ほうが害が大きいという判断による。
+# 取りこぼしが問題になったら手動登録できる: async-work.sh register --id ...
+def strip_heredocs(text):
+    """heredoc の本文を落とす。本文は実行されるコマンドではなくデータである。"""
+    lines = text.split("\n")
+    kept, terminator = [], None
+    for line in lines:
+        if terminator is not None:
+            if line.strip() == terminator:
+                terminator = None
+            continue
+        kept.append(line)
+        hd = re.search(r"<<-?\s*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?", line)
+        if hd:
+            terminator = hd.group(1)
+    return "\n".join(kept)
+
+
+# コマンド位置: 文頭、改行後、または ; & | ( { の直後（前後の空白は許す）。
+# 引用符やコロンの直後は含めない。`&&` / `||` は 2 文字目が [;&|] に入る。
+AT_COMMAND = r"(?:\A|[\n;&|(){}]\s*)"
+
+scan = strip_heredocs(cmd)
+
+for m in re.finditer(AT_COMMAND + r"gh\s+workflow\s+run\s+([^\s;|&]+)", scan):
     wf = m.group(1)
     out.append(("cd-run", ident("wf", wf + cmd), "gh workflow run %s" % wf))
 
 # gh run watch <id> — 完走待ち。待ちはツール呼び出しの寿命を超えうる。
-for m in re.finditer(r"gh\s+run\s+watch\s+(\d+)", cmd):
+for m in re.finditer(AT_COMMAND + r"gh\s+run\s+watch\s+(\d+)", scan):
     rid = m.group(1)
     out.append(("cd-run", "run-%s" % rid, "gh run watch %s" % rid))
 
 # nohup — 明示的にツール呼び出しより長生きさせた。
-if re.search(r"(?:^|[;&|]\s*|\s)nohup\s", cmd):
+if re.search(AT_COMMAND + r"nohup\s", scan):
     head = re.sub(r"\s+", " ", cmd).strip()[:120]
     out.append(("generic", ident("nohup", cmd), "nohup: %s" % head))
 
