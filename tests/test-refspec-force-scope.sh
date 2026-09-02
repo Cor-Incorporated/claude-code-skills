@@ -90,6 +90,27 @@ test_case "bash -c"                          block "bash -c 'git push origin ${P
 test_case "after cd + semicolon"             block "cd /tmp; ( git push origin ${P}main )"
 test_case "after true &&"                    block "true && ( git push origin ${P}main )"
 
+# インタプリタ経由。第二版はここを 6 形すべて素通しにした。原因は stage 2 の
+# `git` 判定がトークン等価で、`os.system(git` の中の git を拾えなかったこと。
+#
+# **インタプリタ名を列挙して塞いではならない。列挙は必ず漏れる。**
+# `ruby` と `deno` は hook のどのリストにも入っていない。この 2 件が block で
+# あることが、判定が列挙ではなくセグメントの中身に基づいている証拠になる。
+# 列挙で通す実装に戻したら、まずこの 2 件が red になる。
+echo "--- インタプリタ経由（列挙に頼っていないことの対照を含む） ---"
+FORCE="git push origin ${P}main"
+test_case "python3 -c, double quotes"        block "python3 -c \"import os; os.system('${FORCE}')\""
+test_case "python3 -c, single quotes"        block "python3 -c 'import os; os.system(\"${FORCE}\")'"
+test_case "python3 -c, __import__"           block "python3 -c \"__import__('os').system('${FORCE}')\""
+test_case "python3 - heredoc (本文はコード)"  block "python3 - <<'PY'
+import os
+os.system(\"${FORCE}\")
+PY"
+test_case "perl -e"                          block "perl -e 'system(\"${FORCE}\")'"
+test_case "node -e"                          block "node -e \"require('child_process').execSync('${FORCE}')\""
+test_case "ruby -e (どのリストにも無い)"       block "ruby -e 'system(\"${FORCE}\")'"
+test_case "deno eval (どのリストにも無い)"     block "deno eval \"Deno.run({cmd:['${FORCE}']})\""
+
 echo ""
 echo "=== F2 陰性対照: 2026-09-02 の実際の事故入力 ==="
 # (1) コミットメッセージが push ガードの話をしている
@@ -120,6 +141,17 @@ echo "=== 既知の残存（別ルールの管轄。本 PR の対象外） ==="
 # 再設計が要るので本 PR では触らない。現状を記録として固定する。
 test_case "heredoc with --force + main (別ルール)" block "cat <<EOF > note.md
 git push --force origin main
+EOF"
+
+echo ""
+echo "=== 除外が壊れていないことの対照（連結の反対側） ==="
+test_case "git log && echo"                  allow "git log --oneline -1 && echo done"
+test_case "commit msg quoting the form"      allow "git commit -m 'ref: git push origin ${P}main は禁止' && git status"
+test_case "feature push && echo"             allow "git push origin feat/x && echo pushed"
+# データ文脈の heredoc は本文を落とす（cat はファイルへ書くだけ）。
+# python3 - <<PY は本文をインタプリタが実行するので落とさない（上の陽性対照）。
+test_case "cat heredoc は本文がデータ"        allow "cat <<'EOF' > /tmp/note.md
+git push origin ${P}main
 EOF"
 
 echo ""
