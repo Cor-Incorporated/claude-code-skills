@@ -31,8 +31,13 @@ _LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
 # shellcheck source=/dev/null
 [ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
 _aidd_block() {
+  # Optional rule tag. Without it every block is filed under one name, so the
+  # ledger cannot say WHICH rule fired — and a rule with a high false-positive
+  # rate becomes indistinguishable from one that is working. Existing call sites
+  # pass nothing and keep the previous value.
+  local rule="${1:-protect-branches}"
   if declare -F aidd_ledger_append >/dev/null 2>&1; then
-    aidd_ledger_append "protect-branches" "block" "deny" "${cmd:-}" "protect-branches"
+    aidd_ledger_append "protect-branches" "block" "deny" "${cmd:-}" "$rule"
   fi
   exit 2
 }
@@ -212,13 +217,92 @@ fi
 
 # --- Check 0a2: refspec force `+<ref>` guard (loop-break T1 follow-up) ---
 # `git push origin +main` は `--force` を伴わずに保護ブランチの履歴を上書きする。
-# `+` は refspec の先頭にのみ意味を持つため、空白または `:` の直後に限定して
-# 照合する（`git push origin feat/a+b` のようなブランチ名は誤検知しない）。
-if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE" && echo "$cmd_norm" | grep -qE '[[:space:]:]\+[A-Za-z0-9_./-]'; then
+#
+# 2026-09-02 の修正まで、この検査は 2 つの述語をコマンド文字列**全体**に対して
+# 独立に当てていた:
+#
+#   grep -qE "$_GIT_PUSH_RE"  &&  grep -qE '[[:space:]:]\+[A-Za-z0-9_./-]'
+#
+# `git push` と `+18` が文字列の別の場所にあるだけで一致するため、
+# **コミットメッセージが push ガードの話をしているだけで block した。**
+#
+#   git commit -m "fix: git push guard misread +18"   → [BLOCK]
+#
+# 同日に 5 回発火（コミットメッセージ / errexit 解除表記 / テスト検体 /
+# grep パターン / heredoc 本文）。運用者は `git commit -F <file>` で迂回した。
+# **迂回されるガードは何も守っていない。** 参照: aidd-governance#100
+#
+# `+` は git push 自身の引数トークンである場合にのみ意味を持つ。
+# 迂回形は引き続き止まる — セグメント単位で見るため、`&&` `;` `|` や
+# サブシェルに隠した push はそれ自体が 1 セグメントとして検査される。
+has_refspec_force() {
+  # セグメント分割 → 各セグメントで「git のサブコマンドが push か」を判定 →
+  # push の引数トークンだけを `+` で調べる。
+  # BSD awk は RS に正規表現を取れないので、分割は tr で行う。
+  # heredoc の本文は落とす。awk は行単位で見るため、本文の 1 行
+  # `git push origin +main は --force と等価` はコマンド行と文字列上まったく
+  # 同一で、区別する手掛かりが行の中に無い。区切り記号 `<<WORD` は行の外にある。
+  local body_stripped
+  body_stripped="$(printf '%s' "$1" | awk '
+    BEGIN { delim = "" }
+    {
+      if (delim != "") {
+        line = $0; sub(/^[ \t]+/, "", line)
+        if (line == delim) delim = ""
+        next
+      }
+      if (match($0, /<<-?[ \t]*[A-Za-z_][A-Za-z0-9_]*/)) {
+        d = substr($0, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", d); delim = d
+      }
+      print
+    }
+  ')"
+
+  # 区切りは `;` `|` `&` のみ。括弧では分割しない。
+  # 括弧で分割すると、コミットメッセージ中の `fix(#195): git push ... +195` が
+  # `: git push ... +195` という偽のセグメントを生み、再び誤検知する（実測）。
+  # サブシェル `(...)` / `$(...)` / `<(...)` は先頭の非英数字を剥がして拾う。
+  # shellcheck disable=SC2020 # 3 個の区切り文字を全て改行へ写す。重複は意図的で、
+  # SET2 を 1 文字に縮めると tr 実装ごとの補完規則に依存してしまう。
+  printf '%s' "$body_stripped" | tr ';|&' '\n\n\n' | awk '
+    function takes_value(t) { return (t == "-c" || t == "--config" || t == "-C") }
+    function is_prefix(t) {
+      return (t == "env" || t == "sudo" || t == "time" || t == "nohup" || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/)
+    }
+    {
+      if (NF == 0) next
+      # サブシェル・プロセス置換の記号を剥がす: `(git` `$(git` `<(git` → `git`
+      sub(/^[^A-Za-z0-9_]+/, "", $1)
+      # セグメントの先頭が git であることを要求する。
+      # 先頭が git でない `+` は、コマンドの引数ではなくデータ（メッセージ本文・
+      # grep パターン・heredoc 本文）である。これが 2026-09-02 の誤検知 5 件の境界。
+      gi = 0
+      for (i = 1; i <= NF; i++) {
+        if (is_prefix($i)) continue
+        if ($i == "git") gi = i
+        break
+      }
+      if (gi == 0) next
+      # git のサブコマンド = 最初の非オプショントークン。
+      subcmd = ""; si = 0
+      for (i = gi + 1; i <= NF; i++) {
+        if (substr($i, 1, 1) == "-") { if (takes_value($i)) i++; continue }
+        subcmd = $i; si = i; break
+      }
+      if (subcmd != "push") next
+      for (i = si + 1; i <= NF; i++) {
+        # `+main` / `+main:main`（先頭）と `HEAD:+main`（dst 側）の両形
+        if (substr($i, 1, 1) == "+" || index($i, ":+") > 0) { print "FORCE"; exit }
+      }
+    }
+  ' | grep -q FORCE
+}
+
+if has_refspec_force "$cmd_norm"; then
   echo "[BLOCK] refspec force (+<ref>) 付き push を検出。" >&2
   echo "  WHY: '+' 接頭辞は --force と等価で、保護ブランチの履歴を上書きします。" >&2
   echo "  FIX: '+' を外し、通常の push を行ってください。" >&2
-  _aidd_block
+  _aidd_block "refspec-force"
 fi
 
 # --- Check 0b: Force push guard (fork-aware) (#192, #195, parser-gap fix) ---
