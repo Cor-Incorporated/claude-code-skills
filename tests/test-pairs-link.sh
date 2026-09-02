@@ -10,11 +10,23 @@ from pathlib import Path
 
 ROOT = Path(sys.argv[1])
 PASS = FAIL = 0
+SKIPPED: list[str] = []
 
 def ok(msg: str) -> None:
     global PASS
     PASS += 1
     print(f"PASS: {msg}")
+
+def skip(msg: str) -> None:
+    """照合できなかった pair。PASS に数えない（#349）。
+
+    これらは repo 正本 ↔ **配備先**を比べる pair であり、CI には配備先が存在しない。
+    CI で fail させるのは誤りなので exit には影響させない。しかし PASS に混ぜると
+    「15 の対が照合された」と読めてしまい、CI では実際には 5 しか照合していない。
+    検査していないのに緑、という #120 と同じクラスの欠陥になる。
+    """
+    SKIPPED.append(msg)
+    print(f"SKIP: {msg}")
 
 def bad(msg: str, detail: str) -> None:
     global FAIL
@@ -27,7 +39,7 @@ deploy_dir = Path.home() / ".claude" / "hooks"
 dep = sorted(p.name for p in deploy_dir.glob("*.sh")) if deploy_dir.is_dir() else []
 # Local deploy pair: skip when no machine deploy (CI runners).
 if not dep:
-    ok("pair1 skipped (no local deploy hooks; CI/local-without-setup)")
+    skip("pair1 skipped (no local deploy hooks; CI/local-without-setup)")
 elif repo == dep:
     ok("pair1 repo_hooks == deployed_hooks")
 else:
@@ -96,7 +108,7 @@ if unused.is_dir() and dep:
     else:
         bad("pair6 retired hooks still deployed", f"deployed_retired={bad_names}")
 elif unused.is_dir():
-    ok("pair6 skipped (no local deploy)")
+    skip("pair6 skipped (no local deploy)")
 
 # ---- T7-3: 4-agent pairs (facts.yaml ids must all be exercised) ----
 # Local-only pairs: skip when the target machine files are absent (CI-safe).
@@ -105,7 +117,7 @@ home = Path.home()
 # pair7: codex hooks.json registrations ↔ deployed scripts
 cj = home / ".codex" / "hooks.json"
 if not cj.is_file():
-    ok("pair7 codex hooks.json skipped (no Codex install)")
+    skip("pair7 codex hooks.json skipped (no Codex install)")
 else:
     reg = json.loads(cj.read_text())
     cmds = [
@@ -131,7 +143,7 @@ else:
 # pair8: codex AGENTS.md force-push protection ↔ default.rules forbidden rules
 rules = home / ".codex" / "rules" / "default.rules"
 if not rules.is_file():
-    ok("pair8 codex execpolicy skipped (no default.rules)")
+    skip("pair8 codex execpolicy skipped (no default.rules)")
 else:
     rule_text = rules.read_text()
     ops = [
@@ -154,7 +166,7 @@ else:
 cg = home / ".cursor" / "hooks" / "git-guard.sh"
 cl = home / ".cursor" / "hooks" / "guard-ledger.jsonl"
 if not cg.is_file():
-    ok("pair9 cursor guard hook skipped (no Cursor hook)")
+    skip("pair9 cursor guard hook skipped (no Cursor hook)")
 elif cl.is_file():
     ok("pair9 cursor guard hook + ledger present")
 else:
@@ -166,7 +178,7 @@ else:
 # pair10: opencode team.ts blanket allow must be 0 (comments excluded)
 oc_team = home / "Developer" / "opencode" / "packages" / "guardrails" / "profile" / "plugins" / "team.ts"
 if not oc_team.is_file():
-    ok("pair10 opencode team.ts skipped (no opencode checkout)")
+    skip("pair10 opencode team.ts skipped (no opencode checkout)")
 else:
     text = oc_team.read_text()
     # count actual rule lines, excluding comment/doc lines
@@ -193,7 +205,7 @@ codex_deployed = Path(
     )
 ).expanduser()
 if not codex_deployed.is_file():
-    ok("pair11 Codex deployed hook skipped (no local deploy)")
+    skip("pair11 Codex deployed hook skipped (no local deploy)")
 elif not codex_source.is_file():
     bad(
         "pair11 Codex repo source missing",
@@ -222,7 +234,7 @@ cursor_deployed = Path(
     )
 ).expanduser()
 if not cursor_deployed.is_file():
-    ok("pair12 Cursor deployed hook skipped (no local deploy)")
+    skip("pair12 Cursor deployed hook skipped (no local deploy)")
 elif not cursor_source.is_file():
     bad(
         "pair12 Cursor repo source missing",
@@ -354,7 +366,7 @@ else:
 codex_hooks_json = home / ".codex" / "hooks.json"
 codex_config = home / ".codex" / "config.toml"
 if not codex_hooks_json.is_file() or not codex_config.is_file():
-    ok("pair15 codex trust state skipped (no Codex install)")
+    skip("pair15 codex trust state skipped (no Codex install)")
 else:
     event_key = {"PreToolUse": "pre_tool_use", "PostToolUse": "post_tool_use"}
     registered = {}
@@ -411,7 +423,7 @@ else:
 gov = Path(os.environ.get("AIDD_GOV_ROOT", str(home / "Developer" / "aidd-governance")))
 manifest = gov / "design" / "ops" / "payloads" / "manifest.tsv"
 if not manifest.is_file():
-    ok("pair17 payload manifest skipped (aidd-governance not present)")
+    skip("pair17 payload manifest skipped (aidd-governance not present)")
 else:
     def _norm(t: str) -> str:
         return t.rstrip("\n") + "\n"
@@ -469,7 +481,7 @@ else:
     if problems:
         bad("pair17 payload SSOT != deployed block", " ; ".join(problems))
     elif checked == 0:
-        ok("pair17 payload blocks skipped (no deployed target on this machine)")
+        skip("pair17 payload blocks skipped (no deployed target on this machine)")
     else:
         ok(f"pair17 payload SSOT == deployed block ({checked} payload(s) verified)")
 
@@ -518,6 +530,15 @@ else:
             f"{registered.count('none')} declared none)"
         )
 
-print(f"--- {PASS} passed, {FAIL} failed ---")
+# 3 値で出す。skipped は「照合できなかった」であって「通った」ではない。
+print(f"--- {PASS} passed, {len(SKIPPED)} skipped, {FAIL} failed ---")
+if SKIPPED:
+    # skip の理由を 1 行ずつ常時出す。「なぜ CI では 5 本なのか」を毎回ログに残す
+    # ためで、失敗時だけの診断ではない。
+    print(f"--- skipped ({len(SKIPPED)}): machine-local pairs; this environment "
+          f"has no deployed target to compare against ---")
+    for m in SKIPPED:
+        print(f"  SKIP: {m}")
+# exit の意味は変えない（#349: CI を落とすのが目的ではない）。
 sys.exit(0 if FAIL == 0 else 1)
 PY
