@@ -49,7 +49,11 @@ else:
     )
 
 settings_path = Path.home() / ".claude" / "settings.json"
-if settings_path.is_file():
+# else が無いと、配備先が無い環境で pair2 は PASS/SKIP/FAIL のどれも出さず
+# **無言で消える**（#351）。skip 誤計上より重い: skip は少なくとも行が出る。
+if not settings_path.is_file():
+    skip("pair2 skipped (no local deploy settings.json)")
+else:
     s = json.loads(settings_path.read_text())
     registered = set()
     for _ev, ms in s.get("hooks", {}).items():
@@ -71,7 +75,15 @@ canon = ROOT / "docs" / "CANONICAL-STATE.md"
 repo_settings = ROOT / "settings.json"
 # Prefer repo settings.json so CI links declaration to SSOT (not machine deploy).
 settings_for_pair5 = repo_settings if repo_settings.is_file() else settings_path
-if canon.is_file() and settings_for_pair5.is_file():
+if not (canon.is_file() and settings_for_pair5.is_file()):
+    # ここは配備状態ではなく **repo の**ファイル。欠けていたら skip ではなく欠陥である。
+    # pair13 の "source file missing" と同じ扱いにそろえる（#351 受入基準 6）。
+    bad(
+        "pair5 source file missing",
+        f"declaration={canon} exists={canon.is_file()} "
+        f"enforcement={settings_for_pair5} exists={settings_for_pair5.is_file()}",
+    )
+else:
     text = canon.read_text()
     m = re.search(
         r"Registered hooks in `settings\.json`\s*\|\s*\*\*(\d+)\*\*",

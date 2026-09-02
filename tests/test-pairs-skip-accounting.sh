@@ -43,7 +43,7 @@ fi
 echo "--- 2. CI 相当（配備先なし）の実測 ---"
 p=$(field "$OUT" passed); s=$(field "$OUT" skipped); f=$(field "$OUT" failed)
 if [[ "$p" == "5" ]]; then ok "passed == 5 (CI verifies 5 pairs, not 15)"; else bad "passed == 5 (got '$p')"; fi
-if [[ "$s" == "10" ]]; then ok "skipped == 10"; else bad "skipped == 10 (got '$s')"; fi
+if [[ "$s" == "11" ]]; then ok "skipped == 11"; else bad "skipped == 11 (got '$s')"; fi
 if [[ "$f" == "0" ]]; then ok "failed == 0"; else bad "failed == 0 (got '$f')"; fi
 
 echo "--- 3. skip が PASS 行に混ざらないこと（本 issue の核心） ---"
@@ -117,8 +117,8 @@ fi
 HOME="$EMPTY" bash "$MUTANT" >"$OUT" 2>&1
 mp=$(field "$OUT" passed); ms=$(field "$OUT" skipped)
 mleak=$(grep -c '^PASS: .*skip' "$OUT" || true)
-if [[ "$ms" == "0" && "$mp" == "15" ]]; then
-  ok "mutant over-claims (passed=15, skipped=0) — exactly the state #349 reports"
+if [[ "$ms" == "0" && "$mp" == "16" ]]; then
+  ok "mutant over-claims (passed=16, skipped=0) — the state #349 reported"
 else
   bad "mutant did not reproduce the over-claim (passed=$mp skipped=$ms)"
 fi
@@ -128,18 +128,63 @@ else
   bad "this checker would NOT detect the mutation — it is not a device"
 fi
 
-echo "--- 8. 会計の網羅（非失敗の観測。#349 の範囲外の欠陥を隠さないため） ---"
+echo "--- 8. 会計の網羅: implemented == emitted（#351 で NOTE から FAIL へ格上げ） ---"
+# #349 では観測だけだった。無言の pair は skip 誤計上より重い（skip は行が出る）。
+# 格上げすると、次に無言の pair が入った時点で落ちる。
 HOME="$EMPTY" bash "$TARGET" >"$OUT" 2>&1
 emitted=$(grep -oE '^(PASS|SKIP|FAIL): pair[0-9]+' "$OUT" | sed 's/.*: //' | sort -u | wc -l | tr -d ' ')
 implemented=$(grep -oE '"pair[0-9]+' "$TARGET" | sort -u | wc -l | tr -d ' ')
-echo "  NOTE: implemented=$implemented emitted=$emitted"
-if [[ "$emitted" != "$implemented" ]]; then
+if [[ "$emitted" == "$implemented" ]]; then
+  ok "implemented == emitted (both $implemented) — no pair is silent"
+else
   missing=$(comm -13 \
     <(grep -oE '^(PASS|SKIP|FAIL): pair[0-9]+' "$OUT" | sed 's/.*: //' | sort -u) \
     <(grep -oE '"pair[0-9]+' "$TARGET" | tr -d '"' | sort -u) | tr '\n' ' ')
-  echo "  NOTE: これらの pair は PASS/SKIP/FAIL のどれも出していない: $missing"
-  echo "  NOTE: 無言で何も出さないのは skip 誤計上より重い。#349 の 7 項目の外なので"
-  echo "  NOTE: ここでは失敗にせず観測だけ記録する（別 issue の対象）。"
+  bad "implemented=$implemented emitted=$emitted — silent pair(s): $missing"
+fi
+
+echo "--- 9. 構造照合: 分岐の片側だけが pair を出す形が残っていないこと（#351 の本体） ---"
+# 節 8 は「その環境で出たか」しか見ない。pair5 のようにガードが repo ファイルの
+# 存在で、現行 2 環境ではどちらも成立する pair は経験的照合に現れない。
+# 実測（#351 起点調査）: 経験的には pair2 の 1 件だが、構造的には pair5 も同型だった。
+# したがって AST で「body が pair を出すのに orelse が出さない if」を機械照合する。
+run_struct() { PAIRS_FILE="$1" python3 "$ROOT/tests/lib/pairs-branch-audit.py"; }
+struct_out=$(run_struct "$TARGET")
+struct_rc=$?
+if [[ "$struct_rc" -ne 0 ]]; then
+  bad "structural check could not run (rc=$struct_rc) — not treating as pass"
+  printf '      %s\n' "$struct_out"
+else
+  holes=$(printf '%s' "$struct_out" | sed -nE 's/^COUNT ([0-9]+)$/\1/p')
+  if [[ "$holes" == "0" ]]; then
+    ok "no branch emits a pair on one side only"
+  else
+    bad "$holes branch(es) emit a pair on one side only"
+    printf '%s\n' "$struct_out" | grep '^HOLE' | sed 's/^/      /'
+  fi
+fi
+
+echo "--- 10. 節 8/9 自身の反証: pair2 の else を消す片側変異 ---"
+# else を消すと pair2 は無言に戻る。節 8（経験的）と節 9（構造）の**両方**が
+# それを検出できなければ、格上げは効いていない。
+if ! python3 "$ROOT/tests/lib/pairs-mutate-drop-else.py" "$TARGET" "$MUTANT"; then
+  bad "mutation could not be injected — fix the injection, not the test"
+else
+  HOME="$EMPTY" bash "$MUTANT" >"$OUT" 2>&1
+  me=$(grep -oE '^(PASS|SKIP|FAIL): pair[0-9]+' "$OUT" | sed 's/.*: //' | sort -u | wc -l | tr -d ' ')
+  mi=$(grep -oE '"pair[0-9]+' "$MUTANT" | sort -u | wc -l | tr -d ' ')
+  if [[ "$me" -lt "$mi" ]]; then
+    ok "section 8 detects the mutation (implemented=$mi emitted=$me -> would go red)"
+  else
+    bad "section 8 would NOT detect the mutation (implemented=$mi emitted=$me)"
+  fi
+  mstruct=$(run_struct "$MUTANT")
+  mholes=$(printf '%s' "$mstruct" | sed -nE 's/^COUNT ([0-9]+)$/\1/p')
+  if [[ "${mholes:-0}" -ge 1 ]]; then
+    ok "section 9 detects the mutation ($mholes structural hole(s) -> would go red)"
+  else
+    bad "section 9 would NOT detect the mutation (holes=${mholes:-parse-failed})"
+  fi
 fi
 
 echo ""
