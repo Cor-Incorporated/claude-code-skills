@@ -219,6 +219,50 @@ YML
 assert_verdict A15 "$WORK/a15" MISSING "check-runs"
 
 echo
+echo "=== 2.5 any_of（1 つの API 面を複数スコープのどれかが満たす）==="
+# `POST /repos/{owner}/{repo}/issues/{issue_number}/comments` は GitHub の
+# fine-grained 権限リファレンスで "Issues"(write) と "Pull requests"(write) の
+# 両方の節に掲載されている（2026-09-02 実測）。gh pr comment はこれを使う。
+# 片側だけを要求として書くと、もう片方を宣言した正しい workflow に偽 MISSING を出す。
+PRCOMMENT='      - name: comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment 1 --body "hello"'
+assert_verdict B1 "$(fixture b1 '    permissions:
+      contents: read' "$PRCOMMENT")" MISSING "pr comment"
+assert_verdict B2 "$(fixture b2 '    permissions:
+      pull-requests: write' "$PRCOMMENT")" GRANTED "pr comment"
+assert_verdict B3 "$(fixture b3 '    permissions:
+      issues: write' "$PRCOMMENT")" GRANTED "pr comment"
+assert_verdict B4 "$(fixture b4 '    permissions:
+      pull-requests: read' "$PRCOMMENT")" MISSING "pr comment"
+
+echo
+echo "=== 2.6 シェルの行継続 ==="
+# `gh api \` の次行が別トークンになると、パスとして `\` を拾う。
+# 実測: opencode review.yml の複数行 gh api が `GET \` と判定されていた。
+mkdir -p "$WORK/b5/.github/workflows"
+cat >"$WORK/b5/.github/workflows/wf.yml" <<'YML'
+name: b5
+on: workflow_dispatch
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: review comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            /repos/${{ github.repository }}/pulls/1/comments \
+            -f 'body=x'
+YML
+assert_verdict B5 "$WORK/b5" MISSING "pulls/1/comments"
+
+echo
 echo "=== 3. 厳格 YAML: 重複キー（#98 同型 #1 / GitHub は HTTP 422 を返す）==="
 mkdir -p "$WORK/dup/.github/workflows"
 cat >"$WORK/dup/.github/workflows/wf.yml" <<'YML'

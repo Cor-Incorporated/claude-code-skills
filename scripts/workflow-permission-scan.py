@@ -301,6 +301,10 @@ def strip_shell_data(text: str) -> str:
     単引用符の除去は**しない**。`gh api 'repos/o/r/x'` は実際の呼び出しであり、
     引用符だけを根拠に落とすと本物の呼び出しが消える。
     """
+    # シェルの行継続を先に畳む。畳まないと `gh api \\` の次行が別トークンになり、
+    # パスとして `\\` を拾ってしまう（実測: opencode review.yml の
+    # `gh api \\ --method POST ... /repos/.../comments` が `GET \\` になった）。
+    text = re.sub(r"\\\n[ \t]*", " ", text)
     lines = text.splitlines()
     out: list[str] = []
     index = 0
@@ -525,6 +529,25 @@ def token_is_default(env_chain: list[dict]) -> tuple[bool, str]:
     return True, "(unset; assumed default GITHUB_TOKEN)"
 
 
+def required_alternatives(entry) -> list[tuple[str, str]]:
+    """エントリが要求するスコープの選択肢を (scope, level) の一覧で返す。
+
+    1 つの API 面が複数のスコープのどれか 1 つで足りることがある。実例:
+    `POST /repos/{owner}/{repo}/issues/{issue_number}/comments` は GitHub の
+    fine-grained 権限リファレンスで "Issues"(write) と "Pull requests"(write) の
+    **両方**の節に掲載されている（2026-09-02 実測）。`gh pr comment` はこの
+    エンドポイントを使うので、片方だけを要求として書くと、もう片方を宣言して
+    いる正しい workflow に偽の MISSING を出す。
+    """
+    if "any_of" in entry:
+        return [(str(a["scope"]), str(a["level"])) for a in entry["any_of"]]
+    return [(str(entry["scope"]), str(entry["level"]))]
+
+
+def describe_required(alts: list[tuple[str, str]]) -> str:
+    return " または ".join(f"{scope}: {level}" for scope, level in alts)
+
+
 def judge(
     call: Call,
     entry,
@@ -536,14 +559,15 @@ def judge(
     """1 呼び出しの 5 値判定。戻り値は (verdict, required, granted, reason)。"""
     if entry is None:
         return UNDECIDABLE_API, "-", (perms.describe() if perms else "-"), reason
+    alts = required_alternatives(entry)
+    required = describe_required(alts)
     if not str(entry.get("evidence", "")).strip():
         return (
             UNDECIDABLE_API,
-            f"{entry['scope']}: {entry['level']}",
+            required,
             perms.describe() if perms else "-",
             "対応表エントリに evidence が無いため判定を保留する",
         )
-    required = f"{entry['scope']}: {entry['level']}"
     if not default_token:
         return (
             NOT_APPLICABLE,
@@ -559,14 +583,14 @@ def judge(
             "workflow / job のどちらにも permissions が無い。既定はリポジトリ設定"
             "依存で、このリポジトリからは読めない",
         )
-    have = perms.level(entry["scope"])
-    if LEVEL_ORDER[have] >= LEVEL_ORDER[entry["level"]]:
+    if any(LEVEL_ORDER[perms.level(sc)] >= LEVEL_ORDER[lv] for sc, lv in alts):
         return GRANTED, required, perms.describe(), ""
+    have = ", ".join(f"{sc}={perms.level(sc)}" for sc, _ in alts)
     return (
         MISSING,
         required,
         perms.describe(),
-        f"{entry['scope']} は {have} だが {entry['level']} が要る。根拠: "
+        f"実効権限は {have}。{required} のいずれかが要る。根拠: "
         f"{' '.join(str(entry['evidence']).split())}",
     )
 

@@ -65,6 +65,76 @@ rest:
       — "Repository permissions for \"Actions\"" 節に read として掲載
       （2026-09-02 参照）。
 
+  - match: "repos/{owner}/{repo}/issues/{issue_number}"
+    method: GET
+    scope: issues
+    level: read
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Repository permissions for \"Issues\"" 節に read として掲載（2026-09-02 参照）。
+
+  - match: "repos/{owner}/{repo}/issues/{issue_number}"
+    method: PATCH
+    scope: issues
+    level: write
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Repository permissions for \"Issues\"" 節に write として掲載（2026-09-02 参照）。
+
+  - match: "repos/{owner}/{repo}/issues/{issue_number}/comments"
+    method: GET
+    any_of:
+      - scope: issues
+        level: read
+      - scope: pull-requests
+        level: read
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — 本エンドポイントは "Issues"(read) と "Pull requests"(read) の**両方**の節に
+      掲載されている（2026-09-02 実測）。PR のコメントは issue コメントとして
+      読まれるため、どちらか一方があれば足りる。単一スコープで書くと、
+      pull-requests だけを宣言した正しい workflow に偽 MISSING を出す。
+
+  - match: "repos/{owner}/{repo}/issues/comments/{comment_id}"
+    method: DELETE
+    any_of:
+      - scope: issues
+        level: write
+      - scope: pull-requests
+        level: write
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Issues"(write) と "Pull requests"(write) の両方の節に掲載（2026-09-02 実測）。
+
+  - match: "repos/{owner}/{repo}/issues/comments/{comment_id}"
+    method: PATCH
+    any_of:
+      - scope: issues
+        level: write
+      - scope: pull-requests
+        level: write
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Issues"(write) と "Pull requests"(write) の両方の節に掲載（2026-09-02 実測）。
+
+  - match: "repos/{owner}/{repo}/pulls/{pull_number}/comments"
+    method: POST
+    scope: pull-requests
+    level: write
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Repository permissions for \"Pull requests\"" 節に write として掲載。
+      issues 側の節には無い（レビューコメントは PR 固有）（2026-09-02 実測）。
+
+  - match: "repos/{owner}/{repo}/actions/runs/{run_id}"
+    method: GET
+    scope: actions
+    level: read
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Repository permissions for \"Actions\"" 節に
+      `GET /repos/{owner}/{repo}/actions/runs/{run_id} | read` として掲載（2026-09-02 参照）。
+
 # ---- gh CLI サブコマンド（gh <command> <subcommand>）----
 gh_commands:
   - match: "pr view"
@@ -75,6 +145,55 @@ gh_commands:
       permissions: contents:read + pull-requests:read を宣言し、その step が
       scripts/h5-admission-check.sh:49 の `gh pr view --json body` を実行して
       required check として緑になっている。
+
+  - match: "issue view"
+    scope: issues
+    level: read
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — `GET /repos/{owner}/{repo}/issues/{issue_number}` が "Issues"(read) に掲載。
+      gh issue view はこの issue 本体の読み取りに相当する（2026-09-02 参照）。
+
+  - match: "issue edit"
+    scope: issues
+    level: write
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — `PATCH /repos/{owner}/{repo}/issues/{issue_number}` が "Issues"(write) に掲載。
+      gh issue edit は issue 本体の更新に相当する（2026-09-02 参照）。
+
+  - match: "issue comment"
+    any_of:
+      - scope: issues
+        level: write
+      - scope: pull-requests
+        level: write
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — `POST /repos/{owner}/{repo}/issues/{issue_number}/comments` は
+      "Issues"(write) と "Pull requests"(write) の**両方**の節に掲載（2026-09-02 実測）。
+
+  - match: "pr comment"
+    any_of:
+      - scope: pull-requests
+        level: write
+      - scope: issues
+        level: write
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — gh pr comment は `POST /repos/{owner}/{repo}/issues/{issue_number}/comments`
+      を使う（PR コメントは issue コメントとして格納される）。同エンドポイントは
+      "Pull requests"(write) と "Issues"(write) の**両方**の節に掲載されている
+      （2026-09-02 実測）。どちらか一方で足りるため any_of で書く。単一スコープに
+      すると、もう片方を宣言した正しい workflow に偽 MISSING を出す。
+
+  - match: "run view"
+    scope: actions
+    level: read
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — `GET /repos/{owner}/{repo}/actions/runs/{run_id}` が "Actions"(read) に掲載
+      （2026-09-02 実測）。
 
 # ---- uses: アクション ----
 # ここに無い action は UNDECIDABLE-API（第三者 action の API 面は静的に読めない）。
