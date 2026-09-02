@@ -31,8 +31,13 @@ _LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
 # shellcheck source=/dev/null
 [ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
 _aidd_block() {
+  # Optional rule tag. Without it every block is filed under one name, so the
+  # ledger cannot say WHICH rule fired — and a rule with a high false-positive
+  # rate becomes indistinguishable from one that is working. Existing call sites
+  # pass nothing and keep the previous value.
+  local rule="${1:-protect-branches}"
   if declare -F aidd_ledger_append >/dev/null 2>&1; then
-    aidd_ledger_append "protect-branches" "block" "deny" "${cmd:-}" "protect-branches"
+    aidd_ledger_append "protect-branches" "block" "deny" "${cmd:-}" "$rule"
   fi
   exit 2
 }
@@ -212,13 +217,151 @@ fi
 
 # --- Check 0a2: refspec force `+<ref>` guard (loop-break T1 follow-up) ---
 # `git push origin +main` は `--force` を伴わずに保護ブランチの履歴を上書きする。
-# `+` は refspec の先頭にのみ意味を持つため、空白または `:` の直後に限定して
-# 照合する（`git push origin feat/a+b` のようなブランチ名は誤検知しない）。
-if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE" && echo "$cmd_norm" | grep -qE '[[:space:]:]\+[A-Za-z0-9_./-]'; then
+#
+# 2026-09-02 の修正まで、この検査は 2 つの述語をコマンド文字列**全体**に対して
+# 独立に当てていた:
+#
+#   grep -qE "$_GIT_PUSH_RE"  &&  grep -qE '[[:space:]:]\+[A-Za-z0-9_./-]'
+#
+# 両者が文字列の別の場所にあるだけで一致するため、**コミットメッセージが
+# push ガードの話をしているだけで block した。** 同日 5 回発火し、運用者は
+# `git commit -F <file>` で迂回した。参照: aidd-governance#100
+#
+# 本規則は偽陽性と偽陰性のコストが等しくない。
+#   偽陽性 = コミットが 1 回止まる。`-F` に逃げれば回復する
+#   偽陰性 = 保護ブランチの履歴が書き換わる。取り返しがつかない
+# harness-spec は本 hook を tail-risk 型に分類している。したがって
+# **既定は block（網）** とし、データ文脈だと積極的に同定できたセグメントだけを
+# 除外する。除外できるのは次の 2 つだけである。
+#
+#   1. git の非 push サブコマンド（commit / log / show ...）— 引数は本文
+#   2. 引数をデータとして扱うコマンド（grep / echo / cat / head / tail）
+#
+# **インタプリタを列挙しない。** 除外されなかったセグメントは、先頭が何であれ
+# 中身を見る。`python3 -c` / `perl -e` / `node -e` / `ruby -e` / 未知のものも、
+# 中に git push と `+<ref>` が並んでいれば同じ経路で網にかかる。
+# 列挙は必ず漏れる。有限で短いのはデータ文脈の側だけである。
+#
+# 2026-09-02 の修正で 2 度退行させた。記録として残す。
+#   第 1 版: 「push だと断定できたときだけ block」に倒し、群化形 7 種中 6 種を
+#            素通しにした（`( git push ... )` のように括弧の後に空白がある形）。
+#            括弧を剥がした残りが空文字トークンになり、それを飛ばしていなかった。
+#   第 2 版: 網は戻したが、`hasgit` をトークン等価で見ていたため
+#            `os.system(git push origin +main)` の `git` を拾えず、
+#            インタプリタ経由 6 種を素通しにした。
+#   いずれも「宣言では網、実装では素通し」であり、本リポが問題にしている
+#   宣言↔実体の乖離そのものだった。
+has_refspec_force() {
+  # heredoc の本文は、**それを食うコマンドがデータ文脈のときだけ**落とす。
+  #   cat <<EOF > note.md   → 本文はファイルへ書かれる。データである
+  #   python3 - <<PY        → 本文はインタプリタが実行する。コードである
+  # 無条件に落とすと後者が素通りする（第 2 版の欠陥の 1 つ）。
+  local body_stripped
+  body_stripped="$(printf '%s' "$1" | awk '
+    function is_dataonly(t) {
+      return (t == "grep" || t == "egrep" || t == "fgrep" || t == "rg" || t == "ag" ||
+              t == "echo" || t == "printf" || t == "cat" || t == "tee" ||
+              t == "head" || t == "tail")
+    }
+    BEGIN { delim = "" }
+    {
+      if (delim != "") {
+        line = $0; sub(/^[ \t]+/, "", line)
+        if (line == delim) delim = ""
+        next
+      }
+      if (match($0, /<<-?[ \t]*[A-Za-z_][A-Za-z0-9_]*/)) {
+        # この行の最初のコマンド語を見る
+        cw = ""
+        for (i = 1; i <= NF; i++) {
+          t = $i; gsub(/^[^A-Za-z0-9_]+/, "", t)
+          if (t == "" || substr(t, 1, 1) == "-") continue
+          cw = t; break
+        }
+        if (is_dataonly(cw)) {
+          d = substr($0, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", d); delim = d
+        }
+      }
+      print
+    }
+  ')"
+
+  # 区切りは `;` `|` `&` のみ。括弧では分割しない — 分割すると
+  # `fix(#195): git push ... +195` が `: git push ... +195` という偽セグメントを
+  # 生んで再び誤検知する（実測）。
+  # shellcheck disable=SC2020 # 3 個の区切り文字を全て改行へ写す。重複は意図的で、
+  # SET2 を 1 文字に縮めると tr 実装ごとの補完規則に依存してしまう。
+  printf '%s' "$body_stripped" | tr ';|&' '\n\n\n' | awk '
+    function takes_value(t) { return (t == "-c" || t == "--config" || t == "-C") }
+    # 引数を「コマンドとして実行しうる」もの。読み飛ばして先の語を見に行く。
+    # ここに無いインタプリタも、下の既定の網が拾う。列挙は網の前提ではない。
+    function is_runner(t) {
+      return (t == "env" || t == "sudo" || t == "doas" || t == "nohup" ||
+              t == "time" || t == "timeout" || t == "stdbuf" || t == "nice" ||
+              t == "ionice" || t == "setsid" || t == "command" || t == "exec" ||
+              t == "xargs" || t == "eval" ||
+              t == "bash" || t == "sh" || t == "zsh" || t == "dash" || t == "ksh" ||
+              t ~ /^[A-Za-z_][A-Za-z0-9_]*=/)
+    }
+    # 引数を「データとして扱う」もの。ここに現れる `+` はコマンドではない。
+    # 実行しうるもの（python -c / perl -e / node -e ...）は**入れない**。
+    function is_dataonly(t) {
+      return (t == "grep" || t == "egrep" || t == "fgrep" || t == "rg" || t == "ag" ||
+              t == "echo" || t == "printf" || t == "cat" || t == "tee" ||
+              t == "head" || t == "tail")
+    }
+    function strip_punct(t) { gsub(/^[^A-Za-z0-9_]+/, "", t); return t }
+    {
+      if (NF == 0) next
+
+      # --- stage 1: データ文脈だと同定できたセグメントだけを除外する ---
+      cw = ""; ci = 0
+      for (i = 1; i <= NF; i++) {
+        t = strip_punct($i)
+        if (t == "") continue
+        if (is_runner(t)) continue
+        if (substr(t, 1, 1) == "-") continue
+        cw = t; ci = i; break
+      }
+      if (ci > 0) {
+        if (cw == "git") {
+          subcmd = ""
+          for (i = ci + 1; i <= NF; i++) {
+            if (substr($i, 1, 1) == "-") { if (takes_value($i)) i++; continue }
+            subcmd = $i; break
+          }
+          if (subcmd != "" && subcmd != "push") next
+        } else if (is_dataonly(cw)) {
+          next
+        }
+      }
+
+      # --- stage 2 (既定の網): セグメント先頭が何であれ中身を見る ---
+      # 区切り記号を空白へ潰してから再トークン化する。トークン等価だけで見ると
+      # `os.system(git` の `git` を拾えず、インタプリタ経由が素通りする。
+      # ref に意味のある文字（英数 _ . : / + -）だけを残す。
+      s2 = $0
+      gsub(/[^A-Za-z0-9_.:\/+-]/, " ", s2)
+      n2 = split(s2, a2, /[ \t]+/)
+      pi = 0
+      for (i = 1; i <= n2; i++) if (a2[i] == "push") { pi = i; break }
+      if (pi == 0) next
+      hasgit = 0
+      for (i = 1; i < pi; i++) if (a2[i] == "git") hasgit = 1
+      if (hasgit == 0) next
+      for (i = pi + 1; i <= n2; i++) {
+        # `+main` / `+main:main`（先頭）と `HEAD:+main`（dst 側）の両形
+        if (substr(a2[i], 1, 1) == "+" || index(a2[i], ":+") > 0) { print "FORCE"; exit }
+      }
+    }
+  ' | grep -q FORCE
+}
+
+if has_refspec_force "$cmd_norm"; then
   echo "[BLOCK] refspec force (+<ref>) 付き push を検出。" >&2
   echo "  WHY: '+' 接頭辞は --force と等価で、保護ブランチの履歴を上書きします。" >&2
   echo "  FIX: '+' を外し、通常の push を行ってください。" >&2
-  _aidd_block
+  _aidd_block "refspec-force"
 fi
 
 # --- Check 0b: Force push guard (fork-aware) (#192, #195, parser-gap fix) ---
