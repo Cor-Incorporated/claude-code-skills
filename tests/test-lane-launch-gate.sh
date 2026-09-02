@@ -295,16 +295,97 @@ if [ -n "$BREAKER" ]; then
     || bad "case8 修理台帳不在が台帳に残らない"
 fi
 
+MUTCHK="$SB/mutchk"; mkdir -p "$MUTCHK"
 echo "--- 網羅性: 素通しする分岐はすべて記録を残すこと（無言経路ゼロ） ---"
-python3 - "$HOOK" <<'PY' && ok "無言で素通しする分岐が残っていない" || bad "記録の無い素通し分岐がある"
+# 抽出は正規表現の findall ではなく行走査で行う。findall は非重複なので、直前の
+# 分岐のキャプチャが末尾改行まで食い、**隣接する elif を 1 本おきに取りこぼす**
+# （検収指摘で実測: 実際 3 本に対し 2 本しか見ていなかった）。
+# 行走査なら隣接は構造上取りこぼさない。
+silent_check() {
+  python3 - "$1" <<'PY'
 import re, sys
 src = open(sys.argv[1], encoding="utf-8").read()
 body = src[src.index("# --- (1) #91 基点規律"):src.index("done <<")]
-# 判定を省略して通す分岐は、note_ledger と stderr の両方を持たねばならない。
-branches = re.findall(r"\n  (?:elif|else)\b[^\n]*\n((?:    [^\n]*\n|\n)+)", body)
-missing = [b.strip()[:70] for b in branches
+lines = body.splitlines()
+branches, i = [], 0
+while i < len(lines):
+    if re.match(r"^  (?:elif|else)\b", lines[i]):
+        hdr, blk = lines[i], []
+        i += 1
+        while i < len(lines) and not re.match(r"^  (?:elif|else|fi)\b", lines[i]):
+            blk.append(lines[i]); i += 1
+        branches.append((hdr, "\n".join(blk)))
+    else:
+        i += 1
+if not branches:
+    print("no branches found - extraction is broken", file=sys.stderr)
+    raise SystemExit(2)
+# 判定を省略して通す分岐は note_ledger と stderr の両方を持たねばならない。
+missing = [h.strip() for h, b in branches
            if "emit_deny" not in b and ("note_ledger" not in b or ">&2" not in b)]
-assert not missing, "silent skip branches: %r" % missing
+if missing:
+    print("silent skip branches: %r" % missing, file=sys.stderr)
+    raise SystemExit(1)
+print("branches=%d all recorded" % len(branches))
+PY
+}
+if silent_check "$HOOK" >/dev/null 2>&1; then
+  ok "無言で素通しする分岐が残っていない ($(silent_check "$HOOK"))"
+else
+  bad "記録の無い素通し分岐がある: $(silent_check "$HOOK" 2>&1)"
+fi
+
+echo "--- 網羅性照合そのものの陰性テスト（検査器を反証する） ---"
+# 検査器を作っただけでは「検査していないのに緑」を検出できない。無言の elif を
+# 実際に注入して red になることを実測する。注入位置は 2 通り —
+# (a) 既存分岐の直前（隣接。findall 版が取りこぼしていた位置）
+# (b) 末尾の分岐の直前。
+inject_silent() {
+  python3 - "$HOOK" "$1" "$2" <<'PY'
+import re, sys
+src_path, out, anchor = sys.argv[1:4]
+src = open(src_path, encoding="utf-8").read()
+probe = '  elif [ -n "${LANE_SILENT_PROBE:-}" ]; then\n    :\n'
+m = re.search(anchor, src, re.M)
+if not m:
+    raise SystemExit(1)
+open(out, "w", encoding="utf-8").write(src[:m.start()] + probe + src[m.start():])
+PY
+}
+if inject_silent "$MUTCHK/adjacent.sh" '^  elif \[ -z "\$start" \]; then'; then
+  if silent_check "$MUTCHK/adjacent.sh" >/dev/null 2>&1; then
+    bad "陰性(隣接注入) 無言 elif を既存分岐の直前へ入れても緑 = 検査器が見ていない"
+  else
+    ok "陰性(隣接注入) 既存分岐の直前の無言 elif で red になる"
+  fi
+else
+  bad "陰性(隣接注入) 注入位置が見つからない — 反証不能"
+fi
+if inject_silent "$MUTCHK/tail.sh" '^  elif \[ -n "\$\{LANE_PATHS:-\}" \] && \[ -z "\$BREAKER_SH" \]; then'; then
+  if silent_check "$MUTCHK/tail.sh" >/dev/null 2>&1; then
+    bad "陰性(末尾注入) 無言 elif を末尾へ入れても緑 = 検査器が見ていない"
+  else
+    ok "陰性(末尾注入) 末尾の無言 elif で red になる"
+  fi
+else
+  bad "陰性(末尾注入) 注入位置が見つからない — 反証不能"
+fi
+# 抽出漏れそのものを本数で押さえる。取りこぼしが起きたらここが落ちる。
+python3 - "$HOOK" <<'PY' && ok "抽出本数が実際の elif/else 本数と一致する" || bad "抽出漏れがある"
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+body = src[src.index("# --- (1) #91 基点規律"):src.index("done <<")]
+actual = len(re.findall(r"^  (?:elif|else)\b", body, re.M))
+lines = body.splitlines()
+seen, i = 0, 0
+while i < len(lines):
+    if re.match(r"^  (?:elif|else)\b", lines[i]):
+        seen += 1; i += 1
+        while i < len(lines) and not re.match(r"^  (?:elif|else|fi)\b", lines[i]):
+            i += 1
+    else:
+        i += 1
+assert seen == actual, "extracted %d of %d branches" % (seen, actual)
 PY
 
 echo
