@@ -121,10 +121,60 @@ def strip_heredoc_bodies(cmd: str) -> str:
     return "\n".join(out)
 
 
+def split_segments(cmd: str) -> list[str]:
+    """`;` `|` `&` 改行で区切る。ただし **引用符の外だけ**.
+
+    `re.split(r"[;&|\n]+", cmd)` は引用を見ないので、複数行の引用文字列の中の 1 行が
+    独立したセグメントに化ける。2026-09-02 の実測では、別レーンのテスト検体
+
+        fire "実際の呼び出し"  'gh workflow run v2-alpha-cd.yml --ref main'
+        ...
+        gh workflow run v2-alpha-cd.yml      <- 引用文字列の内側の行
+
+    がコマンド位置の起動として数えられ、**真の値が 0 のセッションで 1 を返していた**。
+    基準 (1) は「0 であることを示せる」ことを要求しているので、これは基準未達である。
+    """
+    segs: list[str] = []
+    buf: list[str] = []
+    quote: str | None = None
+    i = 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if quote is not None:
+            buf.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < len(cmd):
+                buf.append(cmd[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < len(cmd):
+            buf.append(ch)
+            buf.append(cmd[i + 1])
+            i += 2
+            continue
+        if ch in ";|&\n":
+            segs.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    segs.append("".join(buf))
+    return segs
+
+
 def launches_in(cmd: str) -> list[str]:
     """コマンド位置で「実際に起動している」非同期作業だけを返す."""
     found: list[str] = []
-    for seg in re.split(r"[;&|\n]+", strip_heredoc_bodies(cmd)):
+    for seg in split_segments(strip_heredoc_bodies(cmd)):
         seg = seg.strip()
         if not seg:
             continue
@@ -161,7 +211,7 @@ def resolutions_in(cmd: str) -> list[str]:
     数えない。
     """
     found: list[str] = []
-    for seg in re.split(r"[;&|\n]+", strip_heredoc_bodies(cmd)):
+    for seg in split_segments(strip_heredoc_bodies(cmd)):
         seg = seg.strip()
         if not seg:
             continue

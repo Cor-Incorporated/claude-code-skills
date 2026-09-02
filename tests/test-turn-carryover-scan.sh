@@ -182,6 +182,86 @@ else
 fi
 
 echo
+echo "=== case 8: 入力の出所で切り分ける（検収指摘の検体を固定） ==="
+echo "    起動として数えるのは assistant の tool_use.command だけ。"
+echo "    user role の hook フィードバックと assistant の説明文は引用であって実行ではない。"
+T="$SB/userrole.jsonl"
+py_mk "$T" '[["human","2026-09-02T05:40:00Z",null],
+             ["human","2026-09-02T05:40:28Z","gh workflow run v2-alpha-cd.yml"],
+             ["human","2026-09-02T05:45:00Z",null]]'
+OUT="$(scan "$T")"
+[[ "$(field "$OUT" turns_ended_with_unresolved_async)" == "0" ]] \
+  && ok "case8 user role に現れたコマンド文字列は起動に数えない" \
+  || bad "case8 user role のテキストを起動と誤認した"
+
+T="$SB/asstext.jsonl"
+py_mk "$T" '[["human","2026-09-02T05:40:00Z",null],
+             ["text","2026-09-02T05:42:02Z","テスト検体は gh workflow run v2-alpha-cd.yml --ref main です。"],
+             ["human","2026-09-02T05:45:00Z",null]]'
+OUT="$(scan "$T")"
+[[ "$(field "$OUT" turns_ended_with_unresolved_async)" == "0" ]] \
+  && ok "case8 assistant の説明文（text ブロック）は起動に数えない" \
+  || bad "case8 assistant text を起動と誤認した"
+
+T="$SB/realtool.jsonl"
+py_mk "$T" '[["human","2026-09-02T05:40:00Z",null],
+             ["tool","2026-09-02T05:42:02Z","gh workflow run v2-alpha-cd.yml --ref main"],
+             ["human","2026-09-02T05:45:00Z",null]]'
+OUT="$(scan "$T")"
+[[ "$(field "$OUT" turns_ended_with_unresolved_async)" == "1" ]] \
+  && ok "case8 tool_use.command の実起動は検出する（除外で検出能力を失っていない）" \
+  || bad "case8 本物の起動を落とした = 除外が強すぎる"
+
+echo
+echo "--- 偽陽性の真因: 複数行の引用文字列の内側 ---"
+# 2026-09-02 の実測。別レーンのテスト検体がこの形で、引用の中の 1 行が
+# コマンド位置の起動として数えられていた。真の値 0 のセッションで 1 を返していた。
+T="$SB/quotedblock.jsonl"
+python3 - "$T" <<'PYQ'
+import json, sys
+# 別レーンのテスト検体をそのまま再現する。2 行目は引用文字列の内側にある。
+cmd = ("fire \"実際の呼び出し\" 'gh workflow run a.yml --ref main\n"
+       "gh workflow run a.yml\n'")
+rows = [
+    {"type": "user", "timestamp": "2026-09-02T05:40:00Z",
+     "message": {"role": "user", "content": "go"}},
+    {"type": "assistant", "timestamp": "2026-09-02T05:42:02Z",
+     "message": {"role": "assistant", "content": [
+         {"type": "tool_use", "name": "Bash", "input": {"command": cmd}}]}},
+    {"type": "user", "timestamp": "2026-09-02T05:45:00Z",
+     "message": {"role": "user", "content": "next"}},
+]
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    for r in rows:
+        fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+PYQ
+# 検体が実際に組み立てられたことを先に確かめる（組み立て失敗を「0 件」と読み違えない）
+[[ -s "$T" ]] && [[ "$(wc -l <"$T" | tr -d ' ')" == "3" ]] \
+  && ok "case8 引用検体を組み立てられた（3 行）" \
+  || bad "case8 引用検体の組み立てに失敗 — 以降の判定は無効"
+OUT="$(scan "$T")"
+[[ "$(field "$OUT" turns_ended_with_unresolved_async)" == "0" ]] \
+  && ok "case8 複数行の引用文字列の内側は起動に数えない（偽陽性の真因）" \
+  || bad "case8 引用文字列の内側を起動と誤認した"
+
+echo
+echo "=== case 9: 検収検体（監督の実セッション）で 0 になること ==="
+LIVE="$HOME/.claude/projects/-Users-teradakousuke-Developer-aidd-governance/c063c60a-9531-41c0-bc7f-a7ff97acc145.jsonl"
+if [ -f "$LIVE" ]; then
+  OUT="$(scan "$LIVE")"
+  N="$(field "$OUT" turns_ended_with_unresolved_async)"
+  T_N="$(field "$OUT" turns)"
+  [[ "$T_N" -gt 0 ]] \
+    && ok "case9 検収検体からターンを抽出できた（$T_N ターン）" \
+    || bad "case9 ターン 0 = 抽出が効いていない"
+  [[ "$N" == "0" ]] \
+    && ok "case9 検収検体で持ち越し 0（真の値 0 を示せる）" \
+    || bad "case9 検収検体で $N 件の偽陽性が残っている"
+else
+  echo "SKIP: 検収検体が無い環境（CI では正常）"
+fi
+
+echo
 echo "=== 変異体: 判定を外すと偽陽性が戻る／検出が消える ==="
 MUT="$SB/mut"; mkdir -p "$MUT"
 mutate() {
@@ -240,6 +320,18 @@ if mutate '"conclusion" in joined' '"status" in joined' "$MUT/nocheck.py"; then
 else
   bad "変異(conclusion 要求なし) 対象が見つからない — 反証不能"
 fi
+
+# (4) セグメント分割を引用非対応へ戻す -> 引用文字列の内側が起動に見える
+if mutate 'for seg in split_segments(strip_heredoc_bodies(cmd)):' \
+          'for seg in re.split(r"[;&|\n]+", strip_heredoc_bodies(cmd)):' "$MUT/blindsplit.py"; then
+  OUT="$(scan_with "$MUT/blindsplit.py" "$SB/quotedblock.jsonl")"
+  [[ "$(field "$OUT" turns_ended_with_unresolved_async)" != "0" ]] \
+    && ok "変異(引用非対応の分割) 引用の内側が起動に見える = 引用対応は効いていた" \
+    || bad "変異(引用非対応の分割) 何も変わらない = case8 は別条件が出していた"
+else
+  bad "変異(引用非対応の分割) 対象が見つからない — 反証不能"
+fi
+
 
 echo
 echo "--- $pass passed, $fail failed ---"
