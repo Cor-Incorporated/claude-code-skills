@@ -16,6 +16,11 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export AIDD_LEDGER_SOURCE=test
+# 2026-09-02 以降、block は CODEX_H1_RESTRICTED_MODELS に一致するモデルでのみ
+# 評価される（既定は "sol"）。このスイートは停止規則そのものを検査するので
+# ワイルドカードで全モデルを対象にする。既定の絞り込み自体は
+# tests/test-h1-restricted-models.sh が検査する。
+export CODEX_H1_RESTRICTED_MODELS="*"
 
 HOOK="$ROOT/hooks/codex/h1-stall-runtime.sh"
 SB="$(mktemp -d)"
@@ -144,7 +149,9 @@ fi
 echo
 echo "=== case 2: spend >= budget -> deny (budget-cap) ==="
 seed_rollout "gpt-5-codex" 4000000 400000   # 4M in + 400k out = $5.00 + $4.00
-out2=$(run "$HOOK" c2 "ls -la" CODEX_H1_SESSIONS_DIR="$SB/sessions")
+# 既定の予算は 5 -> 25 に変わった（制限対象モデル向け）。この case は上限判定を
+# 見るのが目的なので、既定値に依存せず明示する。
+out2=$(run "$HOOK" c2 "ls -la" CODEX_H1_SESSIONS_DIR="$SB/sessions" CODEX_H1_BUDGET_USD=5)
 rc2=$?
 if [[ "$(decision_of "$out2")" == "deny" ]]; then
   ok "case2 over-budget call denied"

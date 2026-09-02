@@ -42,7 +42,7 @@
 #   CODEX_TIMEOUT_SEC       — CSV fan-out timeout 秒 (default: 3600)
 #
 # H1 非進捗ランタイム — stop conditions beyond the wall-clock timeout:
-#   CODEX_H1_BUDGET_USD      — 委任あたり課金上限 USD (default: 5)
+#   CODEX_H1_BUDGET_USD      — 委任あたり課金上限 USD (default: 25、制限対象モデルのみ)
 #   CODEX_H1_MAX_ITERATIONS  — 反復上限 (default: 10)
 #   CODEX_H1_NO_PROGRESS_SEC — 無進捗タイムアウト秒 (default: 2700 = 45分)
 #   CODEX_H1_WRAPPER_ENFORCE — 0 で watchdog 無効化（hook 側の block は残る）

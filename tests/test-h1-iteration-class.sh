@@ -332,6 +332,11 @@ mkdir -p "$HSB/.claude/hooks/lib"
 cp "$ROOT/hooks/lib/aidd-ledger.sh" "$HSB/.claude/hooks/lib/aidd-ledger.sh"
 LEDGER="$HSB/.claude/hooks/ledger/guard-ledger.jsonl"
 export AIDD_LEDGER_SOURCE=test
+# 2026-09-02 以降、block は CODEX_H1_RESTRICTED_MODELS に一致するモデルでのみ
+# 評価される（既定は "sol"）。このスイートは停止規則そのものを検査するので
+# ワイルドカードで全モデルを対象にする。既定の絞り込み自体は
+# tests/test-h1-restricted-models.sh が検査する。
+export CODEX_H1_RESTRICTED_MODELS="*"
 
 # hook_run <hook> <delegation> <cmd> — Codex PreToolUse 呼び出しを 1 回再現する。
 hook_run() {
