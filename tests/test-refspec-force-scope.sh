@@ -70,10 +70,25 @@ test_case "refspec force quoted"             block "git push origin \"${P}main\"
 test_case "refspec force on dst side"        block "git push origin HEAD:${P}main"
 test_case "refspec force after git -c"       block "git -c core.pager=cat push origin ${P}main"
 test_case "refspec force chained after &&"   block "git status && git push origin ${P}main"
-test_case "refspec force in subshell"        block "(git push origin ${P}main)"
 test_case "explicit -f to main"              block 'git push -f origin main'
 test_case "explicit --force to main"         block 'git push --force origin main'
 test_case "--force-with-lease to main"       block 'git push --force-with-lease origin main'
+test_case "direct push to main"              block 'git push origin main'
+
+# **空白の有無で結果が変わることが 2026-09-02 の退行の本体だった。**
+# 第一版は `(git`（空白なし）だけを陽性対照に置いていたため、括弧の後に空白を
+# 入れる通常の書き方が block から allow へ落ちたことに気づけなかった。
+# 7 形中 6 形が素通しになっていた。原因は、括弧・波括弧を剥がした残りが
+# 空文字トークンになり、それを飛ばさずに判定へ落としていたこと。
+# 両形を必ず対にして並べること。
+echo "--- 群化・入れ子（空白の有無を必ず対にする） ---"
+test_case "subshell, no space"               block "(git push origin ${P}main)"
+test_case "subshell, space after paren"      block "( git push origin ${P}main)"
+test_case "subshell, spaces both sides"      block "( git push origin ${P}main )"
+test_case "brace group"                      block "{ git push origin ${P}main; }"
+test_case "bash -c"                          block "bash -c 'git push origin ${P}main'"
+test_case "after cd + semicolon"             block "cd /tmp; ( git push origin ${P}main )"
+test_case "after true &&"                    block "true && ( git push origin ${P}main )"
 
 echo ""
 echo "=== F2 陰性対照: 2026-09-02 の実際の事故入力 ==="

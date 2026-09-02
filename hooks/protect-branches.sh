@@ -223,25 +223,26 @@ fi
 #
 #   grep -qE "$_GIT_PUSH_RE"  &&  grep -qE '[[:space:]:]\+[A-Za-z0-9_./-]'
 #
-# `git push` と `+18` が文字列の別の場所にあるだけで一致するため、
-# **コミットメッセージが push ガードの話をしているだけで block した。**
+# 両者が文字列の別の場所にあるだけで一致するため、**コミットメッセージが
+# push ガードの話をしているだけで block した。** 同日に 5 回発火し、運用者は
+# `git commit -F <file>` で迂回した。迂回されるガードは何も守っていない。
+# 参照: aidd-governance#100
 #
-#   git commit -m "fix: git push guard misread +18"   → [BLOCK]
+# ただし本規則は偽陽性と偽陰性のコストが等しくない。
+#   偽陽性 = コミットが 1 回止まる。`-F` に逃げれば回復する
+#   偽陰性 = 保護ブランチの履歴が書き換わる。取り返しがつかない
+# harness-spec は本 hook を tail-risk 型に分類している。したがって
+# **既定は block（網）** とし、データ文脈であると積極的に同定できたセグメント
+# だけを除外する。
 #
-# 同日に 5 回発火（コミットメッセージ / errexit 解除表記 / テスト検体 /
-# grep パターン / heredoc 本文）。運用者は `git commit -F <file>` で迂回した。
-# **迂回されるガードは何も守っていない。** 参照: aidd-governance#100
-#
-# `+` は git push 自身の引数トークンである場合にのみ意味を持つ。
-# 迂回形は引き続き止まる — セグメント単位で見るため、`&&` `;` `|` や
-# サブシェルに隠した push はそれ自体が 1 セグメントとして検査される。
+# 「push だと断定できたときだけ block」にすると網が下がる。2026-09-02 の
+# 第一版がこれで 7 形中 6 形を素通しにした（`( git push ... )` のように括弧の
+# 後に空白がある形、`{ ...; }`、`bash -c '...'`、`cd /tmp; ( ... )`）。
+# 原因は、括弧を剥がした残りが空文字トークンになり、それを飛ばさずに
+# 「先頭が git か」の判定へ落としていたこと。**空白の有無で結果が変わった。**
 has_refspec_force() {
-  # セグメント分割 → 各セグメントで「git のサブコマンドが push か」を判定 →
-  # push の引数トークンだけを `+` で調べる。
-  # BSD awk は RS に正規表現を取れないので、分割は tr で行う。
-  # heredoc の本文は落とす。awk は行単位で見るため、本文の 1 行
-  # `git push origin +main は --force と等価` はコマンド行と文字列上まったく
-  # 同一で、区別する手掛かりが行の中に無い。区切り記号 `<<WORD` は行の外にある。
+  # heredoc の本文は落とす。awk は行単位で見るため、本文の 1 行はコマンド行と
+  # 文字列上まったく同一で、区別する手掛かり `<<WORD` は行の外にある。
   local body_stripped
   body_stripped="$(printf '%s' "$1" | awk '
     BEGIN { delim = "" }
@@ -258,39 +259,67 @@ has_refspec_force() {
     }
   ')"
 
-  # 区切りは `;` `|` `&` のみ。括弧では分割しない。
-  # 括弧で分割すると、コミットメッセージ中の `fix(#195): git push ... +195` が
-  # `: git push ... +195` という偽のセグメントを生み、再び誤検知する（実測）。
-  # サブシェル `(...)` / `$(...)` / `<(...)` は先頭の非英数字を剥がして拾う。
+  # 区切りは `;` `|` `&` のみ。括弧では分割しない — 分割すると
+  # `fix(#195): git push ... +195` が `: git push ... +195` という偽セグメントを
+  # 生んで再び誤検知する（実測）。サブシェル記号はトークン側で剥がす。
   # shellcheck disable=SC2020 # 3 個の区切り文字を全て改行へ写す。重複は意図的で、
   # SET2 を 1 文字に縮めると tr 実装ごとの補完規則に依存してしまう。
   printf '%s' "$body_stripped" | tr ';|&' '\n\n\n' | awk '
     function takes_value(t) { return (t == "-c" || t == "--config" || t == "-C") }
-    function is_prefix(t) {
-      return (t == "env" || t == "sudo" || t == "time" || t == "nohup" || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/)
+    # 引数を「コマンドとして実行しうる」もの。読み飛ばして先の語を見に行く。
+    function is_runner(t) {
+      return (t == "env" || t == "sudo" || t == "doas" || t == "nohup" ||
+              t == "time" || t == "timeout" || t == "stdbuf" || t == "nice" ||
+              t == "ionice" || t == "setsid" || t == "command" || t == "exec" ||
+              t == "xargs" || t == "eval" ||
+              t == "bash" || t == "sh" || t == "zsh" || t == "dash" || t == "ksh" ||
+              t ~ /^[A-Za-z_][A-Za-z0-9_]*=/)
     }
+    # 引数を「データとして扱う」もの。ここに現れる `+` はコマンドではない。
+    # 実行しうるもの（python -c / perl -e / awk の system() など）は入れない。
+    function is_dataonly(t) {
+      return (t == "grep" || t == "egrep" || t == "fgrep" || t == "rg" || t == "ag" ||
+              t == "echo" || t == "printf" || t == "cat" || t == "head" || t == "tail")
+    }
+    function strip_punct(t) { gsub(/^[^A-Za-z0-9_]+/, "", t); return t }
     {
       if (NF == 0) next
-      # サブシェル・プロセス置換の記号を剥がす: `(git` `$(git` `<(git` → `git`
-      sub(/^[^A-Za-z0-9_]+/, "", $1)
-      # セグメントの先頭が git であることを要求する。
-      # 先頭が git でない `+` は、コマンドの引数ではなくデータ（メッセージ本文・
-      # grep パターン・heredoc 本文）である。これが 2026-09-02 の誤検知 5 件の境界。
-      gi = 0
+
+      # --- 最初の「コマンド語」を探す ---
+      # 記号のみのトークン（`(` `{` `$(` `<(`）、オプション、runner を読み飛ばす。
+      # 空文字になったトークンを飛ばさなかったのが第一版の欠陥である。
+      cw = ""; ci = 0
       for (i = 1; i <= NF; i++) {
-        if (is_prefix($i)) continue
-        if ($i == "git") gi = i
-        break
+        t = strip_punct($i)
+        if (t == "") continue
+        if (is_runner(t)) continue
+        if (substr(t, 1, 1) == "-") continue
+        cw = t; ci = i; break
       }
-      if (gi == 0) next
-      # git のサブコマンド = 最初の非オプショントークン。
-      subcmd = ""; si = 0
-      for (i = gi + 1; i <= NF; i++) {
-        if (substr($i, 1, 1) == "-") { if (takes_value($i)) i++; continue }
-        subcmd = $i; si = i; break
+
+      # --- 除外できるのは、データ文脈だと積極的に同定できた場合だけ ---
+      if (ci > 0) {
+        if (cw == "git") {
+          subcmd = ""
+          for (i = ci + 1; i <= NF; i++) {
+            if (substr($i, 1, 1) == "-") { if (takes_value($i)) i++; continue }
+            subcmd = $i; break
+          }
+          # git の非 push サブコマンド（commit / log / show ...）の引数は本文である
+          if (subcmd != "" && subcmd != "push") next
+        } else if (is_dataonly(cw)) {
+          next
+        }
       }
-      if (subcmd != "push") next
-      for (i = si + 1; i <= NF; i++) {
+
+      # --- 既定: git を伴う push トークンの後方に `+<ref>` があれば block ---
+      pi = 0
+      for (i = 1; i <= NF; i++) if (strip_punct($i) == "push") { pi = i; break }
+      if (pi == 0) next
+      hasgit = 0
+      for (i = 1; i < pi; i++) if (strip_punct($i) == "git") hasgit = 1
+      if (hasgit == 0) next
+      for (i = pi + 1; i <= NF; i++) {
         # `+main` / `+main:main`（先頭）と `HEAD:+main`（dst 側）の両形
         if (substr($i, 1, 1) == "+" || index($i, ":+") > 0) { print "FORCE"; exit }
       }
