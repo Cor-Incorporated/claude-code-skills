@@ -5,34 +5,42 @@
 # 対象ファイルが無ければ test-pairs-link.sh がスキップする（CI-safe）。
 pairs:
   - id: ccs-hook-registration-count
+    pair: pair5
     declaration: settings.json#hooks
     enforcement: docs/CANONICAL-STATE.md#registered-hooks
     note: "develop settings registrations must match CANONICAL-STATE registered-hooks count (2026-08-12 実測: 20). 数値は test-pairs-link.sh が照合する — この note の数値は参考であり判定には使わない"
   - id: ccs-hard-block-four
+    pair: none
     declaration: docs/CANONICAL-STATE.md#hard-blocks
     enforcement: hooks/git-push-guard.sh+hooks/protect-branches.sh+hooks/block-local-hooks-write.sh+hooks/validate-no-local-hooks.sh
     note: "four hard blocks remain; ledger wiring required"
   - id: codex-hooks-json-vs-deploy
+    pair: pair7
     declaration: ~/.codex/hooks.json#PreToolUse
     enforcement: ~/.codex/hooks/*.sh (deployed scripts)
     note: "hooks.json に登録された hook スクリプトが実在し、hook 数の一致を pair7 で照合（2026-08-12 実測: 登録1=配備1）"
   - id: codex-execpolicy-forbidden
+    pair: pair8
     declaration: ~/.codex/AGENTS.md#force-push-protection
     enforcement: ~/.codex/rules/default.rules#forbidden
     note: "AGENTS.md が宣言する保護ブランチ操作（--force / origin main / origin master / origin develop / --mirror）が forbidden prefix_rule に実在することを pair8 で照合（2026-08-12 実測: 28 件）"
   - id: cursor-guard-hook-and-ledger
+    pair: pair9
     declaration: ~/.cursor/hooks/git-guard.sh
     enforcement: ~/.cursor/hooks/guard-ledger.jsonl
     note: "Cursor guard hook が存在するなら台帳（hook の出力先）も存在することを pair9 で照合（2026-08-12 実測: 両方実在）"
   - id: opencode-team-blanket-allow-zero
+    pair: pair10
     declaration: ~/Developer/opencode/packages/guardrails/profile/plugins/team.ts#permit
     enforcement: team-permission.test.ts#isBlanketAllow
     note: "T5-1 後、blanket allow ルール（permission:* pattern:* action:allow）は 0 であること。コメント行は数えない。pair10 で照合（2026-08-12 実測: 0）"
   - id: ccs-rules-pin-vs-canonical
+    pair: pair13
     declaration: rules/hook-deployment.md#正本-registered-count
     enforcement: docs/CANONICAL-STATE.md#registered-hooks
     note: "rules/hook-deployment.md の「N 登録」pin が CANONICAL-STATE の宣言数と一致すること。pair13 が両側の値を挙げて照合する（2026-09-01 実測: rules=18 / canonical=20 の乖離を検出し rules を 20 へ是正）"
   - id: codex-registration-vs-trust-state
+    pair: pair15
     declaration: ~/.codex/hooks.json#PreToolUse
     enforcement: ~/.codex/config.toml#[hooks.state."...:<event>:<matcher>:<hook>"].enabled
     note: |
@@ -44,14 +52,17 @@ pairs:
       19 日間発火ゼロだった。pair7 と pair11 はその間ずっと PASS していた
       （どちらも trust を見ないため）。片側だけ変えると pair15 が両側の値を挙げて red。
   - id: codex-hook-source-vs-deploy
+    pair: pair11
     declaration: hooks/codex/protect-branches-codex.sh
     enforcement: ~/.codex/hooks/protect-branches-codex.sh
     note: "repo source と deployed hook の MD5 が一致すること。pair11 は不一致時に両側の値を出力する"
   - id: cursor-hook-source-vs-deploy
+    pair: pair12
     declaration: hooks/cursor/git-guard.sh
     enforcement: ~/.cursor/hooks/git-guard.sh
     note: "repo source と deployed hook の MD5 が一致すること。pair12 は不一致時に両側の値を出力する"
   - id: h1-delegation-contract-vs-runtime-block
+    pair: pair14
     declaration: skills/handover/SKILL.md#委任契約 欄1-3（最大反復 / 無進捗タイムアウト / 課金上限）
     enforcement: hooks/codex/h1-stall-runtime.sh (CODEX_H1_MAX_ITERATIONS / CODEX_H1_NO_PROGRESS_SEC / CODEX_H1_BUDGET_USD)
     note: |
@@ -62,3 +73,45 @@ pairs:
       書き換えた。pair14 は 3 欄すべてを数値照合する（宣言は分・ドル、強制は秒・ドルなので
       単位を揃えてから比較）。実測: 欄1 10=10 / 欄2 45分=2700秒 / 欄3 $5=$5.0。
       片側だけ変えると pair14 が両側の値を挙げて red になることを 3 欄とも実測済み。
+  - id: ccs-hard-block-ledger-note
+    pair: none
+    declaration: docs/CANONICAL-STATE.md#hard-blocks
+    enforcement: (未実装 — 台帳配線は H6 側にあり link test は無い)
+    note: |
+      pair: none は「登録簿にあるが link test を持たない」ことの明示。
+      黙って欠けているのと、欠けていると書いてあるのは違う。pair16 は
+      pair: 欄の**存在**を必須にし、値が none であることは許す。
+  - id: ccs-repo-hooks-vs-deployed-set
+    pair: pair1
+    declaration: hooks/*.sh (repo)
+    enforcement: ~/.claude/hooks/*.sh (deployed)
+    note: "repo の hook 集合と配備済み hook 集合が一致すること。pair1 が両側の一覧を挙げて照合する（ローカル配備が無い CI ではスキップ）"
+  - id: ccs-settings-basenames-subset
+    pair: pair2
+    declaration: ~/.claude/settings.json#hooks[].command
+    enforcement: hooks/*.sh (repo) + intentional CLI allowlist
+    note: "settings.json が登録する hook basename が repo に実在すること。pair2 が settings 側と repo 側の両方を挙げて照合する"
+  - id: ccs-h5-admission-workflow-present
+    pair: pair4
+    declaration: docs/CANONICAL-STATE.md / rules（h5-admission を required check とする宣言）
+    enforcement: .github/workflows/h5-admission.yml
+    note: "required check の宣言に対し、それを実行する workflow ファイルが実在すること。pair4 が照合する"
+  - id: ccs-retired-hooks-not-deployed
+    pair: pair6
+    declaration: hooks/_unused/*.sh（退役宣言）
+    enforcement: ~/.claude/hooks/ に同名が存在しないこと
+    note: "退役させた hook が配備先に残っていないこと。宣言だけ退役して実体が動き続ける事故を防ぐ。pair6 が照合する"
+  - id: pairs-registry-vs-implementation
+    pair: pair16
+    declaration: facts.yaml#pairs[].pair
+    enforcement: tests/test-pairs-link.sh（メッセージ文字列中の pairN）
+    note: |
+      登録簿（facts.yaml）と実装（test-pairs-link.sh）の突合。aidd-governance#97。
+      #97 は「二重管理が系統的に散在すると知りながら能動的に掃かなかった」を問う。
+      その散在は登録簿自身にも起きていた: 2026-09-02 実測で
+      **実装 14 pair に対し登録 11 件**。facts.yaml の冒頭コメントは
+      「facts.yaml ids must all be exercised」と宣言していたが、
+      それを機械照合するものが無かったため、pair2 / pair4 / pair6 が
+      3 週間ぶん未登録のまま残っていた（登録簿の側の二重管理）。
+      pair16 は両方向を見る: 実装された pairN は必ず登録され、
+      登録エントリは必ず pair 欄を持つ（値 none は許す＝未実装の明示）。

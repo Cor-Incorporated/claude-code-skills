@@ -397,6 +397,51 @@ else:
             f"enforcement={codex_config} trust={trust} broken={broken}",
         )
 
+# pair16: facts.yaml 登録簿 ↔ test-pairs-link.sh が実装している pair 群。
+# aidd-governance#97 —「二重管理が系統的に散在すると知りながら能動的に掃かず、
+# CD の失敗を 1 件ずつ受動的に発見した」。同じ受動性が登録簿自身にも起きていた。
+# facts.yaml の冒頭は「facts.yaml ids must all be exercised」と宣言していたが、
+# それを機械照合するものが無く、2026-09-02 実測で実装 14 に対し登録 11 だった
+# （pair2 / pair4 / pair6 が未登録）。宣言だけあって強制が無い、この repo の定型。
+# 両方向を見る: 実装された pairN は必ず登録され、登録エントリは必ず pair 欄を持つ。
+facts = ROOT / "facts.yaml"
+selftest = ROOT / "tests" / "test-pairs-link.sh"
+if not (facts.is_file() and selftest.is_file()):
+    bad(
+        "pair16 source file missing",
+        f"declaration={facts} exists={facts.is_file()} "
+        f"enforcement={selftest} exists={selftest.is_file()}",
+    )
+else:
+    facts_text = facts.read_text(encoding="utf-8")
+    # 実装側: ok()/bad() のメッセージ文字列の先頭に現れる pairN だけを数える。
+    # コメント中の言及（`# pair13: ...`）は引用符が前に無いので拾わない。
+    implemented = {
+        f"pair{n}"
+        for n in re.findall(r"[\"']pair(\d+)\b", selftest.read_text(encoding="utf-8"))
+    }
+    entries = re.findall(r"^  - id: (\S+)$", facts_text, re.M)
+    registered = re.findall(r"^    pair: (\S+)$", facts_text, re.M)
+    unregistered = sorted(implemented - set(registered))
+    no_field = len(entries) - len(registered)
+    dangling = sorted(p for p in registered if p != "none" and p not in implemented)
+    if unregistered or no_field or dangling:
+        bad(
+            "pair16 registry/implementation drift",
+            f"declaration(facts.yaml)={sorted(set(registered))} entries={len(entries)} "
+            f"pair_fields={len(registered)} | "
+            f"enforcement(tests/test-pairs-link.sh)={sorted(implemented)} | "
+            f"implemented_but_unregistered={unregistered} "
+            f"entries_missing_pair_field={no_field} "
+            f"registered_but_unimplemented={dangling}",
+        )
+    else:
+        ok(
+            f"pair16 facts.yaml registry == implemented pairs "
+            f"({len(implemented)} implemented, {len(entries)} entries, "
+            f"{registered.count('none')} declared none)"
+        )
+
 print(f"--- {PASS} passed, {FAIL} failed ---")
 sys.exit(0 if FAIL == 0 else 1)
 PY

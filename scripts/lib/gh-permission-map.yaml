@@ -1,0 +1,99 @@
+# GitHub API 面 → job permissions スコープの対応表（H5/P2 追補・aidd-governance#94）
+#
+# 使い方の原則 — この表に無いものは PASS ではなく UNDECIDABLE になる。
+#   scripts/workflow-permission-scan.py は、`evidence` が空でないエントリにだけ
+#   MISSING（= exit 1）判定を与える。根拠のない対応づけで workflow を落とすと
+#   検査器自身が二重管理の発生源になるため（aidd-governance#98「検証器が自ら
+#   前提を撒いて欠陥を吸収する」の裏返し）。
+#
+# evidence の種別:
+#   measured:<ref>  実際に 403 / 200 を観測した記録がある
+#   docs:<url>      GitHub の fine-grained PAT 権限リファレンスで確認した
+#   observed:<ref>  本リポジトリの稼働中 workflow で成立が確認できる
+#
+# 表を増やすときは evidence を必ず書く。書けないなら足さない
+# （足さなくても UNDECIDABLE として一覧には出るので、隠れない）。
+
+# ---- REST パス（gh api / curl https://api.github.com/...）----
+# match: パス。`{...}` は 1 セグメントのワイルドカード。
+#        スキャナは変数展開（$SHA / ${{ ... }}）も `{}` に正規化してから突合する。
+# method: GET | POST | PUT | PATCH | DELETE | ANY
+rest:
+  - match: "repos/{owner}/{repo}/commits/{ref}/check-runs"
+    method: GET
+    scope: checks
+    level: read
+    evidence: >-
+      measured:aidd-governance#94 — 2026-08-27 Grift Alpha CD の job
+      "Authorize exact develop head" が permissions: contents:read のみで本
+      エンドポイントを呼び HTTP 403 "Resource not accessible by integration"。
+      job へ checks: read を追加して解消。本件がこの検査器を作らせた欠陥そのもの。
+
+  - match: "repos/{owner}/{repo}/pulls/{pull_number}"
+    method: GET
+    scope: pull-requests
+    level: read
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Repository permissions for \"Pull requests\"" 節に read として掲載
+      （2026-09-02 参照）。
+
+  - match: "repos/{owner}/{repo}/contents/{path}"
+    method: GET
+    scope: contents
+    level: read
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Repository permissions for \"Contents\"" 節に read として掲載
+      （2026-09-02 参照）。
+
+  - match: "repos/{owner}/{repo}/issues/{issue_number}/comments"
+    method: POST
+    scope: issues
+    level: write
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Repository permissions for \"Issues\"" 節に write として掲載
+      （2026-09-02 参照）。
+
+  - match: "repos/{owner}/{repo}/actions/runs"
+    method: GET
+    scope: actions
+    level: read
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Repository permissions for \"Actions\"" 節に read として掲載
+      （2026-09-02 参照）。
+
+# ---- gh CLI サブコマンド（gh <command> <subcommand>）----
+gh_commands:
+  - match: "pr view"
+    scope: pull-requests
+    level: read
+    evidence: >-
+      observed:claude-code-skills .github/workflows/h5-admission.yml — job が
+      permissions: contents:read + pull-requests:read を宣言し、その step が
+      scripts/h5-admission-check.sh:49 の `gh pr view --json body` を実行して
+      required check として緑になっている。
+
+# ---- uses: アクション ----
+# ここに無い action は UNDECIDABLE-API（第三者 action の API 面は静的に読めない）。
+actions:
+  - match: "actions/checkout"
+    scope: contents
+    level: read
+    evidence: >-
+      observed:claude-code-skills / aidd-governance 双方の workflow が
+      permissions: contents:read の下で actions/checkout@v4 を実行し成功している。
+
+# ---- actions/github-script の script 本文 namespace → スコープ ----
+# github.rest.<namespace>.<method> の namespace を写す。method 名が
+# get/list/check/compare で始まれば read、それ以外は write とみなす。
+# この推定は「evidence 付き」ではないので判定は UNDECIDABLE-API に落とす
+# （一覧には出るが exit 1 にはしない）。
+github_script_namespaces:
+  pulls: pull-requests
+  issues: issues
+  checks: checks
+  actions: actions
+  repos: contents
