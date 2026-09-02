@@ -34,10 +34,19 @@ aidd_ledger_append() {
   mkdir -p "$ledger_dir"
   local ts
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # JSON 文字列として安全にする。引用符は「置換」で潰しているが、バックスラッシュは
+  # 「エスケープ」しなければならない。2026-09-02 実測: cmd_head に
+  # `grep -n 'cmd_norm\|sed -E'` が入った 3 行が Invalid \escape で JSON として
+  # 読めなくなっていた（台帳 5643 行中 3 行）。読めない行は ledger-summary.sh の
+  # 集計から丸ごと落ちるので、防御の記録が静かに消える。
+  # バックスラッシュを先に倍化してから引用符を潰す（順序が逆だと二重に効く）。
+  # タブと復帰も生のままだと JSON 文字列に置けないので空白へ寄せる。
   local safe_cmd
-  safe_cmd="$(printf '%s' "$cmd_head" | _aidd_truncate_utf8 120 | tr '"' "'" | tr '\n' ' ')"
+  safe_cmd="$(printf '%s' "$cmd_head" | _aidd_truncate_utf8 120 \
+    | sed 's/\\/\\\\/g' | tr '"' "'" | tr '\n\t\r' '   ')"
   local safe_session
-  safe_session="$(printf '%s' "$session" | _aidd_truncate_utf8 80 | tr '"' "'" | tr '\n' ' ')"
+  safe_session="$(printf '%s' "$session" | _aidd_truncate_utf8 80 \
+    | sed 's/\\/\\\\/g' | tr '"' "'" | tr '\n\t\r' '   ')"
   if [[ "$component" == "H1" ]]; then
     printf '{"ts":"%s","component":"H1","event":"%s","rule":"%s","detail":"%s","subject":{},"source":"%s","session":"%s","agent":"%s"}\n' \
       "$ts" "$event" "$rule" "$safe_cmd" "$source" "$safe_session" "$agent" >>"$ledger" 2>/dev/null || true
