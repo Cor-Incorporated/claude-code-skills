@@ -6,6 +6,17 @@
 #   検査器自身が二重管理の発生源になるため（aidd-governance#98「検証器が自ら
 #   前提を撒いて欠陥を吸収する」の裏返し）。
 #
+#
+# 適用条件（2026-09-02 改訂・aidd-governance#94 ④）
+#   **`permissions` 未宣言の job も対象にする（`--strict-undecidable` を維持）。**
+#   issue 本文(2026-08-27)は「宣言のない job は対象外（過検出を避ける）」としていたが、
+#   これは「検査しなかったものを緑と呼ぶ」形である。未宣言 job の実効権限は
+#   リポジトリ/組織の設定依存で、リポジトリの中身からは読めない。読めないものを
+#   「問題なし」に分類すると、#349（skip を PASS に数える）/ #351（pair が何も出さない）
+#   / #120（測定が無いのに PASS）と同じ欠陥になる。
+#   達成可能性は実測済み: 3 リポとも自ブランチで exit=0。
+#   未宣言は UNDECIDABLE-PERMS として一覧に出し、strict では exit 1 にする。
+
 # evidence の種別:
 #   measured:<ref>  実際に 403 / 200 を観測した記録がある
 #   docs:<url>      GitHub の fine-grained PAT 権限リファレンスで確認した
@@ -135,6 +146,24 @@ rest:
       — "Repository permissions for \"Actions\"" 節に
       `GET /repos/{owner}/{repo}/actions/runs/{run_id} | read` として掲載（2026-09-02 参照）。
 
+  - match: "repos/{owner}/{repo}/deployments"
+    method: POST
+    scope: deployments
+    level: write
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — "Repository permissions for \"Deployments\"" 節に
+      `POST /repos/{owner}/{repo}/deployments | write` として掲載（2026-09-02 実測）。
+      本リポジトリに実使用は無い。出典確認のみで先に載せる。
+
+  - match: "repos/{owner}/{repo}/deployments"
+    method: GET
+    scope: deployments
+    level: read
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — 同節に `GET /repos/{owner}/{repo}/deployments | read` として掲載（2026-09-02 実測）。
+
 # ---- gh CLI サブコマンド（gh <command> <subcommand>）----
 gh_commands:
   - match: "pr view"
@@ -204,6 +233,41 @@ actions:
     evidence: >-
       observed:claude-code-skills / aidd-governance 双方の workflow が
       permissions: contents:read の下で actions/checkout@v4 を実行し成功している。
+
+  # ---- OIDC クラス（id-token: write）----
+  # 他のスコープと性質が違う。contents:read は「GitHub の中で読める」だが、
+  # id-token:write は「OIDC トークンを発行できる」であり、そのトークンで**何が
+  # できるか**は GitHub の外（クラウド側の信頼ポリシー: Workload Identity Pool /
+  # IAM ロールの信頼関係 / フェデレーション資格情報）が決める。
+  # したがって level=write は **要求の表現**であって、**影響範囲の尺度ではない**。
+  # この表の level を「危険度」として読まないこと（#94 スパイク回答）。
+  - match: "google-github-actions/auth"
+    scope: id-token
+    level: write
+    evidence: >-
+      docs:https://github.com/google-github-actions/auth — "Usage" 節の例が
+      `permissions: contents: 'read' / id-token: 'write'` を示し、"Add 'id-token'
+      with the intended permissions." と記す（2026-09-02 参照）。スコープ自体の定義は
+      docs:https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
+      — id-token は "Fetch an OpenID Connect (OIDC) token. This requires
+      `id-token: write`." と記載（2026-09-02 実測）。
+
+  - match: "aws-actions/configure-aws-credentials"
+    scope: id-token
+    level: write
+    evidence: >-
+      docs:https://github.com/aws-actions/configure-aws-credentials —
+      "Quick Start (OIDC, recommended)" 節が `permissions: id-token: write` を示し、
+      例中に "Need ID token write permission to use OIDC" と注記（2026-09-02 参照）。
+
+  - match: "azure/login"
+    scope: id-token
+    level: write
+    evidence: >-
+      docs:https://github.com/Azure/login — "Login With OpenID Connect (OIDC)
+      [Recommended]" 節が `permissions: id-token: write / contents: read` を示し、
+      "you should set `permissions:` with `id-token: write` at workflow level or job
+      level" と記す（2026-09-02 参照）。action 名は大文字小文字を区別せず突合する。
 
 # ---- actions/github-script の script 本文 namespace → スコープ ----
 # github.rest.<namespace>.<method> の namespace を写す。method 名が

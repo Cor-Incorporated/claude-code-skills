@@ -478,9 +478,12 @@ class PermissionMap:
         return None, "対応表に無い gh サブコマンド"
 
     def lookup_action(self, name: str):
-        base = name.split("@", 1)[0]
+        # GitHub の action 参照は大文字小文字を区別しない。正本は `Azure/login` だが
+        # workflow では `azure/login` とも書かれる。区別すると、対応表にある action を
+        # 綴り違いで UNDECIDABLE-API へ落としてしまう（見逃し側の誤り）。
+        base = name.split("@", 1)[0].lower()
         for entry in self.actions:
-            if entry["match"] == base:
+            if str(entry["match"]).lower() == base:
                 return entry, ""
         return None, "第三者 action の API 面は静的に読めない"
 
@@ -723,6 +726,40 @@ def scan(root: Path, workflows: Path, pmap: PermissionMap):
 ORDER = [MISSING, UNDECIDABLE_PERMS, UNDECIDABLE_API, NOT_APPLICABLE, GRANTED]
 
 
+
+# UNDECIDABLE-API は「判定できない」で終わると、読んだ人が次に何をすればよいか
+# 分からない。落ちたときに解決手段が出ることを条件に strict を維持している
+# （aidd-governance#94 ④）。ここは表面形の助言ではなく、**どのファイルのどの節に
+# 何を書くか**を具体的に出す。
+_SECTION_BY_KIND = {
+    "rest": "rest:",
+    "gh_command": "gh_commands:",
+    "action": "actions:",
+    "github_script": "github_script_namespaces:",
+}
+
+
+def remediation(f) -> list[str]:
+    section = _SECTION_BY_KIND.get(f.call.kind, "rest:")
+    path = "scripts/lib/gh-permission-map.yaml"
+    if f.call.kind == "rest":
+        shape = (
+            f'- match: "{f.call.target}"  method: {f.call.method}  '
+            f"scope: <scope>  level: <read|write>"
+        )
+    elif f.call.kind == "github_script":
+        shape = f"{f.call.target}: <scope>   # namespace -> スコープ"
+    else:
+        shape = f'- match: "{f.call.target}"  scope: <scope>  level: <read|write>'
+    return [
+        f"{path} の `{section}` へ evidence つきで追加する:",
+        f"  {shape}",
+        "  evidence: docs:<GitHub 権限リファレンスの該当節> / "
+        "measured:<403 か 200 を観測した記録> / observed:<稼働中 workflow>",
+        "根拠を書けないなら足さない。UNDECIDABLE のままが正しい"
+        "（根拠なしの対応づけで workflow を落とすと検査器自身が二重管理の発生源になる）。",
+    ]
+
 def render_text(findings, inventory, files, notes) -> str:
     lines = [
         "workflow-permission-scan — step の API 面 ↔ job の permissions (aidd-governance#94)",
@@ -759,6 +796,9 @@ def render_text(findings, inventory, files, notes) -> str:
             lines.append(f"    granted  : {f.granted}")
             if f.reason:
                 lines.append(f"    reason   : {f.reason}")
+            if verdict == UNDECIDABLE_API:
+                for hint in remediation(f):
+                    lines.append(f"    fix      : {hint}")
         lines.append("")
     return "\n".join(lines)
 
