@@ -110,19 +110,39 @@ PY
 
 # 未解決一覧を JSON 配列で返す。owner が宣言されているものは「次に誰がいつ確認
 # するか」が書かれているとみなし、owned=true として区別する。
+# 未解決一覧。**test 系 source は既定で除く。**
+#
+# ここが唯一の濾過点である。停止判定 (aidd-turn-boundary-stop.sh) も次ターン冒頭の
+# 照合 (aidd-carryover-reconcile.sh) も本コマンドを読むので、両方が一度に揃う。
+# 消費側それぞれに濾過を書くと、片方だけ直る形（本リポが繰り返している宣言↔実体の
+# 二重管理）になる。
+#
+# 除くのは「見えなくする」ためではない。`list` には出るし、`--include-test` で
+# いつでも出せる。停止判定の入力から外すだけである。
 cmd_unresolved() {
-  python3 - "$STATE_DIR" <<'PY'
+  local include_test=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --include-test) include_test=1; shift ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+  python3 - "$STATE_DIR" "$include_test" <<'PY'
 import glob, json, os, sys
-state = sys.argv[1]
+state, include_test = sys.argv[1], sys.argv[2] == "1"
 rows = []
 for path in sorted(glob.glob(os.path.join(state, "*.json"))):
     try:
         row = json.load(open(path, encoding="utf-8"))
     except (OSError, ValueError):
         continue
-    if not row.get("resolved"):
-        row["owned"] = bool(str(row.get("owner") or "").strip())
-        rows.append(row)
+    if row.get("resolved"):
+        continue
+    source = str(row.get("source") or "")
+    if not include_test and (source == "test" or source.startswith("test:")):
+        continue
+    row["owned"] = bool(str(row.get("owner") or "").strip())
+    rows.append(row)
 print(json.dumps(rows, ensure_ascii=False))
 PY
 }
@@ -157,7 +177,9 @@ usage: async-work.sh <register|resolve|unresolved|list|clear> [flags]
            [--owner <次に確認する主体>] [--check-cmd <確認コマンド>] [--source <who>]
   resolve  --id <id> --conclusion <success|failure|cancelled|...>
            in_progress / queued / running 等は終端として受け付けない (#96)
-  unresolved   未解決を JSON 配列で
+  unresolved [--include-test]
+               未解決を JSON 配列で。test 系 source は既定で除く
+               （停止判定の入力から外すため。list には出る）
   list         人間向け一覧
 
 env:

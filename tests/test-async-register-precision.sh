@@ -37,8 +37,11 @@ mkdir -p "$SB/.claude/hooks/lib" "$SB/.claude/scripts"
 cp "$ROOT/hooks/lib/aidd-ledger.sh" "$SB/.claude/hooks/lib/"
 cp "$ROOT/scripts/async-work.sh" "$SB/.claude/scripts/"
 
+# --include-test を付ける。本スイートが測るのは **検出の精度**（登録されたか）で
+# あって停止判定ではない。fire() は AIDD_LEDGER_SOURCE=test で発火するので、
+# test 系 source を除く既定の unresolved では登録が見えない。
 registered() {
-  HOME="$SB" bash "$SB/.claude/scripts/async-work.sh" unresolved 2>/dev/null \
+  HOME="$SB" bash "$SB/.claude/scripts/async-work.sh" unresolved --include-test 2>/dev/null \
     | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0
 }
 
