@@ -323,5 +323,91 @@ else
 fi
 
 echo
+echo "=== 5. 追加した map エントリ: 未宣言で MISSING / 宣言で GRANTED（#94 ①②）==="
+# 片方向だけでは不足である。「落ちること」と「正しく書けば通ること」の両方を測る。
+# 落ちるだけの検査は、正しい workflow も落とせるので装置として使えない。
+
+# --- ① id-token（OIDC クラス）---
+oidc_case() { # $1=id $2=uses 行の action 名
+  local id="$1" action="$2"
+  local steps="      - name: auth
+        uses: ${action}@v2"
+  local miss granted
+  miss="$(fixture "oidc-miss-$id" '    permissions:
+      contents: read' "$steps")"
+  assert_verdict "①-$id 未宣言" "$miss" "MISSING" "$action"
+  granted="$(fixture "oidc-ok-$id" '    permissions:
+      contents: read
+      id-token: write' "$steps")"
+  assert_verdict "①-$id 宣言済み" "$granted" "GRANTED" "$action"
+}
+oidc_case gcp google-github-actions/auth
+oidc_case aws aws-actions/configure-aws-credentials
+oidc_case azure azure/login
+
+# action 名の大文字小文字。正本は Azure/login だが workflow では azure/login とも書く。
+# 区別すると対応表にある action を綴り違いで見逃す。
+assert_verdict "①-case 大文字表記でも突合する" \
+  "$(fixture oidc-case '    permissions:
+      contents: read' '      - name: auth
+        uses: Azure/login@v2')" "MISSING" "Azure/login"
+
+# --- ② deployments ---
+DEP_POST='      - name: create deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST repos/o/r/deployments -f ref=main'
+DEP_GET='      - name: list deployments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/o/r/deployments'
+assert_verdict "②-post 未宣言" "$(fixture dep-post-miss '    permissions:
+      contents: read' "$DEP_POST")" "MISSING" "POST repos/o/r/deployments"
+assert_verdict "②-post 宣言済み" "$(fixture dep-post-ok '    permissions:
+      contents: read
+      deployments: write' "$DEP_POST")" "GRANTED" "POST repos/o/r/deployments"
+assert_verdict "②-get 未宣言" "$(fixture dep-get-miss '    permissions:
+      contents: read' "$DEP_GET")" "MISSING" "GET repos/o/r/deployments"
+assert_verdict "②-get 宣言済み" "$(fixture dep-get-ok '    permissions:
+      contents: read
+      deployments: read' "$DEP_GET")" "GRANTED" "GET repos/o/r/deployments"
+# read しか要らない GET を write で宣言しても通る（level は >= で判定する）
+assert_verdict "②-get write でも足りる" "$(fixture dep-get-write '    permissions:
+      contents: read
+      deployments: write' "$DEP_GET")" "GRANTED" "GET repos/o/r/deployments"
+
+echo
+echo "=== 6. UNDECIDABLE-API の red が actionable であること（#94 ④ の条件）==="
+# 「判定できない」で終わると、読んだ人が次に何をすればよいか分からない。
+UNK="$(fixture unknown-api '    permissions:
+      contents: read' '      - name: unknown
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/o/r/some-unmapped-surface')"
+unk_out="$(python3 "$SCAN" --root "$UNK" 2>&1)"
+if printf '%s' "$unk_out" | grep -q "UNDECIDABLE-API=1"; then
+  ok "④ 未対応の API 面は UNDECIDABLE-API になる"
+else
+  bad "④ UNDECIDABLE-API にならない" "$unk_out"
+fi
+if printf '%s' "$unk_out" | grep -q "fix      : scripts/lib/gh-permission-map.yaml の \`rest:\` へ evidence つきで追加する"; then
+  ok "④ 解決手段（どのファイルのどの節に何を書くか）が出力に出る"
+else
+  bad "④ fix 行が出ていない" "$unk_out"
+fi
+if printf '%s' "$unk_out" | grep -q "根拠を書けないなら足さない"; then
+  ok "④ evidence の基準を緩めない旨も併記される"
+else
+  bad "④ evidence 基準の注意が無い" "$unk_out"
+fi
+# strict では UNDECIDABLE-API も exit 1（適用条件の維持）
+python3 "$SCAN" --root "$UNK" --strict-undecidable >/dev/null 2>&1
+if [[ $? -eq 1 ]]; then
+  ok "④ strict では UNDECIDABLE-API も exit 1（未宣言を緑と呼ばない）"
+else
+  bad "④ strict なのに exit 0" "$unk_out"
+fi
+
+echo
 echo "--- $PASS passed, $FAIL failed ---"
 [[ $FAIL -eq 0 ]]
