@@ -141,6 +141,12 @@
           },
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/lane-launch-gate.sh",
+            "timeout": 20,
+            "statusMessage": "Checking lane basepoint and repair-family limit..."
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/git-push-guard.sh",
             "timeout": 15
           }
