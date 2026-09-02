@@ -368,7 +368,7 @@ def measure_spend(tool_calls, started_ts):
 
 
 def subject_of(state):
-    return {
+    subject = {
         "delegation": state["delegation"],
         "spend_usd": state["spend_usd"],
         "last_progress_ts": iso(state["last_progress_ts"]),
@@ -378,6 +378,58 @@ def subject_of(state):
         "tool_calls": state["tool_calls"],
         "same_cmd_streak": state["same_cmd_streak"],
     }
+    # #87 要求 4「既存作用点へ統合する」— 意味分類が宣言されている委任では、
+    # 台帳行に fingerprint / oracle / classification / epoch / close_target /
+    # transition を機械可読で載せる。宣言がなければ欄ごと出さない。"unknown" で
+    # 埋めると「分類していない」と「分類できなかった」が区別できなくなる。
+    sem = state.get("h1_semantics")
+    if isinstance(sem, dict) and sem.get("transition"):
+        subject["iteration_semantics"] = {
+            "failure_fingerprint": sem.get("last_fingerprint", ""),
+            "oracle_id": sem.get("last_oracle_id", ""),
+            "classification": sem.get("classification", ""),
+            "epoch": sem.get("epoch", 1),
+            "close_target": sem.get("close_target", ""),
+            "transition": sem.get("transition", ""),
+        }
+    return subject
+
+
+def iteration_verdict(state, effective):
+    """反復上限到達時の 3 値遷移 (#87).
+
+    意味分類の宣言が無ければ **従来どおり無条件 STOP** する。これは fail-safe
+    であって手抜きではない: 宣言の省略で上限を無効化できるなら、この装置は
+    「書かなければ止まらない」抜け道になる。分類は上限を緩める根拠ではなく、
+    緩める資格を宣言して初めて検査対象になる、という向きにしてある。
+    """
+    sem = state.get("h1_semantics")
+    sem = sem if isinstance(sem, dict) else {}
+    transition = str(sem.get("transition") or "")
+    cap = int(state["max_iterations"])
+    base = "repeated-command iterations %d exceeded max %d" % (effective, cap)
+
+    if transition == "REBASE_REQUIRED":
+        return (
+            "rebase-required",
+            "%s / 意味進捗 (classification=%s epoch=%s fingerprint=%s). "
+            "これは完了ではなく Issue close 可でもない。固定 scope・固定 close "
+            "target のまま supervisor の rebase 承認を得てから再開すること。"
+            % (
+                base,
+                sem.get("classification", ""),
+                sem.get("epoch", 1),
+                str(sem.get("last_fingerprint", ""))[:12],
+            ),
+        )
+    note = {
+        "STOP": "意味分類 = %s" % sem.get("classification", ""),
+        # CONTINUE 宣言のままランタイム反復が上限を超えている = 宣言が実体から
+        # 遅れている。宣言側を信じて通すのではなく、実体側で止める。
+        "CONTINUE": "宣言は CONTINUE だがランタイム反復が上限超過（宣言が実体に追随していない）",
+        "": "意味分類の宣言なし",
+    }.get(transition, "未知の transition=%s" % transition)
+    return ("max-iterations", "%s / %s" % (base, note))
 
 
 def record(state, event, rule, detail):
@@ -405,12 +457,19 @@ def decide(state):
             "spend $%.2f reached budget $%.2f (%s)"
             % (state["spend_usd"], state["budget_usd"], state["budget_source"]),
         )
-    if int(state["iterations"]) > int(state["max_iterations"]):
-        return (
-            "max-iterations",
-            "repeated-command iterations %d exceeded max %d"
-            % (state["iterations"], state["max_iterations"]),
-        )
+    # #87: 反復上限は epoch 基準線からの差で測る。rebase が granted された委任は
+    # iteration_baseline が押し上げられており、新 epoch の反復だけが数えられる。
+    # 宣言が無い委任では baseline=0 なので、従来と同じ絶対値比較に退化する。
+    sem = state.get("h1_semantics")
+    baseline = 0
+    if isinstance(sem, dict):
+        try:
+            baseline = max(0, int(sem.get("iteration_baseline") or 0))
+        except (TypeError, ValueError):
+            baseline = 0
+    effective = int(state["iterations"]) - baseline
+    if effective > int(state["max_iterations"]):
+        return iteration_verdict(state, effective)
     return (None, None)
 
 

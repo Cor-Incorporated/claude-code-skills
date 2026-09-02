@@ -41,8 +41,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
 # --- H1 非進捗ランタイム (shared with hooks/codex/h1-stall-runtime.sh) ---
-_H1_LIB="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/lib/h1-runtime.sh"
+_H1_LIB="${SCRIPT_DIR}/lib/h1-runtime.sh"
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/h1-runtime.sh
 [ -f "$_H1_LIB" ] && . "$_H1_LIB"
@@ -404,6 +406,28 @@ fi
 
 git -C "$REPO_PATH" worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
 log "Worktree created: ${WORKTREE_PATH}"
+
+# --- 発射直前ゲート: レーンの基点検査 (aidd-governance#91) ---
+# worktree は「作った時の基点」を保持し、再利用しても更新されない。上の
+# `git branch` は REPO_PATH の現 HEAD から切るだけで、既存ブランチなら何もしない。
+# どちらの経路でも基点は静かに古くなりうる。基点が古いまま発射すると、その間に
+# base へ入った他レーンの成果を知らずに同じ領域を再実装し、マージ時の add/add で
+# 成熟度の低い側が破棄される（Grift feat/l-s6-api: develop 650 行 vs ブランチ 290 行）。
+# 検出点がマージ時しかなかったことが損失を確定させたので、ここで止める。
+# exec ビットではなく -f で判定し bash で起動する。exec ビットが落ちただけで
+# ゲートが黙って無効化される（= まさにこの Issue の失敗形）のを避ける。
+LANE_CHECK="${SCRIPT_DIR}/lane-basepoint-check.sh"
+if [[ -f "$LANE_CHECK" ]]; then
+    if ! LANE_LEDGER_SOURCE=codex-parallel bash "$LANE_CHECK" check "$WORKTREE_PATH"; then
+        error "レーンの基点検査に失敗したため発射しない: ${BRANCH_NAME}"
+        error "  worktree は残してある。上の指示どおり切り直してから再実行すること:"
+        error "    git -C ${WORKTREE_PATH} rebase origin/<base>"
+        error "  意図的に無視する場合のみ LANE_BASEPOINT_ENFORCE=0（降格は台帳へ記帳される）"
+        exit 1
+    fi
+else
+    warn "lane-basepoint-check.sh が見つからない: 基点検査なしで発射する (${LANE_CHECK})"
+fi
 
 # --- Build full prompt with skill reference ---
 FULL_PROMPT="$(cat <<PROMPT_EOF

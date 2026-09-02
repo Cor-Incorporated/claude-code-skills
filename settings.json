@@ -198,6 +198,12 @@
             "command": "bash ~/.claude/hooks/enforce-hook-deploy-after-merge.sh",
             "timeout": 30,
             "statusMessage": "Auto-deploying hooks after PR merge..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/aidd-async-register.sh",
+            "timeout": 10,
+            "statusMessage": "Registering async work carry-over..."
           }
         ]
       },
@@ -257,6 +263,12 @@
             "command": "bash ~/.claude/hooks/aidd-h3-evidence-stop.sh",
             "timeout": 8,
             "statusMessage": "H3 evidence trailer check (warn only)..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/aidd-turn-boundary-stop.sh",
+            "timeout": 10,
+            "statusMessage": "Checking unresolved async work before ending the turn..."
           }
         ]
       }
