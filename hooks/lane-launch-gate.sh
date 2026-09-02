@@ -210,6 +210,15 @@ while IFS=$'\x1f' read -r repo start target; do
     if [ "$brc" -ne 0 ]; then
       emit_deny "$(printf 'レーン発射ゲート [基点規律 #91]\n%s\n\n  起点を取り直してから再実行してください。\n  意図的に無視する場合のみ LANE_BASEPOINT_ENFORCE=0（降格は台帳へ記帳されます）。' "$out")"
     fi
+  elif [ -z "$BASEPOINT_SH" ]; then
+    # 判定スクリプトが解決できない = hook は配備されたのに検査が効いていない。
+    # 壊れた関門で作業を止めるのは正しくないので通すが、**黙っては通さない**。
+    # 無言で素通しすると「配備済みなのに無効」が発見されないまま残る。
+    # 同型の実例: #81（secret-patterns が merge されたが未配備）/
+    # #121（checker は配備したが harness-spec.md を配らず恒久 rc=2）。
+    note_ledger measure basepoint-unavailable \
+      "lane-basepoint-check.sh が解決できないため基点判定を省略: $target"
+    printf '[lane-launch-gate] lane-basepoint-check.sh が見つからないため基点判定を省略しました。setup.sh の配備を確認してください。\n' >&2
   elif [ -z "$start" ]; then
     # 起点省略（`-b new <path>` のみ）= git は現 HEAD を使う。hook 側で HEAD を
     # 確定できないので判定しない。黙って通さず、通したことを記録する。
@@ -234,7 +243,13 @@ while IFS=$'\x1f' read -r repo start target; do
         fi
       else
         note_ledger measure repair-ledger-absent "修理台帳が無いため #88 判定を省略: $ledger_file"
+        printf '[lane-launch-gate] 修理台帳 %s が無いため #88 判定を省略しました。\n' "$ledger_file" >&2
       fi
+    else
+      # 宣言はあったが family を導出できなかった。上と同じ理由で黙らない。
+      note_ledger measure repair-family-underivable \
+        "LANE_PATHS から family を導出できないため #88 判定を省略"
+      printf '[lane-launch-gate] LANE_PATHS から family を導出できないため #88 判定を省略しました。\n' >&2
     fi
   elif [ -n "${LANE_PATHS:-}" ] && [ -z "$BREAKER_SH" ]; then
     printf '[lane-launch-gate] repair-loop-breaker.sh が見つからないため #88 判定を省略しました。\n' >&2

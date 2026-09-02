@@ -243,6 +243,71 @@ ledger_has basepoint-bypassed \
   || bad "case7 降格が台帳に残らない"
 
 echo
+echo "=== case 8: 依存が解決できないとき — 通すが、黙らない ==="
+echo "    壊れた関門で作業を止めるのは正しくない。変えてはいけないのは「黙る」ことだけ。"
+echo "    同型: #81 secret-patterns 未配備 / #121 harness-spec 未配布。"
+# hook を scripts/ の無いディレクトリへ隔離し、BASEPOINT_SH を解決不能にする。
+ISO="$SB/iso"
+mkdir -p "$ISO/hooks/lib"
+cp "$HOOK" "$ISO/hooks/lane-launch-gate.sh"
+cp "$ROOT/hooks/lib/aidd-ledger.sh" "$ISO/hooks/lib/aidd-ledger.sh"
+if run_gate "$ISO/hooks/lane-launch-gate.sh" \
+     "git -C $REPO worktree add $REPO/.worktrees/a/u1 -b feat/u1 $FRESH" \
+     LANE_BASE=trunk HOME="$HOME"; then
+  ok "case8 basepoint スクリプト不在でも通す（壊れた関門で止めない）"
+else
+  bad "case8 スクリプト不在で block した"
+fi
+grep -q "lane-basepoint-check.sh が見つからない" "$SB/err" \
+  && ok "case8 スクリプト不在を stderr で告げる（黙って通さない）" \
+  || bad "case8 スクリプト不在が無言だった: [$(cat "$SB/err")]"
+ledger_has basepoint-unavailable \
+  && ok "case8 スクリプト不在を台帳へ measure で残す" \
+  || bad "case8 スクリプト不在が台帳に残らない"
+
+if run_gate "$ISO/hooks/lane-launch-gate.sh" \
+     "git -C $REPO worktree add $REPO/.worktrees/a/u2 -b feat/u2 origin/trunk" \
+     LANE_BASE=trunk HOME="$HOME" LANE_PATHS="infra/main.tf" LANE_BREAKER_SH=""; then
+  ok "case8 breaker 不在でも通す"
+else
+  bad "case8 breaker 不在で block した"
+fi
+grep -q "repair-loop-breaker.sh が見つからない" "$SB/err" \
+  && ok "case8 breaker 不在を stderr で告げる" \
+  || bad "case8 breaker 不在が無言だった: [$(cat "$SB/err")]"
+ledger_has breaker-absent \
+  && ok "case8 breaker 不在を台帳へ measure で残す" \
+  || bad "case8 breaker 不在が台帳に残らない"
+
+if [ -n "$BREAKER" ]; then
+  if run_gate "$HOOK" "git -C $REPO worktree add $REPO/.worktrees/a/u3 -b feat/u3 origin/trunk" \
+       LANE_BASE=trunk HOME="$HOME" LANE_PATHS="infra/main.tf" \
+       LANE_BREAKER_SH="$BREAKER" LANE_REPAIR_LEDGER="$SB/does-not-exist.jsonl"; then
+    ok "case8 修理台帳不在でも通す"
+  else
+    bad "case8 修理台帳不在で block した"
+  fi
+  grep -q "修理台帳" "$SB/err" \
+    && ok "case8 修理台帳不在を stderr で告げる" \
+    || bad "case8 修理台帳不在が無言だった: [$(cat "$SB/err")]"
+  ledger_has repair-ledger-absent \
+    && ok "case8 修理台帳不在を台帳へ measure で残す" \
+    || bad "case8 修理台帳不在が台帳に残らない"
+fi
+
+echo "--- 網羅性: 素通しする分岐はすべて記録を残すこと（無言経路ゼロ） ---"
+python3 - "$HOOK" <<'PY' && ok "無言で素通しする分岐が残っていない" || bad "記録の無い素通し分岐がある"
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+body = src[src.index("# --- (1) #91 基点規律"):src.index("done <<")]
+# 判定を省略して通す分岐は、note_ledger と stderr の両方を持たねばならない。
+branches = re.findall(r"\n  (?:elif|else)\b[^\n]*\n((?:    [^\n]*\n|\n)+)", body)
+missing = [b.strip()[:70] for b in branches
+           if "emit_deny" not in b and ("note_ledger" not in b or ">&2" not in b)]
+assert not missing, "silent skip branches: %r" % missing
+PY
+
+echo
 echo "=== 変異体: 条件を外すと同じシナリオが素通し／誤発火することの実測 ==="
 MUT="$SB/mut"; mkdir -p "$MUT"
 mutate() {
@@ -266,7 +331,9 @@ if mutate "$HOOK" \
   orig_err="$(cat "$SB/err")"
   run_gate "$MUT/substr.sh" 'git commit -m "add worktree add support"' LANE_BASE=trunk HOME="$HOME"
   mut_err="$(cat "$SB/err")"
-  if [ -z "$orig_err" ] && printf '%s' "$mut_err" | grep -q "起点未指定"; then
+  # 判定は「ゲートに入ったか」。入れば起点未指定か依存不在のいずれかを必ず告げる
+  # （無言経路ゼロを上で機械照合済み）ので、出力の有無そのものが指標になる。
+  if [ -z "$orig_err" ] && printf '%s' "$mut_err" | grep -q "lane-launch-gate"; then
     ok "変異(substring 判定) コミットメッセージがゲートへ入る = 位置判定は効いていた"
   else
     bad "変異(substring 判定) 挙動が変わらない (orig='${orig_err:0:40}' mut='${mut_err:0:40}')"
