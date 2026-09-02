@@ -251,13 +251,16 @@ fi
 #            インタプリタ経由 6 種を素通しにした。
 #   いずれも「宣言では網、実装では素通し」であり、本リポが問題にしている
 #   宣言↔実体の乖離そのものだった。
-has_refspec_force() {
-  # heredoc の本文は、**それを食うコマンドがデータ文脈のときだけ**落とす。
-  #   cat <<EOF > note.md   → 本文はファイルへ書かれる。データである
-  #   python3 - <<PY        → 本文はインタプリタが実行する。コードである
-  # 無条件に落とすと後者が素通りする（第 2 版の欠陥の 1 つ）。
-  local body_stripped
-  body_stripped="$(printf '%s' "$1" | awk '
+# heredoc の本文は、**それを食うコマンドがデータ文脈のときだけ**落とす。
+#   cat <<EOF > note.md   → 本文はファイルへ書かれる。データである
+#   python3 - <<PY        → 本文はインタプリタが実行する。コードである
+# 無条件に落とすと後者が素通りする（第 2 版の欠陥の 1 つ）。
+#
+# Check 0a2 (#346) と Check 4 (#358) が共有する。#358 は「#346 が git push に
+# 対して解いた位置判定が gh pr merge の述語には適用されていなかった」欠陥
+# だった。同じ抽出を 2 度書くと、次も片方にだけ直しが入る。
+strip_dataonly_heredoc_bodies() {
+  printf '%s' "$1" | awk '
     function is_dataonly(t) {
       return (t == "grep" || t == "egrep" || t == "fgrep" || t == "rg" || t == "ag" ||
               t == "echo" || t == "printf" || t == "cat" || t == "tee" ||
@@ -284,7 +287,12 @@ has_refspec_force() {
       }
       print
     }
-  ')"
+  '
+}
+
+has_refspec_force() {
+  local body_stripped
+  body_stripped="$(strip_dataonly_heredoc_bodies "$1")"
 
   # 区切りは `;` `|` `&` のみ。括弧では分割しない — 分割すると
   # `fix(#195): git push ... +195` が `: git push ... +195` という偽セグメントを
@@ -472,7 +480,171 @@ if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE"; then
 fi
 
 # --- Check 4: gh pr merge --delete-branch (most dangerous!) ---
-if echo "$cmd" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
+# 旧実装は 1 本の正規表現だった:
+#
+#   echo "$cmd" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'
+#
+# これは 2 つの区別ができない（issue #358・同型欠陥 14 件目）。
+#
+#   (1) 値   `--delete-branch=false` は **削除しない** 指定である。それを
+#            `--delete-branch` の前方一致で「削除しうる」と読んで block した。
+#   (2) 位置 heredoc 本文・コミットメッセージに語が現れるだけで block した。
+#            `cat > f.md <<EOF` はブランチを削除しない。ガードは
+#            「フラグについて書くこと」と「フラグを使うこと」を混同していた。
+#
+# 修正前の実測（2026-09-02、現在ブランチ main の probe リポジトリ）:
+#   gh pr merge 42 --merge --delete-branch        rc=2  block   期待どおり
+#   gh pr merge 42 --merge --delete-branch=true   rc=2  block   期待どおり
+#   gh pr merge 42 --merge --delete-branch=false  rc=2  block   ← 誤検知
+#   gh pr merge 42 --merge -d                     rc=0  allow   ← 見逃し
+#   gh pr merge 42 -dm                            rc=0  allow   ← 見逃し
+#   cat > f.md <<EOF …(本文に語)… EOF             rc=2  block   ← 誤検知
+#   git commit -m 'docs: gh pr merge … の注意'    rc=2  block   ← 誤検知
+#
+# **否定側の誤検知と肯定側の見逃しが同居していた。** 短縮形 `-d` を一度も
+# 見ていないことが実測で確定したので、緩めるだけの修正では足りない。
+#
+# 値の意味は gh 2.98.0 で実測した（記憶で書かない）:
+#   `--delete-branch=notabool` → invalid argument … strconv.ParseBool
+#   `-d=notabool`              → 同じ ParseBool エラー
+#       ⇒ 長形・短縮形とも `=value` は ParseBool で解釈される
+#   `--delete-branch false`    → accepts at most 1 arg(s), received 2
+#       ⇒ 空白区切りは値にならない。フラグは true。**block のまま**
+#   ParseBool の偽側は 0 / f / F / FALSE / false / False の 6 語だけ
+#
+# 位置判定は #346 が has_refspec_force で確立した形を再利用する（新規に
+# 書き起こさない）。既定は網（本 hook は tail-risk 型）で、データ文脈だと
+# **積極的に同定できた**セグメントだけを除外する。
+has_active_delete_branch() {
+  local prepared
+  # (1) データ文脈が食う heredoc 本文を落とす（#346 と同じ抽出を共有）
+  prepared="$(strip_dataonly_heredoc_bodies "$1")"
+  # (2) 行継続 `\<改行>` を畳む。畳まないと
+  #       gh pr merge 42 --merge \
+  #         --delete-branch
+  #     が別セグメントに割れて見逃す。旧実装も grep が行単位なので同じ穴が
+  #     あった。ここは緩める方向ではなく、見逃しを 1 つ塞ぐ方向の変更である。
+  #     sed の `:a;N;$!ba` は使わない。BSD sed は最終行で N に当たると
+  #     パターン空間を捨てるため、**1 行入力が丸ごと空になる**（macOS 実測）。
+  #     空になれば述語は常に偽 = ガードが全面 fail-open する。bash 置換で行う。
+  local _bs_nl=$'\\\n'
+  prepared="${prepared//"$_bs_nl"/}"
+  # (3) `$(` はコマンド置換の開始なので区切りにする。切らないと
+  #     `git commit -m $(gh pr merge 1 --delete-branch)` が git セグメントとして
+  #     除外され見逃す。
+  #     裸の `(` では切らない — `fix(#195):` が偽セグメントを生んで #346 が
+  #     踏んだ誤検知に戻る。バッククォートでも切らない — markdown のコード
+  #     スパンと区別できず、言及を再び block してしまう（本 issue の 2 件目と
+  #     同じ形）。この 2 つを切らないことは意図であって漏れではない。
+  prepared="${prepared//'$('/;}"
+
+  # `… | bash` の形はデータ文脈の除外を丸ごと無効にし、純粋な網に落とす。
+  # 無効にしないと `echo "gh pr merge 1 --delete-branch" | bash` が echo
+  # セグメントとして除外される。この入力は **修正前は block していた**（旧正規
+  # 表現に一致するため）ので、素通しにすると見逃しの純増になる。実測:
+  #   長形  echo "… --delete-branch" | bash  修正前 rc=2 → 修正後 rc=2（維持）
+  #   短縮形 echo "… -d" | bash              修正前 rc=0 → 修正後 rc=2（新規に塞ぐ）
+  # 誤検知を減らす修正で見逃しを増やしてはならない（issue #358 の安全境界）。
+  local netonly=0
+  if printf '%s' "$prepared" \
+     | grep -qE '[|][[:space:]]*(bash|sh|zsh|ksh|dash|xargs)([^A-Za-z0-9_-]|$)'; then
+    netonly=1
+  fi
+
+  # shellcheck disable=SC2020 # 3 個の区切り文字を全て改行へ写す（#346 と同形）
+  printf '%s' "$prepared" | tr ';|&' '\n\n\n' | awk -v netonly="$netonly" '
+    # strconv.ParseBool の偽側。これ以外の値は gh 自身がエラーにするので、
+    # 判断できない値は「削除しうる」側に倒す。
+    function is_false_val(v) {
+      return (v == "0" || v == "f" || v == "F" ||
+              v == "FALSE" || v == "false" || v == "False")
+    }
+    # トークンが「ブランチを削除する」指定か。
+    # `=` の値は **直前の 1 文字** に束縛される（pflag 実測）:
+    #   -dm=false → -d は true（値は m に効く）  … 削除する
+    #   -md=false → 値は d に効く                … 削除しない
+    # 値を取る短縮形（gh pr merge: -A -b -F -t）に当たったら、以降はその値。
+    function delete_active(t,   eq, val, letters, n, i, c) {
+      if (substr(t, 1, 2) == "--") {
+        eq = index(t, "=")
+        if (eq == 0) return (t == "--delete-branch")
+        if (substr(t, 1, eq - 1) != "--delete-branch") return 0
+        return (is_false_val(substr(t, eq + 1)) ? 0 : 1)
+      }
+      if (substr(t, 1, 1) != "-" || length(t) < 2) return 0
+      eq = index(t, "=")
+      if (eq > 0) { letters = substr(t, 2, eq - 2); val = substr(t, eq + 1) }
+      else        { letters = substr(t, 2);         val = "" }
+      n = length(letters)
+      for (i = 1; i <= n; i++) {
+        c = substr(letters, i, 1)
+        if (c == "d") {
+          if (eq > 0 && i == n) return (is_false_val(val) ? 0 : 1)
+          return 1
+        }
+        if (c == "A" || c == "b" || c == "F" || c == "t") return 0
+      }
+      return 0
+    }
+    function is_runner(t) {
+      return (t == "env" || t == "sudo" || t == "doas" || t == "nohup" ||
+              t == "time" || t == "timeout" || t == "stdbuf" || t == "nice" ||
+              t == "ionice" || t == "setsid" || t == "command" || t == "exec" ||
+              t == "xargs" || t == "eval" ||
+              t == "bash" || t == "sh" || t == "zsh" || t == "dash" || t == "ksh" ||
+              t ~ /^[A-Za-z_][A-Za-z0-9_]*=/)
+    }
+    function is_dataonly(t) {
+      return (t == "grep" || t == "egrep" || t == "fgrep" || t == "rg" || t == "ag" ||
+              t == "echo" || t == "printf" || t == "cat" || t == "tee" ||
+              t == "head" || t == "tail")
+    }
+    function strip_punct(t) { gsub(/^[^A-Za-z0-9_]+/, "", t); return t }
+    {
+      if (NF == 0) next
+
+      # --- stage 1: データ文脈だと同定できたセグメントだけを除外する ---
+      if (netonly == 0) {
+        cw = ""; ci = 0
+        for (i = 1; i <= NF; i++) {
+          t = strip_punct($i)
+          if (t == "") continue
+          if (is_runner(t)) continue
+          if (substr(t, 1, 1) == "-") continue
+          cw = t; ci = i; break
+        }
+        if (ci > 0) {
+          # git は gh を起動しない。コミットメッセージ本文はここで落ちる。
+          if (cw == "git") next
+          if (is_dataonly(cw)) next
+        }
+      }
+
+      # --- stage 2 (既定の網): セグメント先頭が何であれ中身を見る ---
+      # 区切り記号を空白へ潰してから再トークン化する。トークン等価だけで見ると
+      # `os.system(gh pr merge 1 -d)` の `gh` を拾えない（#346 の第 2 版と同じ穴）。
+      # フラグの形を保つため `=` `-` は残す。
+      s2 = $0
+      gsub(/[^A-Za-z0-9_.:\/=+-]/, " ", s2)
+      n2 = split(s2, a2, /[ \t]+/)
+      gi = 0
+      for (i = 1; i <= n2; i++) {
+        if (a2[i] == "gh" || a2[i] ~ /\/gh$/) { gi = i; break }
+      }
+      if (gi == 0) next
+      pi = 0; mi = 0
+      for (i = gi + 1; i <= n2; i++) if (a2[i] == "pr")    { pi = i; break }
+      if (pi == 0) next
+      for (i = pi + 1; i <= n2; i++) if (a2[i] == "merge") { mi = i; break }
+      if (mi == 0) next
+      for (i = gi + 1; i <= n2; i++) {
+        if (delete_active(a2[i])) { print "ACTIVE"; exit }
+      }
+    }
+  ' | grep -q ACTIVE
+}
+
+if has_active_delete_branch "$cmd_norm"; then
     PR_CHECKED=false
 
     # Extract PR number
@@ -489,7 +661,10 @@ if echo "$cmd" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
                     echo "[Hook] BLOCKED: PR #${PR_NUM} source branch is '${branch}' (protected)." >&2
                     echo "[Hook] --delete-branch would delete '${branch}', which is tied to CI/CD." >&2
                     echo "[Hook] Remove --delete-branch and run: gh pr merge ${PR_NUM} --merge" >&2
-                    _aidd_block
+                    # 規則名で台帳に積む。無いと Check 0a2 などと同じ名前で
+                    # 混ざり、「この規則の誤検知率」が測れない（#346 が
+                    # _aidd_block にタグ引数を足したのはそのため）。
+                    _aidd_block "delete-branch"
                 fi
             done
             # PR source branch is NOT protected - allow
@@ -504,7 +679,8 @@ if echo "$cmd" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
                 echo "[Hook] BLOCKED: Cannot determine PR source branch, and current branch '${branch}' is protected." >&2
                 echo "[Hook] --delete-branch could delete a protected branch." >&2
                 echo "[Hook] Remove --delete-branch flag and retry." >&2
-                _aidd_block
+                echo "[Hook] NOTE: --delete-branch=false は削除しない指定なので通ります。" >&2
+                _aidd_block "delete-branch"
             fi
         done
     fi
