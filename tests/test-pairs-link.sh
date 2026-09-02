@@ -397,6 +397,82 @@ else:
             f"enforcement={codex_config} trust={trust} broken={broken}",
         )
 
+# pair17: aidd-governance の payload 正本 ↔ 配備先のマーカーブロック（aidd-governance#82）
+# payload/README.md は「payload と適用先を個別に手編集せず、payload を正として同期検査を
+# 行う」と宣言していたが、その同期検査は存在しなかった。宣言だけあって強制が無い定型。
+# pair11/12 の MD5 全体一致は使えない。配備先（~/.codex/rules/default.rules 等）は
+# payload 以外の行も正当に持つため、**包含**の照合になる。
+# 方式: 開きマーカーへ payload の sha256 を埋め、ブロック内側のバイト列の sha256 と比べる。
+#   - 配備先を手編集 → 内側の hash が変わる → red（marker の記録値と want が一致するので
+#     「手編集」と診断できる）
+#   - payload を変更して未適用 → want が変わる → red（marker の記録値が古いので「未適用」）
+#   - マーカーを消す → block-missing → red
+# 正規化は「末尾改行を 1 個に揃える」だけ。内容の 1 バイト変更は必ず hash に出る。
+gov = Path(os.environ.get("AIDD_GOV_ROOT", str(home / "Developer" / "aidd-governance")))
+manifest = gov / "design" / "ops" / "payloads" / "manifest.tsv"
+if not manifest.is_file():
+    ok("pair17 payload manifest skipped (aidd-governance not present)")
+else:
+    def _norm(t: str) -> str:
+        return t.rstrip("\n") + "\n"
+
+    problems = []
+    checked = 0
+    for raw in manifest.read_text(encoding="utf-8").splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        parts = raw.split("\t")
+        if len(parts) != 3:
+            problems.append(f"manifest row is not 3 columns: {raw!r}")
+            continue
+        name, target, style = (c.strip() for c in parts)
+        src = gov / "design" / "ops" / "payloads" / name
+        dest = Path(target.replace("$HOME", str(home)))
+        if not src.is_file():
+            problems.append(f"{name}: payload missing at {src}")
+            continue
+        if not dest.is_file():
+            # 配備先が無い機械では照合対象が無い（pair11/12 の「no local deploy」と同じ）
+            continue
+        if style == "hash":
+            pre, suf = f"# >>> aidd-payload: {name} sha256=", " >>>"
+            close_m = f"# <<< aidd-payload: {name} <<<"
+        elif style == "html":
+            pre, suf = f"<!-- >>> aidd-payload: {name} sha256=", " >>> -->"
+            close_m = f"<!-- <<< aidd-payload: {name} <<< -->"
+        else:
+            problems.append(f"{name}: unknown marker_style {style!r}")
+            continue
+        want = hashlib.sha256(_norm(src.read_text(encoding="utf-8")).encode()).hexdigest()
+        text = dest.read_text(encoding="utf-8")
+        m = re.search(
+            r"^" + re.escape(pre) + r"([0-9a-f]{64})" + re.escape(suf)
+            + r"\n([\s\S]*?)^" + re.escape(close_m) + r"\n?",
+            text,
+            re.M,
+        )
+        checked += 1
+        if m is None:
+            problems.append(
+                f"{name}: block-missing | declaration={src} sha256:{want} "
+                f"enforcement={dest} (no marker block)"
+            )
+            continue
+        got = hashlib.sha256(_norm(m.group(2)).encode()).hexdigest()
+        if got != want:
+            reason = ("deployed block hand-edited" if m.group(1) == want
+                      else "payload changed since last apply")
+            problems.append(
+                f"{name}: {reason} | declaration({src})=sha256:{want} "
+                f"enforcement({dest})=sha256:{got} marker_records={m.group(1)}"
+            )
+    if problems:
+        bad("pair17 payload SSOT != deployed block", " ; ".join(problems))
+    elif checked == 0:
+        ok("pair17 payload blocks skipped (no deployed target on this machine)")
+    else:
+        ok(f"pair17 payload SSOT == deployed block ({checked} payload(s) verified)")
+
 # pair16: facts.yaml 登録簿 ↔ test-pairs-link.sh が実装している pair 群。
 # aidd-governance#97 —「二重管理が系統的に散在すると知りながら能動的に掃かず、
 # CD の失敗を 1 件ずつ受動的に発見した」。同じ受動性が登録簿自身にも起きていた。

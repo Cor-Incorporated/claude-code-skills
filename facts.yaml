@@ -51,6 +51,19 @@ pairs:
       hooks.json 登録）を全て満たし MD5 も一致していたが、`enabled = false` のため
       19 日間発火ゼロだった。pair7 と pair11 はその間ずっと PASS していた
       （どちらも trust を見ないため）。片側だけ変えると pair15 が両側の値を挙げて red。
+  - id: codex-payload-ssot-vs-deployed-block
+    pair: pair17
+    declaration: ~/Developer/aidd-governance/design/ops/payloads/{codex-rules-append.rules,codex-AGENTS-worktree.md}
+    enforcement: ~/.codex/rules/default.rules / ~/.codex/AGENTS.md#aidd-payload-block
+    note: >
+      aidd-governance#82。payloads/README.md は「payload を正として同期検査を行う」と
+      宣言していたが、その同期検査が存在しなかった。配備先は payload 以外の行も正当に
+      持つため pair11/12 の MD5 全体一致は使えず、マーカーで囲んだブロックの内側の
+      sha256 を payload のそれと比べる包含照合にする。配備先を手編集すればブロック内側の
+      hash が変わって red、payload だけ変えれば marker の記録値が古いままで red、
+      マーカーを消せば block-missing で red。$HOME は展開しない（展開すると配備先の
+      内容が機械ごとに変わり照合が原理的に成立しない）。対応表は manifest.tsv が正本で、
+      適用側 apply-local-dotfiles.sh と本 pair が同じそれを読む。
   - id: codex-hook-source-vs-deploy
     pair: pair11
     declaration: hooks/codex/protect-branches-codex.sh
