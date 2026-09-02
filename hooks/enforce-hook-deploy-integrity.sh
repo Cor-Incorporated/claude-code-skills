@@ -107,6 +107,67 @@ if declare -F aidd_ledger_append >/dev/null 2>&1; then
     "session start HB" "heartbeat" "H1"
 fi
 
+# --- core.hooksPath override that silently drops guards -----------------------
+#
+# 起点事故 (2026-09-02): 監督のプローブが `set -e` 無しでサンドボックスへの `cd` に
+# 失敗し、続く `git config core.hooksPath /dev/null` が **実リポの
+# aidd-governance に当たった。** 以後この repo の commit は pre-commit（H16 秘密
+# 走査）を一度も通っていない。事後走査では流出は無かったが、**気づいたのは
+# 別件を調べていた偶然**であって、装置は何も言わなかった。
+#
+# 同日、claude-code-skills も local override が `<repo>/.git/hooks`（`.sample`
+# のみ）を指しており、global の pre-commit を影にしていた。こちらは誰が設定したか
+# 特定できなかった。**設定した本人が気づけない**のが本欠陥の性質である。
+#
+# 判定: **local override が global より hook を減らしているか。**
+#   - 「pre-commit が無い」だけでは撃たない。pre-commit を持たない repo は正当に
+#     多く、そこで撃つと雑音になる。雑音はガードが読まれなくなる最短路である。
+#   - global が提供する hook を override が落としているときだけ撃つ。これは
+#     「守りが減った」ことの直接の観測であって、好みの問題ではない。
+#
+# 誤検知面を実測してから入れた (2026-09-02, $HOME/Developer 配下 58 repo):
+#   override 有り 7 / うち失うもの有り 6 / 誤検知 0
+#   opencode の `.husky/_` は 5 hook すべて持つので撃たない（正しく OK）
+#   4 repo が pre-commit を完全に失っていた = 秘密走査が commit 時に走らない
+#
+# SessionStart は block できない。したがって出力は**実行可能な修復コマンド**に
+# する（runbook.md 実値主義: 「適切に直す」ではなく、貼れば直る 1 行を出す）。
+_ghp="$(git config --global core.hooksPath 2>/dev/null || true)"
+_lhp="$(git -C "${CLAUDE_PROJECT_DIR:-.}" config --local core.hooksPath 2>/dev/null || true)"
+if [[ -n "$_ghp" && -n "$_lhp" && -d "$_ghp" ]]; then
+  case "$_lhp" in
+    /*) _lhp_abs="$_lhp" ;;
+    *)  _lhp_abs="${CLAUDE_PROJECT_DIR:-.}/$_lhp" ;;
+  esac
+  _lost=""
+  for _h in "$_ghp"/*; do
+    [[ -f "$_h" ]] || continue
+    _hn="$(basename "$_h")"
+    case "$_hn" in *.sample) continue ;; esac
+    [[ -x "$_lhp_abs/$_hn" ]] || _lost="${_lost}${_lost:+ }${_hn}"
+  done
+  if [[ -n "$_lost" ]]; then
+    echo "[Hook Deploy Integrity] core.hooksPath の local override が global の hook を落としています。" >&2
+    echo "  repo   : ${CLAUDE_PROJECT_DIR:-$PWD}" >&2
+    echo "  local  : ${_lhp}" >&2
+    echo "  global : ${_ghp}" >&2
+    echo "  失う   : ${_lost}" >&2
+    echo "  FIX    : git -C '${CLAUDE_PROJECT_DIR:-$PWD}' config --local --unset core.hooksPath" >&2
+    # override 先が hook を置けない場所（/dev/null 等）のとき「そこへ配置しろ」は
+    # 実行不可能な助言になる。runbook.md 実値主義 — 出す手順は実行できるものだけ。
+    if [[ -d "$_lhp_abs" ]]; then
+      echo "  （override が意図的なら、落ちている hook を ${_lhp_abs}/ へ配置してください）" >&2
+    else
+      echo "  （'${_lhp}' はディレクトリではないので hook を置けません。unset が唯一の修復です）" >&2
+    fi
+    if declare -F aidd_ledger_append >/dev/null 2>&1; then
+      aidd_ledger_append "enforce-hook-deploy-integrity" "warn" "warn" \
+        "local hooksPath override drops: ${_lost}" "hookspath-override-drops-guards"
+    fi
+  fi
+fi
+unset _ghp _lhp _lhp_abs _lost _h _hn
+
 # No sentinel-bearing hooks dir => no baseline to diff against. Skip, but say so:
 # a silent skip is indistinguishable from a clean run, and "clean" is the one
 # conclusion we must not imply when the comparison never happened.
