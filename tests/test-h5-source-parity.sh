@@ -28,7 +28,9 @@ fi
 # 覆うのは judgment を決めるものだけ。judgment を検証するテスト群は覆わない
 # （本体が byte 固定なので両リポの判定は一致したまま。根拠はスタンプの
 # ヘッダに書いてある）。
-EXPECTED_COVERAGE="scripts/h5-source-check.sh"
+EXPECTED_COVERAGE="scripts/h5-source-check.sh
+.aidd-h5-vendor-lint
+scripts/h5-vendor-lint.sh"
 
 echo "=== 被覆範囲が宣言と一致すること (#144) ==="
 ACTUAL_COVERAGE="$(grep -E '^sha256:' "$ROOT/scripts/h5-admission-check.source" \

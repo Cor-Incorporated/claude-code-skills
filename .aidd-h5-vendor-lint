@@ -1,0 +1,72 @@
+# .aidd-h5-vendor-lint — vendor 成果物にかける検査集合の宣言 (aidd-governance#152)
+#
+# ## 何を解く宣言か
+#
+# 単一正本 + vendoring (#137) を入れてから、**正本の欠陥が 3 回とも
+# 「消費側の CI」でしか検出されなかった。** 正本側の CI は 3 回とも緑だった。
+#
+#   1 変数直後の非 ASCII（set -u で unbound）  捕: ccs test-no-ambiguous-expansion.sh
+#   2 UNDECIDABLE-API                          捕: ccs workflow-permission-scan.py
+#   3 SC2034 未使用 local                       捕: gov shellcheck -x
+#
+# **向きを反転しても再発した**（1・2 は gov が正本、3 は ccs が正本）。
+# したがって「どちらを正本にするか」ではなく、**正本の検査集合が消費側の
+# 検査集合を包含していない**という構造の問題である。
+#
+# 実測 (2026-09-03) — 本ファイル導入前の状態:
+#
+#   ccs (正本)   .github/workflows/ci.yml    shellcheck は hooks/*.sh のみ。
+#                                             **scripts/ を一度も見ていない**
+#   gov (消費側) hooks-path-ci.yml            shellcheck -x を明示列挙。
+#                                             h5-source-check.sh はあるが
+#                                             **h5-admission-check.sh が無い**
+#
+#   結果: scripts/h5-admission-check.sh に SC2034 が 2 件あり、
+#   **どちらの CI も見ていなかった。** 欠陥は仮定ではなく実在した。
+#
+# ## 形式（.aidd-h5-gates と同じ house idiom）
+#
+#   artifact <repo 相対パス>
+#   check <名前> <コマンド。{} が対象ファイルに置換される>
+#
+# 行ベース・純 bash で読める形にする理由は .aidd-h5-gates のヘッダと同じ:
+# これを読む scripts/h5-vendor-lint.sh は依存インストールの無い job から
+# 起動されうるので、PyYAML も jq も前提にできない。
+#
+# ## 強制点
+#
+#   scripts/h5-vendor-lint.sh   本ファイルを読んで実際に走らせる。
+#                               **本ファイルが無ければ red**（skip しない）。
+#                               artifact か check が 0 件でも red
+#                               （空宣言で緑にする逃げ道を塞ぐ）。
+#   tests/test-h5-vendor-lint.sh
+#                               片側変異と、ワークフローが宣言を迂回して
+#                               直接 linter を呼んでいないことを検査する。
+#
+# **両リポが本ファイルと runner を vendor する。** スタンプ
+# (scripts/h5-admission-check.source) が sha256 で固定するので、片方だけ
+# 検査を足すと vendor parity が落ちる = #152 の完了条件 2。
+#
+# ## 深刻度をなぜ warning で切るか
+#
+# gov が実際に捕まえた SC2034 は warning である。note まで含めると
+# SC2001 / SC2086 / SC2329 が 6 件出るが、これらは**判定を持つ vendor 成果物**
+# に対する書き換えを要求する。SC2086 の引用追加は値に空白や glob が入ると
+# 挙動が変わるし、SC2329「呼ばれていない関数」は間接呼び出しの誤検知でありうる。
+#
+# **緩めているのではなく、線を実測（実際に事故になった深刻度）で引いている。**
+# note を潰すのは別の判断として別 PR で行う。
+#
+# ## 覆っていないもの（ふりをしない）
+#
+# ccs だけが持つ test-no-ambiguous-expansion.sh と workflow-permission-scan.py は
+# **まだ本宣言に入っていない。** 前者はリポジトリ全体を git ls-files で走査する形で、
+# ファイル単位の {} 置換に乗らない。後者は .github/workflows が対象で
+# vendor 成果物ではない。**事例 1・2 は本 PR では解けていない。**
+# 解けているのは事例 3（両側の shellcheck 非対称）である。
+
+artifact scripts/h5-admission-check.sh
+artifact scripts/h5-source-check.sh
+
+check syntax bash -n {}
+check lint shellcheck -x -S warning {}

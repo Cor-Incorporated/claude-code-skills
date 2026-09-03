@@ -17,7 +17,6 @@ cd "$ROOT"
 BASE_REF="${H5_BASE_REF:-origin/develop}"
 HEAD_REF="${H5_HEAD_REF:-HEAD}"
 PR_BODY="${H5_PR_BODY:-}"
-EVENT_NAME="${GITHUB_EVENT_NAME:-}"
 LEDGER_PATH="${H5_LEDGER_PATH:-$HOME/.claude/hooks/ledger/guard-ledger.jsonl}"
 LEDGER_SOURCE="${AIDD_LEDGER_SOURCE:-real}"
 
@@ -80,7 +79,7 @@ h5_gate_line() {
 # requires の欠落は「走らせない」ではなく **red**（呼び出し側が exit 1 する）。
 _H5_GATE_SKIP_REASON=""
 h5_gate_enabled() {
-  local name="$1" line tok state req missing=() p
+  local name="$1" line state req missing=() p
   _H5_GATE_SKIP_REASON=""
   line="$(h5_gate_line "$name")"
 
