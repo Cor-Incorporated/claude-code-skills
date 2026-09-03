@@ -258,6 +258,18 @@ for repo_axis in same different none; do
 done
 echo "foreign PR matrix mismatches=$pr_fail (same/none false positives and different-owner misses combined)"
 
+# origin owner が決められないと different-owner が構成できず、ASK ではなく ALLOW に
+# 見えて mismatches が積み上がる。**これは強制点の欠陥ではなくハーネスの設定失敗
+# である。** 同じ数字を「ガードが緩んだ」と読ませてはならない（本日、起動失敗の
+# 127 を BLOCK と読み違えたのと同じ型の誤り）。
+# 「測れなかった」は緑にはしない。ラベルを分けて落とす。
+foreign_unmeasurable=0
+if [[ -z "$origin_owner" ]]; then
+  foreign_unmeasurable=1
+  echo "NOTICE: origin owner を決定できず foreign PR 節は測定不能（$ROOT に origin remote が無い）。" >&2
+  echo "        上の mismatches は強制点の欠陥ではなくハーネス側の未設定である。" >&2
+fi
+
 # =============================================================================
 # 門（2026-09-03 追加）
 # =============================================================================
@@ -295,7 +307,12 @@ gate_check "hole/Codex"               "$cx_f"
 gate_check "falsepositive/ClaudeCode" "$cc_p"
 gate_check "falsepositive/Cursor"     "$cu_p"
 gate_check "falsepositive/Codex"      "$cx_p"
-gate_check "foreignPR/mismatches"     "$pr_fail"
+if [[ "$foreign_unmeasurable" -eq 1 ]]; then
+  # 測定不能も 0 にはしない。ただし強制点の欠陥とは別のラベルで落とす。
+  gate_check "foreignPR/UNMEASURABLE(ハーネス未設定)" 1
+else
+  gate_check "foreignPR/mismatches"   "$pr_fail"
+fi
 if [[ "$gate_fail" -eq 0 ]]; then
   echo "GATE-PASS: 測れた範囲で 穴 0 / 偽陽性 0 / foreign PR mismatches 0"
 else
