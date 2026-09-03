@@ -52,9 +52,21 @@
 # --- ADR-006 入場料 -----------------------------------------------------------
 #   台帳: 発火は scripts/lane-basepoint-check.sh / repair-loop-breaker.sh 経由で
 #         guard-ledger.jsonl へ届く。本 hook 自身も skip 理由を measure で残す。
+#         共有チェックアウトは rule=shared-checkout / 領域重複は
+#         rule=lane-area-overlap で記帳する（実測済み）。
 #   陰性テスト: tests/test-lane-launch-gate.sh（欠陥注入で red を実測）
 #   廃止条件: 誤ブロック率 > 30%/四半期 → LANE_BEHIND_LIMIT を緩める。
 #             発火ゼロ 90 日 → 降格候補（H6 共通様式）。
+#             共有チェックアウト判定 (4): 誤ブロック率 > 30%/四半期、または
+#             LANE_SHARED_ENFORCE=0 の降格が block の 50% を超えたら退役 issue。
+#             領域重複の警告 (3): 警告に対する分担変更が 0 件/四半期なら退役
+#             （見られていない警告は装置ではない）。
+#
+# --- 2026-09-03 の追補（項目 2）: 共有チェックアウト -----------------------------
+# 事故 2 件はいずれも「1 チェックアウトを複数レーンが共有した」ことが原因で、
+# #91 項目 2 の原文（別ブランチが同じファイルを独立実装）とは別種である。
+# 前者は「共有させない」(4) で消える。後者は worktree を分けても消えないので
+# (3) の領域重複警告が要る。**片方だけでは閉じない。**
 set -uo pipefail
 
 _LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
@@ -126,8 +138,13 @@ RUNNER = {"env", "sudo", "doas", "nohup", "time", "timeout", "stdbuf", "nice",
 TAKES_VALUE = {"-C", "--git-dir", "--work-tree", "--namespace", "-c", "--config"}
 
 out = []
-for seg in re.split(r"[;&|\n]+", cmd):
-    seg = seg.strip()
+# セパレータを捨てずに割る。`git checkout -b x || <fallback>` の `||` が
+# **失敗の握り潰し**そのものなので、捨てると 2026-09-03 の事故 1 を同定できない。
+parts = re.split(r"(\|\||&&|[;&|\n])", cmd)
+cwd = "."   # `cd X && git checkout -b y` を X で判定するための追跡
+for idx in range(0, len(parts), 2):
+    seg = parts[idx].strip()
+    nxt = parts[idx + 1] if idx + 1 < len(parts) else ""
     if not seg:
         continue
     try:
@@ -140,12 +157,17 @@ for seg in re.split(r"[;&|\n]+", cmd):
         i += 1
     if i >= len(toks):
         continue
+    if toks[i] == "cd":
+        pos = [t for t in toks[i + 1:] if not t.startswith("-")]
+        if pos:
+            cwd = pos[0]
+        continue
     if toks[i] in DATA_ONLY:
         continue
     if toks[i] != "git" and not toks[i].endswith("/git"):
         continue
     i += 1
-    repo = "."
+    repo = cwd
     # git のグローバルオプション
     while i < len(toks) and toks[i].startswith("-"):
         if toks[i] in TAKES_VALUE and i + 1 < len(toks):
@@ -154,35 +176,83 @@ for seg in re.split(r"[;&|\n]+", cmd):
             i += 2
         else:
             i += 1
-    # ここが「worktree」で、その次が「add」でなければ対象外
-    if i + 1 >= len(toks) or toks[i] != "worktree" or toks[i + 1] != "add":
+    if i >= len(toks):
         continue
-    rest = toks[i + 2:]
+    sub = toks[i]
+    # 失敗が握り潰される形か。`2>/dev/null` と後続 `||` の両方を見る。
+    swallow = "1" if ("2>/dev/null" in toks or "2>&-" in toks or nxt == "||") else "0"
 
-    start = ""
-    positional = []
-    j = 0
-    while j < len(rest):
-        t = rest[j]
-        if t == "--":
-            positional.extend(rest[j + 1:]); break
-        if t in ("-b", "-B", "--orphan"):
-            # -b <new-branch> — 起点は次の positional（省略時は HEAD）
-            j += 2; continue
-        if t.startswith("-"):
-            j += 1; continue
-        positional.append(t); j += 1
-    # positional = [<path>, <commit-ish>?]
-    target = positional[0] if positional else ""
-    if len(positional) >= 2:
-        start = positional[1]
-    out.append("%s\x1f%s\x1f%s" % (repo, start, target))
+    # --- (a) worktree add: 既存の基点規律。出力形は変えない -------------------
+    if sub == "worktree" and i + 1 < len(toks) and toks[i + 1] == "add":
+        rest = toks[i + 2:]
+        start = ""
+        positional = []
+        j = 0
+        while j < len(rest):
+            t = rest[j]
+            if t == "--":
+                positional.extend(rest[j + 1:]); break
+            if t in ("-b", "-B", "--orphan"):
+                # -b <new-branch> — 起点は次の positional（省略時は HEAD）
+                j += 2; continue
+            if t.startswith("-"):
+                j += 1; continue
+            positional.append(t); j += 1
+        # positional = [<path>, <commit-ish>?]
+        target = positional[0] if positional else ""
+        if len(positional) >= 2:
+            start = positional[1]
+        out.append("worktree-add\x1f%s\x1f%s\x1f%s" % (repo, start, target))
+        continue
+
+    # --- (b) ブランチ変更: 事故 1 前半 / 事故 2 ------------------------------
+    if sub in ("checkout", "switch"):
+        rest = toks[i + 1:]
+        newbranch, positional, dashdash = "", [], False
+        j = 0
+        while j < len(rest):
+            t = rest[j]
+            if t == "--":
+                dashdash = True; break
+            if t in ("-b", "-B", "-c", "-C", "--orphan"):
+                if j + 1 < len(rest):
+                    newbranch = rest[j + 1]
+                j += 2; continue
+            if t == "-":            # `git checkout -` = 直前のブランチへ戻る
+                positional.append(t); j += 1; continue
+            if t.startswith("-"):
+                j += 1; continue
+            positional.append(t); j += 1
+        if dashdash:
+            continue                # `git checkout -- <file>` はファイル復元
+        if newbranch:
+            out.append("branch-new\x1f%s\x1f%s\x1f%s" % (repo, newbranch, swallow))
+        elif positional:
+            # switch は常にブランチ操作。checkout は <branch> と <path> が同形
+            # なので曖昧マークを付け、ref かどうかは bash 側で git に訊く。
+            kind = "branch-switch" if sub == "switch" else "branch-switch-maybe"
+            out.append("%s\x1f%s\x1f%s\x1f%s" % (kind, repo, positional[0], swallow))
+        continue
+
+    # --- (c) 無差別ステージング: 事故 1 後半（他レーンの作業を巻き込む） -----
+    rest = toks[i + 1:]
+    if sub == "add" and any(t in ("-A", "--all", ".", "./", ":/") for t in rest):
+        out.append("stage-all\x1f%s\x1fgit add %s\x1f%s"
+                   % (repo, next(t for t in rest if t in ("-A", "--all", ".", "./", ":/")), swallow))
+    elif sub == "commit" and any(
+            t == "--all" or (re.match(r"^-[A-Za-z]+$", t) and "a" in t[1:]) for t in rest):
+        out.append("stage-all\x1f%s\x1fgit commit -a\x1f%s" % (repo, swallow))
 
 for line in out:
     print(line)
 PY
 )"
 [ -n "$parsed" ] || emit_allow
+
+# 既存ループは worktree-add だけを見る（無言経路ゼロの機械照合が掛かっている）。
+# 共有チェックアウト側は別ループで扱う。両者の入力を字面で分ける。
+wt_parsed="$(printf '%s\n' "$parsed" | grep '^worktree-add' | cut -d$'\x1f' -f2- || true)"
+shared_parsed="$(printf '%s\n' "$parsed" | grep -v '^worktree-add' || true)"
 
 note_ledger() {
   declare -F aidd_ledger_append_record >/dev/null 2>&1 || return 0
@@ -255,6 +325,71 @@ while IFS=$'\x1f' read -r repo start target; do
     printf '[lane-launch-gate] repair-loop-breaker.sh が見つからないため #88 判定を省略しました。\n' >&2
     note_ledger measure breaker-absent "repair-loop-breaker.sh 未解決のため #88 判定を省略"
   fi
-done <<<"$parsed"
+
+  # --- (3) #91 項目 2: 稼働中レーンとの担当領域の重複（警告のみ） -------------
+  # 事故 2 件の直接の形は「チェックアウトの共有」だが、#91 項目 2 の原文は
+  # 「担当領域の重複」である。着地済みの重複は lane-basepoint-check.sh の
+  # duplicates が見るので、ここは **まだ着地していない他 worktree** を見る。
+  # block ではなく警告にしてある理由は check_overlap の註記に書いた。
+  if [ -n "${LANE_PATHS:-}" ] && [ -n "$BASEPOINT_SH" ]; then
+    LANE_LEDGER_SOURCE=lane-launch-gate bash "$BASEPOINT_SH" overlap "$repo" >/dev/null || true
+  fi
+done <<<"$wt_parsed"
+
+# --- (4) #91 項目 2: 共有チェックアウトでの破壊的操作 --------------------------
+#
+# 2026-09-03 の事故 2 件。判定は lane-basepoint-check.sh が正本で、ここは
+# 「どの入力を判定へ渡すか」だけを決める（#88 と同じ分業。両側に判定を置くと
+# それ自体が宣言↔実体の二重管理になる）。
+#
+# 無言経路を作らないこと: 判定を省略する道はすべて note_ledger + stderr を通る。
+# tests/test-lane-launch-gate.sh が本ブロックも機械照合している。
+shared_op_label() {
+  case "$1" in
+    branch-new)          printf 'ブランチ生成 (%s)' "$2" ;;
+    branch-switch|branch-switch-maybe) printf 'ブランチ切替 (%s)' "$2" ;;
+    stage-all)           printf '無差別ステージング (%s)' "$2" ;;
+    *)                   printf '%s (%s)' "$1" "$2" ;;
+  esac
+}
+
+while IFS=$'\x1f' read -r kind repo arg swallow; do
+  [ -n "$kind" ] || continue
+  [ -d "$repo" ] || continue
+  git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || continue
+
+  # `git checkout <arg>` は <branch> と <path> が同形。実在パスならファイル操作
+  # として通す。ref として解決できるときだけブランチ切替とみなす。
+  # ここは「入力がブランチ操作か」の分類であって、判定の省略ではない。
+  # 記帳を要求すると `git checkout <file>` のたびに台帳が埋まる。分類だけの
+  # 分岐は `# 分類のみ` を付けて、無言経路の機械照合から明示的に外す。
+  if [ "$kind" = "branch-switch-maybe" ]; then
+    if [ -e "$repo/$arg" ]; then   # 分類のみ
+      continue
+    elif [ "$arg" != "-" ] && ! git -C "$repo" rev-parse --verify --quiet "$arg" >/dev/null 2>&1; then   # 分類のみ
+      continue
+    fi
+  fi
+
+  if [ -z "$BASEPOINT_SH" ]; then
+    # 配備済みなのに検査が効いていない状態を、黙って通さない（#81 / #121 と同型）。
+    note_ledger measure shared-checkout-unavailable \
+      "lane-basepoint-check.sh が解決できないため共有チェックアウト判定を省略: $kind $arg"
+    printf '[lane-launch-gate] lane-basepoint-check.sh が見つからないため共有チェックアウト判定を省略しました。\n' >&2
+    continue
+  fi
+
+  op="$(shared_op_label "$kind" "$arg")"
+  out="$(LANE_LEDGER_SOURCE=lane-launch-gate bash "$BASEPOINT_SH" \
+           shared-checkout "$repo" "$op" "$cmd" 2>&1)"
+  src=$?
+  if [ "$src" -ne 0 ]; then
+    extra=''
+    # 事故 1 はブランチ生成の失敗を握り潰したことで commit が誤爆した。
+    # 握り潰しを検出したら、それ自体を名指しする。
+    [ "$swallow" = "1" ] && extra=$'\n  さらに、この操作は失敗が握り潰される形（2>/dev/null か ||）になっています。\n  失敗しても後続の add/commit が走り、他レーンのブランチに載ります。'
+    emit_deny "$(printf 'レーン発射ゲート [共有チェックアウト #91]\n%s%s\n\n  意図的に無視する場合のみ LANE_SHARED_ENFORCE=0（降格は台帳へ記帳されます）。' "$out" "$extra")"
+  fi
+done <<<"$shared_parsed"
 
 emit_allow

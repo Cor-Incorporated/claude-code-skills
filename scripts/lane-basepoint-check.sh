@@ -206,21 +206,159 @@ print(json.dumps({"worktree": sys.argv[1], "base": "origin/" + sys.argv[2],
   return 1
 }
 
+# --- 共有チェックアウト (#91 項目 2) -----------------------------------------
+#
+# 2026-09-03 の事故 2 件は、いずれも「1 チェックアウトを複数レーンが共有した」
+# ことが原因である。issue #91 項目 2 の原文（Grift の add/add = 別ブランチが
+# 同じファイルを独立実装）とは**別種**なので、両方を分けて扱う。
+#
+#   事故 1: 監督が共有チェックアウトで `git checkout -b <新>` を実行 →
+#           別レーンが同じツリーを使っていたため失敗 → `2>/dev/null || <fallback>`
+#           で失敗を握り潰した → 続く `git add` + `git commit` が
+#           **他レーンのブランチに載った**。
+#             dfe65f1 test(matrix): …    ← 他レーン
+#             c65dadb test: シェル変数の… ← 監督の commit が潜り込んだ
+#   事故 2: 逆方向。監督が共有チェックアウトのブランチを切り替えたところ、
+#           その時点で別レーンが同じツリーで作業中だった。
+#
+# 「共有」の定義は実測で決めた。main worktree か linked worktree かは
+# `<absolute-git-dir>/gitdir` の有無で決まる（linked にだけ存在する）。実測:
+#   MAIN    n=55  /Users/…/claude-code-skills/.git
+#   LINKED  n=15  /Users/…/aidd-governance/.git/worktrees/convergence
+#   MAIN    n=1   （worktree を 1 本も持たない素のリポジトリ）
+# **レーン自身の worktree は LINKED なので、この判定はレーンを巻き込まない。**
+# 巻き込むのは「linked worktree を 1 本以上抱えた main チェックアウト」だけ、
+# つまりレーンが共有している当のツリーである。
+is_shared_checkout() {
+  local repo="$1" agd n
+  agd="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null || true)"
+  [ -n "$agd" ] || return 1
+  # linked worktree は 1 レーンの専有物。切り替えても他レーンに当たらない。
+  [ -f "$agd/gitdir" ] && return 1
+  n="$(git -C "$repo" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || true)"
+  [ "${n:-0}" -ge 2 ]
+}
+
+# check_shared_checkout <repo> <operation> [detail]
+#
+# 強制の向き: 共有チェックアウトでの**ブランチ変更と無差別ステージング**を止め、
+# worktree へ誘導する。`git commit` そのものは止めない — 15 worktree を抱えた
+# 監督用チェックアウトで commit を全面禁止すると、文書作業が一切できなくなる。
+# 事故 1 で commit が誤爆したのは commit が悪いからではなく、**その前の
+# branch 変更の失敗を握り潰した**からである。そこを止めれば commit は誤爆しない。
+check_shared_checkout() {
+  local repo="$1" op="$2" detail="${3:-}" n linked branch subject
+  is_shared_checkout "$repo" || return 0
+  n="$(git -C "$repo" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || true)"
+  linked=$(( ${n:-1} - 1 ))
+  branch="$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+  subject="$(printf '{"repo":"%s","operation":"%s","current_branch":"%s","linked_worktrees":%s}' \
+    "$repo" "$op" "$branch" "$linked")"
+
+  die "共有チェックアウトで ${op} を実行しようとしている: ${repo}"
+  die "  このチェックアウトには linked worktree が ${linked} 本ぶら下がっており、"
+  die "  現在 ${branch} を指している。他レーンが同じツリーを使っている可能性がある。"
+  die "  2026-09-03 に実際に起きたこと: ブランチ生成の失敗を握り潰し、続く commit が"
+  die "  他レーンのブランチに載った（c65dadb が dfe65f1 の上に潜り込んだ）。"
+  die "  worktree を切って作業すること:"
+  die "    git -C ${repo} worktree add ${repo}/.worktrees/<agent>/<slug> -b <branch> origin/<base>"
+  [ -n "$detail" ] && die "  検出した入力: ${detail}"
+  ledger block shared-checkout "$op in shared checkout ($linked linked worktrees)" "$subject"
+  return 1
+}
+
+# --- 稼働中レーンとの担当領域の重複 (#91 項目 2 原文) --------------------------
+#
+# duplicates モードは「base に既に在るファイル」しか見ない = **着地済みの成果**
+# しか見えない。並列レーンの本当の衝突相手は、まだ着地していない別 worktree
+# である。ここはその差を埋める。
+#
+# レジストリは作らない。稼働中 worktree の diff から導出する。宣言と実体を
+# 二重に持つと片方だけ古くなって嘘をつく（本リポジトリが繰り返し踏んだ形）。
+# 判定材料は LANE_PATHS（改行区切り、#88 と同じ宣言欄を使い回す）。
+#
+# 警告であって block ではない。他レーンが触ったファイルへ正当に追記する場合が
+# あり、54 worktree 規模では prefix 一致が常時発火する。**block の値打ちが
+# 誤検知で溶ける**ので、記帳して見えるようにするところまでに留める。
+check_overlap() {
+  local repo="$1" wt self_wt hits=0 report="" changed base overlap subject
+  [ -n "${LANE_PATHS:-}" ] || { note "LANE_PATHS 未宣言: 担当領域の重複判定を省略する"; return 0; }
+  base="$(resolve_base "$repo" 2>/dev/null || true)"
+  [ -n "$base" ] || { note "base を決められない: 担当領域の重複判定を省略する"; return 0; }
+  base="${base#origin/}"
+  self_wt="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)"
+
+  while IFS= read -r wt; do
+    wt="${wt#worktree }"
+    [ -n "$wt" ] || continue
+    [ "$wt" = "$self_wt" ] && continue
+    [ -d "$wt" ] || continue
+    # そのレーンが fork 点以降に触ったファイル（= まだ着地していない作業）。
+    # commit 済みだけでは足りない。実測 (2026-09-03, aidd-governance):
+    #   cluster-a/convergence  ahead=0 だが未コミット 16 ファイル
+    #   （.github/workflows/homonym-guard-ci.yml を含む）
+    # レーンは長時間コミットせずに作業する。commit 済みしか見ないと、
+    # **まさに衝突が起きている最中のレーンが見えない**。作業ツリーも足す。
+    changed="$( { git -C "$wt" diff --name-only "origin/$base...HEAD" 2>/dev/null || true
+                  git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null \
+                    | sed -e 's/^...//' -e 's/.* -> //' || true
+                } | sort -u )"
+    [ -n "$changed" ] || continue
+    # 宣言と変更一覧は argv で渡す。heredoc とパイプは併用できない（SC2259）。
+    overlap="$(python3 - "${LANE_PATHS:-}" "$changed" <<'PY' || true
+import sys
+declared = [p.strip() for p in sys.argv[1].splitlines() if p.strip()]
+changed = [c.strip() for c in sys.argv[2].splitlines() if c.strip()]
+print("\n".join(sorted({c for c in changed for d in declared
+                        if c == d or c.startswith(d.rstrip("/") + "/")})))
+PY
+)"
+    [ -n "$overlap" ] || continue
+    hits=$((hits + 1))
+    report="${report}${report:+$'\n'}  ${wt}: $(printf '%s' "$overlap" | tr '\n' ' ')"
+  done < <(git -C "$repo" worktree list --porcelain 2>/dev/null | grep '^worktree ')
+
+  subject="$(python3 -c '
+import json, sys
+print(json.dumps({"repo": sys.argv[1],
+                  "declared": [p for p in sys.argv[2].splitlines() if p.strip()],
+                  "overlapping_worktrees": int(sys.argv[3])}, ensure_ascii=False))' \
+    "$repo" "${LANE_PATHS:-}" "$hits")"
+
+  if [ "$hits" -eq 0 ]; then
+    note "担当領域の重複なし: 宣言したパスを触っている稼働中 worktree は無い"
+    ledger pass lane-area-overlap "overlap=0" "$subject"
+    return 0
+  fi
+  note "担当領域が稼働中の ${hits} レーンと重複している（着地前なので base には現れない）:"
+  printf '%s\n' "$report" >&2
+  note "  同じファイルを独立に実装すると add/add になる。分担を確認すること。"
+  ledger warn lane-area-overlap "overlap with $hits live worktree(s)" "$subject"
+  return 0
+}
+
 usage() {
   cat >&2 <<'EOF'
 usage: lane-basepoint-check.sh <basepoint|duplicates|check> <worktree-path> [base-branch]
        lane-basepoint-check.sh basepoint-ref <repo-path> <commit-ish> [base-branch]
+       lane-basepoint-check.sh shared-checkout <repo-path> <operation> [detail]
+       lane-basepoint-check.sh overlap <repo-path>
 
-  basepoint      worktree が base より遅れていないか（既存 worktree 向け）
-  basepoint-ref  これから checkout する起点が base より遅れていないか
-                 （worktree 作成 *前* の判定。ディレクトリはまだ存在しない）
-  duplicates     このブランチが新規作成したファイルが base に既に在るか（add/add 先回り）
-  check          basepoint + duplicates
+  basepoint       worktree が base より遅れていないか（既存 worktree 向け）
+  basepoint-ref   これから checkout する起点が base より遅れていないか
+                  （worktree 作成 *前* の判定。ディレクトリはまだ存在しない）
+  duplicates      このブランチが新規作成したファイルが base に既に在るか（add/add 先回り）
+  check           basepoint + duplicates
+  shared-checkout linked worktree を抱えた main チェックアウトでの破壊的操作か
+                  （非ゼロ = block。2026-09-03 の事故 2 件）
+  overlap         LANE_PATHS 宣言が稼働中の他 worktree と重なるか（警告のみ、常に 0）
 
 env:
   LANE_BASE                 base ブランチ名を明示（既定: origin/HEAD -> develop -> main）
   LANE_BEHIND_LIMIT         許容する behind commit 数（既定 0）
   LANE_BASEPOINT_ENFORCE    0 で警告のみへ降格（降格したことを台帳へ記帳する）
+  LANE_PATHS                触る予定のパス（改行区切り）。overlap の判定材料
+  LANE_SHARED_ENFORCE       0 で shared-checkout の block を warn へ降格（記帳する）
 EOF
 }
 
@@ -228,6 +366,30 @@ main() {
   local mode="${1:-}" wt="${2:-}" base="${3:-}"
   case "$mode" in
     basepoint | duplicates | check) ;;
+    shared-checkout)
+      # 引数の意味が違う: <repo> <operation> [detail]
+      local srepo="${2:-}" sop="${3:-}" sdetail="${4:-}"
+      [ -n "$srepo" ] && [ -n "$sop" ] || { usage; return 2; }
+      git -C "$srepo" rev-parse --git-dir >/dev/null 2>&1 || {
+        die "git リポジトリではない: $srepo"; return 2; }
+      check_shared_checkout "$srepo" "$sop" "$sdetail"
+      local src=$?
+      if [ "$src" -eq 1 ] && [ "${LANE_SHARED_ENFORCE:-1}" = "0" ]; then
+        note "LANE_SHARED_ENFORCE=0 のため block を warn へ降格した"
+        ledger warn shared-checkout-bypassed "block downgraded by LANE_SHARED_ENFORCE=0" \
+          "$(printf '{"repo":"%s","operation":"%s"}' "$srepo" "$sop")"
+        return 0
+      fi
+      return "$src"
+      ;;
+    overlap)
+      local orepo="${2:-}"
+      [ -n "$orepo" ] || { usage; return 2; }
+      git -C "$orepo" rev-parse --git-dir >/dev/null 2>&1 || {
+        die "git リポジトリではない: $orepo"; return 2; }
+      check_overlap "$orepo"
+      return 0
+      ;;
     basepoint-ref)
       # 引数の意味が違う: <repo> <commit-ish> [base]
       local repo="${2:-}" ref="${3:-}" rbase="${4:-}"
