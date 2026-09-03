@@ -60,6 +60,29 @@ stamp_get() { # <key>
   ' "$STAMP"
 }
 
+# 追加被覆 (aidd-governance#144): `sha256:<repo相対パス>=<hash>` 行を列挙する。
+# `sha256=` は本体 (h5-admission-check.sh) 専用のまま残す。**加算的な拡張**で、
+# 旧い検査器はこの行を読まない（awk -F= の $1 が `sha256:<path>` になり
+# `sha256` と一致しないため。実測 2026-09-03、行順にも依存しない）。
+# したがって「片方が新書式・片方が旧書式」の移行期でも既存照合は壊れない。
+stamp_extra_paths() { # -> "<path>\t<sha>" を 1 行ずつ
+  [[ -f "$STAMP" ]] || return 0
+  awk '
+    /^[[:space:]]*(#|$)/ { next }
+    /^[[:space:]]*sha256:/ {
+      line = $0
+      sub(/^[[:space:]]*sha256:/, "", line)
+      idx = index(line, "=")
+      if (idx < 2) next
+      p = substr(line, 1, idx - 1)
+      h = substr(line, idx + 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", p)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", h)
+      if (p != "" && h != "") printf "%s\t%s\n", p, h
+    }
+  ' "$STAMP"
+}
+
 # --- 前提の存在確認。無いことを黙って通さない ---
 if [[ ! -f "$BODY" ]]; then
   fail "本体が無い: $BODY"; exit 1
@@ -92,20 +115,47 @@ fi
 
 case "$MODE" in
 offline)
+  offline_bad=0
   got_sha="$(sha256_of "$BODY")" || { fail "sha256 を計算できない（sha256sum も shasum も無い）"; exit 1; }
-  if [[ "$got_sha" == "$want_sha" ]]; then
-    log "H5-SOURCE-OK (offline): $BODY は スタンプと一致する"
+  if [[ "$got_sha" != "$want_sha" ]]; then
+    # runbook.md rule C: 期待値だけでなく観測値も出す。片方だけでは直せない。
+    fail "スタンプと一致しない: scripts/h5-admission-check.sh"
+    fail "  stamp  sha256 = $want_sha"
+    fail "  actual sha256 = $got_sha"
+    fail "  file          = $BODY"
+    offline_bad=$((offline_bad + 1))
+  fi
+  # 追加被覆分 (#144)。1 件ずつ「どのファイルが / 期待 / 実測」を出す。
+  covered=1
+  while IFS="$(printf '\t')" read -r p want; do
+    [[ -z "$p" ]] && continue
+    covered=$((covered + 1))
+    if [[ ! -f "$ROOT/$p" ]]; then
+      fail "スタンプが覆うファイルが存在しない: $p"
+      fail "  stamp sha256 = $want"
+      offline_bad=$((offline_bad + 1))
+      continue
+    fi
+    got="$(sha256_of "$ROOT/$p")" || { fail "sha256 を計算できない: $p"; offline_bad=$((offline_bad + 1)); continue; }
+    if [[ "$got" != "$want" ]]; then
+      fail "スタンプと一致しない: $p"
+      fail "  stamp  sha256 = $want"
+      fail "  actual sha256 = $got"
+      fail "  file          = $ROOT/$p"
+      offline_bad=$((offline_bad + 1))
+    fi
+  done <<<"$(stamp_extra_paths)"
+
+  if [[ "$offline_bad" -eq 0 ]]; then
+    log "H5-SOURCE-OK (offline): 被覆 $covered ファイルがすべてスタンプと一致する"
     log "  source=$src_repo ref=$src_ref commit=${src_commit:-<none>}"
-    log "  sha256=$got_sha"
+    log "  sha256=$got_sha (scripts/h5-admission-check.sh)"
+    stamp_extra_paths | while IFS="$(printf '\t')" read -r p _; do [[ -n "$p" ]] && log "  covered: $p"; done
     exit 0
   fi
-  # runbook.md rule C: 期待値だけでなく観測値も出す。片方だけでは直せない。
-  fail "vendor 済み本体がスタンプと一致しない（ローカル改変の疑い）"
-  fail "  stamp  sha256 = $want_sha"
-  fail "  actual sha256 = $got_sha"
-  fail "  body          = $BODY"
+  fail "$offline_bad 件がスタンプと一致しない（ローカル改変の疑い / 被覆 $covered ファイル）"
   fail "対処: 正本 $src_repo@$src_ref から vendor し直し、スタンプも更新する"
-  fail "本体をこのリポジトリで直接編集してはならない (aidd-governance#137)"
+  fail "これらのファイルをこのリポジトリで直接編集してはならない (aidd-governance#137 / #144)"
   exit 1
   ;;
 online)
@@ -120,46 +170,75 @@ online)
     unver "gh が無いため正本を取得できなかった — **緑にしない**"
     exit 2
   fi
-  tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
-  # owner と repo を別セグメントで書く。1 変数へ "owner/repo" を入れると
-  # claude-code-skills の workflow-permission-scan.py が
-  # `repos/{}/contents/...` と読み、宣言済みの `repos/{owner}/{repo}/contents/{path}`
-  # に当たらず UNDECIDABLE-API になる（実測 2026-09-03, ccs#368 の CI）。
-  # 宣言を増やすのではなく呼び出し側を正す。
   src_owner="${src_repo%%/*}"; src_name="${src_repo##*/}"
-  body_path="scripts/h5-admission-check.sh"
-  err="$(mktemp)"
-  if ! gh api "repos/${src_owner}/${src_name}/contents/${body_path}?ref=${src_ref}" \
-        --jq '.content' 2>"$err" | base64 -d > "$tmp" 2>/dev/null || [[ ! -s "$tmp" ]]; then
-    # #349 の原則: 相手側が見えないとき PASS にしない。SKIP でもなく UNVERIFIED。
-    # ただし「なぜ見えないか」を分けて出す。恒久的に見えない（権限）と
-    # 一時的に見えない（network）は対処がまったく違うのに、同じ赤だと
-    # 「いつもの赤」として無視される。
-    if grep -qiE 'Not Found|HTTP 404|Resource not accessible|HTTP 403' "$err" 2>/dev/null; then
-      unver "正本 $src_repo@$src_ref を **読む権限が無い**（404/403）"
-      unver "正本が private で、実行中のトークンが当該リポジトリを読めない場合これになる。"
-      unver "対処は 2 つ: (1) cross-repo read が可能な token を secret で渡す"
-      unver "          (2) 正本を、消費側から読めるリポジトリへ置く"
-      unver "**この状態は恒久的である。** 再実行しても直らない。"
-    else
-      unver "正本 $src_repo@$src_ref を取得できなかった（network / ref 不在）"
+
+  # 正本から 1 ファイル取って sha256 を返す。取得できなければ 2 を返す。
+  # owner と repo を別セグメントで書く。1 変数へ "owner/repo" を入れると
+  # claude-code-skills の workflow-permission-scan.py が `repos/{}/contents/...`
+  # と読み、宣言済みの `repos/{owner}/{repo}/contents/{path}` に当たらず
+  # UNDECIDABLE-API になる（実測 2026-09-03, ccs#368 の CI）。
+  fetch_upstream_sha() { # <repo相対パス> -> stdout に sha / rc 2 で取得失敗
+    local rp="$1" tmp err rc
+    tmp="$(mktemp)"; err="$(mktemp)"
+    if ! gh api "repos/${src_owner}/${src_name}/contents/${rp}?ref=${src_ref}" \
+          --jq '.content' 2>"$err" | base64 -d > "$tmp" 2>/dev/null || [[ ! -s "$tmp" ]]; then
+      # #349 の原則: 相手側が見えないとき PASS にしない。SKIP でもなく UNVERIFIED。
+      # ただし「なぜ見えないか」を分けて出す。恒久的に見えない（権限）と
+      # 一時的に見えない（network）は対処がまったく違うのに、同じ赤だと
+      # 「いつもの赤」として無視される。
+      if grep -qiE 'Not Found|HTTP 404|Resource not accessible|HTTP 403' "$err" 2>/dev/null; then
+        unver "正本 $src_repo@$src_ref の $rp を **読む権限が無い、または存在しない**（404/403）"
+        unver "正本が private で実行中のトークンが読めない場合、またはパスが正本に無い場合これになる。"
+        unver "**この状態は恒久的である。** 再実行しても直らない。"
+      else
+        unver "正本 $src_repo@$src_ref の $rp を取得できなかった（network）"
+      fi
+      [[ -s "$err" ]] && sed -e 's/^/  gh: /' "$err" >&2
+      rm -f "$tmp" "$err"
+      return 2
     fi
-    [[ -s "$err" ]] && sed -e 's/^/  gh: /' "$err" >&2
-    unver "照合していないので緑にしない。exit 2 = 検査できなかった"
     rm -f "$err"
+    sha256_of "$tmp" || { rm -f "$tmp"; return 2; }
+    rm -f "$tmp"
+    return 0
+  }
+
+  online_bad=0
+  covered=1
+  # 本体。1 件でも取得できなければ「照合していない」ので exit 2 で抜ける。
+  if ! up_sha="$(fetch_upstream_sha "scripts/h5-admission-check.sh")"; then
+    unver "照合していないので緑にしない。exit 2 = 検査できなかった"
     exit 2
   fi
-  rm -f "$err"
-  up_sha="$(sha256_of "$tmp")" || { unver "sha256 を計算できない"; exit 2; }
-  if [[ "$up_sha" == "$want_sha" ]]; then
-    log "H5-SOURCE-OK (online): スタンプは正本 $src_repo@$src_ref と一致する"
-    log "  sha256=$up_sha"
+  if [[ "$up_sha" != "$want_sha" ]]; then
+    fail "正本が先へ進んでいる: scripts/h5-admission-check.sh"
+    fail "  stamp    sha256 = $want_sha"
+    fail "  upstream sha256 = $up_sha"
+    online_bad=$((online_bad + 1))
+  fi
+  # 追加被覆分 (#144)
+  while IFS="$(printf '\t')" read -r p want; do
+    [[ -z "$p" ]] && continue
+    covered=$((covered + 1))
+    if ! up="$(fetch_upstream_sha "$p")"; then
+      unver "照合していないので緑にしない。exit 2 = 検査できなかった（${p}）"
+      exit 2
+    fi
+    if [[ "$up" != "$want" ]]; then
+      fail "正本が先へ進んでいる: $p"
+      fail "  stamp    sha256 = $want"
+      fail "  upstream sha256 = $up"
+      online_bad=$((online_bad + 1))
+    fi
+  done <<<"$(stamp_extra_paths)"
+
+  if [[ "$online_bad" -eq 0 ]]; then
+    log "H5-SOURCE-OK (online): 被覆 $covered ファイルが正本 $src_repo@$src_ref と一致する"
+    log "  sha256=$up_sha (scripts/h5-admission-check.sh)"
+    stamp_extra_paths | while IFS="$(printf '\t')" read -r p _; do [[ -n "$p" ]] && log "  covered: $p"; done
     exit 0
   fi
-  fail "正本が先へ進んでいる（vendor が古い）"
-  fail "  stamp    sha256 = $want_sha"
-  fail "  upstream sha256 = $up_sha"
-  fail "  upstream        = $src_repo@$src_ref"
+  fail "$online_bad 件が正本から遅れている（被覆 $covered ファイル / upstream=${src_repo}@${src_ref}）"
   fail "対処: 正本から vendor し直す PR を出す"
   exit 1
   ;;
