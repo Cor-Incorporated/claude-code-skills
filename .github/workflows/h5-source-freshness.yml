@@ -1,0 +1,82 @@
+name: H5 Source Freshness
+
+# aidd-governance#137 — vendor した h5-admission-check.sh が正本から遅れていないか。
+#
+# **オフライン不変条件とは別のジョブである。** 同一性 (vendor 済み本体 ↔ スタンプ) は
+# tests/test-h5-vendor-parity.sh が毎 PR、network なしで見る。こちらは鮮度
+# (スタンプ ↔ 正本) を日次で見る。分けてあるのは、network 障害が
+# 「照合していないのに緑」を作らないようにするためである
+# (claude-code-skills#349 — skip を PASS に計上した件)。
+#
+# fetch に失敗したときスクリプトは exit 2 (UNVERIFIED) を返す。
+# 本ワークフローはそれを **fail 扱いにする**。SKIP でもなく緑でもない。
+# 「検査できなかった」ことが Actions の赤として観測できる形にする。
+
+on:
+  schedule:
+    - cron: "17 21 * * *"   # 毎日 UTC 21:17 (JST 06:17)
+  workflow_dispatch:
+  pull_request:
+    # スタンプ・検査器・本体を触る PR では鮮度も見る。
+    paths:
+      - "scripts/h5-admission-check.sh"
+      - "scripts/h5-admission-check.source"
+      - "scripts/h5-source-check.sh"
+      - ".github/workflows/h5-source-freshness.yml"
+
+permissions:
+  contents: read
+  issues: write        # drift / UNVERIFIED を issue にする
+
+jobs:
+  freshness:
+    name: h5-source-freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 先に offline を通す。ここが赤なら鮮度以前の問題（ローカル改変）。
+      - name: Offline invariant (vendored body vs stamp)
+        run: |
+          chmod +x scripts/h5-source-check.sh
+          bash scripts/h5-source-check.sh offline
+
+      - name: Online freshness (stamp vs upstream)
+        id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          bash scripts/h5-source-check.sh online
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          case "$rc" in
+            0) echo "up to date" ;;
+            1) echo "::error::vendor が正本から遅れている（drift）"; ;;
+            2) echo "::error::正本を照合できなかった（UNVERIFIED）。緑にはしない" ;;
+            *) echo "::error::想定外の exit=$rc" ;;
+          esac
+          exit "$rc"
+
+      # 赤のまま放置されないよう issue を立てる。drift と UNVERIFIED を書き分ける。
+      - name: Open an issue on drift or UNVERIFIED
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC: ${{ steps.fresh.outputs.rc }}
+        run: |
+          if [ "${RC:-}" = "2" ]; then
+            title="H5 vendor: 正本を照合できなかった (UNVERIFIED)"
+            body="scripts/h5-source-check.sh online が exit 2 を返した。network / 権限 / ref 不在のいずれか。**照合していないので緑にしていない** (aidd-governance#137)。run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            title="H5 vendor: 正本から遅れている (drift)"
+            body="scripts/h5-admission-check.sh の vendor が正本 aidd-governance より古い。正本から vendor し直す PR が要る (aidd-governance#137)。run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          # 同じ題の open issue があれば重ねない。
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

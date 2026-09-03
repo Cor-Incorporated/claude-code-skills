@@ -33,6 +33,92 @@ append_h5_block() {
     "$ts" "$rule" "$detail" "$LEDGER_SOURCE" >>"$LEDGER_PATH" 2>/dev/null || true
 }
 
+# ============ ゲート宣言マニフェスト (.aidd-h5-gates / aidd-governance#137) ============
+# 本体は全リポで同一 (単一正本 + vendoring)。したがって本体には全ゲートのコードが
+# 入っている。**どれを有効にするかはリポジトリごとに違う**ので、その差分を
+# .aidd-h5-gates が宣言する。
+#
+# 起点: gov の本体を claude-code-skills へ置くと、ACL ゲートは
+# design/ops/protected-identity-paths.txt が無いため恒久的に不活性のまま exit 0 に
+# なる（実測 2026-09-02）。ログは出るが、「効いている」と「当たる対象が無い」が
+# 出力上しか区別されず、機械判定が無かった。
+#
+# 書式は純 bash で読む。h5-admission.yml は actions/checkout だけを走らせ
+# PyYAML も jq も入れない**うえに、そのファイルは両リポでバイト一致のため
+# 触れない**。したがって YAML/JSON は使えない（house idiom の行ベースに合わせる）。
+#
+# on  かつ requires のファイルが無い → red。有効と宣言したのに当たる対象が無い、を通さない。
+# off → ゲートを呼ばない。skip したことを毎回出力する（黙って緑にしない）。
+# マニフェスト自体が無い → 従来どおり各ゲートの自己検出に委ねる（後方互換）。
+#   ただし「マニフェストが無い」ことを出力する。フリートには 6 版が居るため。
+GATES_FILE="${H5_GATES_FILE:-$ROOT/.aidd-h5-gates}"
+_H5_GATES_PRESENT=0
+[[ -f "$GATES_FILE" ]] && _H5_GATES_PRESENT=1
+
+# マニフェストから 1 ゲートの行を引く。無ければ空を返す。
+h5_gate_line() {
+  local name="$1"
+  [[ "$_H5_GATES_PRESENT" -eq 1 ]] || return 0
+  # 先頭が名前と一致する非コメント行だけ。名前は完全一致で引く。
+  awk -v n="$name" '
+    /^[[:space:]]*(#|$)/ { next }
+    { if ($1 == n) { print; exit } }
+  ' "$GATES_FILE"
+}
+
+# ゲートを走らせてよいか。0=走らせる / 1=走らせない。
+# requires の欠落は「走らせない」ではなく **red**（呼び出し側が exit 1 する）。
+_H5_GATE_SKIP_REASON=""
+h5_gate_enabled() {
+  local name="$1" line tok state req missing=() p
+  _H5_GATE_SKIP_REASON=""
+  line="$(h5_gate_line "$name")"
+
+  if [[ -z "$line" ]]; then
+    if [[ "$_H5_GATES_PRESENT" -eq 1 ]]; then
+      # マニフェストはあるのに、この装置の欄が無い。宣言漏れなので走らせない
+      # ことにはせず、走らせたうえで宣言漏れを出す（判定は緩めない）。
+      warn "H5-GATES: $name が $GATES_FILE に宣言されていない — 従来の自己検出で走らせる"
+    fi
+    return 0
+  fi
+
+  state="$(printf '%s\n' "$line" | awk '{print $2}')"
+  if [[ "$state" == "off" ]]; then
+    _H5_GATE_SKIP_REASON="$(printf '%s\n' "$line" | sed -n 's/.*reason=//p')"
+    return 1
+  fi
+
+  # on。requires が全部実在するかを確かめる。
+  req="$(printf '%s\n' "$line" | sed -n 's/.*requires=\([^ ]*\).*/\1/p')"
+  if [[ -n "$req" ]]; then
+    while IFS= read -r p; do
+      [[ -z "$p" ]] && continue
+      [[ -e "$ROOT/$p" ]] || missing+=("$p")
+    done <<<"$(printf '%s\n' "$req" | tr ',' '\n')"
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      fail "H5-GATES: ゲート '$name' は on と宣言されているが、必要な宣言ファイルが無い"
+      printf '  missing: %s\n' "${missing[@]}" >&2
+      fail "宣言ファイルを持たないゲートを『有効』と数えない (aidd-governance#137)"
+      fail "対処: そのファイルを追加するか、$GATES_FILE で '$name off reason=...' と宣言する"
+      append_h5_block "gate-declared-without-declaration-file" "gate=$name missing=${missing[*]}"
+      return 2
+    fi
+  fi
+  return 0
+}
+
+# ゲート 1 本を宣言に従って実行する。宣言漏れ・requires 欠落は exit 1 させる。
+h5_run_gate() {
+  local name="$1" fn="$2" rc
+  h5_gate_enabled "$name"; rc=$?
+  case "$rc" in
+    1) log "H5-GATES-SKIP: $name は off と宣言されている${_H5_GATE_SKIP_REASON:+（${_H5_GATE_SKIP_REASON}）}" ; return 0 ;;
+    2) return 1 ;;
+  esac
+  "$fn"
+}
+
 # --- Collect PR body (CI or local override) ---
 if [[ -z "$PR_BODY" && -n "${GITHUB_EVENT_PATH:-}" && -f "${GITHUB_EVENT_PATH}" ]]; then
   PR_BODY="$(python3 - <<'PY' 2>/dev/null || true
@@ -175,6 +261,7 @@ _H8_FIELDS=(
   "北極星|メトリクス|測定周期"
   "反証軸"
   "撤収"
+  "識別子境界|触ってよい識別子|触ってはいけない識別子"
 )
 _H8_FIELD_NAMES=(
   "一次資料"
@@ -184,7 +271,34 @@ _H8_FIELD_NAMES=(
   "北極星"
   "反証軸"
   "撤収"
+  "識別子境界"
 )
+# 本欄より後に追加された欄は、既存文書に対して免除する（下記 H8-EXEMPT）。
+# ここに欄名を書くことが免除の宣言であり、免除件数が 0 になったら
+# この配列と免除ロジックごと削除する（撤収条件。日付では判定しない）。
+_H8_FIELDS_SINCE_93=("識別子境界")
+
+# 識別子境界欄はリポジトリ任意ゲート (#93 ④)。off を宣言したリポでは欄を要求しない。
+# 本体は全リポ共通なので、外すのは配列からであってコードからではない。
+# `if ! cmd; then` の中で $? を読むと `!` の結果 (0) になるため、戻り値は明示的に捕る。
+set +e
+h5_gate_enabled h8-identifier-scope
+_h8_id_rc=$?
+set -e
+if [[ "$_h8_id_rc" -eq 2 ]]; then
+  exit 1
+elif [[ "$_h8_id_rc" -eq 1 ]]; then
+  log "H5-GATES-SKIP: h8-identifier-scope は off と宣言されている${_H5_GATE_SKIP_REASON:+（${_H5_GATE_SKIP_REASON}）}"
+  _H8_FIELDS=("${_H8_FIELDS[@]:0:7}")
+  _H8_FIELD_NAMES=("${_H8_FIELD_NAMES[@]:0:7}")
+  # Bash 3.2 では set -u 下の空配列展開が unbound variable になる。空文字 1 要素を
+  # 置くのではなく、参照側 (h8_is_new_field) を `${arr[@]-}` で守る。
+  _H8_FIELDS_SINCE_93=()
+fi
+
+# 候補語に**裸の「識別子」を入れない。** 入れると `## 識別子の命名規則` のような
+# 無関係な見出しに一致し、`**/*acl*` が oracle に一致したのと同型になる
+# （2026-09-02、同日 3 面で踏んだ表面形一致）。複合語に限定してある。
 h8_docs=()
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
@@ -193,13 +307,42 @@ while IFS= read -r f; do
   fi
 done <<<"$(printf '%s\n' "$DIFF_FILES")"
 
+# 既存文書は新欄を免除する。判定は「その文書が base ref に存在したか」だけで、
+# 日付を見ない（CI が日付で挙動を変えると検証しづらい）。git が既に持っている
+# 情報を読むだけなので、新しい状態を作らない。
+#
+# **免除は黙って通さない。** 免除したことと件数を毎回出力する。見えないと
+# 半年後に「全文書が新欄を持っている」と誤認する。件数が 0 になったら
+# 免除ロジックごと削除する（_H8_FIELDS_SINCE_93 の撤収条件）。
+h8_is_preexisting() {
+  git -C "$ROOT" cat-file -e "$BASE_REF:$1" 2>/dev/null
+}
+h8_is_new_field() {
+  local name="$1" n
+  # Bash 3.2: set -u 下で空配列を "${a[@]}" 展開すると unbound variable になる。
+  # h8-identifier-scope を off にしたリポでは実際に空になるため必ず守る。
+  [[ -z "${_H8_FIELDS_SINCE_93[*]-}" ]] && return 1
+  for n in "${_H8_FIELDS_SINCE_93[@]}"; do
+    [[ "$n" == "$name" ]] && return 0
+  done
+  return 1
+}
+
 h8_missing=()
+h8_exempt_count=0
 if [[ -n "${h8_docs[*]-}" ]]; then
   for f in "${h8_docs[@]}"; do
     grep -qE '委任契約|要求インベントリ' "$f" || continue
+    h8_doc_preexisting=0
+    h8_is_preexisting "$f" && h8_doc_preexisting=1
     for ((h8_i = 0; h8_i < ${#_H8_FIELDS[@]}; h8_i++)); do
       field="${_H8_FIELDS[$h8_i]}"
       field_name="${_H8_FIELD_NAMES[$h8_i]}"
+      if [[ "$h8_doc_preexisting" -eq 1 ]] && h8_is_new_field "$field_name"; then
+        log "H8-EXEMPT: $f は base ref に存在するため新欄 $field_name を要求しない（既存文書）"
+        h8_exempt_count=$((h8_exempt_count + 1))
+        continue
+      fi
       if ! python3 - "$f" "$field" "$field_name" <<'PY'
 import re, sys
 doc, pat, field_name = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -222,6 +365,11 @@ if field_name == "反証軸":
         and re.search(r"片側|変異|mutation", content, re.I)
     )
     if not valid:
+        sys.exit(1)
+if field_name == "識別子境界":
+    # 触ってよい / 触ってはいけない の区別が書かれているか、
+    # 該当しない理由が書かれているか。どちらも無ければ欄として成立しない。
+    if not re.search(r"触ってよい|触ってはいけない|該当なし", content):
         sys.exit(1)
 if field_name == "撤収" and not re.search(
     r"(?<![A-Za-z0-9_-])(active|recover|preserve|retire)(?![A-Za-z0-9_-])",
@@ -255,13 +403,182 @@ if [[ -n "${h8_missing[*]-}" ]]; then
 fi
 if [[ -n "${h8_docs[*]-}" ]]; then
   log "H8-PASS: inventory fields present in ${#h8_docs[@]} delegation doc(s)"
+  # 免除件数を毎回出す。減っていく（既存文書が更新されて新欄を持つ）のを
+  # 追えるようにするため。減らないなら移行が進んでいない。
+  log "H8-EXEMPT-COUNT: ${h8_exempt_count}（0 になったら免除ロジックを削除する）"
+  if [[ "$h8_exempt_count" -gt 0 && -n "$LEDGER_PATH" ]]; then
+    mkdir -p "$(dirname "$LEDGER_PATH")" 2>/dev/null || true
+    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    printf '{"ts":"%s","component":"H8","event":"warn","rule":"inventory-field-exempt","subject":{"exempt":%s,"docs":%s},"source":"%s","agent":"ci"}\n' \
+      "$ts" "$h8_exempt_count" "${#h8_docs[@]}" "$LEDGER_SOURCE" >>"$LEDGER_PATH" 2>/dev/null || true
+  fi
 fi
+
+# ====== 同族修理カウンタ N=3 ゲート (aidd-governance#88 + #85) ======
+# 起点事故: Grift v2-alpha-cd bootstrap 境界へ 16 本の "exact" 修理 PR が連続し、
+# うち 13 本は「Turn 4 で Terraform 定常化」という自らの戦略宣言の後だった。
+# 再裁定は 0 回。#1985 の Do-Not-Resume 裁定は失効条件を持たないまま無期限化した。
+#
+# family は PR 本文の申告ではなく **変更パスから導出** する。申告に依らないので
+# 「今回が 1 回目」と書くだけの自己免除ができない。
+# 対象は fix 型 PR に限る（feat/docs/chore は数えない = 誤検知の抑制）。
+# ============ #93 ①: access-control surface change gate ============
+# 起点 (2026-08-27): 承認語 `cloudia-handoff` に対し `grep -ril cloudia` で
+# 18 ファイルを列挙し、そのうち 2 件が Tailscale ACL の実アカウント行だった。
+# 削除していれば人が tailnet へ入れなくなっていた。検出は人が 1 件ずつ読む
+# 手作業のみで、機械的な検出は 0 だった。
+#
+# #93 の項目② は「アクセス制御ファイルを削除禁止リストに置き、**変更には
+# 個別承認を要求する**」。前半（宣言と報告）は #118 で入ったが、後半の強制点が
+# 無かった。本ゲートがそれである。
+#
+# 判定は「誰が変更したか」ではなく「**明示の承認が本文にあるか**」で引く
+# （aidd-governance#100）。AI でも人でも、マーカーがあれば通り、無ければ止まる。
+#
+# **保護パスが 1 件も無いリポジトリでは、それを出力に出す。** 黙って緑にすると
+# 「ゲートが効いている」と「ゲートが当たる対象を持っていない」が区別できず、
+# 本日 5 回踏んだ形（配備した／登録した／検査したつもり）を繰り返す。
+h5_acl_change_gate() {
+  local decl="$ROOT/design/ops/protected-identity-paths.txt"
+  if [[ ! -f "$decl" ]]; then
+    log "H5-ACL: 保護パス宣言が無い（${decl}）— 本ゲートは判定していない"
+    return 0
+  fi
+
+  local globs=()
+  while IFS= read -r line; do
+    line="${line%%$'\r'}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    globs+=("$line")
+  done <"$decl"
+  [[ ${#globs[@]} -eq 0 ]] && { log "H5-ACL: 宣言が空 — 判定していない"; return 0; }
+
+  local touched=() f g
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    for g in "${globs[@]}"; do
+      # shellcheck disable=SC2053 # RHS is intentionally a declared glob
+      if [[ "$f" == $g ]]; then touched+=("$f"); break; fi
+      if [[ "$g" == '**/'* ]]; then
+        # shellcheck disable=SC2053
+        if [[ "$f" == ${g#'**/'} ]]; then touched+=("$f"); break; fi
+      fi
+    done
+  done <<<"$(printf '%s\n' "$DIFF_FILES")"
+
+  # このリポジトリに保護パスが実在するかも数える。0 なら本ゲートは
+  # 「当たる対象を持っていない」のであって「守っている」のではない。
+  local present=0
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    for g in "${globs[@]}"; do
+      # shellcheck disable=SC2053
+      if [[ "$f" == $g ]]; then present=$((present + 1)); break; fi
+      if [[ "$g" == '**/'* ]]; then
+        # shellcheck disable=SC2053
+        if [[ "$f" == ${g#'**/'} ]]; then present=$((present + 1)); break; fi
+      fi
+    done
+  done <<<"$(git -C "$ROOT" ls-files 2>/dev/null || true)"
+
+  if [[ ${#touched[@]} -eq 0 ]]; then
+    log "H5-ACL-PASS: この diff にアクセス制御面は無い（宣言 ${#globs[@]} glob / リポ内実在 $present 件）"
+    return 0
+  fi
+
+  if printf '%s' "$PR_BODY_EVIDENCE" | grep -qE '(^|[[:space:]])ACL-CHANGE:[[:space:]]*\S.{19,}'; then
+    log "H5-ACL-PASS: アクセス制御面 ${#touched[@]} 件の変更に ACL-CHANGE の明示承認がある"
+    printf '  %s\n' "${touched[@]}"
+    return 0
+  fi
+
+  fail "H5-ACL: この PR はアクセス制御面を変更しているが ACL-CHANGE の明示承認が無い"
+  printf '  %s\n' "${touched[@]}" >&2
+  fail "アクセス制御の削除は非対称である。機能の残骸は後で消せるが、"
+  fail "アクセス権を消すと人が締め出され、しかも本人しか復旧できない。"
+  fail "Required: ACL-CHANGE: <20 文字以上の理由。誰のどのアクセスをどう変えるか>"
+  append_h5_block "acl-change-unacknowledged" "touched=${#touched[@]}"
+  return 1
+}
+
+h5_repair_family_gate() {
+  local breaker="$ROOT/scripts/repair-loop-breaker.sh"
+  [[ -x "$breaker" || -f "$breaker" ]] || return 0
+
+  # fix 型の PR か（base..head の commit subject で判定）
+  local subjects
+  subjects="$(git log --format='%s' "$BASE_REF..$HEAD_REF" 2>/dev/null || true)"
+  printf '%s\n' "$subjects" | grep -qiE '^(fix|hotfix)(\(|:)' || return 0
+
+  local family paths
+  paths="$(printf '%s\n' "$DIFF_FILES" | grep -v '^$' || true)"
+  [[ -z "$paths" ]] && return 0
+  family="$(printf '%s\n' "$paths" | bash "$breaker" family --paths-from - 2>/dev/null || true)"
+  [[ -z "$family" ]] && return 0
+
+  local ledger_file count
+  ledger_file="$(mktemp)"
+  bash "$breaker" derive --base "$BASE_REF" --head "$HEAD_REF" \
+    --window-days "${H5_REPAIR_WINDOW_DAYS:-90}" >"$ledger_file" 2>/dev/null || true
+  # `grep -c` は不一致のとき stdout へ "0" を出した**うえで** exit 1 を返す。
+  # したがって `$(grep -c ... || echo 0)` は "0\n0" になり、直後の
+  # `[[ "$count" -lt "$threshold" ]]` が算術構文エラーで false になって
+  # else へ落ちる。= 前例ゼロの fix PR が全部ブロックされる。
+  # h5-admission はこのリポジトリ唯一の required check なので、この誤検知は
+  # 全 fix PR を止める。2026-09-02 実測: prior=0 の合成 PR が exit 1。
+  # awk は不一致でも exit 0 で 1 行だけ出すため、フォールバックが不要になる。
+  count="$(awk '/"kind":"repair-pr"/ {n++} END {print n+0}' "$ledger_file" 2>/dev/null)"
+  # 算術比較へ渡る前に単一トークンであることを確かめる（改行が混ざれば非一致）。
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  local threshold="${H5_REPAIR_THRESHOLD:-3}"
+
+  if [[ "$count" -lt "$threshold" ]]; then
+    log "H5-REPAIR-PASS: family=$family prior fix merges=$count < threshold=$threshold"
+    rm -f "$ledger_file"
+    return 0
+  fi
+
+  local entry
+  entry="$(printf '%s' "$PR_BODY" | grep -oiE 'H5-READJUDICATION:[[:space:]]*\S+' | head -1 \
+    | sed -E 's/^[Hh]5-[Rr][Ee][Aa][Dd][Jj][Uu][Dd][Ii][Cc][Aa][Tt][Ii][Oo][Nn]:[[:space:]]*//')"
+  if [[ -z "$entry" ]]; then
+    fail "H5-REPAIR: family=$family has $count prior fix merges (>= $threshold) and no readjudication"
+    fail "Required: H5-READJUDICATION: <path to a design/ops/readjudication/*.md entry>"
+    fail "Template: design/ops/readjudication/TEMPLATE.md"
+    fail "Prior repairs in window:"
+    sed -e 's/^/    /' "$ledger_file" >&2
+    append_h5_block "repair-family-threshold" "family=$family count=$count"
+    rm -f "$ledger_file"
+    return 1
+  fi
+  if ! bash "$breaker" validate-entry --entry "$ROOT/$entry" --family "$family" >&2 \
+    && ! bash "$breaker" validate-entry --entry "$entry" --family "$family" >&2; then
+    fail "H5-REPAIR: readjudication entry invalid or missing: $entry"
+    append_h5_block "repair-family-entry-invalid" "family=$family entry=$entry"
+    rm -f "$ledger_file"
+    return 1
+  fi
+  log "H5-REPAIR-PASS: family=$family count=$count released by $entry"
+  rm -f "$ledger_file"
+  return 0
+}
+
+if ! h5_run_gate repair-family h5_repair_family_gate; then
+  exit 1
+fi
+
 
 # Ignore negation/meta lines so "missing 陰性テスト" does not count as evidence.
 # H5-E2E remains a form declaration only: this script cannot prove that the
 # command or output is truthful (T8-4).
 PR_BODY_EVIDENCE="$(printf '%s\n' "$PR_BODY" | grep -viE \
   'intentionally missing|expect red|do not merge|falsification only|未記入|TODO 陰性|TODO 台帳|TODO 廃止' || true)"
+
+# ACL ゲートは PR_BODY_EVIDENCE に依存する（否定・メタ行を除いた本文で
+# マーカーを探すため）。定義より前に呼ぶと set -u で落ちる。
+if ! h5_run_gate acl-change h5_acl_change_gate; then
+  exit 1
+fi
 
 if [[ "$is_e2e_pr" -eq 1 ]]; then
   set +e

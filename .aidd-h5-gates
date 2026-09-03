@@ -1,0 +1,16 @@
+# .aidd-h5-gates — このリポジトリが有効にする H5 任意ゲートの宣言 (aidd-governance#137)
+#
+# 本体 (scripts/h5-admission-check.sh) は正本 aidd-governance から vendor した
+# **バイト同一のコピー**である。したがって本体には全ゲートのコードが入っている。
+# どれを有効にするかはリポジトリごとに違うので、その差分をここで宣言する。
+#
+# 書式: <gate-name> <on|off> [requires=<path>[,<path>...]] [reason=<自由記述>]
+#   on かつ requires のファイルが無い → red（有効と宣言したのに当たる対象が無い、を通さない）
+#   off → ゲートを呼ばず、skip したことを毎回出力する
+#
+# **本 PR の vendor は挙動中立である。** 本リポジトリが vendor 前に持っていなかった
+# ゲートは全て off にしてある。有効化はそれぞれ別の判断であり、別 PR で行う。
+
+acl-change off reason=design/ops/protected-identity-paths.txt をまだ持たない
+repair-family off reason=scripts/repair-loop-breaker.sh をまだ持たない
+h8-identifier-scope off reason=委任文書へ導入するかは未決。vendor を挙動中立に保つため
