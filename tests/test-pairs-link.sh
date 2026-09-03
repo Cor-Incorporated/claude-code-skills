@@ -546,6 +546,42 @@ else:
 # aidd-governance#97 項目3 / #98 項目3 —「既知の欠陥を注入して red を実測して
 # いない検査器は、検査器として数えない」。
 #
+# ---- 分母をなぜ「登録 23 本」にするか（block 権限を持つものだけに絞らない）----
+#
+# (1) #98 が挙げた false GREEN は、block しない検査器で起きた。
+#     3 例目は `gcloud --help` を読む**計測器**であって block 装置ではない。
+#     「検査器自身が false GREEN を出した」の実例がまさに非 block 系である。
+#     block 権限で絞ると、issue が名指しした欠陥クラスが分母から落ちる。
+#
+# (2) 今回補った 4 本のうち notify-agent-failure.sh は block しない（分類して
+#     親へ返すだけ）。block 限定の分母なら最初から対象外になり、
+#     「分類分岐が結論を作っているか未検証」は残ったままだった。
+#
+# (3) 他の線引きは手で維持する分類表を要求する。「block 権限を持つか」は
+#     settings.json からは読めず、各 hook の exit 2 経路を読む必要がある。
+#     分類表を置けば、それ自体が宣言と実体の二重管理になる（本 repo が
+#     繰り返し踏んでいる形）。settings.json の登録は**機械的に導出できる
+#     唯一の線**であり、かつ「実際に発火する」と一致する。
+#
+# ---- 分母を広く取っても恒久 red にはならない（2026-09-03 develop 実測: PASS）----
+#
+# red になるのは次の 3 条件だけである。分母の広さは red の条件ではない。
+#   - 新規登録された検査器に自己完結した陰性テストが無い（h5 が通してしまう形）
+#   - 既存の陰性テストを消す / env 差し込み形へ戻す（回帰）
+#   - baseline にあるものが担保済みになったのに baseline から消していない（腐敗）
+# 分母が決めているのは**北極星（担保率）の天井**であって発火条件ではない。
+#
+# 狭い分母にすると、未担保 13 本が**記録から消える**。恒久 red を避ける代償に
+# 未担保の存在自体を見えなくするのは、#97 が問うている受動性そのものである。
+# 13 本の内訳（後続の判断材料。分類は 2026-09-03 実測）:
+#   - テストが 1 本も無い 9 本: auto-init-permissions / auto-update-plugins /
+#     dns-self-heal / enforce-branch-workflow / post-deploy-verify /
+#     post-lint-format / pre-compact-context-save / tool-failure-recovery /
+#     verify-agent-output
+#   - テストはあるが自己完結でない 4 本: aidd-h3-evidence-stop（t92 は
+#     lib/aidd-ledger.sh の source 列を見るだけ）/ auto-commit-worktree-changes /
+#     enforce-hook-deploy-after-merge / validate-provider-env
+#
 # なぜ h5-admission では足りないか（2026-09-03 実測。作るか作らないかの分岐点）:
 #   scripts/h5-admission-check.sh の has_marker() は
 #   `H5-NEGATIVE:` の後ろに 9 文字以上あるかを PR 本文で見るだけである。
