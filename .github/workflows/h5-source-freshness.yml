@@ -16,13 +16,18 @@ on:
   schedule:
     - cron: "17 21 * * *"   # 毎日 UTC 21:17 (JST 06:17)
   workflow_dispatch:
-  pull_request:
-    # スタンプ・検査器・本体を触る PR では鮮度も見る。
-    paths:
-      - "scripts/h5-admission-check.sh"
-      - "scripts/h5-admission-check.source"
-      - "scripts/h5-source-check.sh"
-      - ".github/workflows/h5-source-freshness.yml"
+  # pull_request トリガは付けない。実測 (2026-09-03, ccs#368):
+  # 正本 aidd-governance は private、本リポジトリは public で、CI の
+  # GITHUB_TOKEN は自リポジトリしか読めない。したがって online 検査は
+  # **恒久的に** UNVERIFIED (exit 2) になる。これを全 PR に付けると、
+  # 直せない赤が常時載って「いつもの赤」として無視されるようになる。
+  # それは検査器を無効化するのと同じである。
+  #
+  # 動かすには次のどちらかが要る（aidd-governance#137 で判断待ち）:
+  #   (1) cross-repo read が可能な token を secret で渡す
+  #   (2) 正本を、消費側から読めるリポジトリへ置く（方向を反転する）
+  # どちらも入るまで、毎 PR の強制点は tests/test-h5-vendor-parity.sh
+  # （offline / network 不要）だけである。そちらは実際に効いている。
 
 permissions:
   contents: read

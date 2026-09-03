@@ -3,5 +3,5 @@
 # **本体をこのリポジトリで直接編集してはならない。** 正本で直して vendor し直す。
 source=Cor-Incorporated/aidd-governance
 ref=main
-commit=949acdbb373d6278c170461eca118b643de74ecf
+commit=ccbcd9b7a3550d0f0f44b5e0638e7de9d01279a2
 sha256=8635e93906734e7a3d5e060eae673fcf23c422b25e59eaee4a25cd362ebc0d70

@@ -104,13 +104,28 @@ online)
   # 宣言を増やすのではなく呼び出し側を正す。
   src_owner="${src_repo%%/*}"; src_name="${src_repo##*/}"
   body_path="scripts/h5-admission-check.sh"
+  err="$(mktemp)"
   if ! gh api "repos/${src_owner}/${src_name}/contents/${body_path}?ref=${src_ref}" \
-        --jq '.content' 2>/dev/null | base64 -d > "$tmp" 2>/dev/null || [[ ! -s "$tmp" ]]; then
+        --jq '.content' 2>"$err" | base64 -d > "$tmp" 2>/dev/null || [[ ! -s "$tmp" ]]; then
     # #349 の原則: 相手側が見えないとき PASS にしない。SKIP でもなく UNVERIFIED。
-    unver "正本 $src_repo@$src_ref を取得できなかった（network / 権限 / ref 不在）"
+    # ただし「なぜ見えないか」を分けて出す。恒久的に見えない（権限）と
+    # 一時的に見えない（network）は対処がまったく違うのに、同じ赤だと
+    # 「いつもの赤」として無視される。
+    if grep -qiE 'Not Found|HTTP 404|Resource not accessible|HTTP 403' "$err" 2>/dev/null; then
+      unver "正本 $src_repo@$src_ref を **読む権限が無い**（404/403）"
+      unver "正本が private で、実行中のトークンが当該リポジトリを読めない場合これになる。"
+      unver "対処は 2 つ: (1) cross-repo read が可能な token を secret で渡す"
+      unver "          (2) 正本を、消費側から読めるリポジトリへ置く"
+      unver "**この状態は恒久的である。** 再実行しても直らない。"
+    else
+      unver "正本 $src_repo@$src_ref を取得できなかった（network / ref 不在）"
+    fi
+    [[ -s "$err" ]] && sed -e 's/^/  gh: /' "$err" >&2
     unver "照合していないので緑にしない。exit 2 = 検査できなかった"
+    rm -f "$err"
     exit 2
   fi
+  rm -f "$err"
   up_sha="$(sha256_of "$tmp")" || { unver "sha256 を計算できない"; exit 2; }
   if [[ "$up_sha" == "$want_sha" ]]; then
     log "H5-SOURCE-OK (online): スタンプは正本 $src_repo@$src_ref と一致する"
