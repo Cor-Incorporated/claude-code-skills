@@ -22,7 +22,7 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 # the pre-push lint checks (rev-parse --show-toplevel) evaluate whatever repo
 # the session happens to sit in — blocking pushes to repo B because repo A
 # has lint errors, or misreading the current branch entirely.
-ctx_dir=$(CMD="$cmd" python3 - <<'PY'
+ctx_dirs=$(CMD="$cmd" python3 - <<'PY'
 import os, re
 cmd = os.environ.get("CMD", "")
 q1, q2 = chr(34), chr(39)
@@ -36,20 +36,47 @@ def _resolve(m):
 # `git -C <dir>` wins over a leading `cd <dir> &&` (git resolves -C itself),
 # but only when its value is a real directory — a `git -C` appearing inside a
 # quoted string (e.g. an issue title) must not shadow a valid leading cd.
-d = _resolve(re.search(r'git\s+-C\s+' + pat_val, cmd))
-if not d:
-    d = _resolve(re.match(r'^\s*cd\s+' + pat_val + r'\s*(?:&&|;)', cmd))
-print(d)
+#
+# Resolve -C per PUSHING invocation, not once for the whole command. Taking the
+# first `git -C` anywhere mismatched the push target whenever an earlier
+# invocation named a different repo: `git -C A status && git -C B push --force`
+# read repo A's HEAD while repo B was the one actually pushed, so a force push
+# to a protected branch fell through (rc 0) and a legitimate feature-branch one
+# was blocked (rc 2). Every pushing segment is emitted, and the implicit-branch
+# check below blocks if ANY of them sits on a protected branch — a second push
+# must not hide behind a benign first one. Segment split matches
+# hooks/cursor/git-guard.sh, which already scoped its push rules this way.
+# (Issue #263)
+lead_cd = _resolve(re.match(r'^\s*cd\s+' + pat_val + r'\s*(?:&&|;)', cmd))
+seen, out = set(), []
+for seg in re.split(r'&&|\|\||[;\n|]', cmd):
+    if not re.search(r'\bgit\b.*\bpush\b', seg):
+        continue
+    d = _resolve(re.search(r'git\s+-C\s+' + pat_val, seg)) or lead_cd
+    if d not in seen:
+        seen.add(d)
+        out.append(d)
+print("\n".join(out) if out else lead_cd)
 PY
 )
-git_ctx() {
-  if [[ -n "$ctx_dir" ]]; then git -C "$ctx_dir" "$@"; else git "$@"; fi
+
+# Current branch of every pushing invocation's repo (one per line).
+# An empty ctx dir means the session cwd, which is what plain `git` reads.
+ctx_branches() {
+  local d
+  while IFS= read -r d || [[ -n "$d" ]]; do
+    if [[ -n "$d" ]]; then
+      git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null || true
+    else
+      git rev-parse --abbrev-ref HEAD 2>/dev/null || true
+    fi
+  done <<< "$ctx_dirs"
 }
 
 # cmd_norm: collapse git global options (-C <dir>, -c <k=v>, --no-pager) so the
 # push/commit pattern matches below cannot be dodged with `git -C <repo> push`
 # (fail-open bypass). Quote-aware: -C "/path with spaces" collapses too.
-# ctx_dir above still reads the ORIGINAL command.
+# ctx_dirs above still reads the ORIGINAL command.
 cmd_norm=$(CMD="$cmd" python3 - <<'PY'
 import os, re
 cmd = os.environ.get("CMD", "")
@@ -139,7 +166,7 @@ ERRMSG
     # Fallback: if no explicit push ref in command, check current branch
     # Catches: git push --force, git push --force origin (implicit branch)
     if ! has_explicit_push_ref "$cmd_norm"; then
-        current_branch=$(git_ctx rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+      while IFS= read -r current_branch || [[ -n "$current_branch" ]]; do
         for branch in develop main master; do
             if [[ "$current_branch" == "$branch" ]]; then
                 cat >&2 <<ERRMSG
@@ -156,6 +183,7 @@ ERRMSG
                 _aidd_block
             fi
         done
+      done < <(ctx_branches)
     fi
 fi
 
