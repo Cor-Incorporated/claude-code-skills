@@ -122,6 +122,48 @@ mentions_protected_ref() {
   printf '%s' "$1" | grep -qE "(^|[^A-Za-z0-9._/-])(refs/heads/)?$2([^A-Za-z0-9._/-]|$)"
 }
 
+# delete_verb_hits_branch_in_segment <cmd> <branch> <verb-regex>: true only when the
+# delete verb AND the protected name land in the SAME shell segment.
+#
+# WHY: Check 1/2 used to match "<verb>.*\b<branch>\b" against the whole command.
+# `.*` crosses `&&` / `;` / `|`, so a protected name in a LATER segment was read as
+# the delete target. 2026-09-03 実測: `git branch -D feat/x && git log origin/develop`
+# は block、**順序を逆にすると通った** — 位置で見ていて構文で見ていない徴候である。
+# 5 箇所ある保護名の照合のうち、跨いでいたのはこの 2 つだけだった（Check 3b は既に
+# `[^|;&)<>]` で区切りを除いている）。
+#
+# 分割は git-push-guard.sh の has_explicit_push_ref() と同じ `tr '<>();|&'` を使う。
+# surface-form-matching-strategy.md 条件 1「抽出器を新規に書き起こさない」に従う。
+#
+# 判定内容は変えていない。verb-regex は従来と一字一句同じで、変えたのは `.*` の作用域
+# だけである（同再裁定 §6 / Premise-Sanctuary: 変えてよいのは入力の切り出し方だけ）。
+delete_verb_hits_branch_in_segment() {
+  local cmd="$1" branch="$2" verb="$3" segment normalized prefix sq dq
+  normalized=$(printf '%s' "$cmd" | tr '<>();|&' '\n')
+  while IFS= read -r segment || [[ -n "$segment" ]]; do
+    # Drop a trailing `#` comment WITHIN this segment only.
+    #
+    # 素朴に文字列全体を `#` で切ると bypass ができる:
+    #   echo "#" && git push origin --delete develop
+    # の `#` で切ると、後続の**実削除**ごと消える。だからセグメント化した後に切る。
+    #
+    # さらに `#` が引用の内側にある場合は切らない。切ると
+    #   git -c core.pager="#" branch -D develop
+    # のような**実削除**が verb ごと落ちて素通りする。`#` より前の引用符が
+    # 奇数個なら引用の内側と判定して切らない（保守側に倒す）。
+    prefix="${segment%%#*}"
+    if [[ "$prefix" != "$segment" ]]; then
+      sq="${prefix//[^\']/}"
+      dq="${prefix//[^\"]/}"
+      if (( ${#sq} % 2 == 0 && ${#dq} % 2 == 0 )); then
+        segment="$prefix"
+      fi
+    fi
+    printf '%s' "$segment" | grep -qE "${verb}.*\b${branch}\b" && return 0
+  done <<< "$normalized"
+  return 1
+}
+
 extract_push_remote() {
   local push_cmd="$1"
   # Strip 'git push', then remove all flags, take first positional arg
@@ -430,21 +472,32 @@ if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE" && is_force_push "$cmd_norm"; the
   fi
 fi
 
+# git のグローバルオプション 0 個以上。`git branch` の隣接を要求していたせいで
+#   git -C <dir> branch -D develop
+#   git -c foo=bar branch -D develop
+#   git --no-replace-objects branch -D develop
+# が 3 形とも**素通りしていた**（2026-09-03 実測 rc=0。修正前から存在した穴で、
+# git-push-guard.sh は削除を見ないため多層防御も無かった）。
+# 守る対象は変えていない — 「保護ブランチの削除を止める」という宣言どおりに戻す。
+_GIT_GLOBAL_OPTS="([[:space:]]+(-[cC][[:space:]]*[^[:space:]]+|--[a-zA-Z][a-zA-Z0-9-]*(=[^[:space:]]*)?))*"
+
 # --- Check 1: Direct branch deletion (git branch -d/-D) ---
+# SEGMENT-SCOPED: verb と保護名が同一セグメントに揃ったときだけ block する。
 for branch in $PROTECTED_BRANCHES; do
-    if echo "$cmd" | grep -qE "git\s+branch\s+-[dD]\s+.*\b${branch}\b"; then
+    if delete_verb_hits_branch_in_segment "$cmd" "$branch" "git${_GIT_GLOBAL_OPTS}[[:space:]]+branch[[:space:]]+-[dD][[:space:]]+"; then
         echo "[Hook] BLOCKED: Protected branch '${branch}' cannot be deleted locally." >&2
         echo "[Hook] develop/main/master branches are tied to CI/CD and must NEVER be deleted." >&2
-        _aidd_block
+        _aidd_block "delete-branch-local"
     fi
 done
 
 # --- Check 2: Remote branch deletion (git push --delete) ---
+# SEGMENT-SCOPED: 同上。
 for branch in $PROTECTED_BRANCHES; do
-    if echo "$cmd" | grep -qE "push\s+.*--delete\s+.*\b${branch}\b"; then
+    if delete_verb_hits_branch_in_segment "$cmd" "$branch" "push[[:space:]]+.*--delete[[:space:]]+"; then
         echo "[Hook] BLOCKED: Protected branch '${branch}' cannot be deleted from remote." >&2
         echo "[Hook] develop/main/master branches are tied to CI/CD and must NEVER be deleted." >&2
-        _aidd_block
+        _aidd_block "delete-branch-remote"
     fi
 done
 
@@ -454,7 +507,7 @@ for branch in $PROTECTED_BRANCHES; do
     if echo "$cmd_norm" | grep -qE "push[[:space:]]+[^[:space:]]+[[:space:]]+:(refs/heads/)?${branch}([^A-Za-z0-9._/-]|$)"; then
         echo "[Hook] BLOCKED: Protected branch '${branch}' cannot be deleted from remote." >&2
         echo "[Hook] develop/main/master branches are tied to CI/CD and must NEVER be deleted." >&2
-        _aidd_block
+        _aidd_block "delete-branch-remote"
     fi
 done
 
