@@ -64,7 +64,8 @@ while IFS='|' read -r needle label; do
   if grep -q "$needle" "$CLAUSES"; then
     ok "条項: $label"
   else
-    bad "条項が欠けている: $label（grep '$needle'）"
+    # 変数直後が全角括弧だと曖昧展開 lint に掛かる。必ず ${} で括る。
+    bad "条項が欠けている: ${label}（grep '${needle}'）"
   fi
 done <<'EOF'
 worktree add|worktree を切る手順が実コマンドで書いてある
