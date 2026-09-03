@@ -120,60 +120,113 @@ check() {
 # `HEAD`）は保護ブランチ上で deny のままであり、下の「暗黙 push」節で固定した。
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-use_branch feat/x
-# -----------------------------------------------------------------------------
-echo '--- safe push × unrelated protected-branch token (separator axis) ---'
-check 'and separator' allow 'git push -u origin HEAD && gh pr create --base main'
-check 'semicolon separator' allow 'git push -u origin HEAD; gh pr create --base main'
-check 'or separator' allow 'git push -u origin HEAD || gh pr create --base main'
+# =============================================================================
+# 文脈対照表（2026-09-03 改訂で本形式にした）
+# =============================================================================
+# ブランチごとに節を分けて `check` を並べる書き方だと、**なぜ deny なのかが
+# 「たまたま develop 上で走ったから」に見える。** 期待値を deny に直しただけの
+# テストは、次に checkout 方式が変わったときまた同じことを起こす。
+#
+# そこで、**1 コマンドにつき保護／非保護の両方の期待値を 1 行で宣言する**形に
+# した。`ctx_case` は同じコマンドを両ブランチで走らせ、期待値が文脈でどう変わる
+# かと**その理由**を表に出す。理由欄が書けないケースは、期待値の根拠が無い。
+#
+#   同じ期待値の行  → current branch に依存しない判定である
+#   異なる期待値の行 → current branch に依存する判定である。理由欄がその説明
+# =============================================================================
 
-echo '--- destructive push remains denied in its own segment ---'
-check 'mirror before PR' deny 'git push origin --mirror && gh pr create --base feat/x'
-check 'direct main after safe command' deny 'printf ready; git push origin main'
-check 'force refspec before PR' deny 'git push origin +HEAD:main || gh pr create --base feat/x'
+ctx_rows=()
 
-echo '--- ordinary single commands ---'
-check 'feature push' allow 'git push origin feat/x'
-check 'direct protected push' deny 'git push origin develop'
-check 'non-push' allow 'git status'
+# ctx_case <name> <expect_on_feat/x> <expect_on_develop> <cmd> <why>
+ctx_case() {
+  local name="$1" exp_feat="$2" exp_dev="$3" cmd="$4" why="$5"
+  local got_feat got_dev
 
-echo '--- 暗黙 push（非保護ブランチ上なので通る）---'
-check 'bare push' allow 'git push'
-check 'push origin (refspec なし)' allow 'git push origin'
-check 'push HEAD 単体' allow 'git push -u origin HEAD'
+  git -C "$FIX" checkout -q feat/x
+  BRANCH="feat/x"; got_feat=$(permission "$cmd")
+  git -C "$FIX" checkout -q develop
+  BRANCH="develop"; got_dev=$(permission "$cmd")
 
-# -----------------------------------------------------------------------------
-use_branch develop
-# -----------------------------------------------------------------------------
-echo '--- (A) HEAD は develop に解決する → deny が正しい ---'
-# 旧版はここを allow と期待していた。それが 12 日間の赤の本体である。
-check 'and separator (HEAD=develop)' deny 'git push -u origin HEAD && gh pr create --base main'
-check 'semicolon separator (HEAD=develop)' deny 'git push -u origin HEAD; gh pr create --base main'
-check 'or separator (HEAD=develop)' deny 'git push -u origin HEAD || gh pr create --base main'
+  local mark=" "
+  if [[ "$got_feat" == "$exp_feat" ]]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); mark="X"
+    printf 'FAIL: [feat/x] %s expected=%s actual=%s command=%s\n' "$name" "$exp_feat" "$got_feat" "$cmd"
+  fi
+  if [[ "$got_dev" == "$exp_dev" ]]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); mark="X"
+    printf 'FAIL: [develop] %s expected=%s actual=%s command=%s\n' "$name" "$exp_dev" "$got_dev" "$cmd"
+  fi
 
-echo '--- 暗黙 push は保護ブランチ上で deny（guard 修正で緩めていないことの対照）---'
-# この 4 件が red になったら、guard の修正が行き過ぎて保護を壊している。
-check 'bare push' deny 'git push'
-check 'push origin (refspec なし)' deny 'git push origin'
-check 'push HEAD 単体' deny 'git push -u origin HEAD'
-check 'force push (暗黙)' deny 'git push --force'
+  local depends="同一"
+  [[ "$exp_feat" != "$exp_dev" ]] && depends="**文脈依存**"
+  # 区切りは ASCII Unit Separator。`|` を使うと `git push … || gh pr create …` の
+  # コマンド自身が区切りに化けて、表の行が壊れる（実測で 2 行崩れた）。
+  # 検体に `||` が含まれるスイートなので、表示可能文字を区切りにしてはいけない。
+  ctx_rows+=("$(printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s' \
+    "$mark" "$cmd" "$got_feat" "$got_dev" "$depends" "$why")")
+}
 
-echo '--- 破壊形は保護ブランチ上でも当然 deny ---'
-check 'mirror before PR' deny 'git push origin --mirror && gh pr create --base feat/x'
-check 'direct main after safe command' deny 'printf ready; git push origin main'
-check 'force refspec before PR' deny 'git push origin +HEAD:main || gh pr create --base feat/x'
-check 'direct protected push' deny 'git push origin develop'
+# 期待値が文脈で変わる形 —— current branch に依存する判定
+#   これらが「develop 上で deny」なのは、**その push が実際に保護ブランチを
+#   押すから**であって、テストが develop 上で走ったからではない。
+ctx_case 'HEAD + && separator'  allow deny 'git push -u origin HEAD && gh pr create --base main' \
+  'HEAD は current に解決 → develop を押す'
+ctx_case 'HEAD + ; separator'   allow deny 'git push -u origin HEAD; gh pr create --base main' \
+  '同上（区切り軸）'
+ctx_case 'HEAD + || separator'  allow deny 'git push -u origin HEAD || gh pr create --base main' \
+  '同上（区切り軸）'
+ctx_case 'HEAD 単体'            allow deny 'git push -u origin HEAD' \
+  'HEAD は current に解決 → develop を押す'
+ctx_case 'bare push'            allow deny 'git push' \
+  'refspec 無し → current を押す'
+ctx_case 'push origin のみ'     allow deny 'git push origin' \
+  'refspec 無し → current を押す'
+ctx_case 'force（暗黙）'        allow deny 'git push --force' \
+  '暗黙 + force。保護 current では宛先不問で deny'
 
-echo '--- (B) 明示的に非保護の宛先を名指す push は通す（過剰ブロックの修正）---'
-# cross-tool-force-matrix.sh の GOOD 配列と一致させる。Claude Code と Codex は
-# 元から通しており、Cursor だけが落としていた。
-check 'feature push' allow 'git push origin feat/x'
-check 'docs push (matrix GOOD と同一)' allow 'git push -u origin docs/y'
-check 'refspec 形の feature push' allow 'git push origin HEAD:feat/x'
+# 期待値が文脈で変わらない形 —— current branch に依存しない判定
+#   (B) の修正対象はここ。明示の宛先があるので current は無関係である。
+ctx_case 'feature push'         allow allow 'git push origin feat/x' \
+  '明示の宛先が非保護 → current と無関係'
+ctx_case 'docs push'            allow allow 'git push -u origin docs/y' \
+  '同上（matrix GOOD 配列と同一検体）'
+ctx_case 'HEAD:feat/x'          allow allow 'git push origin HEAD:feat/x' \
+  'dst が非保護'
+ctx_case 'develop:feat/x'       allow allow 'git push origin develop:feat/x' \
+  'ローカル develop を読み remote feat/x へ書く。保護 ref は動かない'
+ctx_case 'non-push'             allow allow 'git status' \
+  'push でない'
 
-echo '--- 非 push は保護ブランチ上でも通る ---'
-check 'non-push' allow 'git status'
+#   破壊形。宛先が保護なので current に関わらず deny。
+ctx_case 'direct develop'       deny deny 'git push origin develop' \
+  '宛先が保護'
+ctx_case 'direct main'          deny deny 'printf ready; git push origin main' \
+  '宛先が保護（区切りの後ろ）'
+ctx_case 'feat/x:develop'       deny deny 'git push origin feat/x:develop' \
+  'dst が保護。src だけ見ると素通しになる形'
+ctx_case 'HEAD:develop'         deny deny 'git push origin HEAD:develop' \
+  'dst が保護'
+ctx_case 'feat/x:refs/heads/main' deny deny 'git push origin feat/x:refs/heads/main' \
+  'dst が保護（完全 ref 表記）'
+ctx_case '複数 refspec に保護混在' deny deny 'git push origin feat/x develop' \
+  '2 つ目の refspec が保護'
+ctx_case 'refspec force +HEAD:main' deny deny 'git push origin +HEAD:main || gh pr create --base feat/x' \
+  '+ は --force 等価 かつ dst が保護'
+ctx_case 'refspec force +feat/x:main' deny deny 'git push origin +feat/x:main' \
+  '同上'
+ctx_case 'mirror'               deny deny 'git push origin --mirror && gh pr create --base feat/x' \
+  '全 ref 上書き'
+ctx_case 'all'                  deny deny 'git push origin --all' \
+  '全 ref 上書き'
+
+echo ''
+echo '=== 文脈対照表: 同じコマンドが保護／非保護でどう変わるか ==='
+printf '%-2s %-52s %-8s %-8s %-14s %s\n' '' 'コマンド' 'feat/x' 'develop' '判定' '理由'
+printf '%s\n' "-------------------------------------------------------------------------------------------------------"
+for row in "${ctx_rows[@]}"; do
+  IFS=$'\x1f' read -r m c f d dep w <<< "$row"
+  printf '%-2s %-52s %-8s %-8s %-14s %s\n' "$m" "$c" "$f" "$d" "$dep" "$w"
+done
 
 printf '\n%s\n' "--- $pass passed, $fail failed ---"
 [[ "$fail" -eq 0 ]]
