@@ -71,16 +71,35 @@ if [[ "$n_files" -ge 20 ]]; then
 else
   bad "走査対象が ${n_files} 本しかない — glob か repo が想定と違う"
 fi
+# **この検査ファイル自身が走査対象に入っていること。**
+# 入っていなければ「このリポに違反が無い」という結論から自分だけが抜ける。
+# 件数だけ見ていると気づけない（2026-09-03: 未追跡のあいだローカルが緑だった）。
+self_rel="tests/$(basename "$0")"
+if git -C "$ROOT" ls-files --error-unmatch "$self_rel" >/dev/null 2>&1; then
+  ok "この検査ファイル自身も走査対象に入っている（${self_rel}）"
+else
+  bad "この検査ファイルが走査対象に入っていない（${self_rel}）— 自分だけ検査を免れている"
+fi
 
 echo ""
 echo "=== 陽性対照: 既知の事故入力を検出するか ==="
 mkdir -p "$WORK/pos"
 git -C "$WORK/pos" init -q
-cat > "$WORK/pos/bad.sh" <<'EOS'
-#!/usr/bin/env bash
-set -u
-echo "見つからない（$hook）— skip"
-EOS
+# 検体を **この行に literal で書かない。**
+#
+# このファイル自身が走査対象なので、literal で書くと自分のフィクスチャを自分で撃つ。
+# 2026-09-03 実測: ローカル緑 / CI 赤
+#   FAIL: 違反が残っている: tests/test-no-ambiguous-expansion.sh:82
+# ローカルが緑だったのは、実行時点でこのファイルがまだ **未追跡**で
+# `git ls-files` に出なかったからである。commit した瞬間に赤くなった。
+#
+# **環境で結果が変わる検査**という、本セッションで繰り返し直している欠陥を、
+# その検査自身で作っていた。だから検体は組み立てて書く —— `$hook` を別引数に
+# 追い出すと、ソース上では直後が `'` になり違反にならない。
+{
+  printf '#!/usr/bin/env bash\nset -u\n'
+  printf 'echo "見つからない（%s）— skip"\n' '$hook'
+} > "$WORK/pos/bad.sh"
 git -C "$WORK/pos" add -A >/dev/null 2>&1
 found="$(scan "$WORK/pos")"
 if [[ "$found" == *"bad.sh:3"* ]]; then
