@@ -176,7 +176,7 @@ compare_contract_field_set() {
   local left="$SYNC_TMP/${key}.left" right="$SYNC_TMP/${key}.right"
   local left_count right_count
   if [ ! -f "$left_path" ] || [ ! -f "$right_path" ]; then
-    echo "  SKIP: 契約欄同期 $left_name ↔ $right_name（片側不在）"
+    echo "  SKIP: 契約欄同期 $left_name ↔ ${right_name}（片側不在）"
     SKIP=$((SKIP + 1))
     return 0
   fi
@@ -200,7 +200,7 @@ compare_section_pair() {
   local key="$1" heading="$2" left_name="$3" left_path="$4" right_name="$5" right_path="$6"
   local left="$SYNC_TMP/${key}.left-section" right="$SYNC_TMP/${key}.right-section"
   if [ ! -f "$left_path" ] || [ ! -f "$right_path" ]; then
-    echo "  SKIP: $heading $left_name ↔ $right_name（片側不在）"
+    echo "  SKIP: $heading $left_name ↔ ${right_name}（片側不在）"
     SKIP=$((SKIP + 1))
     return 0
   fi
@@ -218,7 +218,7 @@ compare_section_pair() {
     echo "  PASS: $heading $left_name == $right_name"
     PASS=$((PASS + 1))
   else
-    echo "  FAIL: $heading $left_name != $right_name（両側の SHA-256 と diff）"
+    echo "  FAIL: $heading $left_name != ${right_name}（両側の SHA-256 と diff）"
     shasum -a 256 "$left" "$right" | sed 's/^/    /'
     diff -u "$left" "$right" | sed 's/^/    /' || true
     FAIL=$((FAIL + 1))
