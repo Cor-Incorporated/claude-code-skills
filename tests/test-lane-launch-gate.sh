@@ -218,7 +218,7 @@ else
       bad "case6 再裁定エントリがあっても解除されない"
     fi
   else
-    echo "SKIP: Grift fixture 不在（$GRIFT_LEDGER）"
+    echo "SKIP: Grift fixture 不在（${GRIFT_LEDGER}）"
   fi
 
   echo "--- LANE_PATHS 未宣言なら #88 判定は省略される（黙って通さない） ---"
