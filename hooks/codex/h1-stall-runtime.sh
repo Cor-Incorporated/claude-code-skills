@@ -243,6 +243,90 @@ def resolve_delegation():
     return raw, (safe or "default")
 
 
+# 北極星「着地 PR 数 / 消費予算」の**分子**を後から結合するためのキー
+# (aidd-governance#155)。
+#
+# H1 は spend（分母）を記録していたが、どのリポジトリのどのブランチで作業していたかを
+# 記録していなかった。そのため ADR-005 の反証条件 2「H1 が発火したが着地 PR が 0 本」を
+# **計算できない**。2026-09-03 実測で block した実運用委任 3 件も、rollout が
+# ~/.codex/archived_sessions/ に残っておらず事後の復元ができなかった。
+#
+# ここで作るのは結合キーだけである。PR の収集も集計もしない。
+# 記録した branch に対して `gh pr list --head <branch>` を後から回せばよい。
+#
+# subprocess は使わない。`.git` を直接読むので PATH に依存せず、タイムアウトも要らず、
+# hook の 1 回あたりの遅延をほぼ増やさない。git が無い環境でも壊れない。
+MAX_BRANCHES = 20
+
+
+def _git_dir_of(root):
+    """`.git` がディレクトリならそれ、ファイル(worktree)なら gitdir: の指す先。"""
+    dot = root / ".git"
+    if dot.is_dir():
+        return dot
+    try:
+        text = dot.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if text.startswith("gitdir:"):
+        target = Path(text.split(":", 1)[1].strip())
+        if not target.is_absolute():
+            target = (root / target).resolve()
+        return target
+    return None
+
+
+def resolve_worktree():
+    """(repo, branch) を返す。決められなければ ("", "")。
+
+    repo は git root の basename。branch は refs/heads/<name>、detached なら
+    "detached:<短縮 sha>"。**例外を投げない** — この関数のために H1 が落ちると、
+    ガバナが自分の計測のために停止することになる。
+    """
+    start = os.environ.get("CODEX_H1_CWD") or os.getcwd()
+    try:
+        cur = Path(start).resolve()
+    except (OSError, ValueError):
+        return "", ""
+    root = None
+    for cand in [cur] + list(cur.parents):
+        if (cand / ".git").exists():
+            root = cand
+            break
+    if root is None:
+        return "", ""
+    gitdir = _git_dir_of(root)
+    if gitdir is None:
+        return root.name, ""
+    try:
+        head = (gitdir / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return root.name, ""
+    if head.startswith("ref:"):
+        ref = head.split(":", 1)[1].strip()
+        return root.name, ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+    if re.fullmatch(r"[0-9a-f]{7,40}", head):
+        return root.name, "detached:" + head[:12]
+    return root.name, ""
+
+
+def record_worktree(state):
+    """委任がどこで作業したかを state に積む。判定には一切使わない。"""
+    repo, branch = resolve_worktree()
+    if repo and not state.get("repo"):
+        state["repo"] = repo
+    if not branch:
+        return
+    if not state.get("branch_start"):
+        state["branch_start"] = branch
+    seen = state.get("branches")
+    if not isinstance(seen, list):
+        seen = []
+    if branch not in seen and len(seen) < MAX_BRANCHES:
+        seen.append(branch)
+    state["branches"] = seen
+
+
 def state_path(slug):
     base = os.environ.get("CODEX_H1_STATE_DIR") or str(
         Path.home() / ".codex" / "hooks" / "h1-state"
@@ -427,6 +511,12 @@ def subject_of(state):
         # ことが分かるよう restricted と別欄で出す。
         "model": state.get("model", ""),
         "restricted": is_restricted(state.get("model")),
+        # 北極星の分子への結合キー (aidd-governance#155)。
+        # spend（分母）だけを記録していたので反証条件 2 が計算できなかった。
+        # 空文字/空配列は「決められなかった」であり「PR が無い」ではない。
+        "repo": state.get("repo", ""),
+        "branch_start": state.get("branch_start", ""),
+        "branches": state.get("branches", []),
     }
     # #87 要求 4「既存作用点へ統合する」— 意味分類が宣言されている委任では、
     # 台帳行に fingerprint / oracle / classification / epoch / close_target /
@@ -624,6 +714,7 @@ def main():
     state = load_state(path, delegation)
     state["delegation"] = delegation
     advance_counters(state)
+    record_worktree(state)
 
     tokens, usd, source, model = measure_spend(state["tool_calls"], int(state["started_ts"]))
     state["model"] = model
