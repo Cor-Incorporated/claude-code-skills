@@ -34,13 +34,17 @@ mkvendor() { # <name> [sha-override] [role] -> fixture root
   cp "$BODY_SRC" "$d/scripts/h5-admission-check.sh"
   s="$(sha256_of "$d/scripts/h5-admission-check.sh")"
   [[ -n "$override" ]] && s="$override"
+  cp "$ROOT/scripts/h5-source-check.sh" "$d/scripts/h5-source-check.sh"
+  local cs
+  cs="$(sha256_of "$d/scripts/h5-source-check.sh")"
   cat >"$d/scripts/h5-admission-check.source" <<EOF
-# vendor 元の記録。scripts/h5-source-check.sh がこの値と本体を照合する。
+# vendor 元の記録。scripts/h5-source-check.sh がこの値と実物を照合する。
 role=${3:-vendor}
 source=Cor-Incorporated/claude-code-skills
 ref=develop
 commit=0000000000000000000000000000000000000000
 sha256=$s
+sha256:scripts/h5-source-check.sh=$cs
 EOF
   printf '%s' "$d"
 }
@@ -148,6 +152,57 @@ printf '\n' >>"$F/scripts/h5-admission-check.sh"
 run_check "$F" offline
 if [[ "$RC" -eq 1 ]]; then ok "正本でも本体を 1 バイト変えると red (exit $RC)"
 else bad "正本側の offline が改変を検出しない" "exit=$RC"; fi
+
+# ===== aidd-governance#144: 追加被覆 =====
+echo "== (#144) 覆っている検査器を 1 バイト変えると offline が red =="
+F="$(mkvendor cover-checker)"
+printf '\n# drift\n' >>"$F/scripts/h5-source-check.sh"
+run_check "$F" offline
+if [[ "$RC" -eq 1 ]] \
+  && printf '%s' "$OUT" | grep -q 'スタンプと一致しない: scripts/h5-source-check.sh' \
+  && printf '%s' "$OUT" | grep -q 'stamp  sha256' \
+  && printf '%s' "$OUT" | grep -q 'actual sha256'; then
+  ok "検査器の drift を検出し、ファイル名・期待 sha・実測 sha を出す (exit $RC)"
+else
+  bad "検査器の drift を検出しない、または診断が足りない" "exit=$RC / $(printf '%s' "$OUT" | head -4)"
+fi
+
+echo "== (#144 / F3 片側変異) 被覆を 1 つ減らすとその drift が検出されなくなる =="
+F="$(mkvendor shrink-coverage)"
+# スタンプから sha256:<path>= 行を落とす = 被覆を 1 つ減らす変異
+grep -v '^sha256:' "$F/scripts/h5-admission-check.source" >"$F/scripts/.stamp.tmp"
+mv "$F/scripts/.stamp.tmp" "$F/scripts/h5-admission-check.source"
+printf '\n# drift\n' >>"$F/scripts/h5-source-check.sh"
+run_check "$F" offline
+if [[ "$RC" -eq 0 ]]; then
+  ok "被覆行を消すと同じ drift が素通りする（被覆が判定に効いている）"
+else
+  bad "変異が効いていない（被覆行を消しても red のまま = 別の理由で落ちている）" "exit=$RC / $(printf '%s' "$OUT" | head -3)"
+fi
+
+echo "== (#144) 覆っているファイルが存在しないと red（黙って被覆を失わない）=="
+F="$(mkvendor missing-covered)"
+rm -f "$F/scripts/h5-source-check.sh"
+run_check "$F" offline
+if [[ "$RC" -eq 1 ]] && printf '%s' "$OUT" | grep -q '覆うファイルが存在しない'; then
+  ok "被覆対象が消えていれば red (exit $RC)"
+else bad "被覆対象の不在が素通りする" "exit=$RC / $(printf '%s' "$OUT" | head -2)"; fi
+
+echo "== (#144) 後方互換: 旧書式スタンプ（sha256:<path> なし）でも動く =="
+F="$(mkvendor legacy-stamp)"
+grep -v '^sha256:' "$F/scripts/h5-admission-check.source" >"$F/scripts/.stamp.tmp"
+mv "$F/scripts/.stamp.tmp" "$F/scripts/h5-admission-check.source"
+run_check "$F" offline
+if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep -q '被覆 1 ファイル'; then
+  ok "旧書式は被覆 1 ファイルとして通る（移行期に required check を止めない）"
+else bad "旧書式スタンプが壊れる（移行期に全 PR が止まる）" "exit=$RC / $(printf '%s' "$OUT" | head -3)"; fi
+
+echo "== (#144) 被覆件数が出力に出る（黙って縮まない）=="
+F="$(mkvendor coverage-count)"
+run_check "$F" offline
+if printf '%s' "$OUT" | grep -q '被覆 2 ファイル' && printf '%s' "$OUT" | grep -q 'covered: scripts/h5-source-check.sh'; then
+  ok "被覆件数と対象パスを毎回出力する"
+else bad "被覆が出力から読めない" "$(printf '%s' "$OUT" | head -3)"; fi
 
 echo "---"
 echo "pass=$pass fail=$fail"

@@ -1,21 +1,41 @@
-# h5-admission-check.sh の同一性スタンプ (aidd-governance#137)
+# h5-admission-check.sh の同一性スタンプ (aidd-governance#137 / #144)
 #
 # **このリポジトリが正本である** (role=source)。したがって照合すべき上流は無く、
 # scripts/h5-source-check.sh online はここでは誤用として落ちる。
 #
-# それでも offline 検査は意味を持つ: **公開している sha256 と本体がずれていないか**
-# を毎 PR で見る。本体を直してこのスタンプを直し忘れると red になるので、
-# vendor 先が読む sha が古いまま公開される事故を止められる。
+# それでも offline 検査は意味を持つ: **公開している sha256 と実物がずれていないか**
+# を毎 PR で見る。ファイルを直してこのスタンプを直し忘れると red になるので、
+# vendor 先が古い sha を正だと信じ続ける事故を止められる。
 #
-# 正本がこちら側にある理由 (#137 で判断):
-#   - claude-code-skills は public、aidd-governance は private。private → public は
-#     常に読めるので、vendor 先の鮮度検査に **secret が 1 本も要らない**
-#   - 逆向きにすると public 側の CI トークンが private を読めず、鮮度検査が恒久的に
-#     UNVERIFIED になる（実測 2026-09-03, ccs#368）
-#   - ccs は main / develop とも required_status_checks に h5-admission を持つ。
-#     gov main は []。強制が最も強い側に正本を置く
+# ## 被覆範囲（#144 で決めた。根拠を残す）
+#
+# 覆うのは **judgment を決めるもの** だけである。覆わないのは **judgment を
+# 検証するもの** と **リポジトリごとに違って当然のもの**。
+#
+#   覆う   scripts/h5-admission-check.sh   drift すると 2 リポが別の論理で PR を
+#                                          判定する。#137 の失敗モードそのもの
+#   覆う   scripts/h5-source-check.sh      drift すると同一性機構自体が別物になり、
+#                                          片方が緩い検査になっても誰も気づかない
+#
+#   覆わない tests/test-h5-*.sh            judgment ではなく judgment の反証。
+#                                          本体は byte 固定なので、片方のテストが
+#                                          弱っても両リポの判定は一致したままである。
+#                                          加えて本体は正本でしか変わらず、正本の
+#                                          スイートが先に通す。vendor 側のテストは
+#                                          second opinion であって一次ゲートではない
+#   覆わない tests/test-h5-*-parity.sh      role 固有。同一であってはならない
+#   覆わない .aidd-h5-gates                 リポごとに違うのが仕様 (#137)
+#
+# **この判断を変える条件**: vendor 側にしか無いテストができたとき、または
+# 本体が vendor 側で編集できるようになったとき。どちらも今は成り立たない。
+#
+# ## 捕まえられないもの（ふりをしない）
+#
+# 検査器の無効化とスタンプ更新を**同時に**やられたら検出できない。循環だからである。
+# 捕まえられるのは「片方だけの編集」と「vendor し直しの更新漏れ」の 2 つ。
 role=source
 source=Cor-Incorporated/claude-code-skills
 ref=develop
 commit=HEAD
 sha256=f5d88242a2f986719411ead303ebc07e1c641937b5dab2f0bfa6898b339c61ba
+sha256:scripts/h5-source-check.sh=17e0165921a34b3286662452478eef78cd94092c519ab9a3d7318488a36f3cf8

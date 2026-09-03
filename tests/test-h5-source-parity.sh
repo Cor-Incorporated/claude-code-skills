@@ -21,6 +21,30 @@ else
   echo "  更新しないと vendor 先が古い sha を正として照合し続ける (aidd-governance#137)。"
   exit 1
 fi
+# aidd-governance#144 — 被覆範囲の宣言 ↔ 強制の対。
+# **ここが宣言側**である。スタンプ (強制側) から sha256:<path> 行を 1 本消すと
+# 集合が食い違って落ちる。被覆が黙って縮むのを止めるのが役目。
+#
+# 覆うのは judgment を決めるものだけ。judgment を検証するテスト群は覆わない
+# （本体が byte 固定なので両リポの判定は一致したまま。根拠はスタンプの
+# ヘッダに書いてある）。
+EXPECTED_COVERAGE="scripts/h5-source-check.sh"
+
+echo "=== 被覆範囲が宣言と一致すること (#144) ==="
+ACTUAL_COVERAGE="$(grep -E '^sha256:' "$ROOT/scripts/h5-admission-check.source" \
+  | sed -E 's/^sha256:(.*)=[0-9a-f]{64}$/\1/' | sort)"
+if [[ "$ACTUAL_COVERAGE" == "$(printf '%s\n' "$EXPECTED_COVERAGE" | sort)" ]]; then
+  echo "PASS: 追加被覆が宣言と一致する"
+  printf '  covered: %s\n' "$ACTUAL_COVERAGE"
+else
+  # runbook.md rule B: 両方の値を挙げて落ちる。「不一致」だけでは直せない。
+  echo "FAIL: 追加被覆が宣言と食い違っている"
+  echo "  expected = [$(printf '%s' "$EXPECTED_COVERAGE" | tr '\n' ' ')]"
+  echo "  actual   = [$(printf '%s' "$ACTUAL_COVERAGE" | tr '\n' ' ')]"
+  echo "  被覆を変えるなら、この宣言とスタンプの両方を同じ commit で更新すること。"
+  exit 1
+fi
+
 echo "=== 正本で online を配線していないこと（上流が無いのに緑にしない）==="
 set +e
 bash "$ROOT/scripts/h5-source-check.sh" online >/dev/null 2>&1
