@@ -1,0 +1,50 @@
+# .aidd-h5-gates — このリポジトリが有効にする H5 任意ゲートの宣言 (aidd-governance#137)
+#
+# **このリポジトリは正本である。** 本体には全ゲートのコードが入っているが、
+# 有効にするかはリポジトリごとに決める。下記は全て off — 本 PR を挙動中立に
+# 保つためであり、有効化はそれぞれ別の判断として別 PR で行う。
+#
+# なぜ宣言が要るか:
+#   h5-admission-check.sh は全リポで**同一の本体**を vendor する（単一正本）。
+#   したがって本体には全ゲートのコードが入っている。どれを有効にするかは
+#   リポジトリごとに違うので、その差分をここに書く。
+#
+#   宣言が無いと「ゲートが効いている」と「ゲートが当たる対象を持っていない」が
+#   区別できない。実測 (2026-09-02): gov の本体を claude-code-skills へ置くと
+#   ACL ゲートは design/ops/protected-identity-paths.txt が無いため恒久的に
+#   不活性のまま exit 0 になる。ログは出るが誰も読まない。
+#
+# ## なぜ YAML でも JSON でもないのか（触れない制約から形式が決まった）
+#
+# **この形式は好みで選んだのではない。制約から一意に決まった。** 次に触る人が
+# 「なぜ yaml でないのか」を再発見しなくて済むよう、根拠を残す。
+#
+#   1. このファイルを読むのは scripts/h5-admission-check.sh である
+#   2. それを起動するのは .github/workflows/h5-admission.yml の 1 step だけで、
+#      その job は `actions/checkout` しか走らせない。**PyYAML も jq も入らない**
+#   3. その workflow は claude-code-skills と aidd-governance で**バイト一致**して
+#      おり、片方だけ触ると本 issue (#137) が直そうとしている乖離を新しく作る。
+#      したがって「依存を入れる step を足す」という逃げ道は取れない
+#
+#   → 純 bash（awk / sed）だけで読める行ベースにするしかない。
+#
+# house idiom とも揃っている: .aidd-prepush-map / .aidd-e2e-paths /
+# design/ops/protected-identity-paths.txt はいずれも行ベースである。
+#
+# **この制約が消えるのは h5-admission.yml に依存インストール step を入れられる
+# ようになったときだけ**で、そのときは両リポ同時に変える必要がある。
+#
+# 書式:
+#
+#   <gate-name> <on|off> [requires=<path>[,<path>...]] [reason=<自由記述>]
+#
+#   on  かつ requires のファイルが**無い** → red。「有効と宣言したのに当たる対象が
+#       無い」を黙って通さない。これが #137 の D2 に対する強制点である。
+#   off → そのゲートは呼ばれない。skip したことを毎回出力する。
+#
+# ゲート名は本体の h5_<name>_gate() 関数と 1:1 で対応する。
+# tests/test-h5-gate-manifest.sh が両側を全件照合し、片側だけ足りなければ
+# 両方の値を挙げて落ちる。
+acl-change off reason=design/ops/protected-identity-paths.txt をまだ持たない
+repair-family off reason=scripts/repair-loop-breaker.sh をまだ持たない
+h8-identifier-scope off reason=委任文書へ導入するかは未決。統合を挙動中立に保つため
