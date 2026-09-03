@@ -691,10 +691,18 @@ else:
             f"marked_but_not_self_contained={sorted(not_self_contained)}",
         )
     else:
+        # 分子は **登録集合との積**で数える。covered には settings.json に
+        # 登録されていない対象も入りうる（Codex hook は ~/.codex/hooks.json、
+        # scripts/ の検査器はそもそも hook ではない）。それらを分子に足すと
+        # 「N/23 registered」が登録以外を含んだ数になり、測った以上を主張する。
+        # 担保があること自体は良いので、登録外は別枠で数えて見えるようにする。
+        covered_registered = sorted(set(covered) & reg)
+        covered_other = sorted(set(covered) - reg)
         ok(
             f"pair18 self-contained negative-test coverage "
-            f"({len(covered)}/{len(reg)} registered checkers; "
-            f"{len(UNCOVERED_BASELINE)} declared uncovered)"
+            f"({len(covered_registered)}/{len(reg)} registered checkers; "
+            f"{len(UNCOVERED_BASELINE)} declared uncovered; "
+            f"{len(covered_other)} covered but not settings.json-registered)"
         )
 
 # 3 値で出す。skipped は「照合できなかった」であって「通った」ではない。

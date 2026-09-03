@@ -26,6 +26,28 @@ jobs:
           # Second pass: fail only on errors (severity "error")
           shellcheck -S error hooks/*.sh
 
+  vendor-lint:
+    # aidd-governance#152: 正本の検査集合が消費側の検査集合を包含していないため、
+    # 正本の欠陥が 3 回とも「消費側の CI」でしか検出されなかった。
+    #
+    # 上の shellcheck job が見ているのは hooks/*.sh だけで、**scripts/ を一度も
+    # 見ていない**。そのため vendor される scripts/h5-admission-check.sh の
+    # SC2034 が 2 件、どちらのリポジトリの CI も通過していた（2026-09-03 実測）。
+    #
+    # この job は .aidd-h5-vendor-lint が宣言した検査集合を実際に走らせる。
+    # 宣言と実行器は消費側へ vendor され、スタンプで sha256 固定されるので、
+    # 片方だけ検査を足すと vendor parity が落ちる。
+    name: vendor-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - name: Run declared check set on vendored artifacts
+        run: bash scripts/h5-vendor-lint.sh
+      - name: Falsifiability of the declaration itself
+        run: bash tests/test-h5-vendor-lint.sh
+
   syntax-check:
     runs-on: ubuntu-latest
     steps:
