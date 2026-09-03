@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# NEGATIVE-TEST-FOR: hooks/aidd-turn-boundary-stop.sh
 # ターン境界の持ち越し検査 — hooks/aidd-turn-boundary-stop.sh /
 # hooks/aidd-async-register.sh / scripts/async-work.sh の反証テスト.
 #

@@ -1,4 +1,5 @@
 #!/bin/bash
+# NEGATIVE-TEST-FOR: hooks/protect-branches.sh
 # Check 4 (gh pr merge の削除フラグ) — 値と位置の固定
 #
 # 発端（issue #358、2026-09-02 に 2 回）:

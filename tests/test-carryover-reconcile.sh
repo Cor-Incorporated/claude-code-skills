@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# NEGATIVE-TEST-FOR: hooks/aidd-carryover-reconcile.sh
 # SessionStart 持ち越し照合 — hooks/aidd-carryover-reconcile.sh の反証テスト.
 #
 # Issue: Cor-Incorporated/aidd-governance#96 受入基準 (3)
