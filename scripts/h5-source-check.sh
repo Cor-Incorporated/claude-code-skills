@@ -97,7 +97,14 @@ online)
     exit 2
   fi
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
-  if ! gh api "repos/$src_repo/contents/scripts/h5-admission-check.sh?ref=$src_ref" \
+  # owner と repo を別セグメントで書く。1 変数へ "owner/repo" を入れると
+  # claude-code-skills の workflow-permission-scan.py が
+  # `repos/{}/contents/...` と読み、宣言済みの `repos/{owner}/{repo}/contents/{path}`
+  # に当たらず UNDECIDABLE-API になる（実測 2026-09-03, ccs#368 の CI）。
+  # 宣言を増やすのではなく呼び出し側を正す。
+  src_owner="${src_repo%%/*}"; src_name="${src_repo##*/}"
+  body_path="scripts/h5-admission-check.sh"
+  if ! gh api "repos/${src_owner}/${src_name}/contents/${body_path}?ref=${src_ref}" \
         --jq '.content' 2>/dev/null | base64 -d > "$tmp" 2>/dev/null || [[ ! -s "$tmp" ]]; then
     # #349 の原則: 相手側が見えないとき PASS にしない。SKIP でもなく UNVERIFIED。
     unver "正本 $src_repo@$src_ref を取得できなかった（network / 権限 / ref 不在）"
@@ -118,5 +125,5 @@ online)
   exit 1
   ;;
 *)
-  fail "unknown mode: $MODE（offline | online）"; exit 1 ;;
+  fail "unknown mode: ${MODE}（offline | online）"; exit 1 ;;
 esac

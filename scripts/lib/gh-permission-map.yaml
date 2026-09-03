@@ -183,6 +183,22 @@ gh_commands:
       scripts/h5-admission-check.sh:49 の `gh pr view --json body` を実行して
       required check として緑になっている。
 
+  - match: "issue list"
+    scope: issues
+    level: read
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — `GET /repos/{owner}/{repo}/issues` が "Issues"(read) に掲載。
+      gh issue list はこの一覧取得に相当する（2026-09-03 参照）。
+
+  - match: "issue create"
+    scope: issues
+    level: write
+    evidence: >-
+      docs:https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+      — `POST /repos/{owner}/{repo}/issues` が "Issues"(write) に掲載。
+      gh issue create はこの作成に相当する（2026-09-03 参照）。
+
   - match: "issue view"
     scope: issues
     level: read
