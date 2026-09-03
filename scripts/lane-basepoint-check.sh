@@ -280,8 +280,54 @@ check_shared_checkout() {
 # 警告であって block ではない。他レーンが触ったファイルへ正当に追記する場合が
 # あり、54 worktree 規模では prefix 一致が常時発火する。**block の値打ちが
 # 誤検知で溶ける**ので、記帳して見えるようにするところまでに留める。
+# overlap_state <worktree> <base> <overlap-files>
+#
+# 重複相手の状態を**観測量そのまま**で返す。閾値で「陳腐化」と断定はしない。
+#   ahead    : origin/<base>..HEAD の commit 数
+#   merged   : HEAD が origin/<base> の祖先か = 成果が既に base に入っているか
+#   最終更新 : 最終コミット時刻と、重複ファイルの mtime のうち新しい方
+#
+# ahead=0 かつ merged なら「そのブランチの成果は既に base にある」ので、
+# 残っている変更は古い可能性が高い。疑いだけ添えて、判断は受け手に残す。
+# 全て git と stat から導出する（新しい状態ファイルもレジストリも作らない）。
+overlap_state() {
+  local wt="$1" base="$2" files="$3" ahead merged
+  ahead="$(git -C "$wt" rev-list --count "origin/$base..HEAD" 2>/dev/null || echo '?')"
+  if git -C "$wt" merge-base --is-ancestor HEAD "origin/$base" 2>/dev/null; then
+    merged="merged"
+  else
+    merged="未merge"
+  fi
+  python3 - "$wt" "$files" "$ahead" "$merged" \
+    "$(git -C "$wt" log -1 --format=%ct 2>/dev/null || echo 0)" <<'PY' 2>/dev/null || printf '[ahead=%s %s]' "$ahead" "$merged"
+import os, sys, time
+wt, files, ahead, merged, ct = sys.argv[1:6]
+try:
+    newest = int(ct or 0)
+except ValueError:
+    newest = 0
+for f in (x.strip() for x in files.splitlines()):
+    if not f:
+        continue
+    try:
+        newest = max(newest, int(os.path.getmtime(os.path.join(wt, f))))
+    except OSError:
+        pass
+age = max(0, int(time.time()) - newest)
+for div, unit in ((86400, "日"), (3600, "時間"), (60, "分")):
+    if age >= div:
+        rel = "%d%s前" % (age // div, unit)
+        break
+else:
+    rel = "たった今"
+# 断定ではなく疑い。ahead=0 かつ merged = 成果は既に base にあるという事実のみ。
+suspect = " ← 陳腐化の疑い（調整ではなく掃除）" if ahead == "0" and merged == "merged" else ""
+print("[ahead=%s %s 最終更新=%s%s]" % (ahead, merged, rel, suspect))
+PY
+}
+
 check_overlap() {
-  local repo="$1" wt self_wt hits=0 report="" changed base overlap subject
+  local repo="$1" wt self_wt hits=0 report="" changed base overlap subject stale_note
   [ -n "${LANE_PATHS:-}" ] || { note "LANE_PATHS 未宣言: 担当領域の重複判定を省略する"; return 0; }
   base="$(resolve_base "$repo" 2>/dev/null || true)"
   [ -n "$base" ] || { note "base を決められない: 担当領域の重複判定を省略する"; return 0; }
@@ -315,7 +361,17 @@ PY
 )"
     [ -n "$overlap" ] || continue
     hits=$((hits + 1))
-    report="${report}${report:+$'\n'}  ${wt}: $(printf '%s' "$overlap" | tr '\n' ' ')"
+    # 「稼働中のレーンが編集中」と「陳腐化した worktree に古い変更が残っている」は
+    # 別の状態で、**受け手の行動が変わる**（前者は調整、後者は掃除）。
+    # 2026-09-03 実測: 検出 3 件のうち cluster-a/convergence は
+    # ahead=0 / merged / 最終コミット 24 時間前で、成果は PR #113〜#119 で
+    # 既に main へ入っていた。残っていたのは同内容の古い変更である。
+    # これは誤検知ではない（変更は実在する）が、調整は不要だった。
+    #
+    # 閾値で「陳腐化」と断定はしない。**観測量をそのまま並べて**、疑いだけを
+    # 添える。新しい状態ファイルもレジストリも作らず、全て git から導出する。
+    stale_note="$(overlap_state "$wt" "$base" "$overlap")"
+    report="${report}${report:+$'\n'}  ${wt} ${stale_note}: $(printf '%s' "$overlap" | tr '\n' ' ')"
   done < <(git -C "$repo" worktree list --porcelain 2>/dev/null | grep '^worktree ')
 
   subject="$(python3 -c '
@@ -332,7 +388,8 @@ print(json.dumps({"repo": sys.argv[1],
   fi
   note "担当領域が稼働中の ${hits} レーンと重複している（着地前なので base には現れない）:"
   printf '%s\n' "$report" >&2
-  note "  同じファイルを独立に実装すると add/add になる。分担を確認すること。"
+  note "  未merge のものは調整が要る（同じファイルを独立に実装すると add/add になる）。"
+  note "  陳腐化の疑いのものは掃除が要る（掃除は「マージ済み + 7 日」限定。本数を KPI にしない）。"
   ledger warn lane-area-overlap "overlap with $hits live worktree(s)" "$subject"
   return 0
 }

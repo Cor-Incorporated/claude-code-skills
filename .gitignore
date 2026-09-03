@@ -53,3 +53,15 @@ skills/review/
 skills/setup-browser-cookies/
 skills/ship/
 skills/unfreeze/
+
+# Worktrees created inside the repo.
+#
+# 2026-09-03 実測: これが無いと共有チェックアウトでの `git add -A` が
+# **他レーンの worktree 54 本を embedded git repository として stage しようとする**
+# （総数 100 件のうち 54 件）。実際に本日、監督の commit が別レーンのブランチへ
+# 潜り込む事故が起きている。aidd-governance は 33 行目に同じ行を持っており、
+# あちらの `add -A` は 4 件で収まる。
+#
+# hooks/lane-launch-gate.sh は共有チェックアウトでの `add -A` 自体を deny するが、
+# それは配備済み環境でしか効かない。**追跡除外はリポジトリを clone した誰にでも効く。**
+.worktrees/

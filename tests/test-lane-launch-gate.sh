@@ -642,6 +642,48 @@ LANE_PATHS="README.md" LANE_BASE=trunk bash "$BP" overlap "$SHARED" 2>"$SB/ov5" 
 grep -q "担当領域が稼働中" "$SB/ov5" \
   && ok "case13 未コミット（tracked の変更）でも重複を検出する" \
   || bad "case13 tracked の未コミット変更を見落とす: $(cat "$SB/ov5")"
+echo "--- 稼働中レーンと陳腐化 worktree を区別すること ---"
+# 2026-09-03 検収: 検出 3 件のうち cluster-a/convergence は ahead=0 / merged /
+# 最終コミット 24 時間前で、成果は PR #113〜#119 で既に main へ入っていた。
+# 変更は実在するので誤検知ではないが、**受け手の行動が違う**（調整 vs 掃除）。
+# 閾値で断定せず、観測量（ahead / merged / 最終更新）を並べて疑いだけ添える。
+LANE_PATHS="hooks/uncommitted.sh" LANE_BASE=trunk bash "$BP" overlap "$SHARED" 2>"$SB/ov7" >/dev/null
+grep -q "ahead=" "$SB/ov7" && grep -q "最終更新=" "$SB/ov7" \
+  && ok "case13 重複相手の観測量（ahead / 最終更新）を並べる" \
+  || bad "case13 観測量が出ていない: $(cat "$SB/ov7")"
+# ラベルは **worktree の行**（ahead= を含む行）に付く。末尾の助言行にも
+# 「陳腐化の疑い」の語が出るので、ファイル全体を grep すると常に真になる。
+# 実測で踏んだ: 助言行を足した瞬間、この 3 件が偽陽性・偽陰性になった。
+stale_labeled() { grep "ahead=" "$1" | grep -q "陳腐化の疑い"; }
+stale_labeled "$SB/ov7" \
+  && bad "case13 未着地の稼働中レーンを陳腐化と誤ラベルした: $(cat "$SB/ov7")" \
+  || ok "case13 未着地のレーンには陳腐化ラベルを付けない（恒真ラベルではない）"
+
+# 陳腐化側: レーンの成果が base へ着地すると ahead=0 かつ merged になる。
+# 未コミットのファイルはそのまま残る = 事故当日の cluster-a と同じ形。
+git_q "$LANE_WT" push -q origin HEAD:trunk
+git_q "$SHARED" fetch -q origin trunk
+LANE_PATHS="hooks/uncommitted.sh" LANE_BASE=trunk bash "$BP" overlap "$SHARED" 2>"$SB/ov8" >/dev/null
+stale_labeled "$SB/ov8" \
+  && ok "case13 成果が base へ入った worktree は陳腐化の疑いとして出す" \
+  || bad "case13 陳腐化を区別できない: $(cat "$SB/ov8")"
+grep -q "ahead=0 merged" "$SB/ov8" \
+  && ok "case13 陳腐化の根拠（ahead=0 かつ merged）を観測量で示す" \
+  || bad "case13 陳腐化の根拠を示さない: $(cat "$SB/ov8")"
+grep -q "掃除" "$SB/ov8" \
+  && ok "case13 受け手の行動（調整ではなく掃除）を明示する" \
+  || bad "case13 行動が書かれていない"
+# 変異: 区別ロジックを外すと陳腐化ラベルが消えることの実測
+if mutate "$BP" 'ahead == "0" and merged == "merged"' 'False' "$MUT/nostale.sh"; then
+  LANE_PATHS="hooks/uncommitted.sh" LANE_BASE=trunk \
+    bash "$MUT/nostale.sh" overlap "$SHARED" 2>"$SB/ov9" >/dev/null
+  stale_labeled "$SB/ov9" \
+    && bad "変異(陳腐化判定除去) それでもラベルが出る = 別条件が出している" \
+    || ok "変異(陳腐化判定除去) 陳腐化ラベルが消える = 判定は効いていた"
+else
+  bad "変異(陳腐化判定除去) 対象が見つからない — 反証不能"
+fi
+
 # 変異: 作業ツリーを見る側を落とすと、上の 2 件が素通しすることの実測
 if mutate "$BP" 'git -C "$wt" status --porcelain --untracked-files=all' \
      'true' "$MUT/nostatus.sh"; then
