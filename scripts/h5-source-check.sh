@@ -178,7 +178,7 @@ online)
   # と読み、宣言済みの `repos/{owner}/{repo}/contents/{path}` に当たらず
   # UNDECIDABLE-API になる（実測 2026-09-03, ccs#368 の CI）。
   fetch_upstream_sha() { # <repo相対パス> -> stdout に sha / rc 2 で取得失敗
-    local rp="$1" tmp err rc
+    local rp="$1" tmp err
     tmp="$(mktemp)"; err="$(mktemp)"
     if ! gh api "repos/${src_owner}/${src_name}/contents/${rp}?ref=${src_ref}" \
           --jq '.content' 2>"$err" | base64 -d > "$tmp" 2>/dev/null || [[ ! -s "$tmp" ]]; then

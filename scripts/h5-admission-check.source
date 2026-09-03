@@ -38,4 +38,4 @@ source=Cor-Incorporated/claude-code-skills
 ref=develop
 commit=HEAD
 sha256=f5d88242a2f986719411ead303ebc07e1c641937b5dab2f0bfa6898b339c61ba
-sha256:scripts/h5-source-check.sh=b6333c328070e73ba9d0b76772180d571bf8b72233b3fcdfc8eec549d4301af9
+sha256:scripts/h5-source-check.sh=17e0165921a34b3286662452478eef78cd94092c519ab9a3d7318488a36f3cf8
