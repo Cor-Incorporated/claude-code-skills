@@ -72,20 +72,37 @@ note() { printf '[lane-basepoint] %s\n' "$*" >&2; }
 
 # resolve_base <worktree> — base ブランチ名を決める。
 # 明示 > origin/HEAD > develop > main。推測した場合はその旨を出す。
+#
+# stdout は "<出所> <base>" の 2 語（出所は explicit / origin-head / fallback）。
+# 呼び出しが $( ) なので、**変数代入では出所が親シェルへ伝わらない**
+# （2026-09-03 実測: 分岐は書いたのに 1 行も出力されなかった）。値に載せる。
+# ブロックメッセージが base を名指すとき、**その base をどこから得たか**を
+# 出せるようにするため。
+#
+# 2026-09-03 実測: `refs/remotes/origin/HEAD` は **ローカルにキャッシュされた宣言**で、
+# リモートの実体と黙って乖離する。ccs のローカルが `main` を指したまま
+# （GitHub の既定は `develop`）になっており、**develop 起点の正当なレーン発射が
+# 全部 block されていた。** メッセージは「origin/main より 8 commit 古い」とだけ言い、
+# **その `main` がどこから来たのかを言わなかった**ので、原因に辿り着けない。
+#
+# hook からネットワークを叩いて実体を取りに行くことはしない。PreToolUse hook が
+# ネットワークに依存すると遅延と fail-open の経路が増える。代わりに
+# **出所を明示して、更新コマンドを実値で出す**（runbook.md 実値主義）。
+LANE_BASE_ORIGIN=""
 resolve_base() {
   local wt="$1" ref
   if [ -n "${LANE_BASE:-}" ]; then
-    printf '%s' "${LANE_BASE#origin/}"
+    printf 'explicit %s' "${LANE_BASE#origin/}"
     return 0
   fi
   ref="$(git -C "$wt" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
   if [ -n "$ref" ]; then
-    printf '%s' "${ref##*/}"
+    printf 'origin-head %s' "${ref##*/}"
     return 0
   fi
   for cand in develop main master; do
     if git -C "$wt" rev-parse --verify --quiet "origin/$cand" >/dev/null 2>&1; then
-      printf '%s' "$cand"
+      printf 'fallback %s' "$cand"
       return 0
     fi
   done
@@ -133,7 +150,26 @@ check_basepoint_ref() {
   die "  その間に他レーンの成果が ${base} へ入っている。同じ領域を独立に再実装すると"
   die "  add/add 競合になり、成熟度の低い側が破棄される（Grift feat/l-s6-api: 650 行 vs 290 行）。"
   die "  起点を取り直す:  git -C ${repo} fetch origin ${base} && <worktree add を origin/${base} 起点で再実行>"
-  ledger block stale-basepoint "start ref '$ref' is $behind commits behind origin/$base (pre-launch)" "$subject"
+  # **base をどこから得たかを必ず出す。**
+  # 2026-09-03: ローカルの origin/HEAD が古く（main を指す）、GitHub の既定は develop
+  # だったため、develop 起点の正当な発射が「origin/main より 8 commit 古い」と
+  # 言われて全部 block された。base の出所が出ていれば 1 行で原因に届いた。
+  case "${LANE_BASE_ORIGIN:-}" in
+    origin-head)
+      die "  base '${base}' の出所: ローカルの refs/remotes/origin/HEAD（**キャッシュされた宣言**）"
+      die "    リモートの既定と黙って乖離する。実体と違うと感じたら次で取り直す:"
+      die "      git -C ${repo} remote set-head origin -a"
+      die "    それでも違うなら base を明示する:  LANE_BASE=<branch> <再実行>"
+      ;;
+    fallback)
+      die "  base '${base}' の出所: 候補 develop/main/master からの**推測**（origin/HEAD 未設定）"
+      die "    意図した base と違うなら明示する:  LANE_BASE=<branch> <再実行>"
+      ;;
+    explicit)
+      die "  base '${base}' の出所: LANE_BASE による明示指定"
+      ;;
+  esac
+  ledger block stale-basepoint "start ref '$ref' is $behind commits behind origin/$base (pre-launch, base_origin=${LANE_BASE_ORIGIN:-unknown})" "$subject"
   return 1
 }
 
@@ -329,7 +365,9 @@ PY
 check_overlap() {
   local repo="$1" wt self_wt hits=0 report="" changed base overlap subject stale_note
   [ -n "${LANE_PATHS:-}" ] || { note "LANE_PATHS 未宣言: 担当領域の重複判定を省略する"; return 0; }
-  base="$(resolve_base "$repo" 2>/dev/null || true)"
+  _rb="$(resolve_base "$repo" 2>/dev/null || true)"
+  LANE_BASE_ORIGIN="${_rb%% *}"; base="${_rb#* }"
+  [ "$_rb" = "$base" ] && LANE_BASE_ORIGIN=""
   [ -n "$base" ] || { note "base を決められない: 担当領域の重複判定を省略する"; return 0; }
   base="${base#origin/}"
   self_wt="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -454,7 +492,8 @@ main() {
       git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || {
         die "git リポジトリではない: $repo"; return 2; }
       if [ -z "$rbase" ]; then
-        rbase="$(resolve_base "$repo")" || { note "base を決められない: 判定を省略"; return 0; }
+        _rb="$(resolve_base "$repo")" || { note "base を決められない: 判定を省略"; return 0; }
+        LANE_BASE_ORIGIN="${_rb%% *}"; rbase="${_rb#* }"
       fi
       rbase="${rbase#origin/}"
       check_basepoint_ref "$repo" "$ref" "$rbase"
@@ -479,7 +518,7 @@ main() {
     return 2
   fi
   if [ -z "$base" ]; then
-    base="$(resolve_base "$wt")" || {
+    _rb="$(resolve_base "$wt")" && { LANE_BASE_ORIGIN="${_rb%% *}"; base="${_rb#* }"; } || {
       die "base ブランチを決められない。LANE_BASE で明示すること。"
       return 2
     }
