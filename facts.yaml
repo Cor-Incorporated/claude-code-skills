@@ -128,3 +128,34 @@ pairs:
       3 週間ぶん未登録のまま残っていた（登録簿の側の二重管理）。
       pair16 は両方向を見る: 実装された pairN は必ず登録され、
       登録エントリは必ず pair 欄を持つ（値 none は許す＝未実装の明示）。
+  - id: ccs-registered-checkers-self-contained-negative-test
+    pair: pair18
+    declaration: settings.json#hooks（登録された = 実際に発火する検査器）
+    enforcement: tests/*.sh#NEGATIVE-TEST-FOR（自己完結した陰性テスト）
+    note: |
+      aidd-governance#97 項目3 / #98 項目3 —「既知の欠陥を注入して red を
+      実測していない検査器は、検査器として数えない」。
+      判定軸は語（変異 / mutation / F3）の有無ではなく、
+      **テストが自分で変異体を書き出し、同じ実行の中でそれを走らせるか**。
+
+      なぜ h5-admission では足りないか（2026-09-03 実測）:
+      scripts/h5-admission-check.sh の has_marker() は PR 本文の
+      `H5-NEGATIVE:` の後ろに 9 文字以上あるかを見るだけである。実測 3 本:
+        A 新規 hook + "HOOK_DIR=/tmp/unfixed bash ... -> 6 failed" → exit 0
+        B 新規 hook + テストファイルを 1 つも足さず散文だけ        → exit 0
+        C 新規 hook + マーカー無し（対照）                        → exit 1
+      C が落ちるので h5 は壊れていないが、A/B が通る以上 h5 は
+      **PR 単位の宣言**しか見ておらず、検査器単位の担保は見ていない。
+
+      なぜ「外から env で差し込む」形を数えないか（2026-09-03 実測）:
+      tests/test-issue-263-multi-repo-ctx.sh は壊れた版を
+      `git show origin/develop:hooks/git-push-guard.sh` で人が用意し
+      `HOOK_DIR=` で差し込む形だった。その赤は 2 つの理由で存在しなかった:
+        1. .github/workflows/ci.yml は `bash tests/test-*.sh` としか書かず
+           HOOK_DIR の出現は 0 件。CI は緑側しか走らせない。
+        2. origin/develop は動く ref。#263 の修正が着地した時点でレシピは
+           修正版を出すようになり「15 passed, 0 failed」= 赤が消えた。
+
+      pair18 はラチェットである。UNCOVERED_BASELINE に無い検査器が未担保に
+      なったら落ち（新設 or 陰性テスト削除の回帰）、baseline にあるのに
+      担保済みになっても落ちる（baseline を腐らせない）。担保率は下がらない。

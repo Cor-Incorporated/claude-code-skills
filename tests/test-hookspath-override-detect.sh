@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# NEGATIVE-TEST-FOR: hooks/enforce-hook-deploy-integrity.sh
 # core.hooksPath の local override が global の hook を落としている状態の検出。
 #
 # 起点事故 (2026-09-02): プローブが `set -e` 無しでサンドボックスへの `cd` に失敗し、

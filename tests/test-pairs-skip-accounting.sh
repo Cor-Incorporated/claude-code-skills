@@ -42,7 +42,10 @@ fi
 
 echo "--- 2. CI 相当（配備先なし）の実測 ---"
 p=$(field "$OUT" passed); s=$(field "$OUT" skipped); f=$(field "$OUT" failed)
-if [[ "$p" == "5" ]]; then ok "passed == 5 (CI verifies 5 pairs, not 15)"; else bad "passed == 5 (got '$p')"; fi
+# 6 = 配備先が無い CI でも照合できる pair の本数。2026-09-03 に 5 → 6。
+# pair18（登録検査器 ↔ 自己完結した陰性テスト）は repo の settings.json と
+# tests/*.sh だけを読むので、~/.claude が無い CI でも skip せず走る。
+if [[ "$p" == "6" ]]; then ok "passed == 6 (CI verifies 6 pairs, not 17)"; else bad "passed == 6 (got '$p')"; fi
 if [[ "$s" == "11" ]]; then ok "skipped == 11"; else bad "skipped == 11 (got '$s')"; fi
 if [[ "$f" == "0" ]]; then ok "failed == 0"; else bad "failed == 0 (got '$f')"; fi
 
@@ -117,8 +120,10 @@ fi
 HOME="$EMPTY" bash "$MUTANT" >"$OUT" 2>&1
 mp=$(field "$OUT" passed); ms=$(field "$OUT" skipped)
 mleak=$(grep -c '^PASS: .*skip' "$OUT" || true)
-if [[ "$ms" == "0" && "$mp" == "16" ]]; then
-  ok "mutant over-claims (passed=16, skipped=0) — the state #349 reported"
+# 17 = 全 pair が「通った」と主張してしまう数（6 実照合 + 11 skip の詐称）。
+# 2026-09-03 に 16 → 17。pair18 の追加で実照合が 1 本増えたぶん。
+if [[ "$ms" == "0" && "$mp" == "17" ]]; then
+  ok "mutant over-claims (passed=17, skipped=0) — the state #349 reported"
 else
   bad "mutant did not reproduce the over-claim (passed=$mp skipped=$ms)"
 fi

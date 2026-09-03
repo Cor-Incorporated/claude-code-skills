@@ -542,6 +542,125 @@ else:
             f"{registered.count('none')} declared none)"
         )
 
+# pair18: settings.json が登録する検査器 ↔ 自己完結した陰性テスト
+# aidd-governance#97 項目3 / #98 項目3 —「既知の欠陥を注入して red を実測して
+# いない検査器は、検査器として数えない」。
+#
+# なぜ h5-admission では足りないか（2026-09-03 実測。作るか作らないかの分岐点）:
+#   scripts/h5-admission-check.sh の has_marker() は
+#   `H5-NEGATIVE:` の後ろに 9 文字以上あるかを PR 本文で見るだけである。
+#   実測 3 本:
+#     A 新規 hook + "HOOK_DIR=/tmp/unfixed bash ... -> 6 failed" → exit 0 (PASS)
+#     B 新規 hook + テストファイルを 1 つも足さず散文だけ        → exit 0 (PASS)
+#     C 新規 hook + マーカー無し（対照）                          → exit 1 (FAIL)
+#   C が落ちるので h5 は壊れていない。しかし A/B が通る以上、h5 は
+#   **PR 単位の宣言**を強制しているだけで、検査器単位で陰性テストが
+#   存在するか・走るかは見ていない。したがって backfill は一度きりにならない。
+#
+# なぜ「外から env で差し込む」形を数えないか（実測）:
+#   tests/test-issue-263-multi-repo-ctx.sh は壊れた版を
+#   `git show origin/develop:hooks/git-push-guard.sh` で人が用意し
+#   `HOOK_DIR=` で差し込む形だった。2 つの理由でその赤は存在しなかった:
+#     1. .github/workflows/ci.yml は `bash tests/test-*.sh` としか書かず、
+#        HOOK_DIR の出現は 0 件。CI は緑側しか走らせない。
+#     2. origin/develop は**動く ref**。#263 の修正が着地した時点で
+#        レシピは修正版を出すようになり、2026-09-03 実測で
+#        「15 passed, 0 failed」= 赤が消えた。
+#   「陰性テストがある」と「陰性テストが走っている」は別である。
+#
+# 判定軸: テストが**自分で**変異体を書き出し、**同じ実行の中で**それを走らせるか。
+# 宣言側 = settings.json の登録（= 実際に発火する検査器）
+# 強制側 = tests/*.sh の `# NEGATIVE-TEST-FOR: hooks/<name>.sh` と、その中身。
+#
+# ラチェット: 現在 未担保の集合を UNCOVERED_BASELINE に固定する。
+#   - baseline に無い検査器が未担保になったら落ちる
+#     （新設された検査器、または陰性テストを消した回帰）
+#   - baseline にあるのに担保済みになったら落ちる（baseline を腐らせない）
+# 割合は下げられない。北極星（担保率）は単調増加しかしない。
+settings_repo = ROOT / "settings.json"
+if not settings_repo.is_file():
+    bad("pair18 source file missing", f"declaration={settings_repo} exists=False")
+else:
+    reg = set()
+    for _ev, ms in json.loads(settings_repo.read_text(encoding="utf-8")).get("hooks", {}).items():
+        for m in ms:
+            for h in m.get("hooks", []):
+                for part in re.findall(r"[\w./-]+\.sh", h.get("command", "")):
+                    reg.add(f"hooks/{os.path.basename(part)}")
+
+    # 強制側: マーカーを持ち、かつ**自己完結している**テストだけを数える。
+    # 自己完結の構造条件（語ではなく構造で見る）:
+    #   (a) 変異体をこのファイル自身が書き出す — 元を読んで別パスへ write する
+    #   (b) 書き出した先の変数を、このファイル自身が実行する
+    # (b) が無いと「変異体を作ったが走らせていない」を通してしまう。
+    covered: dict[str, str] = {}
+    not_self_contained: list[str] = []
+    for t in sorted((ROOT / "tests").glob("test-*.sh")):
+        text = t.read_text(encoding="utf-8", errors="replace")
+        marks = re.findall(r"^#\s*NEGATIVE-TEST-FOR:\s*(\S+)\s*$", text, re.M)
+        if not marks:
+            continue
+        # (a) 変異体の書き出し先に渡される変数（元を読んで別パスへ write する行）
+        # (b) それとは別の行で、コマンドの引数として渡される変数
+        written, executed = set(), set()
+        for line in text.splitlines():
+            is_write = ("python3 - " in line) or bool(re.search(r"\bmutate\s", line))
+            if is_write:
+                written.update(re.findall(r'"\$(\w+)"', line))
+                continue
+            # `cmd "$V"` の形。`$(...)` の内側も拾う。
+            # `-f "$V"` のようなファイルテストは実行ではないので落とす
+            # （不在の確認は「走らせた」証拠にならない）。
+            for head, var in re.findall(r'([\w./-]+)\s+"\$(\w+)"', line):
+                if not head.startswith("-"):
+                    executed.add(var)
+        self_contained = bool(written & executed)
+        for h in marks:
+            if self_contained:
+                covered[h] = t.name
+            else:
+                not_self_contained.append(f"{h}<-{t.name}")
+
+    # 宣言されたのに実体が無いマーカー（削除・改名の検出）
+    dangling_marks = sorted(h for h in covered if not (ROOT / h).is_file())
+
+    # 2026-09-03 実測の未担保集合。担保が付いたらこの行から消す（消し忘れも落ちる）。
+    UNCOVERED_BASELINE = {
+        "hooks/aidd-h3-evidence-stop.sh",
+        "hooks/auto-commit-worktree-changes.sh",
+        "hooks/auto-init-permissions.sh",
+        "hooks/auto-update-plugins.sh",
+        "hooks/dns-self-heal.sh",
+        "hooks/enforce-branch-workflow.sh",
+        "hooks/enforce-hook-deploy-after-merge.sh",
+        "hooks/post-deploy-verify.sh",
+        "hooks/post-lint-format.sh",
+        "hooks/pre-compact-context-save.sh",
+        "hooks/tool-failure-recovery.sh",
+        "hooks/validate-provider-env.sh",
+        "hooks/verify-agent-output.sh",
+    }
+    uncovered = reg - set(covered)
+    regressed = sorted(uncovered - UNCOVERED_BASELINE)   # 新設 or 陰性テスト削除
+    stale = sorted(UNCOVERED_BASELINE - uncovered)       # 担保済みなのに baseline に残存
+    if regressed or stale or dangling_marks or not_self_contained:
+        bad(
+            "pair18 registered checkers without a self-contained negative test",
+            f"declaration(settings.json)={len(reg)} registered | "
+            f"enforcement(tests/*.sh NEGATIVE-TEST-FOR)={len(covered)} covered "
+            f"({sorted(covered)}) | "
+            f"newly_uncovered={regressed} "
+            f"covered_but_still_in_baseline={stale} "
+            f"marker_targets_missing={dangling_marks} "
+            f"marked_but_not_self_contained={sorted(not_self_contained)}",
+        )
+    else:
+        ok(
+            f"pair18 self-contained negative-test coverage "
+            f"({len(covered)}/{len(reg)} registered checkers; "
+            f"{len(UNCOVERED_BASELINE)} declared uncovered)"
+        )
+
 # 3 値で出す。skipped は「照合できなかった」であって「通った」ではない。
 print(f"--- {PASS} passed, {len(SKIPPED)} skipped, {FAIL} failed ---")
 if SKIPPED:

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# NEGATIVE-TEST-FOR: hooks/aidd-async-register.sh
 # 自動登録が「実行」と「引用」を区別することを検査する (aidd-governance#100)。
 #
 # 起点事故 (2026-09-02): 文字列として `gh workflow run v2-alpha-cd.yml` を含む

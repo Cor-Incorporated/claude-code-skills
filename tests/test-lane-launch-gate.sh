@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# NEGATIVE-TEST-FOR: hooks/lane-launch-gate.sh
 # レーン発射ゲート — hooks/lane-launch-gate.sh の反証テスト.
 #
 # Issue: Cor-Incorporated/aidd-governance#91（基点規律）, #88（同族反復上限）
