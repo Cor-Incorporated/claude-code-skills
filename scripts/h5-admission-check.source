@@ -1,0 +1,21 @@
+# h5-admission-check.sh の同一性スタンプ (aidd-governance#137)
+#
+# **このリポジトリが正本である** (role=source)。したがって照合すべき上流は無く、
+# scripts/h5-source-check.sh online はここでは誤用として落ちる。
+#
+# それでも offline 検査は意味を持つ: **公開している sha256 と本体がずれていないか**
+# を毎 PR で見る。本体を直してこのスタンプを直し忘れると red になるので、
+# vendor 先が読む sha が古いまま公開される事故を止められる。
+#
+# 正本がこちら側にある理由 (#137 で判断):
+#   - claude-code-skills は public、aidd-governance は private。private → public は
+#     常に読めるので、vendor 先の鮮度検査に **secret が 1 本も要らない**
+#   - 逆向きにすると public 側の CI トークンが private を読めず、鮮度検査が恒久的に
+#     UNVERIFIED になる（実測 2026-09-03, ccs#368）
+#   - ccs は main / develop とも required_status_checks に h5-admission を持つ。
+#     gov main は []。強制が最も強い側に正本を置く
+role=source
+source=Cor-Incorporated/claude-code-skills
+ref=develop
+commit=HEAD
+sha256=f5d88242a2f986719411ead303ebc07e1c641937b5dab2f0bfa6898b339c61ba
