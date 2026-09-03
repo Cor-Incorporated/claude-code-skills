@@ -36,7 +36,7 @@ mk_repo() { # mk_repo <dir>
   mkdir -p "$1/scripts"
   cp "$RUNNER" "$1/scripts/h5-vendor-lint.sh"
 }
-run_in() { # run_in <repo> -> rc（出力は $LAST_OUT）
+run_in() { # run_in <repo> -> rc。出力は ${LAST_OUT} に入る
   LAST_OUT="$(bash "$1/scripts/h5-vendor-lint.sh" 2>&1)"
   return $?
 }

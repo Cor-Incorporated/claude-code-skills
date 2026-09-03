@@ -41,9 +41,19 @@ scan() { # $1=repo root -> 違反行を stdout（"path:line:抜粋"）
 import os, pathlib, re, subprocess, sys
 pat = re.compile(r'\$([A-Za-z_][A-Za-z0-9_]*)(?=[^\x00-\x7f])')
 root = pathlib.Path(sys.argv[1])
+# tracked に加えて **untracked（gitignore 対象は除く）** も走査する。
+# `git ls-files` だけだと、まだ add していない新規ファイルが対象から外れる。
+# 2026-09-03/04 に監督が 2 回この穴へ落ちた: 新規テストを書き、staging 前に
+# スイートを回して「違反 0 件」を得て、commit 後に CI で初めて赤くなった。
+# **走査対象に入っていなかっただけなのに「違反が無い」と読める** — これは
+# 本テストが検出しようとしている欠陥クラスと同型である。
 try:
-    files = subprocess.run(["git", "-C", str(root), "ls-files", "*.sh"],
-                           capture_output=True, text=True, timeout=120).stdout.split("\n")
+    tracked = subprocess.run(["git", "-C", str(root), "ls-files", "*.sh"],
+                             capture_output=True, text=True, timeout=120).stdout.split("\n")
+    untracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "*.sh"],
+        capture_output=True, text=True, timeout=120).stdout.split("\n")
+    files = tracked + untracked
 except Exception as e:                      # 取得失敗は「違反ゼロ」と読ませない
     print(f"SCAN-ERROR:{e}")
     raise SystemExit(2)
