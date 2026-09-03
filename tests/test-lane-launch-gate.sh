@@ -404,8 +404,8 @@ PY
 
 # (1) コマンド位置判定を substring に替える -> 引用が誤発火する
 if mutate "$HOOK" \
-   'if i + 1 >= len(toks) or toks[i] != "worktree" or toks[i + 1] != "add":' \
-   'if "worktree" not in seg or "add" not in seg:' "$MUT/substr.sh"; then
+   'if sub == "worktree" and i + 1 < len(toks) and toks[i + 1] == "add":' \
+   'if "worktree" in seg and "add" in seg:' "$MUT/substr.sh"; then
   # 判定は「deny したか」ではなく「ゲートに入ったか」。位置判定を外すと
   # コミットメッセージがゲートへ入り、起点省略の警告が出る。
   run_gate "$HOOK" 'git commit -m "add worktree add support"' LANE_BASE=trunk HOME="$HOME"
@@ -457,6 +457,275 @@ t = open(sys.argv[1], encoding="utf-8").read()
 assert not re.search(r"repairs?\s*>=\s*3|>=\s*threshold|threshold\s*=\s*3", t), "threshold logic inlined"
 assert "repair-loop-breaker.sh" in t, "breaker not referenced"
 assert "evaluate --ledger" in t, "breaker evaluate not invoked"
+PY
+
+echo
+echo "=== case 9 (#91 項目2): 共有チェックアウト — 2026-09-03 の事故 2 件の再現 ==="
+# F2 反証軸。当日の入力をそのまま流し、止まることを実測する。
+#
+#   事故 1: `git checkout -b <新>` が別レーンの占有で失敗 → `2>/dev/null ||` で
+#           握り潰し → 続く add/commit が他レーンのブランチに載った
+#             dfe65f1 test(matrix): …    ← 他レーン
+#             c65dadb test: シェル変数の… ← 監督の commit が潜り込んだ
+#   事故 2: 監督が共有チェックアウトのブランチを切り替えたら、そのツリーで
+#           別レーンが作業中だった
+SHARED="$SB/shared"; SOLO="$SB/solo"
+git clone -q "$ORIGIN" "$SHARED"
+git_q "$SHARED" checkout -q -b supervisor
+# 別レーンがこの共有チェックアウトに worktree をぶら下げる = 「共有」の成立条件
+git_q "$SHARED" worktree add -q "$SHARED/.worktrees/lane/a" -b lane-a trunk
+git clone -q "$ORIGIN" "$SOLO"          # linked worktree ゼロ = 共有ではない
+LANE_WT="$SHARED/.worktrees/lane/a"
+
+echo "--- 事故 2 の再現: 共有チェックアウトのブランチ切替 ---"
+run_gate "$HOOK" "git -C $SHARED checkout lane-a" LANE_BASE=trunk HOME="$HOME"
+rc=$?
+[[ "$rc" -eq 2 ]] \
+  && ok "case9 事故2 再現: 共有チェックアウトのブランチ切替を exit 2 で拒否した" \
+  || bad "case9 事故2 が素通しした (rc=$rc): $(cat "$SB/err")"
+grep -q "共有チェックアウト" "$SB/err" \
+  && ok "case9 事故2 拒否理由が共有チェックアウトであると明示する" \
+  || bad "case9 事故2 拒否理由が不明瞭: $(cat "$SB/err")"
+grep -q "worktree add" "$SB/err" \
+  && ok "case9 事故2 復旧手順（worktree を切る）を示す" \
+  || bad "case9 事故2 復旧手順がない"
+
+run_gate "$HOOK" "git -C $SHARED switch lane-a" LANE_BASE=trunk HOME="$HOME"
+[[ "$?" -eq 2 ]] \
+  && ok "case9 事故2 switch 形でも拒否する（checkout だけ塞いでも迂回される）" \
+  || bad "case9 switch 形が素通しした"
+
+run_gate "$HOOK" "git -C $SHARED checkout -" LANE_BASE=trunk HOME="$HOME"
+[[ "$?" -eq 2 ]] \
+  && ok "case9 事故2 \`checkout -\` でも拒否する" \
+  || bad "case9 \`checkout -\` が素通しした"
+
+echo "--- 事故 1 の再現: 握り潰し付きブランチ生成 → add -A → commit ---"
+ACCIDENT1="git -C $SHARED checkout -b feat/new 2>/dev/null || git -C $SHARED checkout feat/new; git -C $SHARED add -A && git -C $SHARED commit -m 'test: シェル変数の…'"
+run_gate "$HOOK" "$ACCIDENT1" LANE_BASE=trunk HOME="$HOME"
+rc=$?
+[[ "$rc" -eq 2 ]] \
+  && ok "case9 事故1 再現: 当日の複合コマンドを exit 2 で拒否した" \
+  || bad "case9 事故1 が素通しした (rc=$rc): $(cat "$SB/err")"
+grep -q "握り潰" "$SB/err" \
+  && ok "case9 事故1 失敗の握り潰しを名指しする（根因を告げる）" \
+  || bad "case9 事故1 握り潰しに言及しない: $(cat "$SB/err")"
+
+run_gate "$HOOK" "git -C $SHARED add -A" LANE_BASE=trunk HOME="$HOME"
+[[ "$?" -eq 2 ]] \
+  && ok "case9 事故1 無差別ステージング単体でも拒否する（他レーンの作業を巻き込む）" \
+  || bad "case9 git add -A が素通しした"
+run_gate "$HOOK" "git -C $SHARED commit -am wip" LANE_BASE=trunk HOME="$HOME"
+[[ "$?" -eq 2 ]] \
+  && ok "case9 事故1 \`commit -am\` も拒否する（-a は tracked を全部さらう）" \
+  || bad "case9 commit -am が素通しした"
+
+echo "--- cd 追跡: \`cd <repo> && git checkout -b\` も同じ repo で判定する ---"
+run_gate "$HOOK" "cd $SHARED && git checkout -b feat/viacd" LANE_BASE=trunk HOME="$HOME"
+[[ "$?" -eq 2 ]] \
+  && ok "case9 cd 経由でも共有チェックアウトとして判定する" \
+  || bad "case9 cd 経由が素通しした（-C が無いと判定を落としている）"
+
+echo
+echo "=== case 10: 正当な単独レーンでは出ない（恒真 block ではない） ==="
+# 完了条件の後半。ここが落ちるなら装置は使い物にならない。
+for c in \
+  "git -C $LANE_WT checkout -b feat/inside-lane" \
+  "git -C $LANE_WT switch -c feat/inside-lane2" \
+  "git -C $LANE_WT add -A" \
+  "git -C $LANE_WT commit -am wip" \
+  "git -C $SOLO checkout -b feat/solo" \
+  "git -C $SOLO add -A" \
+  "git -C $SHARED checkout -- README.md" \
+  "git -C $SHARED checkout README.md" \
+  "git -C $SHARED add README.md" \
+  "git -C $SHARED commit -m 'docs: 監督メモ'" \
+  "git -C $SHARED status" \
+  "git -C $SHARED log --oneline" \
+  "git -C $SHARED worktree list" \
+  'echo "git checkout -b feat/x"' \
+  'grep -rn "git switch -c" docs/' ; do
+  if run_gate "$HOOK" "$c" LANE_BASE=trunk HOME="$HOME"; then
+    ok "case10 誤検知なし: ${c:0:58}"
+  else
+    bad "case10 誤発火した: $c -> $(cat "$SB/err")"
+  fi
+done
+
+echo
+echo "=== case 11 (F3 片側変異): 判定を外すと事故 2 件が素通しすることの実測 ==="
+if mutate "$HOOK" '  src=$?' '  src=0' "$MUT/noshared.sh"; then
+  if run_gate "$MUT/noshared.sh" "git -C $SHARED checkout lane-a" LANE_BASE=trunk HOME="$HOME"; then
+    ok "変異(共有判定除去) 事故2 が素通しする = 判定は効いていた"
+  else
+    bad "変異(共有判定除去) それでも block = case9 は別条件が出している"
+  fi
+  if run_gate "$MUT/noshared.sh" "$ACCIDENT1" LANE_BASE=trunk HOME="$HOME"; then
+    ok "変異(共有判定除去) 事故1 が素通しする = 判定は効いていた"
+  else
+    bad "変異(共有判定除去) 事故1 がそれでも block"
+  fi
+else
+  bad "変異(共有判定除去) 対象が見つからない — 反証不能"
+fi
+# linked worktree 除外を外すと、レーン自身の worktree まで巻き込むことの実測。
+# 誤検知側の変異も見ないと「網が広すぎても緑」になる。
+if mutate "$ROOT/scripts/lane-basepoint-check.sh" \
+     '  [ -f "$agd/gitdir" ] && return 1' '  : ' "$MUT/greedy-check.sh"; then
+  # 判定は script が正本なので script を直接叩く。除外を外すとレーン自身の
+  # worktree（LINKED）まで「共有」と誤判定するはずである。
+  if bash "$MUT/greedy-check.sh" shared-checkout "$LANE_WT" "ブランチ生成 (x)" >/dev/null 2>&1; then
+    bad "変異(linked 除外を外す) レーン自身の worktree が通ってしまう = 除外が効いていない"
+  else
+    ok "変異(linked 除外を外す) レーン自身の worktree まで巻き込む = 除外は効いていた"
+  fi
+else
+  bad "変異(linked 除外) 対象が見つからない — 反証不能"
+fi
+
+echo
+echo "=== case 12: LANE_SHARED_ENFORCE=0 は降格するが記帳する ==="
+if run_gate "$HOOK" "git -C $SHARED checkout lane-a" \
+    LANE_BASE=trunk HOME="$HOME" LANE_SHARED_ENFORCE=0; then
+  ok "case12 降格指定で通る"
+else
+  bad "case12 降格指定が効かない: $(cat "$SB/err")"
+fi
+ledger_has shared-checkout-bypassed \
+  && ok "case12 降格の事実が台帳に残る（黙って外せない）" \
+  || bad "case12 降格が台帳に残らない"
+ledger_has shared-checkout \
+  && ok "case12 block そのものが台帳に残る（ADR-006 入場料）" \
+  || bad "case12 block が台帳に残らない"
+
+echo
+echo "=== case 13 (#91 項目2 原文): 稼働中レーンとの担当領域の重複を警告する ==="
+# duplicates モードは base に着地済みのものしか見えない。ここが見るのは
+# **まだ着地していない別 worktree** の作業。レジストリは作らず diff から導出する。
+BP="$ROOT/scripts/lane-basepoint-check.sh"
+mkdir -p "$LANE_WT/hooks"
+printf 'lane a work\n' >"$LANE_WT/hooks/shared.sh"
+git_q "$LANE_WT" add hooks/shared.sh
+git_q "$LANE_WT" commit -qm "lane a: hooks/shared.sh"
+LANE_PATHS="hooks/shared.sh" LANE_BASE=trunk bash "$BP" overlap "$SHARED" 2>"$SB/ov" >/dev/null
+grep -q "担当領域が稼働中" "$SB/ov" \
+  && ok "case13 他レーンが触っているファイルを宣言すると重複を警告する" \
+  || bad "case13 重複を警告しない: $(cat "$SB/ov")"
+grep -q "$LANE_WT" "$SB/ov" \
+  && ok "case13 どの worktree と重複しているかを名指しする" \
+  || bad "case13 相手の worktree を示さない"
+LANE_PATHS="scripts/other.sh" LANE_BASE=trunk bash "$BP" overlap "$SHARED" 2>"$SB/ov2" >/dev/null
+grep -q "担当領域の重複なし" "$SB/ov2" \
+  && ok "case13 重ならない宣言では警告しない（恒真警告ではない）" \
+  || bad "case13 重ならないのに警告した: $(cat "$SB/ov2")"
+LANE_BASE=trunk bash "$BP" overlap "$SHARED" 2>"$SB/ov3" >/dev/null
+grep -q "LANE_PATHS 未宣言" "$SB/ov3" \
+  && ok "case13 未宣言なら判定を省略し、省略したことを告げる（黙らない）" \
+  || bad "case13 未宣言が無言だった"
+if LANE_PATHS="hooks/shared.sh" LANE_BASE=trunk bash "$BP" overlap "$SHARED" >/dev/null 2>&1; then
+  ok "case13 重複は警告であって block ではない（exit 0）"
+else
+  bad "case13 重複で block した = 54 worktree 規模で常時発火する"
+fi
+
+echo "--- 未コミット作業も見ること（commit 済みだけでは実運用で空振りする） ---"
+# 実測 (2026-09-03, aidd-governance): cluster-a/convergence は ahead=0 なのに
+# 未コミット 16 ファイル。レーンは長時間コミットせずに作業するので、commit 済み
+# しか見ないと **衝突が起きている最中のレーンがちょうど見えない**。
+printf 'uncommitted work\n' >"$LANE_WT/hooks/uncommitted.sh"
+LANE_PATHS="hooks/uncommitted.sh" LANE_BASE=trunk bash "$BP" overlap "$SHARED" 2>"$SB/ov4" >/dev/null
+grep -q "担当領域が稼働中" "$SB/ov4" \
+  && ok "case13 未コミット（untracked）の作業でも重複を検出する" \
+  || bad "case13 未コミット作業を見落とす: $(cat "$SB/ov4")"
+printf 'modified\n' >>"$LANE_WT/README.md"
+LANE_PATHS="README.md" LANE_BASE=trunk bash "$BP" overlap "$SHARED" 2>"$SB/ov5" >/dev/null
+grep -q "担当領域が稼働中" "$SB/ov5" \
+  && ok "case13 未コミット（tracked の変更）でも重複を検出する" \
+  || bad "case13 tracked の未コミット変更を見落とす: $(cat "$SB/ov5")"
+# 変異: 作業ツリーを見る側を落とすと、上の 2 件が素通しすることの実測
+if mutate "$BP" 'git -C "$wt" status --porcelain --untracked-files=all' \
+     'true' "$MUT/nostatus.sh"; then
+  LANE_PATHS="hooks/uncommitted.sh" LANE_BASE=trunk \
+    bash "$MUT/nostatus.sh" overlap "$SHARED" 2>"$SB/ov6" >/dev/null
+  grep -q "担当領域の重複なし" "$SB/ov6" \
+    && ok "変異(作業ツリー除去) 未コミット作業が見えなくなる = status 併合は効いていた" \
+    || bad "変異(作業ツリー除去) 挙動が変わらない"
+else
+  bad "変異(作業ツリー除去) 対象が見つからない — 反証不能"
+fi
+
+echo
+echo "--- 網羅性: 共有チェックアウト側にも無言経路が無いこと ---"
+# (1)(2) と同じ照合を (4) ブロックにも掛ける。片方だけ照合すると、新しく
+# 足した側が黙って素通しするようになっても緑のままになる。
+shared_silent_check() {
+  python3 - "$1" <<'PY'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+body = src[src.index("# --- (4) #91 項目 2"):]
+lines = body.splitlines()
+# ネストした分岐も見る。2 スペース固定にすると、入れ子へ 1 段下げるだけで
+# 照合をすり抜けられる（(1)(2) 側の照合が実際にそうなっている既知の限界）。
+HDR = re.compile(r"^\s+(?:elif|else)\b")
+END = re.compile(r"^\s+(?:elif|else|fi)\b")
+branches, i = [], 0
+while i < len(lines):
+    if HDR.match(lines[i]):
+        hdr, blk = lines[i], []
+        i += 1
+        while i < len(lines) and not END.match(lines[i]):
+            blk.append(lines[i]); i += 1
+        branches.append((hdr, "\n".join(blk)))
+    else:
+        i += 1
+if not branches:
+    print("no branches found - extraction is broken", file=sys.stderr)
+    raise SystemExit(2)
+# 素通しする分岐は note_ledger と stderr の両方を持たねばならない。
+# 例外は「入力がそもそも対象外」の分類だけで、それは `# 分類のみ` を明示する。
+missing = [h.strip() for h, b in branches
+           if "emit_deny" not in b and "continue" in b
+           and "分類のみ" not in h
+           and ("note_ledger" not in b or ">&2" not in b)]
+if missing:
+    print("silent skip branches: %r" % missing, file=sys.stderr)
+    raise SystemExit(1)
+print("branches=%d checked" % len(branches))
+PY
+}
+if shared_silent_check "$HOOK" >/dev/null 2>&1; then
+  ok "共有チェックアウト側に記録の無い素通し分岐が無い ($(shared_silent_check "$HOOK"))"
+else
+  bad "共有側に記録の無い素通し分岐がある: $(shared_silent_check "$HOOK" 2>&1)"
+fi
+python3 - "$HOOK" "$MUT/shared-silent.sh" <<'PY'
+import sys
+src_path, out = sys.argv[1:3]
+src = open(src_path, encoding="utf-8").read()
+i = src.index("# --- (4) #91 項目 2")
+# BASEPOINT_SH 不在ブロックを閉じる `fi` の直前へ、記録の無い elif を差し込む。
+j = src.index('  if [ -z "$BASEPOINT_SH" ]; then', i)
+k = src.index("\n  fi\n", j)
+probe = '\n  elif [ -n "${SHARED_SILENT_PROBE:-}" ]; then\n    continue'
+open(out, "w", encoding="utf-8").write(src[:k] + probe + src[k:])
+PY
+inject_rc=$?
+if [ "$inject_rc" -ne 0 ]; then
+  bad "陰性(共有側) 注入位置が見つからない — 反証不能"
+elif shared_silent_check "$MUT/shared-silent.sh" >/dev/null 2>&1; then
+  bad "陰性(共有側) 無言 elif を入れても緑 = 検査器が見ていない"
+else
+  ok "陰性(共有側) 無言 elif を入れると red になる"
+fi
+
+echo
+echo "=== 再実装していないことの機械照合（共有判定は lane-basepoint-check が正本） ==="
+python3 - "$HOOK" <<'PY' && ok "hook は共有判定を自前で持たない（script を呼ぶだけ）" || bad "hook 側に共有判定が混入している"
+import re, sys
+t = open(sys.argv[1], encoding="utf-8").read()
+assert "gitdir" not in t, "shared-checkout detection inlined into the hook"
+assert not re.search(r"worktree list --porcelain", t), "worktree enumeration inlined into the hook"
+assert "shared-checkout" in t, "shared-checkout mode not invoked"
 PY
 
 echo
