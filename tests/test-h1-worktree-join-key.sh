@@ -174,6 +174,13 @@ out=$(run_nocwdenv "$HOOK" k-pcwd-ctl "$SB/plain" "$(payload "ls")"); dec=$(deci
 [ "$(state_field k-pcwd-ctl 's.get("repo","")')" = "" ] \
   && ok "統制: payload に cwd が無く process cwd が非 git なら空（欠測の再現）" \
   || bad "統制が成立しない — 何かが cwd を補っている" "$(state_field k-pcwd-ctl 's.get(\"repo\")')"
+# 統制 2（2026-09-05 実 Codex で top-level キーは `cwd` と確定）: 実在しない候補
+# `.workdir` は読まない。候補列を広げ直したらここが落ちる。
+out=$(run_nocwdenv "$HOOK" k-pcwd-wd "$SB/plain" \
+  "$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":"ls"},"workdir":sys.argv[1]}))' "$SB/named")")
+[ "$(state_field k-pcwd-wd 's.get("repo","")')" = "" ] \
+  && ok "統制 2: .workdir は候補ではない（実 payload のキーは cwd のみ）" \
+  || bad "実在しない候補 .workdir が読まれている" "$(state_field k-pcwd-wd 's.get(\"repo\")')"
 # 優先順: 明示 env は payload より強い
 out=$(printf '%s' "$(payload_cwd "ls" "$SB/plain")" | (cd "$SB/plain" && env HOME="$SB" \
   CODEX_H1_DELEGATION=k-prio CODEX_H1_SESSIONS_DIR="$SB/no-sessions" CODEX_H1_CWD="$SB/named" bash "$HOOK"))
