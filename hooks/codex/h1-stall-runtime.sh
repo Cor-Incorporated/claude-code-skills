@@ -126,13 +126,14 @@ h1_sid=$(printf '%s' "$input" | jq -r '
 # 北極星の分子（repo/branch 結合キー, aidd-governance#155）を決める cwd。
 # 2026-09-04 実測: ~/.codex/hooks.json は CODEX_H1_CWD を渡さないので os.getcwd() に
 # 落ち、実セッション 5 件中 2 件で repo が空だった。payload に cwd 系の欄があれば
-# それを優先する。**どの欄名を Codex が使うかは未検証**なので候補を並べ、
-# CODEX_H1_DEBUG_LOG が設定されているときは payload の top-level キーと採用元を
-# stderr へ出す（Codex 再検証でここを読む）。
-h1_cwd=$(printf '%s' "$input" | jq -r '
-  .cwd // .tool_input.cwd // .workdir // .tool_input.workdir
-  // .working_directory // .tool_input.working_directory // empty
-' 2>/dev/null || true)
+# それを優先する。
+# 2026-09-05 実 Codex（codex-cli 0.151.0）で確定: top-level キーは `cwd`。
+#   payload_keys=cwd,hook_event_name,model,permission_mode,session_id,tool_input,
+#                tool_name,tool_use_id,transcript_path,turn_id
+# 候補列は `.cwd` だけに絞った（#383 で広く取っていた .workdir / .working_directory 系は
+# 実在しない）。CODEX_H1_DEBUG_LOG が設定されているときは payload の top-level キーと
+# 採用元を stderr へ出す。キー名が変わったらそこで分かる。
+h1_cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)
 h1_keys=$(printf '%s' "$input" | jq -r 'if type=="object" then (keys|join(",")) else empty end' 2>/dev/null || true)
 
 verdict=$(H1_CMD="${h1_cmd:-}" H1_SID="${h1_sid:-}" H1_CWD="${h1_cwd:-}" H1_KEYS="${h1_keys:-}" python3 - <<'PY' 2>>"${CODEX_H1_DEBUG_LOG:-/dev/null}"
