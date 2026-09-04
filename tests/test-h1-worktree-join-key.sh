@@ -38,6 +38,19 @@ bad() { echo "  FAIL: $1"; [ $# -gt 1 ] && echo "        $2"; fail=$((fail + 1))
 payload() {
   python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$1"
 }
+# payload に cwd 欄を持たせる（Codex が渡す場合の形。欄名は候補の 1 つ）
+payload_cwd() {
+  python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' "$1" "$2"
+}
+# run_nocwdenv <hook> <delegation> <process-cwd> <payload-json>
+#   CODEX_H1_CWD を **渡さない**。process cwd と payload の cwd を独立に制御する。
+run_nocwdenv() {
+  local hook="$1" delegation="$2" pcwd="$3" json="$4"
+  printf '%s' "$json" | (cd "$pcwd" && env HOME="$SB" \
+    CODEX_H1_DELEGATION="$delegation" \
+    CODEX_H1_SESSIONS_DIR="$SB/no-sessions" \
+    bash "$hook")
+}
 # run <hook> <delegation> <cwd> <cmd> [extra env...]
 run() {
   local hook="$1" delegation="$2" cwd="$3" cmd="$4"; shift 4
@@ -146,6 +159,27 @@ out=$(run "$HOOK" k-broken "$SB/named" "ls"); dec=$(decision_of "$out")
 # 存在しない cwd
 out=$(run "$HOOK" k-missing "$SB/does-not-exist" "ls"); dec=$(decision_of "$out")
 [ "$dec" = "allow" ] && ok "存在しない cwd でも allow" || bad "存在しない cwd で落ちた" "$dec"
+
+echo ""
+echo "=== F4 cwd の出所（aidd-governance#155 の 40% 欠測への是正）==="
+# 実 Codex は CODEX_H1_CWD を渡さない。process cwd が非 git でも payload に cwd が
+# あればそれで解決できることを固定する。統制として payload に cwd が無ければ
+# process cwd に落ちて空になる（= 修正前の挙動、欠測の再現）。
+out=$(run_nocwdenv "$HOOK" k-pcwd "$SB/plain" "$(payload_cwd "ls" "$SB/named")"); dec=$(decision_of "$out")
+[ "$dec" = "allow" ] && ok "payload cwd 経路で allow" || bad "payload cwd 経路で allow でない" "$dec"
+[ "$(state_field k-pcwd 's.get("repo","")')" = "named" ] \
+  && ok "process cwd が非 git でも payload の cwd から repo=named を解決した" \
+  || bad "payload の cwd が使われていない" "$(state_field k-pcwd 's.get(\"repo\")')"
+out=$(run_nocwdenv "$HOOK" k-pcwd-ctl "$SB/plain" "$(payload "ls")"); dec=$(decision_of "$out")
+[ "$(state_field k-pcwd-ctl 's.get("repo","")')" = "" ] \
+  && ok "統制: payload に cwd が無く process cwd が非 git なら空（欠測の再現）" \
+  || bad "統制が成立しない — 何かが cwd を補っている" "$(state_field k-pcwd-ctl 's.get(\"repo\")')"
+# 優先順: 明示 env は payload より強い
+out=$(printf '%s' "$(payload_cwd "ls" "$SB/plain")" | (cd "$SB/plain" && env HOME="$SB" \
+  CODEX_H1_DELEGATION=k-prio CODEX_H1_SESSIONS_DIR="$SB/no-sessions" CODEX_H1_CWD="$SB/named" bash "$HOOK"))
+[ "$(state_field k-prio 's.get("repo","")')" = "named" ] \
+  && ok "優先順: CODEX_H1_CWD(named) > payload cwd(plain)" \
+  || bad "優先順が逆" "$(state_field k-prio 's.get(\"repo\")')"
 
 echo ""
 echo "=== 完了条件 2: block 行の subject に結合キーが載る ==="

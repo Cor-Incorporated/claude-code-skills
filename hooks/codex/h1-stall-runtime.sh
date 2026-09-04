@@ -123,18 +123,32 @@ h1_cmd=$(printf '%s' "$input" | jq -r '
 h1_sid=$(printf '%s' "$input" | jq -r '
   .session_id // .sessionId // .session.id // empty
 ' 2>/dev/null || true)
+# 北極星の分子（repo/branch 結合キー, aidd-governance#155）を決める cwd。
+# 2026-09-04 実測: ~/.codex/hooks.json は CODEX_H1_CWD を渡さないので os.getcwd() に
+# 落ち、実セッション 5 件中 2 件で repo が空だった。payload に cwd 系の欄があれば
+# それを優先する。**どの欄名を Codex が使うかは未検証**なので候補を並べ、
+# CODEX_H1_DEBUG_LOG が設定されているときは payload の top-level キーと採用元を
+# stderr へ出す（Codex 再検証でここを読む）。
+h1_cwd=$(printf '%s' "$input" | jq -r '
+  .cwd // .tool_input.cwd // .workdir // .tool_input.workdir
+  // .working_directory // .tool_input.working_directory // empty
+' 2>/dev/null || true)
+h1_keys=$(printf '%s' "$input" | jq -r 'if type=="object" then (keys|join(",")) else empty end' 2>/dev/null || true)
 
-verdict=$(H1_CMD="${h1_cmd:-}" H1_SID="${h1_sid:-}" python3 - <<'PY' 2>>"${CODEX_H1_DEBUG_LOG:-/dev/null}"
+verdict=$(H1_CMD="${h1_cmd:-}" H1_SID="${h1_sid:-}" H1_CWD="${h1_cwd:-}" H1_KEYS="${h1_keys:-}" python3 - <<'PY' 2>>"${CODEX_H1_DEBUG_LOG:-/dev/null}"
 import hashlib
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 NOW = int(time.time())
 CMD = os.environ.get("H1_CMD", "")
+PAYLOAD_CWD = os.environ.get("H1_CWD", "")
+PAYLOAD_KEYS = os.environ.get("H1_KEYS", "")
 SID = os.environ.get("H1_SID", "")
 
 
@@ -283,7 +297,17 @@ def resolve_worktree():
     "detached:<短縮 sha>"。**例外を投げない** — この関数のために H1 が落ちると、
     ガバナが自分の計測のために停止することになる。
     """
-    start = os.environ.get("CODEX_H1_CWD") or os.getcwd()
+    # 優先順: 明示 env > payload の cwd 欄 > プロセスの cwd。
+    # getcwd() は hook プロセスの起動場所であって委任の作業場所とは限らない
+    # （2026-09-04 実測で実セッションの 40% が空になった原因）。
+    if os.environ.get("CODEX_H1_CWD"):
+        start, source = os.environ["CODEX_H1_CWD"], "env"
+    elif PAYLOAD_CWD:
+        start, source = PAYLOAD_CWD, "payload"
+    else:
+        start, source = os.getcwd(), "getcwd"
+    # CODEX_H1_DEBUG_LOG が無ければ stderr は /dev/null なのでコストは無い。
+    print("H1-DEBUG cwd_source=%s start=%s payload_keys=%s" % (source, start, PAYLOAD_KEYS), file=sys.stderr)
     try:
         cur = Path(start).resolve()
     except (OSError, ValueError):
