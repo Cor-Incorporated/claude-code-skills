@@ -228,5 +228,44 @@ for row in "${ctx_rows[@]}"; do
   printf '%-2s %-52s %-8s %-8s %-14s %s\n' "$m" "$c" "$f" "$d" "$dep" "$w"
 done
 
+echo ''
+echo '=== 台帳: allow も行を残す（claude-code-skills#385）==='
+# 2026-09-05: 実 cursor-agent に保護ブランチへの push を 3 回試行させ、台帳が
+# 414 → 414 のままだった。deny しか書かない台帳では「試みなかった」と
+# 「試みたが allow された」を区別できない。ここで固定する:
+#   F1 判定到達 allow → 1 行（decision:"allow"）
+#   F2 統制: 判定に到達しない素通り（ls）→ 行なし
+#   F3 TRACE=1 の素通り → 1 行（decision:"invoked"）
+#   F4 deny 行の形式は不変（既存集計との互換）
+LEDGER="$SB/.cursor/hooks/guard-ledger.jsonl"
+ledger_rows() { [[ -f "$LEDGER" ]] && wc -l < "$LEDGER" | tr -d ' ' || echo 0; }
+ledger_check() {
+  local name="$1" expect_delta="$2" expect_decision="$3" command="$4" trace="${5:-0}"
+  local before after delta last
+  before=$(ledger_rows)
+  printf '%s' "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "$command")" \
+    | (cd "$FIX" && env HOME="$SB" AIDD_LEDGER_SOURCE=test CURSOR_GIT_GUARD_TRACE="$trace" bash "$HOOK" >/dev/null 2>&1)
+  after=$(ledger_rows); delta=$((after - before))
+  last=$(tail -1 "$LEDGER" 2>/dev/null | python3 -c 'import json,sys; print(json.loads(sys.stdin.read() or "{}").get("decision",""))' 2>/dev/null || true)
+  if [[ "$delta" -eq "$expect_delta" && ( "$expect_delta" -eq 0 || "$last" == "$expect_decision" ) ]]; then
+    printf 'PASS: [%s] %s delta=%s decision=%s\n' "$BRANCH" "$name" "$delta" "${last:-none}"; pass=$((pass + 1))
+  else
+    printf 'FAIL: [%s] %s expected delta=%s decision=%s actual delta=%s decision=%s command=%s\n' \
+      "$BRANCH" "$name" "$expect_delta" "$expect_decision" "$delta" "${last:-none}" "$command"; fail=$((fail + 1))
+  fi
+}
+use_branch feat/x
+ledger_check 'F1 非保護 push の allow は 1 行残る'          1 allow   'git push origin feat/x'
+ledger_check 'F2 統制: 判定に到達しない ls は行を残さない'  0 -       'ls -la'
+ledger_check 'F3 TRACE=1 の素通りは invoked として残る'     1 invoked 'ls -la' 1
+ledger_check 'F4 deny 行の形式は不変'                        1 deny    'git push origin main'
+# 形式の固定: deny 行のキー集合が従来と同一（ts/hook/decision/cmd_head）
+keys=$(tail -1 "$LEDGER" | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin).keys())))')
+if [[ "$keys" == "cmd_head,decision,hook,ts" ]]; then
+  printf 'PASS: [%s] F4 deny 行のキー集合 %s\n' "$BRANCH" "$keys"; pass=$((pass + 1))
+else
+  printf 'FAIL: [%s] F4 deny 行のキー集合が変わった: %s\n' "$BRANCH" "$keys"; fail=$((fail + 1))
+fi
+
 printf '\n%s\n' "--- $pass passed, $fail failed ---"
 [[ "$fail" -eq 0 ]]
