@@ -30,10 +30,23 @@ split_command_segments() {
   printf '%s\n' "$cmd_norm" | awk '{gsub(/&&|\|\||;/, "\n"); print}'
 }
 
-deny() {
-  printf '{"ts":"%s","hook":"git-guard","decision":"deny","cmd_head":"%s"}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(printf '%s' "$cmd" | head -c 120 | tr '"' "'")" \
+# 台帳の 1 行。deny 行の形式は変えない（集計スクリプトの互換）。
+#
+# 2026-09-05 (claude-code-skills#385): 従来は deny のときだけ書いていた。
+# 実 cursor-agent に保護ブランチへの push を 3 回試行させて台帳が 414 → 414 のとき、
+# 「push を試みなかった」と「試みたが allow された（= ガードが効いていない）」を
+# **区別できなかった**。push/merge の判定に到達して allow したときも 1 行残す。
+# 判定に到達しない素通り（ls 等）は既定では書かない（台帳を汚さない）。
+# CURSOR_GIT_GUARD_TRACE=1 のときだけ素通りも decision:"invoked" で残す
+# （実エージェントがシェルを 1 度でも実行したかを測る用途）。
+ledger_row() {
+  printf '{"ts":"%s","hook":"git-guard","decision":"%s","cmd_head":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$(printf '%s' "$cmd" | head -c 120 | tr '"' "'")" \
     >> "$HOME/.cursor/hooks/guard-ledger.jsonl" 2>/dev/null || true
+}
+
+deny() {
+  ledger_row deny
   jq -n --arg m "$1" '{permission:"deny", user_message:$m, agent_message:$m}' 2>/dev/null \
     || printf '{"permission":"deny","agent_message":"%s"}' "$1"
   exit 0
@@ -47,7 +60,17 @@ ask() {
     || printf '{"permission":"ask","agent_message":"%s"}' "$1"
   exit 0
 }
-allow() { printf '{"permission":"allow"}'; exit 0; }
+# allow "judged": push/merge の判定を通って allow した（常に台帳へ）
+# allow        : 判定に到達しない素通り（TRACE 時のみ "invoked" として台帳へ）
+allow() {
+  if [[ "${1:-}" == "judged" ]]; then
+    ledger_row allow
+  elif [[ "${CURSOR_GIT_GUARD_TRACE:-0}" == "1" ]]; then
+    ledger_row invoked
+  fi
+  printf '{"permission":"allow"}'
+  exit 0
+}
 
 # `gh pr create/merge --repo` の owner が origin と異なる場合は、人間確認へ
 # 回す。正当な OSS 貢献があるため deny にはしない。--repo なしは OC-D8
@@ -193,4 +216,4 @@ while IFS= read -r push_segment; do
   fi
 done <<< "$push_segments"
 
-allow
+allow judged
