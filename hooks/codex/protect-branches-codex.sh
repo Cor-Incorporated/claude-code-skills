@@ -128,6 +128,53 @@ ref_targets_protected() {
   printf '%s' "${1:-$cmd_norm}" | grep -qE '(^|[[:space:]:/])(refs/heads/)?(main|master|develop)([[:space:]]|$)'
 }
 
+# push segment の**宛先**ブランチを返す。決められない（= 暗黙 push）なら空文字。
+#
+#   git push                    -> ""      refspec 無し。current を押す
+#   git push origin             -> ""      同上
+#   git push --force            -> ""      同上
+#   git push origin HEAD        -> ""      HEAD は current に解決する = 暗黙
+#   git push origin feat/x      -> feat/x
+#   git push -u origin docs/y   -> docs/y
+#   git push origin HEAD:feat/x -> feat/x  dst 側を採る
+#   git push origin +main:main  -> main
+#
+# 2026-09-05 (claude-code-skills#387): 従来は `|| is_protected "$current"` を無条件に当てて
+# いたため、develop 上の `git push origin feat/x`（refs/heads/feat/x しか触らない）を deny
+# していた。Cursor hooks/cursor/git-guard.sh が 2026-09-03 に同じ理由で直した push_destination()
+# をそのまま移植し、current は**明示の宛先が無いときのフォールバックに限定**する。
+# 明示の保護 ref は ref_targets_protected が先に落とすので、緩めてはいない。
+push_destination() {
+  printf '%s' "$1" | awk '
+    {
+      pi = 0
+      for (i = 1; i <= NF; i++) if ($i == "push") { pi = i; break }
+      if (pi == 0) { print ""; exit }
+      n = 0
+      for (i = pi + 1; i <= NF; i++) {
+        t = $i
+        if (substr(t, 1, 1) == "-") {
+          if (t == "-o" || t == "--push-option" || t == "--repo" || t == "--receive-pack") i++
+          continue
+        }
+        n++
+        positional[n] = t
+      }
+      if (n < 2) { print ""; exit }
+      ref = positional[2]
+      sub(/^\+/, "", ref)
+      if (index(ref, ":") > 0) sub(/^[^:]*:/, "", ref)
+      sub(/^refs\/heads\//, "", ref)
+      if (ref == "HEAD") { print ""; exit }
+      print ref
+    }
+  '
+}
+# implicit_push_to_current <segment>: 宛先が決められず、かつ current が保護なら真
+implicit_push_to_current() {
+  [[ -z "$(push_destination "$1")" ]] && is_protected "$current"
+}
+
 if printf '%s' "$cmd_norm" | grep -qE '\bgit[[:space:]]+merge\b'; then
   if is_protected "$current"; then
     emit_deny "保護ブランチ '${current}' への直接 merge は禁止です。PR 経由でマージしてください。"
@@ -149,13 +196,16 @@ while IFS= read -r _seg || [[ -n "$_seg" ]]; do
     emit_deny "refspec force (+<ref>) 付き push は禁止です（--force と等価）。"
   fi
   if printf '%s' "$_seg" | grep -qE '(\-\-force([^-]|$)|[[:space:]]-[a-zA-Z]*f([[:space:]]|$)|--force-with-lease)'; then
-    if ref_targets_protected "$_seg" || is_protected "$current"; then
+    if ref_targets_protected "$_seg" || implicit_push_to_current "$_seg"; then
       emit_deny "保護ブランチへの force-push は禁止です。feature ブランチで作業し PR を出してください。"
     fi
   fi
   # Direct push to protected (force or not) — closes HEAD:main / +refs/heads/main etc.
-  if ref_targets_protected "$_seg" || is_protected "$current"; then
+  if ref_targets_protected "$_seg"; then
     emit_deny "保護ブランチ(main/master/develop)への直接 push は禁止です。feature ブランチで作業し PR を出してください。"
+  fi
+  if implicit_push_to_current "$_seg"; then
+    emit_deny "保護ブランチ '${current}' からの暗黙 push は禁止です。押す先を明示するか、feature ブランチで作業してください。"
   fi
 done < <(printf '%s' "$cmd_norm" | tr '<>();|&' '\n')
 
