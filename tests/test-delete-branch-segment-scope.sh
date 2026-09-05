@@ -149,9 +149,11 @@ if kind == "segment":
     src = src.replace(old, """  normalized="$cmd\"""")
 elif kind == "comment":
     # コメント除去を消す: `#` 以降を落とさない
-    old = """        segment="$prefix\""""
+    # 2026-09-05 (#365): コメント除去は strip_segment_comment() に切り出された
+    # （force 規則と共有するため）。インデントが 8 → 6 に変わっている。
+    old = """      segment="$prefix\""""
     assert src.count(old) == 1, "コメント除去の形が変わっている"
-    src = src.replace(old, """        : "$prefix\"""")
+    src = src.replace(old, """      : "$prefix\"""")
 elif kind == "globalopts":
     # グローバルオプションの許容を消す: git と branch の隣接を再び要求する
     old = '_GIT_GLOBAL_OPTS="([[:space:]]+(-[cC][[:space:]]*[^[:space:]]+|--[a-zA-Z][a-zA-Z0-9-]*(=[^[:space:]]*)?))*"'
