@@ -141,11 +141,23 @@ fi
 # --- 1. Force push to shared branches check (Issue #17) ---
 # Block --force / --force-with-lease to develop/main/master
 # Feature branches are allowed (user's own branch history cleanup is legitimate)
-if echo "$cmd_norm" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b)' || \
-   echo "$cmd_norm" | grep -qE 'git\s+push\s+-[a-zA-Z]*f'; then
-    # Check explicit branch names in the command
+#
+# 2026-09-05 (claude-code-skills#365): 従来は force フラグの検出と保護名の照合を
+# コマンド文字列**全体**に当てていた。`git push origin feat/x && pkill -f X` は
+# `.*` が `&&` を跨いで force push と読まれ、暗黙ブランチのフォールバックで
+# develop 上の運用者を止めた。has_explicit_push_ref() と同じ `tr '<>();|&'` で
+# セグメント化し、force フラグ付きの git push を含むセグメントの中だけで読む。
+# protect-branches.sh Check 0b と対で直す（片方だけ変えない）。
+force_push_segment() {
+  # <segment>: true if this one segment is a `git push` carrying a force flag
+  printf '%s' "$1" | grep -qE 'git\s+push\b.*(--(force|force-with-lease)\b|-f\b)' \
+    || printf '%s' "$1" | grep -qE 'git\s+push\s+-[a-zA-Z]*f'
+}
+while IFS= read -r _fp_seg || [[ -n "$_fp_seg" ]]; do
+  force_push_segment "$_fp_seg" || continue
+    # Check explicit branch names in this segment
     for branch in develop main master; do
-        if mentions_protected_ref "$cmd_norm" "$branch"; then
+        if mentions_protected_ref "$_fp_seg" "$branch"; then
             cat >&2 <<ERRMSG
 [BLOCK] 共有ブランチ '${branch}' への force push を検出
 
@@ -163,9 +175,9 @@ ERRMSG
         fi
     done
 
-    # Fallback: if no explicit push ref in command, check current branch
+    # Fallback: if no explicit push ref in this segment, check current branch
     # Catches: git push --force, git push --force origin (implicit branch)
-    if ! has_explicit_push_ref "$cmd_norm"; then
+    if ! has_explicit_push_ref "$_fp_seg"; then
       while IFS= read -r current_branch || [[ -n "$current_branch" ]]; do
         for branch in develop main master; do
             if [[ "$current_branch" == "$branch" ]]; then
@@ -185,7 +197,7 @@ ERRMSG
         done
       done < <(ctx_branches)
     fi
-fi
+done < <(printf '%s' "$cmd_norm" | tr '<>();|&' '\n')
 
 # --- 2. Protected branch direct push check ---
 # Destination is protected if refspec is bare branch, refs/heads/<branch>,

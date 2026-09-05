@@ -123,8 +123,9 @@ is_protected() {
 
 # Match protected branch as refspec destination or bare token
 # Covers: main, HEAD:main, +HEAD:main, +refs/heads/main, refs/heads/main, origin main, -u origin main
+# <text>: defaults to the whole command; push checks pass one segment.
 ref_targets_protected() {
-  printf '%s' "$cmd_norm" | grep -qE '(^|[[:space:]:/])(refs/heads/)?(main|master|develop)([[:space:]]|$)'
+  printf '%s' "${1:-$cmd_norm}" | grep -qE '(^|[[:space:]:/])(refs/heads/)?(main|master|develop)([[:space:]]|$)'
 }
 
 if printf '%s' "$cmd_norm" | grep -qE '\bgit[[:space:]]+merge\b'; then
@@ -133,23 +134,29 @@ if printf '%s' "$cmd_norm" | grep -qE '\bgit[[:space:]]+merge\b'; then
   fi
 fi
 
-if printf '%s' "$cmd_norm" | grep -qE "$_GIT_PUSH_RE"; then
-  if printf '%s' "$cmd_norm" | grep -qE '[[:space:]]--(all|mirror)([^[:alnum:]_-]|$)'; then
+# 2026-09-05 (claude-code-skills#365): push の各判定を**git push を含むセグメント**の中で
+# 行う。従来はコマンド文字列全体に当てていたため、`git push origin feat/x && pkill -f foo`
+# の `-f` が force と読まれ、develop 上では current で deny していた（Claude Code の
+# protect-branches.sh Check 0b / git-push-guard.sh §1 と同じ欠陥。3 本を対で直す。
+# Cursor の git-guard.sh は既に push_segments 単位だった）。判定内容は変えていない。
+while IFS= read -r _seg || [[ -n "$_seg" ]]; do
+  printf '%s' "$_seg" | grep -qE "$_GIT_PUSH_RE" || continue
+  if printf '%s' "$_seg" | grep -qE '[[:space:]]--(all|mirror)([^[:alnum:]_-]|$)'; then
     emit_deny "--mirror/--all 付き push は禁止です（全 ref の上書き・削除になり得ます）。"
   fi
   # Check 0a2: refspec force +<ref> (after space or colon)
-  if printf '%s' "$cmd_norm" | grep -qE '[[:space:]:]\+[A-Za-z0-9_./-]'; then
+  if printf '%s' "$_seg" | grep -qE '[[:space:]:]\+[A-Za-z0-9_./-]'; then
     emit_deny "refspec force (+<ref>) 付き push は禁止です（--force と等価）。"
   fi
-  if printf '%s' "$cmd_norm" | grep -qE '(\-\-force([^-]|$)|[[:space:]]-[a-zA-Z]*f([[:space:]]|$)|--force-with-lease)'; then
-    if ref_targets_protected || is_protected "$current"; then
+  if printf '%s' "$_seg" | grep -qE '(\-\-force([^-]|$)|[[:space:]]-[a-zA-Z]*f([[:space:]]|$)|--force-with-lease)'; then
+    if ref_targets_protected "$_seg" || is_protected "$current"; then
       emit_deny "保護ブランチへの force-push は禁止です。feature ブランチで作業し PR を出してください。"
     fi
   fi
   # Direct push to protected (force or not) — closes HEAD:main / +refs/heads/main etc.
-  if ref_targets_protected || is_protected "$current"; then
+  if ref_targets_protected "$_seg" || is_protected "$current"; then
     emit_deny "保護ブランチ(main/master/develop)への直接 push は禁止です。feature ブランチで作業し PR を出してください。"
   fi
-fi
+done < <(printf '%s' "$cmd_norm" | tr '<>();|&' '\n')
 
 emit_allow

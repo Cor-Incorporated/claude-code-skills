@@ -137,28 +137,34 @@ mentions_protected_ref() {
 #
 # 判定内容は変えていない。verb-regex は従来と一字一句同じで、変えたのは `.*` の作用域
 # だけである（同再裁定 §6 / Premise-Sanctuary: 変えてよいのは入力の切り出し方だけ）。
+# strip_segment_comment <segment>: drop a trailing `#` comment WITHIN one segment.
+#
+# 素朴に文字列全体を `#` で切ると bypass ができる:
+#   echo "#" && git push origin --delete develop
+# の `#` で切ると、後続の**実削除**ごと消える。だからセグメント化した後に切る。
+#
+# さらに `#` が引用の内側にある場合は切らない。切ると
+#   git -c core.pager="#" branch -D develop
+# のような**実削除**が verb ごと落ちて素通りする。`#` より前の引用符が
+# 奇数個なら引用の内側と判定して切らない（保守側に倒す）。
+strip_segment_comment() {
+  local segment="$1" prefix sq dq
+  prefix="${segment%%#*}"
+  if [[ "$prefix" != "$segment" ]]; then
+    sq="${prefix//[^\']/}"
+    dq="${prefix//[^\"]/}"
+    if (( ${#sq} % 2 == 0 && ${#dq} % 2 == 0 )); then
+      segment="$prefix"
+    fi
+  fi
+  printf '%s' "$segment"
+}
+
 delete_verb_hits_branch_in_segment() {
-  local cmd="$1" branch="$2" verb="$3" segment normalized prefix sq dq
+  local cmd="$1" branch="$2" verb="$3" segment normalized
   normalized=$(printf '%s' "$cmd" | tr '<>();|&' '\n')
   while IFS= read -r segment || [[ -n "$segment" ]]; do
-    # Drop a trailing `#` comment WITHIN this segment only.
-    #
-    # 素朴に文字列全体を `#` で切ると bypass ができる:
-    #   echo "#" && git push origin --delete develop
-    # の `#` で切ると、後続の**実削除**ごと消える。だからセグメント化した後に切る。
-    #
-    # さらに `#` が引用の内側にある場合は切らない。切ると
-    #   git -c core.pager="#" branch -D develop
-    # のような**実削除**が verb ごと落ちて素通りする。`#` より前の引用符が
-    # 奇数個なら引用の内側と判定して切らない（保守側に倒す）。
-    prefix="${segment%%#*}"
-    if [[ "$prefix" != "$segment" ]]; then
-      sq="${prefix//[^\']/}"
-      dq="${prefix//[^\"]/}"
-      if (( ${#sq} % 2 == 0 && ${#dq} % 2 == 0 )); then
-        segment="$prefix"
-      fi
-    fi
+    segment=$(strip_segment_comment "$segment")
     printf '%s' "$segment" | grep -qE "${verb}.*\b${branch}\b" && return 0
   done <<< "$normalized"
   return 1
@@ -414,30 +420,36 @@ if has_refspec_force "$cmd_norm"; then
   _aidd_block "refspec-force"
 fi
 
-# --- Check 0b: Force push guard (fork-aware) (#192, #195, parser-gap fix) ---
-if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE" && is_force_push "$cmd_norm"; then
-  # Position-independent protected-branch detection: a protected branch ref
-  # appearing anywhere in a force-push command is caught, even when hidden in
-  # process substitution `cat <(git push --force origin main)`, command chains
-  # `echo x && git push --force origin main`, or redirects. The previous
-  # token-position extraction assumed `git push` led the command and mis-read
-  # the branch (e.g. `main)`), allowing the push through.
-  matched_protected=""
+# --- Check 0b: Force push guard (fork-aware) (#192, #195, parser-gap fix, #365 segment scope) ---
+#
+# 2026-09-05 (#365): 従来は `is_force_push "$cmd_norm"` と `mentions_protected_ref "$cmd"` を
+# コマンド文字列**全体**に当てていた。`pkill -f X && gh pr create --base develop` の
+# `-f` と `develop` が別セグメントにあるだけで block し、同日に運用者を 3 回止めた
+# （#380 が Check 1/2 を直したとき、force 規則だけ行全体のまま残っていた）。
+#
+# Check 1/2 と同じ `tr '<>();|&'` でセグメント化し、**force フラグ付きの git push を含む
+# セグメントの中だけ**で保護名・remote・refspec を読む。判定内容（fork 分岐・暗黙ブランチ
+# へのフォールバック）は変えていない。変えたのは入力の切り出し方だけである。
+# プロセス置換 `cat <(git push --force origin main)` は `<(` で切れて単独セグメントに
+# なるので従来どおり捕まえる。tests/test-force-push-segment-scope.sh が
+# 陽性 / 陰性 / 順序対称 / 片側変異で固定する。
+check_force_push_segment() {
+  local seg="$1" matched_protected="" pb push_remote target_branch branch
   for pb in $PROTECTED_BRANCHES; do
-    if mentions_protected_ref "$cmd" "$pb"; then
+    if mentions_protected_ref "$seg" "$pb"; then
       matched_protected="$pb"
       break
     fi
   done
 
   if is_fork_workflow; then
-    push_remote=$(extract_push_remote "$cmd")
+    push_remote=$(extract_push_remote "$seg")
     push_remote="${push_remote:-origin}"
     # Standard fork layout: origin=fork, upstream=parent.
     # Block force push to the parent (upstream remote or upstream token), and
     # block any protected branch ref as a safety net against obfuscated targets.
     if [ "$push_remote" = "upstream" ] \
-       || printf '%s' "$cmd" | grep -qE '(^|[^A-Za-z0-9._/-])upstream([^A-Za-z0-9._/-]|$)' \
+       || printf '%s' "$seg" | grep -qE '(^|[^A-Za-z0-9._/-])upstream([^A-Za-z0-9._/-]|$)' \
        || [ -n "$matched_protected" ]; then
       echo "[BLOCK] upstream (親リポジトリ) / 保護ブランチ への force push を検出。" >&2
       echo "  fork ワークフローでは upstream・保護ブランチへの force push は禁止です。" >&2
@@ -449,7 +461,7 @@ if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE" && is_force_push "$cmd_norm"; the
     echo "[WARN] fork リモート '${push_remote}' への force push を検出。" >&2
     echo "  自分の fork への force push は許可しますが、注意してください。" >&2
   else
-    # Non-fork: explicit protected branch ref anywhere -> block.
+    # Non-fork: explicit protected branch ref in this segment -> block.
     if [ -n "$matched_protected" ]; then
       echo "[BLOCK] 保護ブランチ '${matched_protected}' への force push を検出。" >&2
       echo "  WHY: 共有ブランチの履歴書き換えは禁止です。" >&2
@@ -457,7 +469,7 @@ if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE" && is_force_push "$cmd_norm"; the
       _aidd_block
     fi
     # No explicit protected ref: fall back to current branch (implicit push).
-    target_branch=$(extract_push_branch "$cmd")
+    target_branch=$(extract_push_branch "$seg")
     if [ -z "$target_branch" ]; then
       target_branch=$(git branch --show-current 2>/dev/null || echo "")
     fi
@@ -470,7 +482,14 @@ if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE" && is_force_push "$cmd_norm"; the
       fi
     done
   fi
-fi
+}
+
+while IFS= read -r _fp_seg || [[ -n "$_fp_seg" ]]; do
+  _fp_seg=$(strip_segment_comment "$_fp_seg")
+  if printf '%s' "$_fp_seg" | grep -qE "$_GIT_PUSH_RE" && is_force_push "$_fp_seg"; then
+    check_force_push_segment "$_fp_seg"
+  fi
+done < <(printf '%s' "$cmd_norm" | tr '<>();|&' '\n')
 
 # git のグローバルオプション 0 個以上。`git branch` の隣接を要求していたせいで
 #   git -C <dir> branch -D develop
