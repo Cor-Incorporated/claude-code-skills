@@ -35,15 +35,10 @@ FIX=$(mktemp -d)
 git init -q "$FIX"
 git -C "$FIX" symbolic-ref HEAD refs/heads/develop
 git -C "$FIX" -c user.email=t@example.invalid -c user.name=t commit -q --allow-empty -m init
-# Codex guard は develop 上では**あらゆる push** を current で deny する（明示の宛先が
-# feature でも）。これは force 規則とは別の既存欠陥（Cursor が 2026-09-03 に直した
-# 「current を暗黙 push のフォールバックに限定」の Codex 側未対応。別 issue）。
-# 本スイートの主題（セグメント跨ぎ）を測るため、Codex 行は feature ブランチで回す。
-FIX_FEAT=$(mktemp -d)
-git init -q "$FIX_FEAT"
-git -C "$FIX_FEAT" symbolic-ref HEAD refs/heads/feat/x
-git -C "$FIX_FEAT" -c user.email=t@example.invalid -c user.name=t commit -q --allow-empty -m init
-trap 'rm -rf "$FIX" "$FIX_FEAT"' EXIT
+# Codex guard は #387 まで develop 上で**あらゆる push** を current で deny していた。
+# #387（push_destination の移植）で直したので、Codex 行も develop fixture で回す
+# （3 ガードが同じ入力・同じブランチで同じ結論を出すことが対の検査）。
+trap 'rm -rf "$FIX"' EXIT
 
 json_escape() {
   local s="$1"
@@ -55,7 +50,7 @@ json_escape() {
 run_case() {
   local hook="$1" label="$2" name="$3" expect="$4" cmd="$5" dir="${6:-}" rc=0 out="" actual
   if [ "$label" = "codex" ]; then
-    dir="${dir:-$FIX_FEAT}"
+    dir="${dir:-$FIX}"
     out=$(printf '{"tool_input":{"command":"%s"}}' "$(json_escape "$cmd")" \
       | (cd "$dir" && CODEX_GUARD_LEDGER="$dir/codex-ledger.jsonl" bash "$hook" 2>/dev/null) || true)
     if printf '%s' "$out" | grep -qE '"permissionDecision"[[:space:]]*:[[:space:]]*"deny"'; then actual=block; else actual=allow; fi
@@ -72,7 +67,7 @@ run_case() {
 }
 both() { run_case "$PB" protect-branches "$@"; run_case "$PG" git-push-guard "$@"; run_case "$CX" codex "$@"; }
 
-echo "=== 測定ブランチ: Claude Code 2 本 = $(git -C "$FIX" rev-parse --abbrev-ref HEAD)（保護） / Codex = $(git -C "$FIX_FEAT" rev-parse --abbrev-ref HEAD)（非保護） ==="
+echo "=== 測定ブランチ: 3 ガードとも $(git -C "$FIX" rev-parse --abbrev-ref HEAD)（保護） ==="
 
 echo ""
 echo "=== F1 陽性対照: 真の force push は block のまま ==="
@@ -168,6 +163,29 @@ PY
 # codex の ref_targets_protected は `/main` も言及に数えるので、事故入力 4 が旧形で戻る
 run_case "$MUT_CX" codex "変異版: 事故入力 4 が block へ戻る" block \
   'git push --force origin feat/x && git log origin/main -1'
+
+echo ""
+echo "=== #387: Codex の current は暗黙 push のフォールバックに限定（Cursor 2026-09-03 と同じ）==="
+# develop 上で測る。明示の宛先が非保護なら allow、宛先が決められないなら deny。
+run_case "$CX" codex "#387 明示 feat/x は allow（develop 上）"          allow 'git push origin feat/x'
+run_case "$CX" codex "#387 -u 付き明示 docs/y は allow"                 allow 'git push -u origin docs/y'
+run_case "$CX" codex "#387 HEAD:feat/x は dst 側で allow"               allow 'git push origin HEAD:feat/x'
+run_case "$CX" codex "#387 refspec 無し（暗黙）は deny"                 block 'git push'
+run_case "$CX" codex "#387 origin のみ（暗黙）は deny"                  block 'git push origin'
+run_case "$CX" codex "#387 HEAD は current に解決 = 暗黙で deny"        block 'git push -u origin HEAD'
+run_case "$CX" codex "#387 明示の保護 ref は従来どおり deny"            block 'git push origin feat/x develop'
+run_case "$CX" codex "#387 HEAD:refs/heads/main は deny"                block 'git push origin HEAD:refs/heads/main'
+# 片側変異: implicit_push_to_current を無条件の is_protected に戻すと feat/x が再び deny
+MUT_CX2="$FIX/protect-branches-codex.mut2.sh"
+python3 - "$CX" "$MUT_CX2" <<'PY'
+import sys
+src = open(sys.argv[1], encoding="utf-8").read()
+old = '[[ -z "$(push_destination "$1")" ]] && is_protected "$current"'
+assert src.count(old) == 1, "mutation target missing: implicit_push_to_current (count=%d)" % src.count(old)
+open(sys.argv[2], "w", encoding="utf-8").write(src.replace(old, 'is_protected "$current"'))
+PY
+run_case "$MUT_CX2" codex "変異版(#387): 明示 feat/x が deny へ戻る" block 'git push origin feat/x'
+run_case "$MUT_CX2" codex "変異版(#387): 暗黙は変わらず deny"          block 'git push'
 run_case "$MUT_CX" codex "変異版: 陽性対照は変わらず block" block 'git push --force origin main'
 run_case "$MUT_CX" codex "変異版: 通常 push は変わらず allow" allow 'git push origin feat/x'
 
