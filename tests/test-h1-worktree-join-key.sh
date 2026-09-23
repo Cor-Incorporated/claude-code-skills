@@ -60,7 +60,8 @@ run() {
     CODEX_H1_CWD="$cwd" \
     "$@" bash "$hook"
 }
-> "$LEDGER" 2>/dev/null || { mkdir -p "$(dirname "$LEDGER")"; : > "$LEDGER"; }
+mkdir -p "$(dirname "$LEDGER")"
+: > "$LEDGER"
 # hook は Codex の PreToolUse プロトコル JSON を出す。allow は `{}`。
 decision_of() {
   printf '%s' "$1" | python3 -c '
@@ -243,11 +244,13 @@ echo ""
 echo "=== F3 片側変異: 記録を外すと state と台帳から消える ==="
 MUT="$SB/mut-nojoin.sh"
 python3 - "$HOOK" "$MUT" <<'PY'
-import sys
+import re, sys
 src = open(sys.argv[1], encoding="utf-8").read()
-old = "    record_worktree(state)\n"
-assert src.count(old) == 1, "record_worktree の呼び出し形が変わっている（変異が当たらない）"
-open(sys.argv[2], "w", encoding="utf-8").write(src.replace(old, ""))
+# H1 now records scope at both UserPromptSubmit reset and PreToolUse.
+pattern = r"(?m)^([ \t]*)record_worktree\(state\)$"
+mutated, count = re.subn(pattern, r"\1pass  # join-key mutation", src)
+assert count == 2, "record_worktree の呼び出し形が変わっている（変異が当たらない）"
+open(sys.argv[2], "w", encoding="utf-8").write(mutated)
 PY
 if bash -n "$MUT" 2>/dev/null; then
   ok "変異版が構文として成立している"
