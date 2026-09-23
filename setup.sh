@@ -87,6 +87,8 @@ echo "  Copied Codex protect-branches hook"
 cp "$REPO_DIR/hooks/codex/h1-stall-runtime.sh" "$CODEX_HOOKS_DIR/h1-stall-runtime.sh"
 chmod +x "$CODEX_HOOKS_DIR/h1-stall-runtime.sh"
 echo "  Copied Codex H1 stall-runtime hook"
+python3 "$REPO_DIR/scripts/register-codex-h1-hooks.py" \
+  "$HOME/.codex/hooks.json" "$CODEX_HOOKS_DIR"
 mkdir -p "$CURSOR_HOOKS_DIR"
 cp "$REPO_DIR/hooks/cursor/git-guard.sh" "$CURSOR_HOOKS_DIR/git-guard.sh"
 chmod +x "$CURSOR_HOOKS_DIR/git-guard.sh"
