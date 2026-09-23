@@ -227,7 +227,7 @@ else
   bad "no-progress mutation target not found — falsifiability unproven"
 fi
 
-if mutate_hook 'state["spend_usd"] >= state["budget_usd"]' "$MUT/budget.sh"; then
+if mutate_hook 'effective_spend >= state["budget_usd"]' "$MUT/budget.sh"; then
   m2=$(run "$MUT/budget.sh" m2 "ls -la" CODEX_H1_SESSIONS_DIR="$SB/sessions")
   [[ "$(decision_of "$m2")" == "allow" ]] \
     && ok "mutant without the budget condition allows (rule was load-bearing)" \
