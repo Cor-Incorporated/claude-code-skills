@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export AIDD_LEDGER_SOURCE=test  # T9-2: ledger rows from test harness are source=test
 
 python3 - "$ROOT" <<'PY'
-import hashlib, json, os, re, sys
+import hashlib, json, os, re, subprocess, sys, tempfile
 from pathlib import Path
 
 ROOT = Path(sys.argv[1])
@@ -703,6 +703,101 @@ else:
             f"({len(covered_registered)}/{len(reg)} registered checkers; "
             f"{len(UNCOVERED_BASELINE)} declared uncovered; "
             f"{len(covered_other)} covered but not settings.json-registered)"
+        )
+
+# pair19: setup.sh が配備する scripts/lib ↔ enforce-hook-deploy-integrity.sh が比べる scripts/lib
+# 2026-09-24: 配備済みの ~/.claude/scripts/lib/h1-runtime.sh（draft PR #392 の wrapper,
+# sha256 a6d1aca3…）が develop（918e1103…）と食い違っていたのに、SessionStart の
+# 整合性検査は何も言わなかった。検査は hooks/** しか歩いておらず、setup.sh step 6 が
+# 配備する scripts/lib には「配備する」という宣言だけがあって照合が無かった。
+# 検査に Phase 2b を足しただけでは同じ形が再発する。setup.sh のコピー行を変える人は
+# 検査を見ないからである。だから両側を機械で結ぶ。
+#   宣言側 = setup.sh の scripts/lib コピー行と SCRIPTS_DIR から導いた
+#            {相対パス: 配備先} の集合
+#   強制側 = 検査 hook を空の HOME で走らせ、`NOT INSTALLED: scripts/lib/...` として
+#            名指しされた {相対パス: 配備先} の集合。空の HOME では比べる対象が全部
+#            未配備になるので、名指しの一覧がそのまま被覆の一覧になる
+#            （hook の実装を読まず、振る舞いで測る）
+# 宣言側の模型は `cp -R "$REPO_DIR"/scripts/lib/. "$SCRIPTS_DIR/lib/"` の 1 形だけ。
+# それ以外（glob・個別ファイル・2 本目のコピー）は red にする。形を変えた人に
+# Phase 2b と本 pair の見直しを強いるのが目的なので、推測で緑にしない。
+# repo のファイルと sandbox だけで閉じるので、配備先の無い CI でも skip しない。
+setup_sh = Path(os.environ.get("AIDD_SETUP_SH", str(ROOT / "setup.sh")))
+integrity_hook = Path(
+    os.environ.get(
+        "AIDD_INTEGRITY_HOOK",
+        str(ROOT / "hooks" / "enforce-hook-deploy-integrity.sh"),
+    )
+)
+lib_src = ROOT / "scripts" / "lib"
+if not (setup_sh.is_file() and integrity_hook.is_file()):
+    bad(
+        "pair19 source file missing",
+        f"declaration={setup_sh} exists={setup_sh.is_file()} "
+        f"enforcement={integrity_hook} exists={integrity_hook.is_file()}",
+    )
+else:
+    setup_text = setup_sh.read_text(encoding="utf-8")
+    modeled = 'cp -R "$REPO_DIR"/scripts/lib/. "$SCRIPTS_DIR/lib/"'
+    copy_lines = [
+        ln.strip()
+        for ln in setup_text.splitlines()
+        if re.match(r"\s*cp\s", ln) and "scripts/lib" in ln
+    ]
+    m_dir = re.search(r'^SCRIPTS_DIR="\$HOME/([^"]+)"\s*$', setup_text, re.M)
+    # cp -R はディレクトリ以外を全部運ぶ（dotfile・下位ディレクトリを含む）。
+    lib_files = sorted(
+        (Path(d) / f).relative_to(lib_src).as_posix()
+        for d, _subdirs, names in os.walk(lib_src)
+        for f in names
+    )
+    declared = None
+    if m_dir and copy_lines == [modeled]:
+        declared = {rel: f"~/{m_dir.group(1)}/lib/{rel}" for rel in lib_files}
+
+    with tempfile.TemporaryDirectory() as sandbox:
+        run = subprocess.run(
+            ["bash", str(integrity_hook)],
+            env={
+                **os.environ,
+                "HOME": sandbox,
+                "CLAUDE_PROJECT_DIR": str(ROOT),
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+            },
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    covered = {
+        rel: ("~/" + target[len(sandbox) + 1:]) if target.startswith(sandbox + "/") else target
+        for rel, target in re.findall(
+            r"NOT INSTALLED: scripts/lib/(\S+) \(target=([^;]+);", run.stderr
+        )
+    }
+    enforced_view = [f"{k}->{v}" for k, v in sorted(covered.items())]
+    enforcement_label = f"enforcement({integrity_hook.name}, rc={run.returncode})"
+    if declared is None:
+        bad(
+            "pair19 setup.sh deploys scripts/lib in a form this link does not model",
+            f"declaration(setup.sh)=copy_lines={copy_lines} "
+            f"SCRIPTS_DIR={m_dir.group(1) if m_dir else 'MISSING'} "
+            f"(modeled: exactly one `{modeled}` and SCRIPTS_DIR=\"$HOME/...\") | "
+            f"{enforcement_label}={enforced_view}",
+        )
+    elif declared == covered:
+        ok(
+            f"pair19 setup.sh scripts/lib deploy set == integrity coverage "
+            f"({len(covered)} files -> ~/{m_dir.group(1)}/lib/: {', '.join(sorted(covered))})"
+        )
+    else:
+        declared_view = [f"{k}->{v}" for k, v in sorted(declared.items())]
+        bad(
+            "pair19 setup.sh scripts/lib deploy set != integrity coverage",
+            f"declaration(setup.sh)={declared_view} | "
+            f"{enforcement_label}={enforced_view} | "
+            f"only_declared={sorted(set(declared.items()) - set(covered.items()))} "
+            f"only_enforced={sorted(set(covered.items()) - set(declared.items()))}",
         )
 
 # 3 値で出す。skipped は「照合できなかった」であって「通った」ではない。

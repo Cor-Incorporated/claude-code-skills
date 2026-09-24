@@ -174,3 +174,19 @@ pairs:
       red の条件は「新規登録に陰性テストが無い」「回帰」「baseline の腐敗」の
       3 つだけで、分母は北極星（担保率）の天井を決めているにすぎない。
       狭い分母は未担保 13 本を記録から消す — それは #97 が問う受動性そのもの。
+  - id: ccs-setup-scripts-lib-vs-integrity-coverage
+    pair: pair19
+    declaration: setup.sh#6（cp -R "$REPO_DIR"/scripts/lib/. "$SCRIPTS_DIR/lib/"、SCRIPTS_DIR="$HOME/.claude/scripts"）
+    enforcement: hooks/enforce-hook-deploy-integrity.sh#Phase-2b（scripts/lib/* ↔ ~/.claude/scripts/lib/* の MD5 比較）
+    note: |
+      setup.sh が配備する scripts/lib の {相対パス: 配備先} と、整合性検査が比べる
+      {相対パス: 配備先} が一致すること。2026-09-24 実測: 配備済みの
+      ~/.claude/scripts/lib/h1-runtime.sh（draft PR #392 の wrapper, sha256 a6d1aca3…）が
+      develop（918e1103…）と食い違っていたのに、検査は hooks/** しか比べておらず
+      何も言わなかった。PR #392 の H5-PAIR（hooks/codex/h1-stall-runtime.sh ↔
+      scripts/lib/h1-runtime.sh）は hook 側しか監視されていなかった。
+      強制側は hook を空の HOME で走らせて NOT INSTALLED の名指しから測る（実装を読まない）。
+      宣言側の模型は cp -R の 1 形だけで、glob・個別コピー・2 本目のコピーは red にする。
+      片側変異 3 種（setup.sh を *.sh の glob に / setup.sh の配備先を変える /
+      hook を *.sh だけに絞る）で red になり両側の値を挙げることを
+      tests/test-hook-integrity-scripts-lib.sh が毎回実測する。

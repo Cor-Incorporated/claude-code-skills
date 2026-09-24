@@ -64,7 +64,7 @@ none of these block the session from starting.
 | `validate-no-local-hooks.sh` | Warn if `settings.local.json` declares a `hooks` section (would overwrite globals) |
 | `validate-provider-env.sh` | Check API provider routing (Anthropic subscription vs z.ai) is sane |
 | `enforce-branch-workflow.sh` | Auto-create `develop`, warn if currently on `main`/`develop` |
-| `enforce-hook-deploy-integrity.sh` | MD5 compare `hooks/*.sh` vs `~/.claude/hooks/`, auto-sync mismatches, detect orphans |
+| `enforce-hook-deploy-integrity.sh` | MD5 compare `hooks/**` vs their deploy roots (`~/.claude/hooks/`, `~/.codex/hooks/`, `~/.cursor/hooks/`) and `scripts/lib/*` vs `~/.claude/scripts/lib/`, detect orphans; detect-only (no auto-sync) |
 | `auto-update-plugins.sh` | Update third-party plugins on a 24h cooldown |
 
 ### PreToolUse

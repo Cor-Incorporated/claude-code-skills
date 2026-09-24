@@ -3,6 +3,8 @@
 # =========================================================================
 # Successor to validate-hook-deployment.sh (archived to hooks/_unused/ per ADR-006):
 #   1. MD5 comparison of hooks/*.sh vs ~/.claude/hooks/*.sh (report only)
+#   1b. MD5 comparison of scripts/lib/* vs ~/.claude/scripts/lib/* (report only;
+#       setup.sh step 6 deploys them for the wrappers)
 #   2. Detect orphan deployed hooks (in ~/.claude/hooks/ but not in hooks/)
 #   3. Check settings.json registration
 #   NO auto-sync (loop-break T2): never cp from checkout branch into deploy dir
@@ -180,6 +182,11 @@ INSTALLED_HOOKS_DIR="$HOME/.claude/hooks"
 CODEX_HOOKS_DIR="$HOME/.codex/hooks"
 CURSOR_HOOKS_DIR="$HOME/.cursor/hooks"
 SETTINGS_FILE="$HOME/.claude/settings.json"
+# setup.sh step 6: cp -R "$REPO_DIR"/scripts/lib/. "$SCRIPTS_DIR/lib/"
+# with SCRIPTS_DIR="$HOME/.claude/scripts". tests/test-pairs-link.sh pair19
+# fails when this source/target pair and that copy line drift apart.
+PROJECT_SCRIPTS_LIB_DIR="$(dirname "$PROJECT_HOOKS_DIR")/scripts/lib"
+INSTALLED_SCRIPTS_LIB_DIR="$HOME/.claude/scripts/lib"
 
 # --- Helper: resolve each repository hook to its tool-specific deploy root ---
 # hooks/codex/* and hooks/cursor/* are version-controlled beside Claude hooks,
@@ -229,6 +236,24 @@ compute_md5() {
   fi
 }
 
+# --- Helper: compare one repo file with its deployed copy (detect only) ---
+# Records NOT INSTALLED / MD5 MISMATCH in issues[] and returns 1; returns 0 when
+# the copies match. Never copies (loop-break T2). $1 is the name the report uses.
+check_deployed_copy() {
+  local label="$1" repo_file="$2" deployed_file="$3" repo_md5 deployed_md5
+  if [[ ! -f "$deployed_file" ]]; then
+    issues+=("NOT INSTALLED: ${label} (target=${deployed_file}; detect-only; run setup.sh from develop)")
+    return 1
+  fi
+  repo_md5=$(compute_md5 "$repo_file")
+  deployed_md5=$(compute_md5 "$deployed_file")
+  if [[ "$repo_md5" != "$deployed_md5" ]]; then
+    issues+=("MD5 MISMATCH: ${label} (repo=${repo_md5} deployed=${deployed_md5} target=${deployed_file}; no auto-sync)")
+    return 1
+  fi
+  return 0
+}
+
 issues=()
 
 # --- Phase 1: Collect project hook files ---
@@ -244,22 +269,34 @@ done < <(find "$PROJECT_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pyca
 # loop-break T2: auto-sync copied from whichever branch was checked out at
 # SessionStart and re-deployed retired hooks (main 52 → disk 63). Detect only.
 for rel_path in "${project_files[@]}"; do
-  repo_file="$PROJECT_HOOKS_DIR/$rel_path"
-  deployed_file=$(deployed_hook_path "$rel_path")
-
-  if [[ ! -f "$deployed_file" ]]; then
-    issues+=("NOT INSTALLED: $rel_path (target=${deployed_file}; detect-only; run setup.sh from develop)")
-    continue
-  fi
-
-  # Both files exist — compare MD5 (do not copy)
-  repo_md5=$(compute_md5 "$repo_file")
-  deployed_md5=$(compute_md5 "$deployed_file")
-
-  if [[ "$repo_md5" != "$deployed_md5" ]]; then
-    issues+=("MD5 MISMATCH: $rel_path (repo=${repo_md5} deployed=${deployed_md5} target=${deployed_file}; no auto-sync)")
-  fi
+  check_deployed_copy "$rel_path" "$PROJECT_HOOKS_DIR/$rel_path" "$(deployed_hook_path "$rel_path")"
 done
+
+# --- Phase 2b: scripts/lib support libraries (setup.sh step 6), detect only ---
+# DANGER (2026-09-24): Phases 1-2 only ever walked hooks/**. setup.sh step 6
+# also deploys scripts/lib/*, which scripts/codex-parallel.sh and
+# scripts/codex-orchestrate.sh source, and nothing compared that copy. The
+# deployed ~/.claude/scripts/lib/h1-runtime.sh (draft PR #392 wrapper, sha256
+# a6d1aca3...) differed from develop (918e1103...) and this hook said nothing,
+# so the H5-PAIR hooks/codex/h1-stall-runtime.sh <-> scripts/lib/h1-runtime.sh
+# was monitored on its hook side only.
+# Mirror `cp -R`: every regular file below scripts/lib, including nested dirs
+# and non-.sh files. Unlike Phase 1, nothing is excluded, because setup.sh
+# excludes nothing (a Python module landing here would need Phase 1's
+# __pycache__ exclusion, and pair19 would need to model it).
+_lib_drift=""
+while IFS= read -r -d '' filepath; do
+  rel_path="${filepath#"$PROJECT_SCRIPTS_LIB_DIR"/}"
+  lib_label="scripts/lib/${rel_path}"
+  if ! check_deployed_copy "$lib_label" "$filepath" "${INSTALLED_SCRIPTS_LIB_DIR}/${rel_path}"; then
+    _lib_drift="${_lib_drift}${_lib_drift:+ }${lib_label}"
+  fi
+done < <(find "$PROJECT_SCRIPTS_LIB_DIR" -type f -print0 2>/dev/null | sort -z)
+if [[ -n "$_lib_drift" ]] && declare -F aidd_ledger_append >/dev/null 2>&1; then
+  aidd_ledger_append "enforce-hook-deploy-integrity" "warn" "warn" \
+    "scripts/lib drift: ${_lib_drift}" "scripts-lib-deploy-drift"
+fi
+unset _lib_drift lib_label
 
 # --- Phase 3: Detect orphan deployed hooks ---
 if [[ -d "$INSTALLED_HOOKS_DIR" ]]; then
