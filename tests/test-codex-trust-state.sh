@@ -9,7 +9,9 @@
 # deployed MD5) both PASSED throughout, because neither reads trust state.
 #
 # Falsifiable: make the reporter ignore the `enabled` field and cases 1-2 go green
-# while the guard is dead.
+# while the guard is dead. Restore the two-entry event map and cases 7-10 go red;
+# add only UserPromptSubmit to that map and case 10 stays red; make the reporter
+# crash on the entry shape Codex writes and cases 7 and 10 go red.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPORTER="$ROOT/hooks/lib/codex-trust-state.py"
@@ -105,11 +107,119 @@ else
 fi
 
 # --- case 6: missing files are a no-op, not a crash ---
-python3 "$REPORTER" "$SB/nope.json" "$SB/nope.toml" >/dev/null 2>&1
-if [[ "$?" -eq 0 ]]; then
+if python3 "$REPORTER" "$SB/nope.json" "$SB/nope.toml" >/dev/null 2>&1; then
   ok "case6 missing inputs exit 0"
 else
   bad "case6 missing inputs crashed" ""
+fi
+
+# --- cases 7-10: event names other than PreToolUse (2026-09-24 実測) ---
+# hooks.json spells events in PascalCase, config.toml keys trust in snake_case.
+# The reporter mapped only PreToolUse/PostToolUse and fell back to lower(), so
+# the UserPromptSubmit hook that Codex had trusted was looked up as
+# "userpromptsubmit:0:0" and reported "no trust entry" at every SessionStart.
+cat > "$SB/ups.json" <<'JSON'
+{"hooks":{"UserPromptSubmit":[{"hooks":[
+  {"type":"command","command":"bash /x/.codex/hooks/h1-stall-runtime.sh"}]}]}}
+JSON
+
+run_ups() { python3 "$REPORTER" "$SB/ups.json" "$1" 2>/dev/null; }
+
+# --- case 7: the entry Codex wrote — trusted_hash, no `enabled` line ---
+# No output is also what a crashing reporter prints (main() turns errors into
+# silence), so the same config is read again with an untrusted sentinel
+# registered after the hook: that run must report the sentinel and nothing else.
+cat > "$SB/ups-trusted.toml" <<'TOML'
+[hooks.state."/x/.codex/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:ccc"
+TOML
+cat > "$SB/ups-sentinel.json" <<'JSON'
+{"hooks":{"UserPromptSubmit":[{"hooks":[
+  {"type":"command","command":"bash /x/.codex/hooks/h1-stall-runtime.sh"},
+  {"type":"command","command":"bash /x/.codex/hooks/sentinel.sh"}]}]}}
+JSON
+n="$(run_ups "$SB/ups-trusted.toml" | grep -c . || true)"
+sentinel="$(python3 "$REPORTER" "$SB/ups-sentinel.json" "$SB/ups-trusted.toml" 2>/dev/null)"
+if [[ "$n" -eq 0 ]] \
+   && [[ "$(printf '%s\n' "$sentinel" | grep -c .)" -eq 1 ]] \
+   && printf '%s' "$sentinel" | grep -qF 'sentinel.sh at user_prompt_submit:0:1 (no trust entry)'; then
+  ok "case7 trusted UserPromptSubmit hook is not reported (its untrusted sibling is)"
+else
+  bad "case7 trusted UserPromptSubmit hook misreported" \
+    "hook-only=$(run_ups "$SB/ups-trusted.toml") with-sentinel=${sentinel:-<nothing>}"
+fi
+
+# --- case 8: no user_prompt_submit entry — still reported, at Codex's key ---
+cat > "$SB/ups-absent.toml" <<'TOML'
+[hooks.state."/x/.codex/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:aaa"
+enabled = true
+TOML
+out="$(run_ups "$SB/ups-absent.toml")"
+if printf '%s' "$out" | grep -qF 'h1-stall-runtime.sh at user_prompt_submit:0:0 (no trust entry)'; then
+  ok "case8 untrusted UserPromptSubmit hook is reported at user_prompt_submit:0:0"
+else
+  bad "case8 untrusted UserPromptSubmit hook not reported at the key Codex writes" "$out"
+fi
+
+# --- case 9: enabled = false — still reported, as disabled ---
+cat > "$SB/ups-disabled.toml" <<'TOML'
+[hooks.state."/x/.codex/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:ccc"
+enabled = false
+TOML
+out="$(run_ups "$SB/ups-disabled.toml")"
+if printf '%s' "$out" | grep -qF 'h1-stall-runtime.sh at user_prompt_submit:0:0 (trust disabled)'; then
+  ok "case9 disabled UserPromptSubmit hook is reported as trust disabled"
+else
+  bad "case9 disabled UserPromptSubmit hook not reported as disabled" "$out"
+fi
+
+# --- case 10: every event Codex CLI 0.156.0 knows, not only the ones in use ---
+# Names: HookEventsToml in the 0.156.0 binary. Keys: the snake_case list that
+# precedes "normalized hook identity should serialize to TOML" in the same binary
+# (strings, 2026-09-24; stop and interrupt are single words). Only pre_tool_use
+# and user_prompt_submit have been seen in a real config.toml. A per-event map
+# passes cases 7-9 once UserPromptSubmit is added to it, and fails here.
+events=(PreToolUse PermissionRequest PostToolUse PreCompact PostCompact
+  SessionStart SessionEnd UserPromptSubmit SubagentStart SubagentStop
+  Stop Interrupt)
+keys=(pre_tool_use permission_request post_tool_use pre_compact post_compact
+  session_start session_end user_prompt_submit subagent_start subagent_stop
+  stop interrupt)
+{
+  printf '{"hooks":{'
+  for i in "${!events[@]}"; do
+    [[ "$i" -gt 0 ]] && printf ','
+    printf '"%s":[{"hooks":[{"type":"command","command":"bash /x/h-%s.sh"}]}]' \
+      "${events[$i]}" "${events[$i]}"
+  done
+  printf '}}\n'
+} > "$SB/all.json"
+
+run_all() { python3 "$REPORTER" "$SB/all.json" "$1" 2>/dev/null; }
+
+# Trust every event but one, for each event in turn: the run must report exactly
+# that event, at its snake_case key. Each run has to print one line, so the
+# silence of the other 11 cannot come from a crash.
+wrong=()
+for i in "${!events[@]}"; do
+  for j in "${!keys[@]}"; do
+    [[ "$j" -eq "$i" ]] && continue
+    printf '[hooks.state."/x/.codex/hooks.json:%s:0:0"]\ntrusted_hash = "sha256:%s"\n\n' \
+      "${keys[$j]}" "${keys[$j]}"
+  done > "$SB/all-but-one.toml"
+  out="$(run_all "$SB/all-but-one.toml")"
+  if [[ "$(printf '%s\n' "$out" | grep -c .)" -ne 1 ]] \
+     || ! printf '%s' "$out" | grep -qF "h-${events[$i]}.sh at ${keys[$i]}:0:0 (no trust entry)"; then
+    got="$(printf '%s\n' "$out" | sed -n 's/^CODEX HOOK NOT ACTIVE: \([^ ]*\) at \([^ ]*\) .*/\1@\2/p' | tr '\n' ' ')"
+    wrong+=("${events[$i]}: want ${keys[$i]}:0:0, got ${got:-nothing};")
+  fi
+done
+if [[ ${#wrong[@]} -eq 0 ]]; then
+  ok "case10 all ${#events[@]} events: silent when trusted, reported at the snake_case key when not"
+else
+  bad "case10 events not keyed the way Codex writes them" "${wrong[*]}"
 fi
 
 echo "--- $PASS passed, $FAIL failed ---"

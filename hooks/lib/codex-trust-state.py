@@ -9,6 +9,9 @@ Codex stores hook trust in config.toml keyed by POSITION, e.g.
     trusted_hash = "sha256:..."
     enabled = true
 
+The event part of that key is the hooks.json event name in snake_case
+(UserPromptSubmit -> user_prompt_submit); see event_key().
+
 A hook that is registered in hooks.json but has `enabled = false`, or has no
 trust entry at all, is skipped SILENTLY at runtime -- no error, no log line.
 
@@ -35,16 +38,34 @@ import os
 import re
 import sys
 
-EVENT_KEY = {"PreToolUse": "pre_tool_use", "PostToolUse": "post_tool_use"}
 TRUST_BLOCK = re.compile(
     r'\[hooks\.state\."[^"]*:([a-z_]+:\d+:\d+)"\]\n((?:[a-z_]+ = [^\n]*\n)*)'
 )
 
 
+def event_key(event):
+    """Spell a hooks.json event name the way config.toml keys it.
+
+    hooks.json uses PascalCase (UserPromptSubmit); Codex keys trust in
+    snake_case (user_prompt_submit). Convert generally instead of listing
+    events: until 2026-09-24 this was a two-entry map (PreToolUse,
+    PostToolUse) with an `event.lower()` fallback, so the UserPromptSubmit
+    hook that Codex had trusted was looked up as "userpromptsubmit:0:0" and
+    reported "no trust entry" at every SessionStart.
+
+    All 12 events of Codex CLI 0.156.0 (PreToolUse ... Interrupt) are plain
+    PascalCase, which this rule converts exactly. A future name that it
+    converts differently from Codex usually shows up as a false "no trust
+    entry" line; it stays silent only if the wrong key happens to equal the
+    key of another trusted entry.
+    """
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", event).lower()
+
+
 def registered(hooks_json):
     out = {}
     for event, matchers in json.load(open(hooks_json)).get("hooks", {}).items():
-        key = EVENT_KEY.get(event, event.lower())
+        key = event_key(event)
         for mi, matcher in enumerate(matchers):
             for hi, hook in enumerate(matcher.get("hooks", [])):
                 command = hook.get("command", "")
