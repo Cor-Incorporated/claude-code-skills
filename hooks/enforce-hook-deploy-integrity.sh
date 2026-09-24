@@ -261,7 +261,7 @@ issues=()
 project_files=()
 while IFS= read -r -d '' filepath; do
   # Preserve relative path from PROJECT_HOOKS_DIR (e.g. gate-modes/stop.sh)
-  rel_path="${filepath#$PROJECT_HOOKS_DIR/}"
+  rel_path="${filepath#"$PROJECT_HOOKS_DIR"/}"
   project_files+=("$rel_path")
 done < <(find "$PROJECT_HOOKS_DIR" -not -path '*/_unused/*' -not -path '*/__pycache__/*' \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
 
@@ -301,7 +301,7 @@ unset _lib_drift lib_label
 # --- Phase 3: Detect orphan deployed hooks ---
 if [[ -d "$INSTALLED_HOOKS_DIR" ]]; then
   while IFS= read -r -d '' filepath; do
-    rel_path="${filepath#$INSTALLED_HOOKS_DIR/}"
+    rel_path="${filepath#"$INSTALLED_HOOKS_DIR"/}"
     filename=$(basename "$filepath")
 
     # Skip non-script files and support libs (not standalone hooks)
@@ -328,7 +328,7 @@ if [[ -f "$SETTINGS_FILE" ]]; then
   settings_content=$(cat "$SETTINGS_FILE")
 
   while IFS= read -r -d '' filepath; do
-    rel_path="${filepath#$INSTALLED_HOOKS_DIR/}"
+    rel_path="${filepath#"$INSTALLED_HOOKS_DIR"/}"
     filename=$(basename "$filepath")
 
     # Skip non-script files and support libs
@@ -344,7 +344,9 @@ if [[ -f "$SETTINGS_FILE" ]]; then
       continue
     fi
 
-    # Check if registered in settings.json
+    # Check if registered in settings.json. The tilde stays literal on purpose:
+    # settings.json stores the unexpanded "~/.claude/hooks/..." command path.
+    # shellcheck disable=SC2088
     if ! echo "$settings_content" | grep -q "~/.claude/hooks/$rel_path"; then
       issues+=("NOT REGISTERED: $rel_path (not in settings.json)")
     fi
