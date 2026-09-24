@@ -221,7 +221,7 @@ ADR-006 以降、本リポジトリは元記事の「LLMプロンプトより決
 以下で強制:
 - **4段階検証**: コード存在 → 構文OK → settings.json登録 → 実際に発火
 - **`delivery_score.py`**: 定量品質スコア（hookカバレッジ、CI合格率、レビュー遵守率）
-- **`enforce-hook-deploy-integrity.sh`**: ソース ↔ デプロイ ↔ 登録の整合性チェック（auto-sync + orphan 検出）
+- **`enforce-hook-deploy-integrity.sh`**: hooks と `scripts/lib` のソース ↔ デプロイ ↔ 登録の整合性チェック（検出のみ・auto-sync なし + orphan 検出）
 - **CI/CD**: shellcheck + JSON validation + syntax checking（全PR）
 
 **Epic #130 前**: hookゲート動作率 39% (7/18) → **Epic #130 後・ADR-006 前**: 98%+ (59/59 hooks 登録 + デプロイ済み) → **ADR-006 後（現在）**: 17/17 hooks 登録 + デプロイ済み — 生き残ったセットは drift ではなく設計により小さい。デプロイ整合性検証は引き続き全 hook に適用。
@@ -267,7 +267,7 @@ hook ごとの詳細（イベント、matcher、用途）は [hooks/README.md](h
 - `auto-update-plugins.sh` — サードパーティプラグイン更新（24h クールダウン）
 - `validate-provider-env.sh` — セッション開始時に API プロバイダルーティング（Anthropic/z.ai）を確認
 - `enforce-branch-workflow.sh` — develop ブランチ自動作成、main/develop 上での警告
-- `enforce-hook-deploy-integrity.sh` — hook のインストール・登録を検証（auto-sync + orphan 検出）
+- `enforce-hook-deploy-integrity.sh` — hook と `scripts/lib` の配備済みコピーとの一致（MD5）と hook の登録を検証（検出のみ・auto-sync なし + orphan 検出）
 - `enforce-hook-deploy-after-merge.sh` — hooks/ を変更した PR マージ後に hook を自動デプロイ
 - `verify-agent-output.sh` — エージェントの phantom completion を検出（#173）
 - `auto-commit-worktree-changes.sh` — マージ後に worktree エージェント変更を自動コミット（#220）

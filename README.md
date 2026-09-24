@@ -244,7 +244,7 @@ The core operational principle, born from an incident where 11 of 18 hooks (61%)
 This principle is enforced through:
 - **4-stage verification**: Code exists → Syntax OK → Registered in settings.json → Actually fires
 - **`delivery_score.py`**: Quantitative quality scoring (hook coverage, CI pass rate, review compliance)
-- **`enforce-hook-deploy-integrity.sh`**: Source ↔ deployed ↔ registered consistency check (auto-sync + orphan detection)
+- **`enforce-hook-deploy-integrity.sh`**: Source ↔ deployed ↔ registered consistency check for hooks and `scripts/lib` (detect-only, no auto-sync; orphan detection)
 - **CI/CD**: shellcheck + JSON validation + syntax checking on every PR
 
 **Before Epic #130**: Hook gate operation rate 39% (7/18)
@@ -296,7 +296,7 @@ Rationale for the reduction from 72 registered commands down to 17:
 - `auto-update-plugins.sh` — Update third-party plugins (24h cooldown)
 - `validate-provider-env.sh` — Check API provider routing (Anthropic/z.ai) at session start
 - `enforce-branch-workflow.sh` — Auto-create develop branch, warn on `main`/`develop`
-- `enforce-hook-deploy-integrity.sh` — Verify hooks are installed and registered (auto-sync + orphan detection)
+- `enforce-hook-deploy-integrity.sh` — Verify hooks and `scripts/lib` libraries match their deployed copies (MD5) and hooks are registered (detect-only, no auto-sync; orphan detection)
 - `enforce-hook-deploy-after-merge.sh` — Auto-deploy hooks after a PR merge that touched `hooks/`
 - `verify-agent-output.sh` — Detect agent phantom completions (#173)
 - `auto-commit-worktree-changes.sh` — Auto-commit worktree agent changes after merge (#220)
