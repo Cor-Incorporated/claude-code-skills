@@ -17,9 +17,16 @@
 # truncate history or break merge-base, these fail. Treat that as the value, and
 # treat the fix itself as "ported from a repo that measured the failure".
 #
-# Everything runs against a throwaway clone under $TMPDIR; no real repository is
-# touched. The origin is addressed as file:// because git ignores --depth for a
-# plain local path. The base branch is named `trunk`, not `main`, so the local
+# MEASURED 2026-09-25 -- the gate does not run in the fixture. It resolves ROOT
+# from its own path, so the fetch / rev-parse / diff it issues run in the checkout
+# that contains this file (3 of 3 runs, traced with a git wrapper on PATH); the
+# fixture only sees this file's own rev-parse. Cases 1-4 therefore do not observe
+# the gate, and the standing invariant above does not hold yet. Running the gate
+# inside $SB changes what these cases exercise, so it is left to a separate change.
+#
+# The fixtures are throwaway clones under $TMPDIR, and the gate's ledger, HOME and
+# gh are confined to $SB (case 5). The origin is addressed as file:// because git
+# ignores --depth for a plain local path. The base branch is named `trunk`, not `main`, so the local
 # push guard does not fire on the fixture.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -33,6 +40,37 @@ bad() { echo "FAIL: $1"; echo "  $2"; FAIL=$((FAIL + 1)); }
 
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
+
+# --- keep the gate's side effects inside $SB ---
+# Measured 2026-09-25: every gate run below fell back to the default ledger
+# ($HOME/.claude/hooks/ledger/guard-ledger.jsonl) because neither H5_LEDGER_PATH
+# nor a PR body was set, and appended a real block row -- 3 rows per run of this
+# file. `gh pr view 0` also went to the network. The runs now get a sandbox
+# ledger, a sandbox HOME (so a fallback write lands in $SB, where case 5 can see
+# it) and a gh stub. None of this changes what cases 1-4 assert.
+export H5_LEDGER_PATH="$SB/ledger.jsonl"
+mkdir -p "$SB/bin" "$SB/home"
+# The stub answers the gate's body lookup for H5_PR_NUMBER=0. The body carries a
+# meta-filter word, so every gate run appends one evidence-filter measure row and
+# case 5 has a write to look for, whatever the checkout's HEAD~1 diff is.
+cat >"$SB/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+[[ "${1-}" == pr && "${2-}" == view ]] || exit 1
+printf '%s\n' 'expect red (fixture body for tests/test-h5-no-shallow.sh)'
+STUB
+chmod +x "$SB/bin/gh"
+# GIT_TERMINAL_PROMPT=0: without the real HOME there is no global credential
+# helper, and a fetch must fail rather than wait for a password.
+run_gate() {
+  HOME="$SB/home" PATH="$SB/bin:$PATH" GIT_TERMINAL_PROMPT=0 \
+    H5_BASE_REF=origin/trunk H5_HEAD_REF=HEAD H5_PR_NUMBER=0 \
+    bash "$CHECK" >/dev/null 2>&1
+}
+# Lines in <file> (matching <ERE> when given); 0 when the file does not exist.
+count_rows() {
+  [[ -f "$1" ]] || { echo 0; return; }
+  awk -v re="${2-}" 're == "" || $0 ~ re { n++ } END { print n + 0 }' "$1"
+}
 
 # --- a small origin with real history, plus a full clone of it ---
 git init -q --bare "$SB/origin.git"
@@ -63,8 +101,7 @@ git commit -q -m "feature commit"
 depth_before="$(git rev-list --count HEAD)"
 
 # --- case 1: running the gate must not shallow a full clone ---
-H5_BASE_REF=origin/trunk H5_HEAD_REF=HEAD H5_PR_NUMBER=0 \
-  bash "$CHECK" >/dev/null 2>&1
+run_gate
 
 shallow="$(git rev-parse --is-shallow-repository 2>/dev/null)"
 depth_after="$(git rev-list --count HEAD)"
@@ -84,8 +121,7 @@ else
 fi
 
 # --- case 3: the gate is idempotent -- running it twice changes nothing ---
-H5_BASE_REF=origin/trunk H5_HEAD_REF=HEAD H5_PR_NUMBER=0 \
-  bash "$CHECK" >/dev/null 2>&1
+run_gate
 depth_twice="$(git rev-list --count HEAD)"
 if [[ "$depth_twice" == "$depth_before" ]] && git merge-base origin/trunk HEAD >/dev/null 2>&1; then
   ok "case3 second run is idempotent (commits still $depth_twice)"
@@ -103,10 +139,24 @@ git clone -q --depth=1 -b trunk "file://$SB/origin.git" "$SB/shallow"
   printf 'x\n' > added.txt
   git add added.txt
   git commit -q -m "feature"
-  H5_BASE_REF=origin/trunk H5_HEAD_REF=HEAD H5_PR_NUMBER=0 bash "$CHECK" >/dev/null 2>&1
+  run_gate
   [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]
 ) && ok "case4 an already-shallow clone is left shallow and the gate still runs" \
    || bad "case4 shallow clone path regressed" "see above"
+
+# --- case 5: the gate wrote only inside $SB ---
+# Each of the 3 runs appends one evidence-filter row (see the gh stub). A row in
+# the default ledger under the gate's HOME means a run fell back to
+# $HOME/.claude/hooks/ledger/guard-ledger.jsonl -- the user's real ledger when
+# this file ran without a sandbox HOME.
+fallback_rows="$(count_rows "$SB/home/.claude/hooks/ledger/guard-ledger.jsonl")"
+sandbox_rows="$(count_rows "${H5_LEDGER_PATH-}" '"rule":"evidence-filter"')"
+if [[ "$fallback_rows" -eq 0 && "$sandbox_rows" -eq 3 ]]; then
+  ok "case5 all 3 gate runs wrote to the sandbox ledger, none to \$HOME (sandbox=$sandbox_rows fallback=$fallback_rows)"
+else
+  bad "case5 the gate wrote outside the sandbox ledger" \
+      "default ledger under HOME: $fallback_rows rows (want 0); sandbox evidence-filter rows: $sandbox_rows (want 3)"
+fi
 
 echo "--- $PASS passed, $FAIL failed ---"
 [[ "$FAIL" -eq 0 ]]
