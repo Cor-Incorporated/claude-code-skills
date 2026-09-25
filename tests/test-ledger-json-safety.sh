@@ -50,6 +50,10 @@ aidd_ledger_append test-hook block test-rule "日本語も混ぜる ${BS}n リ�
 # 5: 改行入り
 aidd_ledger_append test-hook block test-rule "first line
 second line"
+# 6: 改行・タブ・復帰以外の制御文字（2026-09-25: \001 や ESC は生のまま残っていた）
+aidd_ledger_append test-hook block test-rule "ctl $(printf '\001') and esc $(printf '\033')[31m red"
+# 7: 120 バイト目で日本語をまたぐ（9 + 110 = 119 バイトの ASCII の直後に「日」）
+aidd_ledger_append test-hook block test-rule "utf8 cut $(printf '%110s' '' | tr ' ' x)日本語"
 EOS
   HOME="$2" bash "$2/probe.sh" >/dev/null 2>&1
 }
@@ -78,7 +82,7 @@ echo "=== 1. 事故入力を書いても全行が JSON として読める ==="
 GOOD="$SB/good"
 write_probe "$LIB" "$GOOD"
 read -r rows broken <<<"$(count_broken "$GOOD")"
-if [[ "$rows" -ge 5 && "$broken" -eq 0 ]]; then
+if [[ "$rows" -ge 7 && "$broken" -eq 0 ]]; then
   ok "書いた $rows 行すべてが JSON として読める（破損 0）"
 else
   bad "台帳に読めない行がある" "rows=$rows broken=$broken"
@@ -86,7 +90,7 @@ fi
 
 echo
 echo "=== 2. 値が失われていない（潰しすぎていない） ==="
-python3 - "$GOOD/.claude/hooks/ledger/guard-ledger.jsonl" <<'PY'
+if python3 - "$GOOD/.claude/hooks/ledger/guard-ledger.jsonl" <<'PY'
 import json, sys
 rows = []
 for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
@@ -104,13 +108,23 @@ checks = [
     ("非 ASCII が残る", any("日本語" in h for h in heads)),
     ("改行は空白へ寄せられる", all("\n" not in h for h in heads)),
     ("生の二重引用符は残らない", all('"' not in h for h in heads)),
+    ("制御文字は残らない", all(all(ord(c) >= 0x20 for c in h) for h in heads)),
+    ("制御文字の前後の値は残る", any("ctl" in h and "[31m red" in h for h in heads)),
+    # 制御文字の除去は改行やタブも消せてしまう。消えたのではなく空白になったことを見る
+    ("改行は削除ではなく空白になる", any("first line second line" in h for h in heads)),
+    ("タブは削除ではなく空白になる", any("and a tab" in h for h in heads)),
+    # errors="replace" で読むので、半端な UTF-8 は U+FFFD として現れる
+    ("UTF-8 の文字を途中で切らない", all("�" not in h for h in heads)),
+    ("切り詰めは 120 バイト目の手前の文字境界で止まる",
+     any(h.startswith("utf8 cut ") and len(h.encode("utf-8")) == 119 for h in heads)),
 ]
 for label, good in checks:
     print(f"{'PASS' if good else 'FAIL'}: {label}")
+print(f"CHECKS {len(checks)}")
 raise SystemExit(0 if all(g for _, g in checks) else 1)
 PY
-if [[ $? -eq 0 ]]; then
-  pass=$((pass + 5))
+then
+  pass=$((pass + 11))
 else
   fail=$((fail + 1))
   echo "    値の保存/正規化に失敗"
@@ -138,6 +152,33 @@ if [[ -f "$MUT" ]]; then
     ok "変異体は $mrows 行中 $mbroken 行を壊す = エスケープが結論を作っていた"
   else
     bad "変異体でも壊れない = このテストはエスケープを証明していない" "rows=$mrows broken=$mbroken"
+  fi
+else
+  bad "変異体を作れなかった — 反証不能" "mutation target missing"
+fi
+
+echo
+echo "=== 4. 反証: 制御文字の除去を外すと壊れるか ==="
+MUT_CTL="$SB/mutant-ctl-lib.sh"
+python3 - "$LIB" "$MUT_CTL" <<'PY'
+import pathlib, sys
+src, dst = sys.argv[1:3]
+text = pathlib.Path(src).read_text()
+needle = " | tr -d '\\000-\\037'"
+n = text.count(needle)
+if n == 0:
+    raise SystemExit("mutation target not found: control-char strip absent")
+pathlib.Path(dst).write_text(text.replace(needle, ""))
+print(f"    変異: 制御文字の除去を {n} 箇所削除")
+PY
+if [[ -f "$MUT_CTL" ]]; then
+  CTLSB="$SB/mutant-ctl"
+  write_probe "$MUT_CTL" "$CTLSB"
+  read -r crows cbroken <<<"$(count_broken "$CTLSB")"
+  if [[ "$cbroken" -gt 0 ]]; then
+    ok "変異体は $crows 行中 $cbroken 行を壊す = 制御文字の除去が結論を作っていた"
+  else
+    bad "変異体でも壊れない = このテストは制御文字の除去を証明していない" "rows=$crows broken=$cbroken"
   fi
 else
   bad "変異体を作れなかった — 反証不能" "mutation target missing"

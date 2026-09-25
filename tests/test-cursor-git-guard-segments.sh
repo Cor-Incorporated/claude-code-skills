@@ -267,5 +267,77 @@ else
   printf 'FAIL: [%s] F4 deny 行のキー集合が変わった: %s\n' "$BRANCH" "$keys"; fail=$((fail + 1))
 fi
 
+echo
+echo '=== 台帳: どの行も 1 行 1 JSON として読める（2026-09-25）==='
+# 実台帳 ~/.cursor/hooks/guard-ledger.jsonl は 416 行中 6 行が JSON として読めなかった
+# （ledger_row が cmd_head を printf へ素のまま渡していた）。Codex の hook の台帳
+# テストと同じ 5 形を deny させ、それぞれ台帳が 1 行だけ増えることを確かめる。
+# そのうえで台帳の全行（上のチェックが書いた行も含む）が strict な UTF-8 + JSON
+# で読め、5 行の cmd_head が仕様どおりの値（先頭 120 バイトを UTF-8 の境界で
+# 切る、" は '、改行・タブ・復帰は空白）を保つことを見る。
+# 反証: develop の ledger_row では 5 行とも読めない（複数行は 2 行に割れる）。
+BS="\\"
+pad="$(printf '%89s' '' | tr ' ' x)" # 30 バイトの接頭辞 + 89 = 119 バイト目まで
+ledger_cmds=()
+for label in multi-line tab-and-quote backslash-at-byte-120 utf8-across-byte-120 control-char; do
+  case "$label" in
+    multi-line) command="git push --force origin main"$'\r\n'"echo second line" ;;
+    tab-and-quote) command='git push --force origin "main"'$'\t''# tabbed' ;;
+    backslash-at-byte-120) command="git push --force origin main #${pad}${BS}tail" ;;
+    utf8-across-byte-120) command="git push --force origin main #${pad}日本語" ;;
+    control-char) command="git push --force origin main # "$'\001'" ctl" ;;
+  esac
+  ledger_cmds+=("$command")
+  ledger_check "J ${label} は deny で 1 行" 1 deny "$command"
+done
+if json_report=$(python3 - "$LEDGER" "${ledger_cmds[@]}" <<'PY'
+import json, re, sys
+path, commands = sys.argv[1], sys.argv[2:]
+raw = open(path, "rb").read()
+lines = raw.split(b"\n")
+if lines and lines[-1] == b"":
+    lines.pop()
+broken, recs = [], []
+if raw and not raw.endswith(b"\n"):
+    broken.append(f"file does not end with a newline: {raw[-40:]!r}")
+for n, line in enumerate(lines, 1):
+    try:
+        rec = json.loads(line.decode("utf-8"))
+        if not isinstance(rec, dict) or not {"ts", "hook", "decision", "cmd_head"} <= rec.keys():
+            raise ValueError(f"not a ledger record: {rec!r:.60}")
+        if rec["hook"] != "git-guard" or rec["decision"] not in ("deny", "allow", "invoked"):
+            raise ValueError(f"hook={rec['hook']} decision={rec['decision']}")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", str(rec["ts"])):
+            raise ValueError(f"ts={rec['ts']!r}")
+        recs.append(rec)
+    except Exception as exc:
+        broken.append(f"line {n}: {type(exc).__name__}: {exc} | {line[:60]!r}")
+
+
+def expected(cmd):
+    head = cmd.encode("utf-8")[:120].decode("utf-8", "ignore")
+    return head.replace('"', "'").replace("\n", " ").replace("\t", " ").replace("\r", " ")
+
+
+def printable(s):  # the jq path escapes other control chars, the fallback drops them
+    return "".join(ch for ch in s if ord(ch) >= 0x20)
+
+
+if not broken:
+    for cmd, rec in zip(commands, recs[-len(commands):]):
+        got, want = rec["cmd_head"], expected(cmd)
+        if printable(got) != printable(want):
+            broken.append(f"cmd_head {got!r} != {want!r}")
+print(f"lines={len(lines)} broken={len(broken)}")
+for b in broken:
+    print("  " + b)
+sys.exit(1 if broken or len(recs) < len(commands) else 0)
+PY
+); then
+  printf 'PASS: [%s] J 台帳の全行が JSON として読め、値も保たれる %s\n' "$BRANCH" "$json_report"; pass=$((pass + 1))
+else
+  printf 'FAIL: [%s] J 台帳に読めない行か崩れた値がある %s\n' "$BRANCH" "$json_report"; fail=$((fail + 1))
+fi
+
 printf '\n%s\n' "--- $pass passed, $fail failed ---"
 [[ "$fail" -eq 0 ]]

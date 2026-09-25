@@ -39,10 +39,38 @@ split_command_segments() {
 # 判定に到達しない素通り（ls 等）は既定では書かない（台帳を汚さない）。
 # CURSOR_GIT_GUARD_TRACE=1 のときだけ素通りも decision:"invoked" で残す
 # （実エージェントがシェルを 1 度でも実行したかを測る用途）。
+#
+# 2026-09-25 実測: 実台帳 ~/.cursor/hooks/guard-ledger.jsonl の 416 行中 6 行が
+# JSON として読めなかった（Invalid \escape 2、Expecting value 2、Unterminated
+# string 1、Invalid control character 1）。cmd_head を printf へ素のまま渡して
+# いたため。hooks/codex/protect-branches-codex.sh の ledger_line と同じ形で組む:
+# キーと値の形（先頭 120 バイト、" は '）は従来どおり、改行・タブ・復帰は空白へ
+# 寄せ、UTF-8 の文字を途中で切らない。組み立ては jq、jq が失敗したときだけ
+# printf（バックスラッシュを倍化し、残りの制御文字を落とす）。行は 1 度だけ書く。
+# 規則は 3 つの書き手で同じであること（tests/test-ledger-cmd-head-link.sh）。
+
+# 先頭 120 バイトを、UTF-8 の文字を途中で切らずに取る（hooks/lib/aidd-ledger.sh の
+# _aidd_truncate_utf8 と同じ）。文字の途中で切ると iconv -c は正しい前半を出した
+# うえで exit 1 を返すので、終了コードは見ない。
+_cursor_truncate_utf8() {
+  if command -v iconv >/dev/null 2>&1; then
+    head -c 120 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null
+  else
+    head -c 120
+  fi
+}
+
 ledger_row() {
-  printf '{"ts":"%s","hook":"git-guard","decision":"%s","cmd_head":"%s"}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$(printf '%s' "$cmd" | head -c 120 | tr '"' "'")" \
-    >> "$HOME/.cursor/hooks/guard-ledger.jsonl" 2>/dev/null || true
+  local ts cmd_head line
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cmd_head="$(printf '%s' "$cmd" | _cursor_truncate_utf8 | tr '"' "'" | tr '\n\t\r' '   ')"
+  line="$(jq -cn --arg ts "$ts" --arg decision "$1" --arg cmd_head "$cmd_head" \
+    '{ts: $ts, hook: "git-guard", decision: $decision, cmd_head: $cmd_head}' 2>/dev/null)" \
+    || line="$(printf '{"ts":"%s","hook":"git-guard","decision":"%s","cmd_head":"%s"}' \
+      "$ts" "$1" "$(printf '%s' "$cmd_head" | sed 's/\\/\\\\/g' | tr -d '\000-\037')")"
+  # 2>/dev/null を先に置く。後ろに置くと、台帳を開けないときのエラーが hook の
+  # stderr へ出る（リダイレクトは左から順に処理される）。
+  printf '%s\n' "$line" 2>/dev/null >>"$HOME/.cursor/hooks/guard-ledger.jsonl" || true
 }
 
 deny() {
