@@ -1,0 +1,72 @@
+# Spellings of one [hooks.state."..."] trust entry, and what each side makes of them.
+#
+# Row: label|codex|reporter|config.toml
+#   codex     what Codex does with the probed hook (CLI 0.156.0, 2026-09-25):
+#               runs    - enabled, and trustStatus trusted
+#               skips   - listed, but disabled or not trusted: skipped SILENTLY
+#               rejects - config.toml does not load at all
+#   reporter  what hooks/lib/codex-trust-state.py prints for the probed hook:
+#             quiet, or the reason it gives in parentheses
+#   config    the whole config.toml. Escapes \n \t \r only; placeholders
+#             @K@ = the probed hook's trust key, @H@ = its trusted hash
+#
+# The probed hook is PreToolUse 0:0. A SessionStart hook without any entry is
+# registered next to it as a sentinel, so every run must print at least one line.
+#
+# tests/test-codex-trust-state.sh checks the reporter column (CI).
+# tests/test-codex-trust-conformance.sh checks the codex column against the real
+# binary (local only; CI has no codex CLI). Together they tie the reporter to
+# Codex: quiet appears exactly on the rows where Codex runs the hook.
+# CI cannot tell a wrong codex column from a right one, so run the conformance
+# test whenever a row is added or changed, and after every Codex upgrade.
+#
+# Not listed: a trusted_hash that no longer matches the hook (Codex: modified,
+# skipped) and an entry for another hooks.json at the same position. The reporter
+# cannot tell either from a valid entry, so it stays quiet on both.
+
+# Codex skips the hook: enabled = false, however it is spelled.
+enabled = false|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled = false\n
+enabled = false on the last line, no newline|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled = false
+enabled=false without spaces|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled=false\n
+enabled=false above trusted_hash|skips|trust disabled|[hooks.state."@K@"]\nenabled=false\ntrusted_hash = "@H@"\n
+a blank line before enabled = false|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n\nenabled = false\n
+a comment line before enabled = false|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n# off by hand\nenabled = false\n
+indented enabled = false|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n  enabled = false\n
+tabs around =|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled\t=\tfalse\n
+enabled = false with a trailing comment|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled = false # off [by hand]\n
+quoted key "enabled"|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n"enabled" = false\n
+literal key 'enabled'|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n'enabled' = false\n
+CRLF line endings|skips|trust disabled|[hooks.state."@K@"]\r\ntrusted_hash = "@H@"\r\nenabled = false\r\n
+header with a trailing comment|skips|trust disabled|[hooks.state."@K@"] # note\ntrusted_hash = "@H@"\nenabled = false\n
+header with spaces inside the brackets|skips|trust disabled|[ hooks.state."@K@" ]\ntrusted_hash = "@H@"\nenabled = false\n
+header key as a literal string|skips|trust disabled|[hooks.state.'@K@']\ntrusted_hash = "@H@"\nenabled = false\n
+
+# Codex skips the hook: the entry has no trusted_hash (trustStatus untrusted).
+header only, last line without a newline|skips|no trusted_hash|[hooks.state."@K@"]
+header only, last line|skips|no trusted_hash|[hooks.state."@K@"]\n
+header only, another table after it|skips|no trusted_hash|[hooks.state."@K@"]\n\n[features]\n
+enabled = true without trusted_hash|skips|no trusted_hash|[hooks.state."@K@"]\nenabled = true\n
+
+# Codex skips the hook: there is no entry.
+no entry at all|skips|no trust entry|
+the whole entry commented out|skips|no trust entry|# [hooks.state."@K@"]\n# trusted_hash = "@H@"\n
+
+# Spellings the reporter does not parse. They read as "no trust entry", so they
+# are reported: correct here, a false alarm if such an entry were trusted and enabled.
+dotted keys under [hooks.state]|skips|no trust entry|[hooks.state]\n"@K@".trusted_hash = "@H@"\n"@K@".enabled = false\n
+an inline table|skips|no trust entry|[hooks.state]\n"@K@" = { trusted_hash = "@H@", enabled = false }\n
+
+# Codex refuses to load config.toml: a trust value of the wrong type.
+enabled = "false" as a string|rejects|invalid trust entry|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled = "false"\n
+trusted_hash as a number|rejects|invalid trust entry|[hooks.state."@K@"]\ntrusted_hash = 1\n
+
+# Codex runs the hook: the reporter must stay quiet.
+trusted_hash only, as Codex writes it|runs|quiet|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n
+trusted_hash and enabled = true|runs|quiet|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled = true\n
+trusted_hash= on the last line, no newline|runs|quiet|[hooks.state."@K@"]\ntrusted_hash="@H@"
+enabled=true without spaces|runs|quiet|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled=true\n
+indented keys|runs|quiet|[hooks.state."@K@"]\n  trusted_hash = "@H@"\n  enabled = true\n
+CRLF line endings, trusted|runs|quiet|[hooks.state."@K@"]\r\ntrusted_hash = "@H@"\r\n
+trusted_hash as a literal string|runs|quiet|[hooks.state."@K@"]\ntrusted_hash = '@H@'\n
+header with a trailing comment, trusted|runs|quiet|[hooks.state."@K@"] # note\ntrusted_hash = "@H@"\n
+enabled = false commented out|runs|quiet|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n# enabled = false\n

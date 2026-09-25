@@ -12,6 +12,13 @@
 # while the guard is dead. Restore the two-entry event map and cases 7-10 go red;
 # add only UserPromptSubmit to that map and case 10 stays red; make the reporter
 # crash on the entry shape Codex writes and cases 7 and 10 go red.
+# Case 11 (2026-09-25): the single-regex parser of #394 fails 20 of its rows. Of
+# these one-sided mutations, each turns the named rows red: `=` without spaces
+# not allowed (4), no trusted_hash read as active (4), reading stopped at a blank
+# or comment line (2), no indentation (2), bare keys only (2), no CRLF
+# translation (2), header without its trailing comment (2), `[` anywhere opens a
+# table (1). A reporter that crashes before printing fails every case except 5
+# and 6, whose point is exit 0; before the sentinel, cases 3 and 4 passed on it.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPORTER="$ROOT/hooks/lib/codex-trust-state.py"
@@ -32,6 +39,24 @@ cat > "$SB/hooks.json" <<'JSON'
 JSON
 
 run() { python3 "$REPORTER" "$SB/hooks.json" "$1" 2>/dev/null; }
+
+# A quiet run and a crashed run look the same: main() turns every error into
+# silence. So a case that expects no report reads its config with an untrusted
+# sentinel registered as well, and passes only when the sentinel is the one line.
+cat > "$SB/hooks+sentinel.json" <<'JSON'
+{"hooks":{"PreToolUse":[{"matcher":".*","hooks":[
+  {"type":"command","command":"bash /x/.codex/hooks/protect-branches-codex.sh"},
+  {"type":"command","command":"bash /x/.codex/hooks/h1-stall-runtime.sh"}]}],
+ "SessionStart":[{"hooks":[
+  {"type":"command","command":"bash /x/.codex/hooks/sentinel.sh"}]}]}}
+JSON
+SENTINEL='sentinel.sh at session_start:0:0 (no trust entry)'
+run_sentinel() { python3 "$REPORTER" "$SB/hooks+sentinel.json" "$1" 2>&1; }
+only_sentinel() {
+  local out
+  out="$(run_sentinel "$1")"
+  [[ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ]] && printf '%s' "$out" | grep -qF "$SENTINEL"
+}
 
 # --- case 1: the actual 19-day outage — enabled = false at 0:0 ---
 cat > "$SB/disabled.toml" <<'TOML'
@@ -67,18 +92,23 @@ else
 fi
 
 # --- case 3: everything trusted — the guard must stay quiet ---
+# Trusted means a trusted_hash: Codex runs an unmanaged hook only when its entry
+# carries one (codex-rs hooks/src/engine/discovery.rs, hook_trust_status). Until
+# 2026-09-25 this fixture held `enabled = true` alone, which Codex lists as
+# untrusted and never runs.
 cat > "$SB/ok.toml" <<'TOML'
 [hooks.state."/x/.codex/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:aaa"
 enabled = true
 
 [hooks.state."/x/.codex/hooks.json:pre_tool_use:0:1"]
+trusted_hash = "sha256:bbb"
 enabled = true
 TOML
-n="$(run "$SB/ok.toml" | grep -c . || true)"
-if [[ "$n" -eq 0 ]]; then
-  ok "case3 no false positive when every hook is trusted"
+if only_sentinel "$SB/ok.toml"; then
+  ok "case3 no false positive when every hook is trusted (sentinel still reported)"
 else
-  bad "case3 false positive" "$(run "$SB/ok.toml")"
+  bad "case3 false positive, or no sentinel line (reporter crashed?)" "$(run_sentinel "$SB/ok.toml")"
 fi
 
 # --- case 4: `enabled` omitted. Codex treats that as active, so must stay quiet ---
@@ -89,11 +119,10 @@ trusted_hash = "sha256:aaa"
 [hooks.state."/x/.codex/hooks.json:pre_tool_use:0:1"]
 trusted_hash = "sha256:bbb"
 TOML
-n="$(run "$SB/unset.toml" | grep -c . || true)"
-if [[ "$n" -eq 0 ]]; then
-  ok "case4 omitted 'enabled' is not treated as disabled"
+if only_sentinel "$SB/unset.toml"; then
+  ok "case4 omitted 'enabled' is not treated as disabled (sentinel still reported)"
 else
-  bad "case4 false positive on omitted enabled" "$(run "$SB/unset.toml")"
+  bad "case4 false positive on omitted enabled, or no sentinel line" "$(run_sentinel "$SB/unset.toml")"
 fi
 
 # --- case 5: unreadable config must not break the SessionStart hook ---
@@ -221,6 +250,67 @@ if [[ ${#wrong[@]} -eq 0 ]]; then
 else
   bad "case10 events not keyed the way Codex writes them" "${wrong[*]}"
 fi
+
+# --- case 11: every spelling in tests/lib/codex-trust-forms.txt (2026-09-25 実測) ---
+# Until 2026-09-25 the reporter read an entry with one regex that took only lines
+# of the exact form `key = value\n` right under the header. Codex parses the table
+# as TOML, so `enabled=false`, a final `enabled = false` without a newline, one
+# after a blank or comment line, an indented one, or one with a quoted key all
+# disabled the hook in Codex and read as active here: the direction of the
+# 2026-09-01 outage. The table gives each spelling with what Codex CLI 0.156.0
+# does with it (tests/test-codex-trust-conformance.sh checks that column against
+# the real binary) and what the reporter must print. Every run registers the
+# sentinel too, so a row can only pass after the reporter has read the config.
+FORMS="$ROOT/tests/lib/codex-trust-forms.txt"
+cat > "$SB/forms.json" <<'JSON'
+{"hooks":{"PreToolUse":[{"matcher":".*","hooks":[
+  {"type":"command","command":"bash /x/.codex/hooks/probed.sh"}]}],
+ "SessionStart":[{"hooks":[
+  {"type":"command","command":"bash /x/.codex/hooks/sentinel.sh"}]}]}}
+JSON
+KEY='/x/.codex/hooks.json:pre_tool_use:0:0'
+rows=0
+kinds=""
+while IFS='|' read -r label codex want config || [[ -n "$label" ]]; do
+  [[ -z "$label" || "$label" == \#* ]] && continue
+  rows=$((rows + 1))
+  kinds="$kinds $codex"
+  # quiet may appear exactly where Codex runs the hook. A row that recorded a
+  # silent skip as expected would turn the gap itself into a passing case.
+  if [[ "$codex" == runs && "$want" != quiet ]] || [[ "$codex" != runs && "$want" == quiet ]]; then
+    bad "case11 $label: table says codex=$codex reporter=$want" "quiet must appear exactly on the rows where Codex runs the hook"
+    continue
+  fi
+  # The conformance test expands only these three escapes; printf %b would take more.
+  if printf '%s' "$config" | grep -q '\\[^ntr]'; then
+    bad "case11 $label: escape other than \\n \\t \\r in the table" "$config"
+    continue
+  fi
+  config="${config//@K@/${KEY}}"
+  printf '%b' "${config//@H@/sha256:aaa}" > "$SB/form.toml"
+  out="$(python3 "$REPORTER" "$SB/forms.json" "$SB/form.toml" 2>&1)"
+  rest="$(printf '%s\n' "$out" | grep -vF "$SENTINEL" | grep .)"
+  if ! printf '%s' "$out" | grep -qF "$SENTINEL"; then
+    bad "case11 $label: no sentinel line (reporter crashed?)" "${out:-<nothing>}"
+  elif [[ "$want" == quiet ]]; then
+    if [[ -z "$rest" ]]; then
+      ok "case11 $label: quiet"
+    else
+      bad "case11 $label: want quiet" "$rest"
+    fi
+  elif [[ "$(printf '%s\n' "$rest" | grep -c .)" -eq 1 ]] \
+       && printf '%s' "$rest" | grep -qF "probed.sh at pre_tool_use:0:0 (${want})"; then
+    ok "case11 $label: (${want})"
+  else
+    bad "case11 $label: want (${want})" "${rest:-<nothing reported>}"
+  fi
+done < "$FORMS"
+for kind in runs skips rejects; do
+  case " $kinds " in
+    *" $kind "*) ;;
+    *) bad "case11 no '$kind' row in the table" "$FORMS (read $rows rows)" ;;
+  esac
+done
 
 echo "--- $PASS passed, $FAIL failed ---"
 [[ "$FAIL" -eq 0 ]]

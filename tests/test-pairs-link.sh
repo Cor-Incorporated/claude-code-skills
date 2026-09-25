@@ -373,8 +373,9 @@ else:
 # (source↔deployed MD5) both PASSED throughout, because neither looks at trust.
 # Codex keys trust by POSITION ("<event>:<matcher>:<hook>"), so inserting a hook
 # also invalidates the entry that used to occupy that index.
-# A registered hook with no enabled trust entry is skipped SILENTLY — no error,
-# no log line — which is why this needs a machine link rather than a habit.
+# A registered hook without an active trust entry (one with a trusted_hash and
+# without `enabled = false`) is skipped SILENTLY — no error, no log line — which
+# is why this needs a machine link rather than a habit.
 # Both sides are parsed by hooks/lib/codex-trust-state.py, the source that
 # setup.sh deploys for the SessionStart check, not by a copy of it. Until
 # 2026-09-24 this block carried its own two-entry event map and shared the
@@ -403,12 +404,12 @@ else:
         codex_config.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
         broken.append(f"config.toml is not UTF-8 ({e}) -> Codex cannot load it")
-    for idx, script in sorted(registered.items()):
-        st = trust.get(idx, "absent")
-        if st == "disabled":
-            broken.append(f"{idx}({script}) trust=disabled -> hook is skipped silently")
-        elif st == "absent":
-            broken.append(f"{idx}({script}) trust=absent -> not yet trusted, hook is skipped silently")
+    # Which trust states count as active is decided only by the reporter
+    # (inactive(), ACTIVE). Until 2026-09-25 this loop named the inactive states
+    # itself, so "untrusted" and "invalid", added to the reporter that day,
+    # would have passed here without a word.
+    for idx, script, st in trust_lib.inactive(registered, trust):
+        broken.append(f"{idx}({script}) trust={st}: {trust_lib.REASONS.get(st, st)}")
     if not broken:
         summary = ", ".join(f"{i}={trust.get(i, 'absent')}" for i in sorted(registered))
         ok(f"pair15 every registered Codex hook has an active trust entry ({summary})")

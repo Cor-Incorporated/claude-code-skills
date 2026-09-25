@@ -45,9 +45,10 @@ pairs:
     enforcement: ~/.codex/config.toml#[hooks.state."...:<event>:<matcher>:<hook>"]
     note: |
       hooks.json に登録された各 hook が、config.toml に有効な trust エントリ（エントリがあり、
-      `enabled = false` でない。`enabled` 行が無いものは Codex が有効として扱う）を持つことを
-      pair15 で照合する。Codex の trust は「位置」キーなので、hook を配列の前に挿入すると
-      既存エントリの hash が合わなくなり、そこに居たガードごと無言で停止する。
+      `trusted_hash` を持ち、`enabled = false` でない。`enabled` 行が無いものは Codex が
+      有効として扱う）を持つことを pair15 で照合する。Codex の trust は「位置」キーなので、
+      hook を配列の前に挿入すると既存エントリの hash が合わなくなり、そこに居たガードごと
+      無言で停止する。
       2026-09-01 実測: protect-branches-codex.sh は配備 3 要件（repo 存在 / コピー /
       hooks.json 登録）を全て満たし MD5 も一致していたが、`enabled = false` のため
       19 日間発火ゼロだった。pair7 と pair11 はその間ずっと PASS していた
@@ -56,6 +57,13 @@ pairs:
       snake_case（user_prompt_submit）。変換が 2 イベント分の対応表だったため、信頼済みの
       UserPromptSubmit hook を「trust エントリ無し」と毎回誤報していた。変換は
       hooks/lib/codex-trust-state.py の event_key() だけが持ち、pair15 もそれを読む。
+      2026-09-25: エントリの解析が `key = value` と改行の厳密な形しか読まず、Codex CLI
+      0.156.0 が無効として読む手編集 13 通り（空白なしの `enabled=false`、改行なしの最終行
+      `enabled = false`、空行・コメント行の後、字下げ、引用符付きキー、`trusted_hash` の
+      無いエントリ等）を有効と読んでいた。書き方ごとの Codex の実挙動は
+      tests/lib/codex-trust-forms.txt が持ち、reporter 列は tests/test-codex-trust-state.sh、
+      Codex 列は tests/test-codex-trust-conformance.sh（実バイナリ。CI では SKIP）が照合する。
+      どの状態を有効とみなすかは reporter の inactive() だけが持ち、pair15 もそれを呼ぶ。
   - id: codex-payload-ssot-vs-deployed-block
     pair: pair17
     declaration: ~/Developer/aidd-governance/design/ops/payloads/{codex-rules-append.rules,codex-AGENTS-worktree.md}
