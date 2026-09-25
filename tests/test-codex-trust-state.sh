@@ -178,9 +178,10 @@ fi
 # --- case 10: every event Codex CLI 0.156.0 knows, not only the ones in use ---
 # Names: HookEventsToml in the 0.156.0 binary. Keys: the snake_case list that
 # precedes "normalized hook identity should serialize to TOML" in the same binary
-# (strings, 2026-09-24; stop and interrupt are single words). Only pre_tool_use
-# and user_prompt_submit have been seen in a real config.toml. A per-event map
-# passes cases 7-9 once UserPromptSubmit is added to it, and fails here.
+# holds the 10 multi-word names (strings, 2026-09-24); stop and interrupt are
+# single words and are not in it. Only pre_tool_use and user_prompt_submit have
+# been seen in a real config.toml. A per-event map passes cases 7-9 once
+# UserPromptSubmit is added to it, and fails here.
 events=(PreToolUse PermissionRequest PostToolUse PreCompact PostCompact
   SessionStart SessionEnd UserPromptSubmit SubagentStart SubagentStop
   Stop Interrupt)
@@ -216,6 +217,12 @@ for i in "${!events[@]}"; do
     wrong+=("${events[$i]}: want ${keys[$i]}:0:0, got ${got:-nothing};")
   fi
 done
+# Nothing trusted: every event must be reported, not only the first one.
+: > "$SB/none.toml"
+out="$(run_all "$SB/none.toml")"
+lines="$(printf '%s\n' "$out" | grep -c . || true)"
+[[ "$lines" -eq ${#events[@]} ]] \
+  || wrong+=("all untrusted: want ${#events[@]} lines, got ${lines};")
 if [[ ${#wrong[@]} -eq 0 ]]; then
   ok "case10 all ${#events[@]} events: silent when trusted, reported at the snake_case key when not"
 else
