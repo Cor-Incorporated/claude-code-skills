@@ -790,7 +790,12 @@ sub_ok=0
 if printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE 'H5-SUBTRACTION:\s*N/?A'; then
   sub_ok=1
 fi
-retire_pr="$(printf '%s' "$PR_BODY" | grep -oiE 'H5-RETIRE-PR:[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+' || true)"
+# 番号は**行末の数字**だけを取る。直前の grep -o はマーカー名ごと 1 行を出すので、
+# 末尾を `[0-9]+` にするとマーカー名 `H5` の `5` まで拾い、番号 457 が
+# retire_pr=$'5\n457' になる。gh pr view は状態を返さず UNKNOWN になり、
+# 番号で控除を宣言する経路は必ず subtraction-pr-not-merged で落ちていた
+# （2026-09-24 実測, bash 3.2.57 / 5.3.20）。tests/test-h5-retire-pr.sh が固定する。
+retire_pr="$(printf '%s' "$PR_BODY" | grep -oiE 'H5-RETIRE-PR:[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+$' || true)"
 if [[ -n "$retire_pr" ]]; then
   if command -v gh >/dev/null 2>&1; then
     st="$(gh pr view "$retire_pr" --json state -q .state 2>/dev/null || echo UNKNOWN)"
