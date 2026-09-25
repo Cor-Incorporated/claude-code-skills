@@ -49,6 +49,12 @@ trap 'rm -rf "$SB"' EXIT
 # ledger, a sandbox HOME (so a fallback write lands in $SB, where case 5 can see
 # it) and a gh stub. None of this changes what cases 1-4 assert.
 export H5_LEDGER_PATH="$SB/ledger.jsonl"
+# GitHub Actions sets GITHUB_EVENT_PATH in every job, and the gate reads the PR
+# body from it before asking gh. Inherited, it made the gate read this PR's real
+# body instead of the stub's (PR #397's first CI run: case 5 saw 0 rows).
+# H5_PR_BODY would do the same, and H5_DIFF_FILES would skip the fetch these
+# cases exist for.
+unset GITHUB_EVENT_PATH H5_PR_BODY H5_DIFF_FILES
 mkdir -p "$SB/bin" "$SB/home"
 # The stub answers the gate's body lookup for H5_PR_NUMBER=0. The body carries a
 # meta-filter word, so every gate run appends one evidence-filter measure row and
