@@ -41,12 +41,15 @@ aidd_ledger_append() {
   # 集計から丸ごと落ちるので、防御の記録が静かに消える。
   # バックスラッシュを先に倍化してから引用符を潰す（順序が逆だと二重に効く）。
   # タブと復帰も生のままだと JSON 文字列に置けないので空白へ寄せる。
+  # 2026-09-25: 残りの制御文字（\001 や ESC など）も JSON 文字列に生で置けない。
+  # 空白へ寄せた後で落とす（Codex / Cursor の hook の fallback と同じ規則。
+  # 書き手どうしの一致は tests/test-ledger-cmd-head-link.sh が見る）。
   local safe_cmd
   safe_cmd="$(printf '%s' "$cmd_head" | _aidd_truncate_utf8 120 \
-    | sed 's/\\/\\\\/g' | tr '"' "'" | tr '\n\t\r' '   ')"
+    | sed 's/\\/\\\\/g' | tr '"' "'" | tr '\n\t\r' '   ' | tr -d '\000-\037')"
   local safe_session
   safe_session="$(printf '%s' "$session" | _aidd_truncate_utf8 80 \
-    | sed 's/\\/\\\\/g' | tr '"' "'" | tr '\n\t\r' '   ')"
+    | sed 's/\\/\\\\/g' | tr '"' "'" | tr '\n\t\r' '   ' | tr -d '\000-\037')"
   if [[ "$component" == "H1" ]]; then
     printf '{"ts":"%s","component":"H1","event":"%s","rule":"%s","detail":"%s","subject":{},"source":"%s","session":"%s","agent":"%s"}\n' \
       "$ts" "$event" "$rule" "$safe_cmd" "$source" "$safe_session" "$agent" >>"$ledger" 2>/dev/null || true
