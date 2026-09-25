@@ -64,8 +64,12 @@ guard_body() { # <番号の行>
 
 run_gate() { # <本文> -> RC / GH_ARGS と $WORK/out, $WORK/err
   : >"$WORK/gh.log"
+  # H5_REPAIR_THRESHOLD: repair-family を on にしたリポ（aidd-governance）では、
+  # 同居する repair-family ゲートが fixture ではなく実 git 履歴の fix commit を数える。
+  # 本テストは控除ゲートだけを見るので切り離す（tests/test-h5-evidence-filter.sh と同じ）。
   GH_STUB_LOG="$WORK/gh.log" PATH="$WORK/bin:$PATH" \
     H5_DIFF_FILES="hooks/example-guard.sh" H5_PR_BODY="$1" \
+    H5_REPAIR_THRESHOLD=999999 \
     bash "$CHK" >"$WORK/out" 2>"$WORK/err"
   RC=$?
   GH_ARGS="$(cat "$WORK/gh.log")"
