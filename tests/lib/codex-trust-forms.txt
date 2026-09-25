@@ -45,6 +45,7 @@ dotted keys under [hooks.state]|skips|trust disabled|[hooks.state]\n"@K@".truste
 dotted keys under [hooks]|skips|trust disabled|[hooks]\nstate."@K@".trusted_hash = "@H@"\nstate."@K@".enabled = false\n
 an inline table|skips|trust disabled|[hooks.state]\n"@K@" = { trusted_hash = "@H@", enabled = false }\n
 a table header inside a multi-line string|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nnote = '''\n[features]\n'''\nenabled = false\n
+an escaped """ inside a multi-line string|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nnote = """a \\""" b"""\nenabled = false\n
 a multi-line array before enabled = false|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\ntags = [\n  ["a"],\n]\nenabled = false\n
 
 # Codex skips the hook: the entry has no trusted_hash (trustStatus untrusted).
@@ -53,6 +54,7 @@ header only, last line|skips|no trusted_hash|[hooks.state."@K@"]\n
 header only, another table after it|skips|no trusted_hash|[hooks.state."@K@"]\n\n[features]\n
 enabled = true without trusted_hash|skips|no trusted_hash|[hooks.state."@K@"]\nenabled = true\n
 trusted_hash only inside a multi-line string|skips|no trusted_hash|[hooks.state."@K@"]\nnote = '''\ntrusted_hash = "@H@"\n'''\n
+trusted_hash only in a comment after an inline table|skips|no trusted_hash|[hooks.state]\n"@K@" = { enabled = true } # trusted_hash = "@H@"\n
 
 # Codex skips the hook: there is no entry.
 no entry at all|skips|no trust entry|
@@ -76,4 +78,5 @@ a trusted_hash key with a \u escape|runs|quiet|[hooks.state."@K@"]\n"trusted\\u0
 header with a trailing comment, trusted|runs|quiet|[hooks.state."@K@"] # note\ntrusted_hash = "@H@"\n
 header with quoted hooks and state, trusted|runs|quiet|["hooks"."state"."@K@"]\ntrusted_hash = "@H@"\n
 an inline table, trusted|runs|quiet|[hooks.state]\n"@K@" = { trusted_hash = "@H@" }\n
+enabled = false in a comment after an inline table|runs|quiet|[hooks.state]\n"@K@" = { trusted_hash = "@H@", enabled = true } # enabled = false\n
 enabled = false commented out|runs|quiet|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n# enabled = false\n

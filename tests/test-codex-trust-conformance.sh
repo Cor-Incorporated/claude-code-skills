@@ -73,10 +73,14 @@ def hooks_list(home):
 
     def call(msg_id, method, params):
         send({"id": msg_id, "method": method, "params": params})
-        # One deadline per request: notifications must not keep a dead request waiting.
+        # One deadline per request, checked on every message: a stream of
+        # notifications must not keep a request that never gets a reply alive.
         deadline = time.monotonic() + 60
         while True:
-            message = json.loads(lines.get(timeout=max(0.1, deadline - time.monotonic())))
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError(f"no reply to {method} within 60 s")
+            message = json.loads(lines.get(timeout=left))
             if message.get("id") == msg_id:
                 return message
 

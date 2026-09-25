@@ -18,7 +18,8 @@
 # the table, no indentation, bare keys only, no CRLF translation, no trailing
 # comment after a header, `[` anywhere opens a table, multi-line values not
 # followed, key escapes not decoded, dotted keys cut to their last segment,
-# inline tables not read. A reporter that crashes before printing fails every
+# inline tables not read, \" not honoured inside """...""", an inline table
+# read on past its closing brace. A reporter that crashes before printing fails every
 # case except 5 and 6, whose point is exit 0; before the sentinel, cases 3 and 4
 # passed on it.
 set -uo pipefail

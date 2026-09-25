@@ -139,27 +139,36 @@ def _carry(text, closer=None, depth=0):
     `closer` is the delimiter of a multi-line string still open and `depth`
     the number of arrays or inline tables still open; both are returned for
     the next line. Lines inside such a value are neither keys nor headers.
+    The third value is the index just past the bracket that first brings
+    `depth` back to 0 on this line (-1 if none): where an inline table ends.
     """
-    i = 0
+    i, end = 0, -1
     while i < len(text):
+        char = text[i]
         if closer:
-            end = text.find(closer, i)
-            if end < 0:
-                return closer, depth
-            i, closer = end + 3, None
+            if closer == '"""' and char == "\\":
+                i += 2  # \" inside """...""" does not close it
+            elif text.startswith(closer, i):
+                while i < len(text) and text[i] == char:
+                    i += 1  # 3 to 5 quotes close; any past 3 belong to the string
+                closer = None
+            else:
+                i += 1
         elif text.startswith('"""', i) or text.startswith("'''", i):
             closer, i = text[i:i + 3], i + 3
-        elif text[i] in "\"'":
-            quote, i = text[i], i + 1
-            while i < len(text) and text[i] != quote:
-                i += 2 if quote == '"' and text[i] == "\\" else 1
+        elif char in "\"'":
             i += 1
-        elif text[i] == "#":
+            while i < len(text) and text[i] != char:
+                i += 2 if char == '"' and text[i] == "\\" else 1
+            i += 1
+        elif char == "#":
             break
         else:
-            depth += {"[": 1, "{": 1, "]": -1, "}": -1}.get(text[i], 0)
+            depth += {"[": 1, "{": 1, "]": -1, "}": -1}.get(char, 0)
+            if char in "]}" and depth == 0 and end < 0:
+                end = i + 1
             i += 1
-    return closer, depth
+    return closer, depth, end
 
 
 def _events(text):
@@ -172,7 +181,7 @@ def _events(text):
     table, closer, depth = [], None, 0
     for line in text.split("\n"):
         if closer or depth > 0:
-            closer, depth = _carry(line, closer, depth)
+            closer, depth, _ = _carry(line, closer, depth)
             continue
         header = HEADER.match(line)
         if header and not header.group(1):
@@ -183,7 +192,7 @@ def _events(text):
         else:
             pair = PAIR.match(line)
             if pair:
-                closer, depth = _carry(pair.group(2))
+                closer, depth, _ = _carry(pair.group(2))
                 if table is not None:
                     yield table, _segments(pair.group(1)), pair.group(2)
 
@@ -203,10 +212,12 @@ def _field(entry, name, rest, value):
 def _inline(entry, value):
     """The fields of `"<key>" = { ... }`, written under [hooks.state]."""
     text = value.strip()
-    if not text.startswith("{") or _carry(text)[1] > 0:
+    end = _carry(text)[2]
+    if not text.startswith("{") or end < 0:
         entry["invalid"] = True  # not a table, or one that goes on past this line
         return
-    for key_path, item in INLINE_PAIR.findall(text):
+    # Up to the closing brace only: a comment after it is not part of the table.
+    for key_path, item in INLINE_PAIR.findall(text[:end]):
         segments = _segments(key_path)
         _field(entry, segments[0], segments[1:], item)
 
