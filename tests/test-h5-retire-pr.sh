@@ -24,7 +24,9 @@ CHK="$ROOT/scripts/h5-admission-check.sh"
 # 外側の CI admission job は実 PR コンテキストを export する。fixture が
 # それを継承すると、空の H5_PR_BODY が実 PR 本文を読み直してしまう。
 unset H5_PR_NUMBER GITHUB_EVENT_PATH
-WORK="$(mktemp -d)"
+# set -e を使わないので、mktemp の失敗を自分で止める。WORK が空のまま進むと
+# スタブを /bin/gh へ書こうとする。
+WORK="$(mktemp -d)" || { echo "FAIL: mktemp -d に失敗した"; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 export H5_LEDGER_PATH="$WORK/ledger.jsonl"
 
