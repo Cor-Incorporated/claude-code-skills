@@ -72,8 +72,10 @@ REASONS = {
     "absent": "no trust entry",
     "untrusted": "no trusted_hash",
     "disabled": "trust disabled",
-    "invalid": "invalid trust entry",
+    "invalid": "config.toml rejected",
 }
+# The states of an entry, worst first.
+RANK = ("invalid", "disabled", "untrusted", "unset", "enabled")
 
 
 def event_key(event):
@@ -222,16 +224,48 @@ def _inline(entry, value):
         _field(entry, segments[0], segments[1:], item)
 
 
+def _define(entry, how):
+    """Record how an entry's table is written. TOML allows one way, once:
+    a [header], an inline table, or dotted keys from a parent table (which may
+    repeat). Anything else is a TOML error, and Codex refuses the file."""
+    if entry["defined"] and (how not in entry["defined"] or how != "parent"):
+        entry["invalid"] = True
+    entry["defined"].add(how)
+
+
+def _record(entries, table, key, value):
+    """Fold one event of _events() into the entries under [hooks.state]."""
+    path = table + (key or [])
+    if len(path) < 3 or path[:2] != ["hooks", "state"]:
+        return
+    entry = entries.setdefault(
+        path[2], {"enabled": [], "trusted_hash": [], "invalid": False, "defined": set()}
+    )
+    if key is None and len(path) == 3:
+        _define(entry, "header")
+    elif len(path) == 3:
+        _define(entry, "inline")
+        _inline(entry, value)
+    else:
+        if key is not None and len(table) < 3:
+            _define(entry, "parent")  # "<key>".enabled = ... under [hooks.state] etc.
+        _field(entry, path[3], path[4:], value)
+
+
 def _entry_state(entry):
     """What Codex makes of one trust entry (hook_enabled, hook_trust_status)."""
     enabled, hashes = entry["enabled"], entry["trusted_hash"]
-    if "false" in enabled:
-        return "disabled"
-    if entry["invalid"] or any(value != "true" for value in enabled) or any(
-        value[:1] not in ("'", '"') for value in hashes
+    if (
+        entry["invalid"]
+        or len(enabled) > 1
+        or len(hashes) > 1
+        or any(value not in ("true", "false") for value in enabled)
+        or any(value[:1] not in ("'", '"') for value in hashes)
     ):
-        # Not a boolean / not a string: Codex refuses to load config.toml.
+        # Not a boolean / not a string / written twice: Codex refuses config.toml.
         return "invalid"
+    if enabled == ["false"]:
+        return "disabled"
     if not hashes:
         return "untrusted"
     # Codex treats a missing `enabled` as active, but record it distinctly
@@ -245,8 +279,13 @@ def trust_state(config_toml):
     config.toml is read the way TOML reads it, as far as a trust entry can be
     spelled: headers with quoted segments, whitespace and trailing comments;
     dotted keys at any level; inline tables; quoted keys and their escapes;
-    comments, blank lines, CRLF and a last line without a newline. Lines inside
-    a multi-line string or array are never read as keys or headers.
+    comments, blank lines, CRLF, a byte order mark and a last line without a
+    newline. Lines inside a multi-line string or array are never read as keys
+    or headers.
+
+    Codex refuses the whole file when any entry has a value of the wrong type
+    or is written twice, so one such entry makes every entry "invalid". Where
+    two entries share a position (one per hooks.json), the worse state counts.
 
     Until 2026-09-25 one regex took only lines of the exact form `key = value`
     plus a newline, directly under the header. Codex reads `enabled=false`, or
@@ -257,23 +296,22 @@ def trust_state(config_toml):
     """
     # Text mode turns CRLF into "\n" (universal newlines), so a CR never reaches
     # the patterns; the CRLF rows of the table fail if that changes.
-    text = open(config_toml, encoding="utf-8", errors="replace").read()
+    text = open(config_toml, encoding="utf-8-sig", errors="replace").read()
     entries = {}
     for table, key, value in _events(text):
-        path = table + (key or [])
-        found = len(path) > 2 and path[:2] == ["hooks", "state"] and POSITION.search(
-            path[2].strip()  # Codex trims the key
-        )
+        _record(entries, table, key, value)
+    states = {key: _entry_state(entry) for key, entry in entries.items()}
+    rejected = "invalid" in states.values()
+    out = {}
+    for key, state in states.items():
+        found = POSITION.search(key.strip())  # Codex trims the key
         if not found:
             continue
-        entry = entries.setdefault(
-            found.group(1), {"enabled": [], "trusted_hash": [], "invalid": False}
-        )
-        if len(path) > 3:
-            _field(entry, path[3], path[4:], value)
-        elif key is not None:
-            _inline(entry, value)
-    return {position: _entry_state(entry) for position, entry in entries.items()}
+        state = "invalid" if rejected else state
+        position = found.group(1)
+        if position not in out or RANK.index(state) < RANK.index(out[position]):
+            out[position] = state
+    return out
 
 
 def inactive(registered_hooks, trust):
@@ -302,8 +340,9 @@ def main():
     for position, script, state in inactive(reg, trust):
         if state == "invalid":
             effect = (
-                "Codex refuses to load config.toml until the value has the right "
-                "type (enabled: true or false, trusted_hash: a string)"
+                "Codex refuses to load config.toml, so no hook runs, while a trust "
+                "entry has a value of the wrong type (enabled: true or false, "
+                "trusted_hash: a string) or is written twice; `codex` names the line"
             )
         else:
             effect = (

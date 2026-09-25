@@ -13,15 +13,14 @@
 # add only UserPromptSubmit to that map and case 10 stays red; make the reporter
 # crash on the entry shape Codex writes and cases 7 and 10 go red.
 # Case 11 (2026-09-25): the single-regex parser of #394 failed 20 of the first 34
-# rows. Each of these one-sided mutations of the reporter turns its rows red:
-# `=` needs spaces, no trusted_hash reads as active, a blank or comment line ends
-# the table, no indentation, bare keys only, no CRLF translation, no trailing
-# comment after a header, `[` anywhere opens a table, multi-line values not
-# followed, key escapes not decoded, dotted keys cut to their last segment,
-# inline tables not read, \" not honoured inside """...""", an inline table
-# read on past its closing brace. A reporter that crashes before printing fails every
-# case except 5 and 6, whose point is exit 0; before the sentinel, cases 3 and 4
-# passed on it.
+# rows. One-sided mutations of the reporter (25 kinds, among them: `=` needs
+# spaces, no trusted_hash reads as active, a blank or comment line ends the
+# table, multi-line values not followed, key escapes not decoded, dotted keys or
+# inline tables not read, a wrong type elsewhere not rejecting the file, a key
+# written twice accepted) each turn only their own rows red. A reporter that
+# crashes before printing fails every case except 5 and 6, whose point is exit 0;
+# before the sentinel, cases 3 and 4 passed on it. Case 12 fails when the rows
+# change without the conformance test having passed on them.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPORTER="$ROOT/hooks/lib/codex-trust-state.py"
@@ -272,10 +271,16 @@ cat > "$SB/forms.json" <<'JSON'
   {"type":"command","command":"bash /x/.codex/hooks/sentinel.sh"}]}]}}
 JSON
 KEY='/x/.codex/hooks.json:pre_tool_use:0:0'
+BOM=$'\xef\xbb\xbf'
 rows=0
 kinds=""
 while IFS='|' read -r label codex want config || [[ -n "$label" ]]; do
-  [[ -z "$label" || "$label" == \#* ]] && continue
+  [[ "$label" == \#* ]] && continue
+  if [[ -z "$label" ]]; then
+    # A blank line is not a row; a row without a label must not be skipped quietly.
+    [[ -n "$codex$want$config" ]] && bad "case11 a row has no label" "|$codex|$want|$config"
+    continue
+  fi
   rows=$((rows + 1))
   kinds="$kinds $codex"
   # quiet may appear exactly where Codex runs the hook. A row that recorded a
@@ -290,6 +295,7 @@ while IFS='|' read -r label codex want config || [[ -n "$label" ]]; do
     continue
   fi
   config="${config//@K@/${KEY}}"
+  config="${config//@BOM@/${BOM}}"
   printf '%b' "${config//@H@/sha256:aaa}" > "$SB/form.toml"
   out="$(python3 "$REPORTER" "$SB/forms.json" "$SB/form.toml" 2>&1)"
   rest="$(printf '%s\n' "$out" | grep -vF "$SENTINEL" | grep .)"
@@ -314,6 +320,25 @@ for kind in runs skips rejects; do
     *) bad "case11 no '$kind' row in the table" "$FORMS (read $rows rows)" ;;
   esac
 done
+
+# --- case 12: the rows are the ones last checked against Codex ---
+# CI has no codex CLI, so nothing here can tell a wrong codex column from a right
+# one. The table carries the sha256 of its rows, which the conformance test
+# prints only after every row agrees with the real binary; a row added or
+# changed without that run no longer matches the stamp.
+stamp="$(sed -n 's/^# verified-rows-sha256: \([0-9a-f]\{64\}\).*/\1/p' "$FORMS")"
+rows_sha="$(python3 -c '
+import hashlib, sys
+lines = open(sys.argv[1], encoding="utf-8").read().splitlines()
+rows = [line for line in lines if line.strip() and not line.startswith("#")]
+print(hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest())
+' "$FORMS")"
+if [[ -n "$stamp" && "$stamp" == "$rows_sha" ]]; then
+  ok "case12 the $rows rows match the stamp the conformance test last printed"
+else
+  bad "case12 rows changed since the conformance test last passed" \
+    "stamp=${stamp:-<none>} rows=${rows_sha} (run tests/test-codex-trust-conformance.sh; it prints the stamp once Codex agrees with every row)"
+fi
 
 echo "--- $PASS passed, $FAIL failed ---"
 [[ "$FAIL" -eq 0 ]]

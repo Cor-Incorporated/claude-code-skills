@@ -8,7 +8,8 @@
 #   reporter  what hooks/lib/codex-trust-state.py prints for the probed hook:
 #             quiet, or the reason it gives in parentheses
 #   config    the whole config.toml. Escapes \n \t \r \\ only; placeholders
-#             @K@ = the probed hook's trust key, @H@ = its trusted hash
+#             @K@ = the probed hook's trust key, @H@ = its trusted hash,
+#             @BOM@ = a UTF-8 byte order mark
 #
 # The probed hook is PreToolUse 0:0. A SessionStart hook without any entry is
 # registered next to it as a sentinel, so every run must print at least one line.
@@ -17,12 +18,15 @@
 # tests/test-codex-trust-conformance.sh checks the codex column against the real
 # binary (local only; CI has no codex CLI). Together they tie the reporter to
 # Codex: quiet appears exactly on the rows where Codex runs the hook.
-# CI cannot tell a wrong codex column from a right one, so run the conformance
-# test whenever a row is added or changed, and after every Codex upgrade.
+# CI cannot run Codex, so it checks the stamp below instead: the sha256 of the
+# rows, which the conformance test prints once every row agrees with Codex.
+# A row added or changed without that run fails CI. Rerun after Codex upgrades.
 #
 # Not listed: a trusted_hash that no longer matches the hook (Codex: modified,
 # skipped) and an entry for another hooks.json at the same position. The reporter
 # cannot tell either from a valid entry.
+#
+# verified-rows-sha256: 838ddfb24f831897453c5bcb982096344d4e5ac4855d47be6546f2485e5ae581 (codex-cli 0.156.0)
 
 # Codex skips the hook: enabled = false, however it is spelled.
 enabled = false|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled = false\n
@@ -47,6 +51,7 @@ an inline table|skips|trust disabled|[hooks.state]\n"@K@" = { trusted_hash = "@H
 a table header inside a multi-line string|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nnote = '''\n[features]\n'''\nenabled = false\n
 an escaped """ inside a multi-line string|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nnote = """a \\""" b"""\nenabled = false\n
 a multi-line array before enabled = false|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\ntags = [\n  ["a"],\n]\nenabled = false\n
+a note starting with [ inside a multi-line string|skips|trust disabled|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nnote = """\n[2026-09-01] off while debugging\n"""\nenabled = false\n
 
 # Codex skips the hook: the entry has no trusted_hash (trustStatus untrusted).
 header only, last line without a newline|skips|no trusted_hash|[hooks.state."@K@"]
@@ -61,10 +66,15 @@ no entry at all|skips|no trust entry|
 the whole entry commented out|skips|no trust entry|# [hooks.state."@K@"]\n# trusted_hash = "@H@"\n
 an entry only inside a multi-line string|skips|no trust entry|notes = '''\n[hooks.state."@K@"]\ntrusted_hash = "@H@"\n'''\n
 
-# Codex refuses to load config.toml: a trust value of the wrong type.
-enabled = "false" as a string|rejects|invalid trust entry|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled = "false"\n
-trusted_hash as a number|rejects|invalid trust entry|[hooks.state."@K@"]\ntrusted_hash = 1\n
-enabled as a dotted key|rejects|invalid trust entry|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled.note = false\n
+# Codex refuses to load config.toml: a trust value of the wrong type, anywhere,
+# or an entry written twice. Then no hook runs at all.
+enabled = "false" as a string|rejects|config.toml rejected|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled = "false"\n
+trusted_hash as a number|rejects|config.toml rejected|[hooks.state."@K@"]\ntrusted_hash = 1\n
+trusted_hash as a number, and enabled = false|rejects|config.toml rejected|[hooks.state."@K@"]\ntrusted_hash = 1\nenabled = false\n
+enabled as a dotted key|rejects|config.toml rejected|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled.note = false\n
+a stale entry of the wrong type at another position|rejects|config.toml rejected|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n\n[hooks.state."/x/hooks.json:pre_tool_use:0:7"]\nenabled = "no"\n
+enabled written twice|rejects|config.toml rejected|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nenabled = true\nenabled = true\n
+a header entry and a dotted key for it|rejects|config.toml rejected|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n\n[hooks.state]\n"@K@".enabled = true\n
 
 # Codex runs the hook: the reporter must stay quiet.
 trusted_hash only, as Codex writes it|runs|quiet|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n
@@ -80,3 +90,9 @@ header with quoted hooks and state, trusted|runs|quiet|["hooks"."state"."@K@"]\n
 an inline table, trusted|runs|quiet|[hooks.state]\n"@K@" = { trusted_hash = "@H@" }\n
 enabled = false in a comment after an inline table|runs|quiet|[hooks.state]\n"@K@" = { trusted_hash = "@H@", enabled = true } # enabled = false\n
 enabled = false commented out|runs|quiet|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n# enabled = false\n
+enabled = false inside a multi-line string, trusted|runs|quiet|[hooks.state."@K@"]\ntrusted_hash = "@H@"\nnote = """\nenabled = false\n"""\n
+enabled = false in the next table, trusted|runs|quiet|[hooks.state."@K@"]\ntrusted_hash = "@H@"\n\n[notes]\nenabled = false\n
+indented headers, as formatters write them, trusted|runs|quiet|[hooks]\n  [hooks.state]\n    [hooks.state."@K@"]\n    trusted_hash = "@H@"\n
+spaces around the dots of a header, trusted|runs|quiet|[hooks . state . "@K@"]\ntrusted_hash = "@H@"\n
+a trust key padded with spaces, trusted|runs|quiet|[hooks.state." @K@ "]\ntrusted_hash = "@H@"\n
+a byte order mark first, trusted|runs|quiet|@BOM@[hooks.state."@K@"]\ntrusted_hash = "@H@"\n

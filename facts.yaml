@@ -63,7 +63,12 @@ pairs:
       無いエントリ等）を有効と読んでいた。書き方ごとの Codex の実挙動は
       tests/lib/codex-trust-forms.txt が持ち、reporter 列は tests/test-codex-trust-state.sh、
       Codex 列は tests/test-codex-trust-conformance.sh（実バイナリ。CI では SKIP）が照合する。
-      どの状態を有効とみなすかは reporter の inactive() だけが持ち、pair15 もそれを呼ぶ。
+      表の行を変えて conformance を通していなければ、表の verified-rows-sha256 と行が合わず CI が red。
+      どの状態を有効とみなすかは reporter の inactive() だけが持ち、pair15 もそれを呼ぶ
+      （tests/test-codex-trust-pair15.sh が偽 HOME で pair15 の red/green を CI で確かめる）。
+      config.toml のどこかに型違い・書き重ねの trust エントリがあると Codex はファイルごと
+      読まないので、そのときは全エントリを無効とみなす。書き方の組み合わせは
+      tests/test-codex-trust-fuzz.sh が tomllib と突き合わせる。
   - id: codex-payload-ssot-vs-deployed-block
     pair: pair17
     declaration: ~/Developer/aidd-governance/design/ops/payloads/{codex-rules-append.rules,codex-AGENTS-worktree.md}

@@ -18,6 +18,9 @@
 #   rejects = no hook listed, and a config.toml load error reported
 # The reporter reads the same two files, so its column is checked here too, with
 # real trust keys (absolute paths) instead of the /x/... ones of the CI test.
+# When every row agrees, the stamp line of the table must hold the sha256 of
+# the rows; if not, this prints the line to put there. CI (case 12 of
+# tests/test-codex-trust-state.sh) compares that stamp with the rows it reads.
 #
 # Local only: CI has no codex CLI. Without one this prints SKIP and exits 0,
 # which is a skip, not a pass. Run it after every Codex upgrade.
@@ -30,6 +33,7 @@ if ! command -v codex >/dev/null 2>&1; then
 fi
 
 python3 - "$ROOT" <<'PY'
+import hashlib
 import json
 import os
 import queue
@@ -142,10 +146,26 @@ def new_home(base, name, config_bytes):
     return home.resolve()
 
 
+def row_lines():
+    """The table's rows as written: every line that is neither blank nor a comment."""
+    lines = FORMS.read_text(encoding="utf-8").splitlines()
+    return [line for line in lines if line.strip() and not line.startswith("#")]
+
+
+def rows_sha256():
+    """What case 12 of tests/test-codex-trust-state.sh compares with the stamp."""
+    return hashlib.sha256("\n".join(row_lines()).encode("utf-8")).hexdigest()
+
+
+def stamp():
+    found = re.search(r"^# verified-rows-sha256: ([0-9a-f]{64})",
+                      FORMS.read_text(encoding="utf-8"), re.M)
+    return found.group(1) if found else None
+
+
 def rows():
-    for line in FORMS.read_text(encoding="utf-8").splitlines():
-        if line and not line.startswith("#"):
-            yield line.split("|", 3)
+    # A row with missing fields fails as a row instead of stopping the run.
+    return [(line.split("|", 3) + ["", "", ""])[:4] for line in row_lines()]
 
 
 def main():
@@ -165,7 +185,7 @@ def main():
             index, (label, codex, want, config) = item
             name = f"row{index:02d}"
             text = (config.replace("@K@", f"{base / name}/hooks.json:pre_tool_use:0:0")
-                    .replace("@H@", trusted_hash))
+                    .replace("@H@", trusted_hash).replace("@BOM@", "﻿"))
             # Same escapes, read left to right, as printf %b in the CI test.
             text = re.sub(r"\\([ntr\\])", lambda m: TABLE_ESCAPES[m.group(1)], text)
             try:
@@ -183,8 +203,8 @@ def main():
 
     failed = 0
     for label, codex, got_codex, detail, want, got_reporter, why in results:
-        line = f"{label}: codex {got_codex} ({detail}), reporter {got_reporter}"
-        if got_codex == codex and got_reporter == want:
+        line = f"{label or '<no label>'}: codex {got_codex} ({detail}), reporter {got_reporter}"
+        if label and got_codex == codex and got_reporter == want:
             print(f"PASS: {line}")
             continue
         failed += 1
@@ -193,6 +213,11 @@ def main():
     if not results:
         failed += 1
         print(f"FAIL: no rows in {FORMS}")
+    if not failed and stamp() != rows_sha256():
+        # Every row agrees with Codex, but CI still holds the old stamp.
+        failed += 1
+        print("FAIL: every row agrees with Codex, but the stamp in the table is stale")
+        print(f"  put this line in {FORMS.name}: # verified-rows-sha256: {rows_sha256()} ({version})")
     print(f"--- {len(results) - failed} passed, {failed} failed ({version}) ---")
     return 1 if failed else 0
 
