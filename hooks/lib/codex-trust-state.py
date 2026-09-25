@@ -31,9 +31,9 @@ was working a moment earlier.
 
 Not detected, because the reporter cannot recompute Codex's hash: a
 `trusted_hash` that no longer matches (the hook's command or matcher changed
-after it was trusted; Codex lists it as "modified"). An entry written for
-another hooks.json at the same position is not told apart either. Both read as
-active.
+after it was trusted; Codex lists it as "modified"). It reads as active.
+Entries are matched by position alone, so one written for another hooks.json
+at the same position is read together with this one.
 
 Prints one line per inactive hook; prints nothing when everything is active.
 Exits 0 in all cases: this is a warn-only reporter, and a broken reporter must
@@ -47,17 +47,22 @@ import os
 import re
 import sys
 
-# A line that opens any table ([x] or [[x]]) ends the table above it.
-TABLE_HEADER = re.compile(r"^[ \t]*\[")
-# [hooks.state."<key>"], with the whitespace and trailing comment TOML allows.
-TRUST_HEADER = re.compile(
-    r"""^[ \t]*\[[ \t]*hooks[ \t]*\.[ \t]*state[ \t]*\.[ \t]*"""
-    r"""(?:"([^"]*)"|'([^']*)')[ \t]*\][ \t]*(?:#.*)?$"""
+# One segment of a dotted key: bare, "basic" (escapes allowed) or 'literal'.
+SEGMENT = r"""(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')"""
+KEY_PATH = SEGMENT + r"(?:[ \t]*\.[ \t]*" + SEGMENT + r")*"
+STRING = r"""(?:"(?:[^"\\]|\\.)*"|'[^']*')"""
+# [a.b."c"] or [[a.b]], with the whitespace and trailing comment TOML allows.
+HEADER = re.compile(
+    r"^[ \t]*\[(\[?)[ \t]*(" + KEY_PATH + r")[ \t]*\]\]?[ \t]*(?:#.*)?$"
 )
-# key = value, with the key bare, "quoted" or 'literal'.
-KEY_VALUE = re.compile(
-    r"""^[ \t]*(?:([A-Za-z0-9_-]+)|"([^"]*)"|'([^']*)')[ \t]*=[ \t]*(.*)$"""
-)
+# Any other line that opens with [ still starts a table, just not one read here.
+TABLE_START = re.compile(r"^[ \t]*\[")
+PAIR = re.compile(r"^[ \t]*(" + KEY_PATH + r")[ \t]*=[ \t]*(.*)$")
+INLINE_PAIR = re.compile("(" + KEY_PATH + r")[ \t]*=[ \t]*(" + STRING + r"|[^,}]*)")
+ESCAPE = re.compile(r"\\(?:u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|(.))")
+SHORT_ESCAPES = {"b": "\b", "t": "\t", "n": "\n", "f": "\f", "r": "\r",
+                 '"': '"', "\\": "\\"}
+FIELDS = ("enabled", "trusted_hash")
 POSITION = re.compile(r":([a-z_]+:\d+:\d+)$")
 
 # Only these states stay quiet. A state missing from REASONS is still reported
@@ -102,31 +107,116 @@ def registered(hooks_json):
     return out
 
 
-def _position(line):
-    """Return "<event>:<matcher>:<hook>" of a [hooks.state."..."] header, or None."""
-    header = TRUST_HEADER.match(line)
-    if not header:
-        return None
-    key = header.group(1) if header.group(1) is not None else header.group(2)
-    found = POSITION.search(key.strip())  # Codex trims the key
-    return found.group(1) if found else None
+def _unescape(text):
+    """Decode the escapes of a TOML basic string ("\\u0065" -> "e")."""
+
+    def one(match):
+        code = match.group(1) or match.group(2)
+        if code:
+            point = int(code, 16)
+            return chr(point) if point <= 0x10FFFF else match.group(0)
+        return SHORT_ESCAPES.get(match.group(3), match.group(0))
+
+    return ESCAPE.sub(one, text)
 
 
-def _entry_state(lines):
-    """State of one trust entry, from the lines of its table."""
-    enabled, hashes = [], []
-    for line in lines:
-        pair = KEY_VALUE.match(line)
-        if not pair:
-            continue  # blank line, comment, or no key/value on this line
-        key = next(part for part in pair.groups()[:3] if part is not None)
-        if key == "enabled":
-            enabled.append(pair.group(4).split("#", 1)[0].strip())
-        elif key == "trusted_hash":
-            hashes.append(pair.group(4).strip())
+def _segments(key_path):
+    """The unquoted segments of a dotted key: 'hooks."a.b"' -> ["hooks", "a.b"]."""
+    out = []
+    for segment in re.findall(SEGMENT, key_path):
+        if segment[0] == '"':
+            out.append(_unescape(segment[1:-1]))
+        elif segment[0] == "'":
+            out.append(segment[1:-1])
+        else:
+            out.append(segment)
+    return out
+
+
+def _carry(text, closer=None, depth=0):
+    """Follow a TOML value across one line.
+
+    `closer` is the delimiter of a multi-line string still open and `depth`
+    the number of arrays or inline tables still open; both are returned for
+    the next line. Lines inside such a value are neither keys nor headers.
+    """
+    i = 0
+    while i < len(text):
+        if closer:
+            end = text.find(closer, i)
+            if end < 0:
+                return closer, depth
+            i, closer = end + 3, None
+        elif text.startswith('"""', i) or text.startswith("'''", i):
+            closer, i = text[i:i + 3], i + 3
+        elif text[i] in "\"'":
+            quote, i = text[i], i + 1
+            while i < len(text) and text[i] != quote:
+                i += 2 if quote == '"' and text[i] == "\\" else 1
+            i += 1
+        elif text[i] == "#":
+            break
+        else:
+            depth += {"[": 1, "{": 1, "]": -1, "}": -1}.get(text[i], 0)
+            i += 1
+    return closer, depth
+
+
+def _events(text):
+    """(table, key, value) per key/value line and (table, None, None) per header.
+
+    Tables and keys come as lists of unquoted segments. After an [[array of
+    tables]] or a header this reader cannot parse, keys are skipped until the
+    next header it can.
+    """
+    table, closer, depth = [], None, 0
+    for line in text.split("\n"):
+        if closer or depth > 0:
+            closer, depth = _carry(line, closer, depth)
+            continue
+        header = HEADER.match(line)
+        if header and not header.group(1):
+            table = _segments(header.group(2))
+            yield table, None, None
+        elif TABLE_START.match(line):
+            table = None
+        else:
+            pair = PAIR.match(line)
+            if pair:
+                closer, depth = _carry(pair.group(2))
+                if table is not None:
+                    yield table, _segments(pair.group(1)), pair.group(2)
+
+
+def _field(entry, name, rest, value):
+    """Record key `name` of a trust entry; `rest` follows it in a dotted key."""
+    if name not in FIELDS:
+        return  # Codex ignores other keys
+    if rest or value is None:
+        entry["invalid"] = True  # `enabled.x = ...` or [..."<key>".enabled]: a table
+    elif name == "enabled":
+        entry["enabled"].append(value.split("#", 1)[0].strip())
+    else:
+        entry["trusted_hash"].append(value.strip())
+
+
+def _inline(entry, value):
+    """The fields of `"<key>" = { ... }`, written under [hooks.state]."""
+    text = value.strip()
+    if not text.startswith("{") or _carry(text)[1] > 0:
+        entry["invalid"] = True  # not a table, or one that goes on past this line
+        return
+    for key_path, item in INLINE_PAIR.findall(text):
+        segments = _segments(key_path)
+        _field(entry, segments[0], segments[1:], item)
+
+
+def _entry_state(entry):
+    """What Codex makes of one trust entry (hook_enabled, hook_trust_status)."""
+    enabled, hashes = entry["enabled"], entry["trusted_hash"]
     if "false" in enabled:
         return "disabled"
-    if any(value != "true" for value in enabled) or any(
+    if entry["invalid"] or any(value != "true" for value in enabled) or any(
         value[:1] not in ("'", '"') for value in hashes
     ):
         # Not a boolean / not a string: Codex refuses to load config.toml.
@@ -141,30 +231,38 @@ def _entry_state(lines):
 def trust_state(config_toml):
     """Map "<event>:<matcher>:<hook>" to the state of its trust entry.
 
-    Every line of a [hooks.state."..."] table counts, up to the next table
-    header, read with the rules TOML has for them: whitespace and indentation,
-    comments, blank lines, quoted keys, CRLF, no newline after the last line.
+    config.toml is read the way TOML reads it, as far as a trust entry can be
+    spelled: headers with quoted segments, whitespace and trailing comments;
+    dotted keys at any level; inline tables; quoted keys and their escapes;
+    comments, blank lines, CRLF and a last line without a newline. Lines inside
+    a multi-line string or array are never read as keys or headers.
+
     Until 2026-09-25 one regex took only lines of the exact form `key = value`
     plus a newline, directly under the header. Codex reads `enabled=false`, or
     an `enabled = false` on the last line of the file, as disabled; this
     reporter read those two and 11 more spellings that Codex CLI 0.156.0 skips
-    as active. tests/lib/codex-trust-forms.txt lists them.
+    as active. tests/lib/codex-trust-forms.txt lists the spellings with what
+    Codex does with each.
     """
     # Text mode turns CRLF into "\n" (universal newlines), so a CR never reaches
     # the patterns; the CRLF rows of the table fail if that changes.
     text = open(config_toml, encoding="utf-8", errors="replace").read()
-    out = {}
-    position, lines = None, []
-    for line in text.split("\n"):
-        if TABLE_HEADER.match(line):
-            if position:
-                out[position] = _entry_state(lines)
-            position, lines = _position(line), []
-        else:
-            lines.append(line)
-    if position:
-        out[position] = _entry_state(lines)
-    return out
+    entries = {}
+    for table, key, value in _events(text):
+        path = table + (key or [])
+        found = len(path) > 2 and path[:2] == ["hooks", "state"] and POSITION.search(
+            path[2].strip()  # Codex trims the key
+        )
+        if not found:
+            continue
+        entry = entries.setdefault(
+            found.group(1), {"enabled": [], "trusted_hash": [], "invalid": False}
+        )
+        if len(path) > 3:
+            _field(entry, path[3], path[4:], value)
+        elif key is not None:
+            _inline(entry, value)
+    return {position: _entry_state(entry) for position, entry in entries.items()}
 
 
 def inactive(registered_hooks, trust):

@@ -33,11 +33,13 @@ python3 - "$ROOT" <<'PY'
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -52,6 +54,7 @@ HOOKS = {"hooks": {
 }}
 PROBED = "probed.sh at pre_tool_use:0:0"
 SENTINEL = "sentinel.sh at session_start:0:0 (no trust entry)"
+TABLE_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\"}
 
 
 def hooks_list(home):
@@ -70,8 +73,10 @@ def hooks_list(home):
 
     def call(msg_id, method, params):
         send({"id": msg_id, "method": method, "params": params})
+        # One deadline per request: notifications must not keep a dead request waiting.
+        deadline = time.monotonic() + 60
         while True:
-            message = json.loads(lines.get(timeout=60))
+            message = json.loads(lines.get(timeout=max(0.1, deadline - time.monotonic())))
             if message.get("id") == msg_id:
                 return message
 
@@ -113,7 +118,7 @@ def codex_verdict(response):
 def reporter_verdict(home):
     result = subprocess.run(
         ["python3", str(REPORTER), str(home / "hooks.json"), str(home / "config.toml")],
-        capture_output=True, text=True)
+        capture_output=True, text=True, timeout=60)
     out = [line for line in (result.stdout + result.stderr).splitlines() if line]
     if SENTINEL not in "\n".join(out):
         return "?", "no sentinel line (reporter crashed?): " + " | ".join(out)[:300]
@@ -156,8 +161,9 @@ def main():
             index, (label, codex, want, config) = item
             name = f"row{index:02d}"
             text = (config.replace("@K@", f"{base / name}/hooks.json:pre_tool_use:0:0")
-                    .replace("@H@", trusted_hash)
-                    .replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r"))
+                    .replace("@H@", trusted_hash))
+            # Same escapes, read left to right, as printf %b in the CI test.
+            text = re.sub(r"\\([ntr\\])", lambda m: TABLE_ESCAPES[m.group(1)], text)
             try:
                 home = new_home(base, name, text.encode("utf-8"))
                 got_codex, detail = codex_verdict(hooks_list(home))

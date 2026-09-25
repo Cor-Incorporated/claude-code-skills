@@ -12,13 +12,15 @@
 # while the guard is dead. Restore the two-entry event map and cases 7-10 go red;
 # add only UserPromptSubmit to that map and case 10 stays red; make the reporter
 # crash on the entry shape Codex writes and cases 7 and 10 go red.
-# Case 11 (2026-09-25): the single-regex parser of #394 fails 20 of its rows. Of
-# these one-sided mutations, each turns the named rows red: `=` without spaces
-# not allowed (4), no trusted_hash read as active (4), reading stopped at a blank
-# or comment line (2), no indentation (2), bare keys only (2), no CRLF
-# translation (2), header without its trailing comment (2), `[` anywhere opens a
-# table (1). A reporter that crashes before printing fails every case except 5
-# and 6, whose point is exit 0; before the sentinel, cases 3 and 4 passed on it.
+# Case 11 (2026-09-25): the single-regex parser of #394 failed 20 of the first 34
+# rows. Each of these one-sided mutations of the reporter turns its rows red:
+# `=` needs spaces, no trusted_hash reads as active, a blank or comment line ends
+# the table, no indentation, bare keys only, no CRLF translation, no trailing
+# comment after a header, `[` anywhere opens a table, multi-line values not
+# followed, key escapes not decoded, dotted keys cut to their last segment,
+# inline tables not read. A reporter that crashes before printing fails every
+# case except 5 and 6, whose point is exit 0; before the sentinel, cases 3 and 4
+# passed on it.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPORTER="$ROOT/hooks/lib/codex-trust-state.py"
@@ -281,9 +283,9 @@ while IFS='|' read -r label codex want config || [[ -n "$label" ]]; do
     bad "case11 $label: table says codex=$codex reporter=$want" "quiet must appear exactly on the rows where Codex runs the hook"
     continue
   fi
-  # The conformance test expands only these three escapes; printf %b would take more.
-  if printf '%s' "$config" | grep -q '\\[^ntr]'; then
-    bad "case11 $label: escape other than \\n \\t \\r in the table" "$config"
+  # The conformance test expands only these four escapes; printf %b would take more.
+  if printf '%s' "$config" | sed 's/\\[ntr\\]//g' | grep -q '[\]'; then
+    bad "case11 $label: escape other than \\n \\t \\r \\\\ in the table" "$config"
     continue
   fi
   config="${config//@K@/${KEY}}"
