@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export AIDD_LEDGER_SOURCE=test  # T9-2: ledger rows from test harness are source=test
 
 python3 - "$ROOT" <<'PY'
-import hashlib, json, os, re, sys
+import hashlib, importlib.util, json, os, re, sys
 from pathlib import Path
 
 ROOT = Path(sys.argv[1])
@@ -375,36 +375,34 @@ else:
 # also invalidates the entry that used to occupy that index.
 # A registered hook with no enabled trust entry is skipped SILENTLY — no error,
 # no log line — which is why this needs a machine link rather than a habit.
+# Both sides are parsed by hooks/lib/codex-trust-state.py, the source that
+# setup.sh deploys for the SessionStart check, not by a copy of it. Until
+# 2026-09-24 this block carried its own two-entry event map and shared the
+# reporter's "userpromptsubmit:0:0" false positive, so the same bug had to be
+# fixed in two places.
 codex_hooks_json = home / ".codex" / "hooks.json"
 codex_config = home / ".codex" / "config.toml"
 if not codex_hooks_json.is_file() or not codex_config.is_file():
     skip("pair15 codex trust state skipped (no Codex install)")
 else:
-    event_key = {"PreToolUse": "pre_tool_use", "PostToolUse": "post_tool_use"}
-    registered = {}
-    for ev, ms in json.loads(codex_hooks_json.read_text()).get("hooks", {}).items():
-        key = event_key.get(ev, ev.lower())
-        for mi, m in enumerate(ms):
-            for hi, h in enumerate(m.get("hooks", [])):
-                script = os.path.basename(h.get("command", "").split()[-1]) if h.get("command") else "?"
-                registered[f"{key}:{mi}:{hi}"] = script
-
-    toml_text = codex_config.read_text()
-    trust = {}
-    for m in re.finditer(
-        r'\[hooks\.state\."[^"]*:([a-z_]+:\d+:\d+)"\]\n((?:[a-z_]+ = [^\n]*\n)*)',
-        toml_text,
-    ):
-        body = m.group(2)
-        if re.search(r"^enabled = false", body, re.M):
-            state = "disabled"
-        elif re.search(r"^enabled = true", body, re.M):
-            state = "enabled"
-        else:
-            state = "unset"   # Codex defaults to enabled, but say so explicitly
-        trust[m.group(1)] = state
+    spec = importlib.util.spec_from_file_location(
+        "codex_trust_state", ROOT / "hooks" / "lib" / "codex-trust-state.py"
+    )
+    trust_lib = importlib.util.module_from_spec(spec)
+    # No __pycache__ in hooks/lib: setup.sh copies that directory as a whole.
+    sys.dont_write_bytecode = True
+    spec.loader.exec_module(trust_lib)
+    registered = trust_lib.registered(codex_hooks_json)
+    trust = trust_lib.trust_state(codex_config)
 
     broken = []
+    # The reporter decodes config.toml leniently so that it can never break
+    # SessionStart. pair15 stays strict: Codex cannot load a config.toml that is
+    # not UTF-8, so such a file must not read as "every hook is trusted".
+    try:
+        codex_config.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        broken.append(f"config.toml is not UTF-8 ({e}) -> Codex cannot load it")
     for idx, script in sorted(registered.items()):
         st = trust.get(idx, "absent")
         if st == "disabled":
