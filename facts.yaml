@@ -18,7 +18,7 @@ pairs:
     pair: pair7
     declaration: ~/.codex/hooks.json#hooks
     enforcement: ~/.codex/hooks/*.sh (deployed scripts)
-    note: "hooks.json に登録された hook スクリプトが実在し、hook 数の一致を pair7 で照合（2026-08-12 実測: 登録1=配備1）"
+    note: "hooks.json に登録された hook スクリプト（.sh）がすべて実在することを pair7 で照合する。数の一致は見ていない（2026-08-12 実測: 登録 1 / 2026-09-24 実測: 登録 3、全件実在）"
   - id: codex-execpolicy-forbidden
     pair: pair8
     declaration: ~/.codex/AGENTS.md#force-push-protection
