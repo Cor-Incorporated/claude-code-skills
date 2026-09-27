@@ -1,201 +1,163 @@
 #!/usr/bin/env bash
-# H1 が「どのモデルを止めるか」— 2026-09-02 のインシデントの陰性テスト。
-#
-# 起点事故: H1 は全モデルに一律 $5 の上限をかけていた。通常の Codex セッションが
-# 301 tool call で spend=$5.34 に達して block し、Google Drive の再読込と
-# ローカルファイル操作の直前で実作業が停止した。
-#
-# 原因は 2 つが重なったこと。
-#   (1) この機械の Codex は gpt-5.6-luna を動かすが PRICES に無く、unknown-model
-#       経路が MAX_RATE（既知で最も高い単価）で見積もる。実測 budget_source:
-#       "rollout:total_token_usage+unknown-model:gpt-5.6-luna@max-rate"
-#   (2) そもそも全モデルを止める必要が無かった。予算を溶かした実績があるのは
-#       最上位モデル（gpt-5.6-sol の ultra）だけである。
-#
-# 以後 block は CODEX_H1_RESTRICTED_MODELS に一致するモデルでのみ評価する。
-# このスイートはその絞り込み自体を検査する。停止規則の中身は
-# tests/test-h1-block.sh が（ワイルドカードで全モデルを対象にして）検査する。
-#
-# 反証可能性: 各主張について、絞り込みを外した変異体を作って結果が変わることを
-# 実測する。外して何も変わらないなら、絞り込みは最初から効いていない。
-#
-# 全ての hook 実行は HOME=$SB / AIDD_LEDGER_SOURCE=test の下で走るので、実際の
-# ~/.claude 台帳にも ~/.codex 状態にも触れない。
-set -uo pipefail
+# H1: 推定予算は全モデル、無進捗・反復停止は従来のモデル範囲。
+# H1_HOOK_UNDER_TEST / H1_LIB_UNDER_TEST で配備済みファイルも同じfixtureで検証。
+set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-export AIDD_LEDGER_SOURCE=test
-# ここでは既定の絞り込みを検査するので、外側の環境変数を必ず落とす。
-unset CODEX_H1_RESTRICTED_MODELS
-
-HOOK="$ROOT/hooks/codex/h1-stall-runtime.sh"
-SB="$(mktemp -d)"
-trap 'rm -rf "$SB"' EXIT
-LEDGER="$SB/.claude/hooks/ledger/guard-ledger.jsonl"
-mkdir -p "$SB/.claude/hooks/lib"
-cp "$ROOT/hooks/lib/aidd-ledger.sh" "$SB/.claude/hooks/lib/aidd-ledger.sh"
-
-pass=0
-fail=0
-ok() { echo "PASS: $1"; pass=$((pass + 1)); }
-bad() { echo "FAIL: $1"; echo "    $2"; fail=$((fail + 1)); }
-
-payload() {
-  python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$1"
-}
-
-# run <hook> <delegation> <command> [extra env assignments...]
-run() {
-  local hook="$1" delegation="$2" cmd="$3"
-  shift 3
-  payload "$cmd" | env HOME="$SB" \
-    CODEX_H1_DELEGATION="$delegation" \
-    CODEX_H1_SESSIONS_DIR="$SB/sessions" \
-    "$@" bash "$hook"
-}
-
-decision_of() {
-  printf '%s' "$1" | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    print("allow"); raise SystemExit(0)
-print(((d.get("hookSpecificOutput") or {}).get("permissionDecision")) or "allow")
-'
-}
-
-# 同じ消費量を、モデル名だけ変えて与える。差が出るならモデルで絞れている。
-seed_rollout() { # $1=model  $2=input_tokens  $3=output_tokens
-  rm -rf "$SB/sessions"
-  local dir="$SB/sessions/2026/09/01"
-  mkdir -p "$dir"
-  cat >"$dir/rollout-2026-09-01T00-00-00-fixture.jsonl" <<EOF
-{"type":"session_meta","payload":{"model":"$1"}}
-{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0},"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0}}}}
-{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":$2,"cached_input_tokens":0,"output_tokens":$3,"total_tokens":$(($2 + $3))},"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0}}}}
-{"total_token_usage":{"input_tokens":$2,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":$3,"reasoning_output_tokens":0,"total_tokens":$(($2 + $3))}}
-EOF
-}
-
-subject_field() { # $1=delegation $2=field
-  python3 - "$LEDGER" "$1" "$2" <<'PY'
-import json, os, sys
-path, delegation, field = sys.argv[1:4]
-if not os.path.exists(path):
-    print(""); raise SystemExit(0)
-val = ""
-for line in open(path, encoding="utf-8", errors="replace"):
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        row = json.loads(line)
-    except Exception:
-        continue
-    if row.get("component") != "H1":
-        continue
-    subject = row.get("subject") or {}
-    if subject.get("delegation") != delegation:
-        continue
-    if field in subject:
-        val = subject[field]
-print(val)
+python3 - "$ROOT" <<'PY'
+import json, os, pathlib, subprocess, sys, tempfile, time
+root = pathlib.Path(sys.argv[1])
+hook = pathlib.Path(os.environ.get('H1_HOOK_UNDER_TEST', root/'hooks/codex/h1-stall-runtime.sh'))
+lib = pathlib.Path(os.environ.get('H1_LIB_UNDER_TEST', root/'scripts/lib/h1-runtime.sh'))
+checks = 0
+with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
+    home = pathlib.Path(tmp)
+    ledgerlib = home/'.claude/hooks/lib'
+    ledgerlib.mkdir(parents=True)
+    (ledgerlib/'aidd-ledger.sh').write_bytes((root/'hooks/lib/aidd-ledger.sh').read_bytes())
+    env = {k:v for k,v in os.environ.items() if not k.startswith(('CODEX_H1_', 'H1_'))}
+    env.update(HOME=tmp, CODEX_H1_STATE_DIR=str(home/'state'),
+               CODEX_H1_SESSIONS_DIR=str(home/'sessions'), AIDD_LEDGER_SOURCE='test',
+               AIDD_LEDGER_PATH=str(home/'.claude/hooks/ledger/guard-ledger.jsonl'))
+    def check(condition, label):
+        global checks
+        if not condition: raise AssertionError(label)
+        checks += 1
+        print('PASS:', label)
+    def transcript(sid, model, tokens):
+        path = home/(sid+'.jsonl')
+        rows = [dict(type='session_meta', payload=dict(id=sid,model=model)),
+                dict(type='turn_context',payload=dict(turn_id='old',model=model)),
+                dict(type='token_usage_record',payload=dict(response_id=sid+'-old',turn_id='old',
+                     usage=dict(input_tokens=tokens, cached_input_tokens=0, output_tokens=0,total_tokens=tokens),
+                     thread_token_usage=dict(total_tokens=tokens)))]
+        path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+        return path
+    def event(key, sid, model, path, kind='PreToolUse', turn='old', prompt='continue', extras=None, cwd=None):
+        p=dict(hook_event_name=kind,session_id=sid,model=model,turn_id=turn,
+               cwd=cwd or tmp,transcript_path=str(path),tool_name='Bash',tool_input={'command':'pwd'})
+        if kind=='UserPromptSubmit': p['prompt']=prompt
+        proc=subprocess.run(['bash',str(hook)],input=json.dumps(p),text=True,capture_output=True,
+                            env=dict(env,CODEX_H1_DELEGATION=key,**(extras or {})))
+        check(proc.returncode==0, key+' hook exit=0')
+        return json.loads(proc.stdout or "{}")
+    def decision(out): return out.get('hookSpecificOutput',{}).get('permissionDecision','allow')
+    def state(key): return json.loads((home/'state'/(key+'.json')).read_text())
+    def watchdog(key):
+        return subprocess.check_output(['bash','-c','source "$1"; h1_check "$2"','bash',str(lib),key],
+                                       env=env,text=True).strip()
+    # Use the actual built-in estimates: unknown models 1.25/in, nano 0.05/in.
+    for model,exact in [('gpt-6-luna',40000000),('gpt-6-sol',40000000),
+                        ('gpt-6-terra',40000000),('future-model',40000000),('',40000000),
+                        ('gpt-5-nano',1000000000)]:
+        for suffix,tokens,want in [('under',exact-1000,'allow'),('at',exact,'deny'),('over',exact+1000,'deny')]:
+            key=(model or 'undetected')+'-'+suffix
+            path=transcript(key,model,tokens)
+            out=event(key,key,model,path)
+            check(decision(out)==want,f'{key}: default $50 {want}')
+            s=state(key)
+            check(s['budget_usd']==50,key+': default budget=50')
+            if model in ('gpt-6-luna','gpt-6-sol'):
+                print('OBSERVED',json.dumps(dict(case=key,output=out,state={k:s.get(k) for k in ('model','budget_usd','budget_epoch','budget_epoch_spend_usd','last_block_rule','budget_source')}),ensure_ascii=False))
+            check(watchdog(key)==('budget-cap' if want=='deny' else ''),key+': hook/watchdog agree')
+    # Wrapper creation/restart shares the $50 contract without clearing usage.
+    subprocess.run(['bash','-c','source "$1"; h1_init wrapper "$2"','bash',str(lib),tmp],
+                   env=env,check=True)
+    check(state('wrapper')['budget_usd']==50,'wrapper default budget=50')
+    old=state('wrapper')
+    old.update(budget_usd=25,spend_usd=30,budget_epoch_spend_usd=30,
+               budget_epoch=2,last_block_rule='budget-cap',tool_calls=7)
+    (home/'state/wrapper.json').write_text(json.dumps(old))
+    subprocess.run(['bash','-c','source "$1"; h1_init wrapper "$2"','bash',str(lib),tmp],
+                   env=env,check=True)
+    check(state('wrapper')['budget_usd']==50,'wrapper restart refreshes budget=50')
+    check(all(state('wrapper')[k]==old[k] for k in ('spend_usd','budget_epoch_spend_usd',
+              'budget_epoch','last_block_rule','tool_calls')),'wrapper restart preserves history and epoch')
+    check(watchdog('wrapper')=='','raising cap is not a stale last-block denial')
+    # Missing transcripts still carry a labeled proxy estimate, including model not detected.
+    out=event('proxy','proxy','',home/'missing.jsonl',extras={'CODEX_H1_PROXY_TOKENS_PER_CALL':'40000000'})
+    check(decision(out)=='deny','undetected-model proxy at $50 denies')
+    check(state('proxy')['budget_source'].startswith('proxy:'),'proxy remains visibly estimated')
+    # The installed hook must no longer exempt the former exhibition project.
+    for name in ('kotoba-robocon','nfc-profile-card'):
+        key='project-'+name
+        path=transcript(key,'gpt-6-sol',40000000)
+        out=event(key,key,'gpt-6-sol',path,cwd='/Users/teradakousuke/Developer/'+name)
+        check(decision(out)=='deny',name+': default $50 denies without project relief')
+        check(state(key)['budget_usd']==50,name+': project budget matches default')
+    for key,tokens in [('warn-below',31999000),('warn-at',32000000)]:
+        path=transcript(key,'gpt-6-sol',tokens)
+        check(decision(event(key,key,'gpt-6-sol',path))=='allow',key+': below-cap warning cannot deny')
+        check(bool(state(key)['last_warn_80'])==(key=='warn-at'),key+': 80% warning boundary')
+    # Session or model change alone cannot reset a stopped delegation.
+    for transition in ('session','model'):
+        key='transition-'+transition
+        path=transcript(key,'gpt-6-sol',41000000)
+        check(decision(event(key,'old','gpt-6-sol',path))=='deny',key+': old epoch stopped')
+        sid='new' if transition=='session' else 'old'
+        model='gpt-6-sol' if transition=='session' else 'gpt-6-luna'
+        check(decision(event(key,sid,model,path))=='deny',key+': transition alone denies')
+        check(state(key)['budget_epoch']==0,key+': transition alone keeps epoch')
+        # Missing IDs, quoted or negated text cannot authorize reset.
+        for turn,prompt in [('', 'continue'),('quote','"continue"'),('negate','do not continue')]:
+            event(key,sid,model,path,'UserPromptSubmit',turn,prompt)
+            check(state(key)['budget_epoch']==0,key+': invalid resume keeps epoch')
+        event(key,'',model,path,'UserPromptSubmit','missing-session','continue')
+        check(state(key)['budget_epoch']==0,key+': missing session cannot grant')
+        event(key,sid,model,path,'UserPromptSubmit','resume','作業を続けて下さい')
+        check(state(key)['budget_epoch']==1,key+': explicit resume grants one epoch')
+        check(state(key)['last_block_rule']=='budget-cap',key+': stop history preserved')
+        event(key,sid,model,path,'UserPromptSubmit','resume','作業を続けて下さい')
+        check(state(key)['budget_epoch']==1,key+': repeated turn is idempotent')
+        check(decision(event(key,sid,model,path,turn='resume'))=='allow',key+': new epoch allows')
+        check(watchdog(key)=='',key+': watchdog allows new epoch')
+        event(key,sid,model,path,'UserPromptSubmit','same-scope','continue')
+        check(state(key)['budget_epoch']==1,key+': same scope continuation cannot regrant')
+    # The budget scope fills in on the first non-empty observation. A first
+    # PreToolUse without a session ID or model must not pin an empty scope that
+    # later blocks an explicit resume after a real transition (Codex review, 2026-09-28).
+    for missing in ('session','model'):
+        key='late-scope-'+missing
+        path=transcript(key,'' if missing=='model' else 'gpt-6-sol',41000000)
+        event(key,'' if missing=='session' else 'old','' if missing=='model' else 'gpt-6-sol',path)
+        check(decision(event(key,'old','gpt-6-sol',path))=='deny',key+': cap reached with known ids')
+        sid='new' if missing=='session' else 'old'
+        model='gpt-6-luna' if missing=='model' else 'gpt-6-sol'
+        check(decision(event(key,sid,model,path))=='deny',key+': transition alone denies')
+        event(key,sid,model,path,'UserPromptSubmit','resume','作業を続けて下さい')
+        check(state(key)['budget_epoch']==1,key+': explicit resume after a late scope grants one epoch')
+    # RESTRICTED_MODELS cannot exempt any model from the budget cap.
+    path=transcript('not-exempt','gpt-6-luna',41000000)
+    check(decision(event('not-exempt','luna','gpt-6-luna',path,extras={'CODEX_H1_RESTRICTED_MODELS':'terra'}))=='deny',
+          'restricted-model override cannot exempt budget')
+    # Preserve existing non-budget model gating (including watchdog).
+    for model,want in [('gpt-6-luna','allow'),('gpt-6-sol','deny')]:
+        key='nonbudget-'+model
+        path=transcript(key,model,1000)
+        event(key,key,model,path)
+        s=state(key)
+        s.update(iterations=11, last_progress_ts=int(time.time())-4000,
+                 watchdog_started_ts=0, same_cmd_streak=3)
+        (home/'state'/(key+'.json')).write_text(json.dumps(s))
+        out=event(key,key,model,path)
+        check(decision(out)==want,key+': no-progress scope unchanged')
+        check(watchdog(key)==('no-progress-timeout' if want=='deny' else ''),key+': watchdog scope unchanged')
+    ledger=home/'.claude/hooks/ledger/guard-ledger.jsonl'
+    rows=[json.loads(line) for line in ledger.read_text().splitlines()]
+    luna=[r for r in rows if r.get('event')=='block' and r.get('subject',{}).get('model')=='gpt-6-luna']
+    check(bool(luna),'Luna budget denial reaches isolated H1 ledger')
+    check(all(r['subject']['budget_restricted'] and not r['subject']['restricted'] for r in luna),
+          'ledger distinguishes universal budget from other model restriction')
+    # A stop made only by the wrapper watchdog must carry the same scope fields.
+    def stop_record(key, rule):
+        out = subprocess.check_output(['bash','-c','source "$1"; h1_stop_record "$2" "$3"','bash',str(lib),key,rule],
+                                      env=env,text=True).strip()
+        return json.loads(out)['subject']
+    luna_stop = stop_record('not-exempt', 'budget-cap')
+    check(luna_stop.get('model')=='gpt-6-luna', 'wrapper stop record carries model')
+    check(luna_stop.get('budget_restricted') is True and luna_stop.get('restricted') is False,
+          'wrapper stop record distinguishes universal budget from model restriction')
+    check('budget_epoch_spend_usd' in luna_stop, 'wrapper stop record carries epoch spend')
+    sol_stop = stop_record('nonbudget-gpt-6-sol', 'no-progress-timeout')
+    check(sol_stop.get('restricted') is True, 'wrapper stop record marks restricted models')
+print(f'--- {checks} passed, 0 failed ---')
 PY
-}
-
-# 上限を確実に超える消費量。4M in + 400k out は MAX_RATE で $9.00。
-OVER_IN=4000000
-OVER_OUT=400000
-BUDGET=5
-
-echo "=== 1. 制限対象外のモデルは、上限を超えていても止めない（今日の事故） ==="
-for model in gpt-5.6-luna gpt-5-codex gpt-5.6-terra; do
-  seed_rollout "$model" "$OVER_IN" "$OVER_OUT"
-  out=$(run "$HOOK" "nr-$model" "ls -la" CODEX_H1_BUDGET_USD="$BUDGET")
-  d=$(decision_of "$out")
-  if [[ "$d" == "allow" ]]; then
-    ok "$model は予算超過でも allow（restricted=$(subject_field "nr-$model" restricted)）"
-  else
-    bad "$model が止められた（今日の事故の再現）" "decision=$d"
-  fi
-done
-
-echo
-echo "=== 2. 制限対象のモデルは、上限を超えたら止める ==="
-for model in gpt-5.6-sol gpt-5.6-sol-ultra; do
-  seed_rollout "$model" "$OVER_IN" "$OVER_OUT"
-  out=$(run "$HOOK" "r-$model" "ls -la" CODEX_H1_BUDGET_USD="$BUDGET")
-  d=$(decision_of "$out")
-  if [[ "$d" == "deny" ]]; then
-    ok "$model は予算超過で deny（restricted=$(subject_field "r-$model" restricted)）"
-  else
-    bad "$model が止まらない（暴走の実績があるモデルを素通しした）" "decision=$d"
-  fi
-done
-
-echo
-echo "=== 3. 制限対象でも上限内なら止めない（過剰ブロックしない） ==="
-seed_rollout "gpt-5.6-sol-ultra" 100000 1000
-out=$(run "$HOOK" "r-under" "ls -la" CODEX_H1_BUDGET_USD="$BUDGET")
-[[ "$(decision_of "$out")" == "allow" ]] \
-  && ok "sol でも予算内なら allow" \
-  || bad "sol を予算内で止めた（過剰ブロック）" "decision=$(decision_of "$out")"
-
-echo
-echo "=== 4. モデルを検出できないときは止めない（unknown != 最上位） ==="
-rm -rf "$SB/sessions"
-out=$(run "$HOOK" "unknown-model" "ls -la" CODEX_H1_BUDGET_USD=0.0000001)
-d=$(decision_of "$out")
-if [[ "$d" == "allow" ]]; then
-  ok "モデル未検出では block しない（proxy 見積で上限を超えていても）"
-else
-  bad "モデル未検出で止めた（『分からないから止める』が今日の事故の形）" "decision=$d"
-fi
-
-echo
-echo "=== 5. 台帳に model と restricted が載る（後から監査できる） ==="
-seed_rollout "gpt-5.6-sol-ultra" "$OVER_IN" "$OVER_OUT"
-run "$HOOK" "led" "ls -la" CODEX_H1_BUDGET_USD="$BUDGET" >/dev/null
-m=$(subject_field led model)
-r=$(subject_field led restricted)
-[[ "$m" == "gpt-5.6-sol-ultra" ]] && ok "台帳 subject.model=$m" || bad "台帳に model が無い" "got=$m"
-[[ "$r" == "True" || "$r" == "true" ]] && ok "台帳 subject.restricted=$r" || bad "台帳に restricted が無い" "got=$r"
-
-echo
-echo "=== 6. 反証: 絞り込みを外すと 1. の結論が反転するか ==="
-# is_restricted を常に True にした変異体。絞り込みが効いているなら、
-# 制限対象外だったモデルが deny に変わるはずである。変わらないなら
-# 1. の allow はモデル絞り込み以外の理由で出ていたことになる。
-MUT="$SB/mutant.sh"
-python3 - "$HOOK" "$MUT" <<'PY'
-import sys, pathlib
-src, dst = sys.argv[1:3]
-t = pathlib.Path(src).read_text()
-needle = '''    if "*" in RESTRICTED_MODELS:
-        return True'''
-assert needle in t, "mutation target not found"
-t = t.replace(needle, '''    if True:
-        return True''', 1)
-pathlib.Path(dst).write_text(t)
-PY
-if [[ -f "$MUT" ]]; then
-  seed_rollout "gpt-5.6-luna" "$OVER_IN" "$OVER_OUT"
-  m1=$(run "$MUT" "mut-luna" "ls -la" CODEX_H1_BUDGET_USD="$BUDGET")
-  [[ "$(decision_of "$m1")" == "deny" ]] \
-    && ok "変異体（絞り込み無効）は gpt-5.6-luna を deny = 絞り込みが結論を作っていた" \
-    || bad "変異体でも allow のまま = 1. は絞り込みを証明していない" "decision=$(decision_of "$m1")"
-else
-  bad "変異体を作れなかった — 反証不能" "mutation target missing"
-fi
-
-echo
-echo "=== 7. CODEX_H1_RESTRICTED_MODELS で対象を広げられる ==="
-seed_rollout "gpt-5.6-luna" "$OVER_IN" "$OVER_OUT"
-out=$(run "$HOOK" "widen" "ls -la" CODEX_H1_BUDGET_USD="$BUDGET" CODEX_H1_RESTRICTED_MODELS="sol,luna")
-[[ "$(decision_of "$out")" == "deny" ]] \
-  && ok "luna を明示的に対象へ加えると deny になる" \
-  || bad "対象を広げても止まらない" "decision=$(decision_of "$out")"
-
-echo
-echo "--- $pass passed, $fail failed ---"
-[[ "$fail" -eq 0 ]]

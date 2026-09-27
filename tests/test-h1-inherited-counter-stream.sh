@@ -2,7 +2,7 @@
 # Counter snapshots belong to transcript streams, not the shared delegation.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-python3 - "$ROOT/hooks/codex/h1-stall-runtime.sh" <<'PY'
+python3 - "${H1_METER_HOOK:-$ROOT/hooks/codex/h1-stall-runtime.sh}" <<'PY'
 import ast, copy, json, pathlib, sys, tempfile
 
 hook = pathlib.Path(sys.argv[1]).read_text()
@@ -55,6 +55,18 @@ with tempfile.TemporaryDirectory() as folder:
     cost = ns['usd_from'](first, 'gpt-5-codex')[0]
     check('new fork stream excludes inherited event count', round(state['spend_usd']-before, 6), cost)
     check('thread total is not an event snapshot', state['usage_snapshot']['total_tokens'], 108076840)
+    # Same-count counterexample for the incident's 395760 fresh tokens.
+    # The input/output split is synthetic; do not label it as the lost raw trace.
+    nfc_large = pathlib.Path(folder) / 'nfc-large.jsonl'
+    fresh = usage(395000, 760)
+    append(nfc_large, record('nfc-395760', fresh, 109080013), event(inherited, fresh))
+    before_large = state['spend_usd']
+    tick(state, nfc_large)
+    check('395760 fresh tokens exclude inherited 108M', round(state['spend_usd']-before_large, 6),
+          ns['usd_from'](fresh, 'gpt-5-codex')[0])
+    before_large = state['spend_usd']
+    tick(state, nfc_large)
+    check('395760 response cannot be billed twice', state['spend_usd'], before_large)
     before = state['spend_usd']
     tick(state, worker)
     check('returning to unchanged stream does not recharge', state['spend_usd'], before)
@@ -106,5 +118,5 @@ with tempfile.TemporaryDirectory() as folder:
     tick(unknown_state, unknown)
     check('missing stream baseline does not price inherited lifetime', unknown_state['spend_usd'], 0.0)
     check('missing stream baseline is labeled', 'stream-baseline-unavailable' in unknown_state['budget_source'], True)
-print('--- 12 passed, 0 failed ---')
+print('--- 14 passed, 0 failed ---')
 PY

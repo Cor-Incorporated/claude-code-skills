@@ -61,7 +61,7 @@ h1_init() {
         export CODEX_H1_CWD
     fi
     python3 - "$file" "$delegation" \
-        "${CODEX_H1_BUDGET_USD:-25}" \
+        "${CODEX_H1_BUDGET_USD:-50}" \
         "${CODEX_H1_MAX_ITERATIONS:-10}" \
         "${CODEX_H1_NO_PROGRESS_SEC:-2700}" <<'PY' 2>/dev/null || true
 import fcntl, json, os, sys, tempfile, time
@@ -118,10 +118,7 @@ no_progress = int(s.get("no_progress_sec") or 2700)
 forced = s.get("forced_stop")
 if forced and forced != "budget-cap":
     print(forced); raise SystemExit(0)
-# 2026-09-02: hook 側と同じく、停止はモデルで絞る。一律の上限は実作業を止めた
-# （通常セッションが 301 tool call で spend=$5.34 に達して block）。model は
-# hook が rollout から読んで同じ state ファイルへ書く。読めていない（空）なら
-# 止めない — 「分からないから止める」が事故の形だった。
+# Budget caps apply to all models. Preserve no-progress / iteration model scope.
 restricted_tokens = [
     token.strip().lower()
     for token in (os.environ.get("CODEX_H1_RESTRICTED_MODELS") or "sol").split(",")
@@ -131,16 +128,15 @@ model_name = str(s.get("model") or "").lower()
 restricted = ("*" in restricted_tokens) or bool(
     model_name and any(token in model_name for token in restricted_tokens)
 )
-if not restricted:
-    raise SystemExit(0)
-
 gap = now - max(int(s.get("last_progress_ts") or now), int(s.get("watchdog_started_ts") or 0))
-if gap > no_progress and int(s.get("same_cmd_streak") or 0) >= 3:
+if restricted and gap > no_progress and int(s.get("same_cmd_streak") or 0) >= 3:
     print("no-progress-timeout"); raise SystemExit(0)
 budget = float(s.get("budget_usd") or 0)
 epoch_spend = float(s.get("budget_epoch_spend_usd", s.get("spend_usd") or 0))
 if budget > 0 and epoch_spend >= budget:
     print("budget-cap"); raise SystemExit(0)
+if not restricted:
+    raise SystemExit(0)
 sem = s.get("h1_semantics") if isinstance(s.get("h1_semantics"), dict) else {}
 try:
     iteration_baseline = max(0, int(sem.get("iteration_baseline") or 0))
@@ -188,12 +184,24 @@ h1_stop_record() {
     local file
     file="$(h1_state_file "$1")"
     python3 - "$file" "$2" <<'PY' 2>/dev/null || printf '{"component":"H1","event":"block","rule":"%s","detail":"wrapper watchdog stop","subject":{"delegation":"%s"}}' "$2" "$1"
-import json, sys
+import json, os, sys
 path, rule = sys.argv[1:3]
 try:
     s = json.load(open(path))
 except Exception:
     s = {}
+# Same scope fields as the hook's ledger rows, so watchdog-only stops can be told
+# apart in the ledger: the budget applies to every model (budget_restricted), while
+# "restricted" is the no-progress / iteration scope (same rule as h1_check).
+restricted_tokens = [
+    token.strip().lower()
+    for token in (os.environ.get("CODEX_H1_RESTRICTED_MODELS") or "sol").split(",")
+    if token.strip()
+]
+model_name = str(s.get("model") or "").lower()
+restricted = ("*" in restricted_tokens) or bool(
+    model_name and any(token in model_name for token in restricted_tokens)
+)
 print(json.dumps({
     "component": "H1", "event": "block", "rule": rule,
     "detail": "wrapper watchdog stopped the Codex run (%s)" % rule,
@@ -202,8 +210,13 @@ print(json.dumps({
         "spend_usd": s.get("spend_usd", 0.0),
         "budget_usd": s.get("budget_usd", 0.0),
         "budget_source": s.get("budget_source", "unknown"),
+        "budget_epoch": s.get("budget_epoch", 0),
+        "budget_epoch_spend_usd": s.get("budget_epoch_spend_usd", s.get("spend_usd", 0.0)),
         "iterations": s.get("iterations", 0),
         "tool_calls": s.get("tool_calls", 0),
+        "model": s.get("model", ""),
+        "restricted": restricted,
+        "budget_restricted": True,
         "enforced_by": "wrapper-watchdog",
     },
 }, ensure_ascii=False, separators=(",", ":")))

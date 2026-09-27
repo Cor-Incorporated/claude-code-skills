@@ -340,11 +340,13 @@ else:
          r'env_num\("CODEX_H1_BUDGET_USD",\s*([0-9.]+)\)', 1),
     ]
     mismatches = []
+    observed = {}
     for label, dpat, epat, scale in numeric:
         dm = re.search(dpat, contract_text)
         em = re.search(epat, hook_text)
         dv = float(dm.group(1)) * scale if dm else None
         ev = float(em.group(1)) if em else None
+        observed[label] = ev
         if dv is None or ev is None or dv != ev:
             mismatches.append(
                 f"{label}: declaration={dm.group(1) if dm else 'MISSING'}"
@@ -363,8 +365,12 @@ else:
             f"enforcement={h1_hook} :: " + " | ".join(mismatches),
         )
     else:
+        # Print the observed values: a hard-coded summary kept saying "$5.0"
+        # after the budget moved to $25 and then $50 (2026-09-27).
         ok("pair14 delegation contract 欄1-3 match H1 enforcement numerically "
-           "(10 iterations / 2700s / $5.0)")
+           f"({observed['欄1 max_iterations']:g} iterations / "
+           f"{observed['欄2 no_progress_sec']:g}s / "
+           f"${observed['欄3 budget_usd']:g})")
 
 # pair15: Codex hooks.json registration ↔ config.toml trust state.
 # 2026-09-01: protect-branches-codex.sh was deployed, registered, and MD5-matched

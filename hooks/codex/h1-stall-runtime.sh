@@ -75,7 +75,7 @@
 #
 # C4 適用限界 (短時間対話セッションには適用しない): all three block rules are
 # self-limiting on short sessions — (a) needs a 45-minute progress gap, (b) needs
-# an estimated $25 epoch burn on a restricted model, (c) needs 10 repeated
+# an estimated $50 epoch burn on any model, (c) needs 10 repeated
 # commands.  No separate session-length
 # knob is introduced.
 #
@@ -200,12 +200,9 @@ def env_num(name, default, cast=float):
     return value if value >= 0 else default
 
 
-# 既定 $5 は 2026-09-02 に通常作業を止めた（301 tool call で spend=$5.34）。
-# block は RESTRICTED_MODELS のみに掛かるようになったが、その最上位モデルも
-# PRICES に無く MAX_RATE で見積もられるため、$5 のままでは制限対象モデルの
-# 正当な作業まで止まる。通常セッション実測 $5.34 の約 5 倍を既定にし、
-# 暴走（2026-09-01 は 1 レーンで 88.8M tokens）は依然捕まえる。
-BUDGET_USD = env_num("CODEX_H1_BUDGET_USD", 25.0)
+# 既定 $5 / $25 は過去の値。2026-09-27のユーザー指示で全モデル推定 $50。
+# 請求実額の上限ではなく、次のPreToolUseで評価する予算epochの上限。
+BUDGET_USD = env_num("CODEX_H1_BUDGET_USD", 50.0)
 MAX_ITERATIONS = int(env_num("CODEX_H1_MAX_ITERATIONS", 10.0))
 NO_PROGRESS_SEC = int(env_num("CODEX_H1_NO_PROGRESS_SEC", 2700.0))
 HEARTBEAT_SEC = int(env_num("CODEX_H1_HEARTBEAT_SEC", 900.0))
@@ -230,23 +227,9 @@ PRICES = {
 # Unknown model → most expensive known rate.  Never silently treat it as free.
 MAX_RATE = max(PRICES.values(), key=lambda rate: rate[2])
 
-# --- どのモデルを止めるか（2026-09-02 のインシデントで設計変更） -----------------
-# 当初は全モデルに一律 $5 の上限をかけていた。実測でそれが通常作業を止めた:
-# 通常の Codex セッションが 301 tool call で spend=$5.34 に達して block し、
-# Google Drive の再読込とローカルファイル操作の直前で作業が停止した。
-#
-# 原因は 2 つが重なったこと。
-#   (1) この機械の Codex は gpt-5.6-luna を動かすが PRICES に無く、unknown-model
-#       経路が MAX_RATE（既知で最も高い単価）で見積もる。上のコメント自身が
-#       「unknown-model 経路は normal path であって edge case ではない」と
-#       書いているのに、その normal path を最高単価で評価していた。
-#   (2) そもそも全モデルを止める必要が無い。実際に予算を溶かしたのは常に
-#       最上位モデル（gpt-5.6-sol の ultra）であって、それ以外ではない。
-#
-# したがって block はモデルで絞る。既定は名前に "sol" を含むモデル。
-# 一致しないモデル（未検出を含む）では block 条件を一切評価せず、measure と
-# warn だけ残す。未検出で止めないのは意図的である — 「分からないから止める」は
-# 今回まさに実作業を止めた側であり、暴走の実績があるのは最上位モデルだけ。
+# --- 予算は全モデル、無進捗・反復停止は従来の対象モデル ------------------------
+# 2026-09-27: ユーザー指定により推定 $50 の予算は未知モデルにも適用する。
+# CODEX_H1_RESTRICTED_MODELS は無進捗・反復停止だけの対象。予算の除外には使わない。
 RESTRICTED_MODELS = [
     token.strip().lower()
     for token in (os.environ.get("CODEX_H1_RESTRICTED_MODELS") or "sol").split(",")
@@ -255,13 +238,7 @@ RESTRICTED_MODELS = [
 
 
 def is_restricted(model):
-    """True only when the model is one we deliberately cap.
-
-    "*" restricts every model including an undetected one. It exists so the
-    falsification suite can still exercise the block rules directly, and as an
-    opt-in for anyone who wants the old blanket behaviour back. It is NOT the
-    default: a blanket cap is what stopped real work on 2026-09-02.
-    """
+    """Whether no-progress / iteration stops apply; budget caps ignore this."""
     if "*" in RESTRICTED_MODELS:
         return True
     name = (model or "").lower()
@@ -714,6 +691,15 @@ def persist_state(path, state):
 
 def apply_meter(state, records, measured):
     tokens, absolute_usd, source, model, usage = measured
+    # Preserve the budget scope across an unapproved transition. Observation
+    # may update current session/model, but cannot consume the resume evidence.
+    # An empty scope (a first PreToolUse without a session ID or model) is filled
+    # on the first non-empty observation and then kept until an authorized reset;
+    # setdefault kept the empty value and blocked a valid resume after a transition.
+    if not state.get("budget_scope_session_id"):
+        state["budget_scope_session_id"] = state.get("session_id") or SID
+    if not state.get("budget_scope_model"):
+        state["budget_scope_model"] = state.get("model") or model
     state["model"] = model
     state["session_id"] = SID or state.get("session_id", "")
     meter_key = state.get("meter_path") or ""
@@ -1008,8 +994,8 @@ def resume_epoch(state, path):
         return None
     if state.get("last_reset_turn_id") == TURN_ID and state.get("last_reset_session_id") == SID:
         return None
-    previous_sid = state.get("session_id") or state.get("first_prompt_session_id") or ""
-    previous_model = state.get("model") or state.get("first_prompt_model") or ""
+    previous_sid = state.get("budget_scope_session_id") or state.get("session_id") or state.get("first_prompt_session_id") or ""
+    previous_model = state.get("budget_scope_model") or state.get("model") or state.get("first_prompt_model") or ""
     if previous_sid and previous_sid != SID:
         reason = "explicit-user-resume:session"
     elif previous_model and PAYLOAD_MODEL and previous_model != PAYLOAD_MODEL:
@@ -1068,6 +1054,8 @@ def resume_epoch(state, path):
         state["budget_epoch_scope_cwd"] = ""
     state["session_id"] = SID
     state["model"] = PAYLOAD_MODEL or previous_model
+    state["budget_scope_session_id"] = SID
+    state["budget_scope_model"] = state["model"]
     state["last_warn_80"] = 0
     return reason
 
@@ -1093,6 +1081,7 @@ def subject_of(state):
         # ことが分かるよう restricted と別欄で出す。
         "model": state.get("model", ""),
         "restricted": is_restricted(state.get("model")),
+        "budget_restricted": True,
         # 北極星の分子への結合キー (aidd-governance#155)。
         # spend（分母）だけを記録していたので反証条件 2 が計算できなかった。
         # 空文字/空配列は「決められなかった」であり「PR が無い」ではない。
@@ -1173,18 +1162,14 @@ def record(state, event, rule, detail):
 def decide(state):
     """Return (rule, detail) for the first tripped block rule, else (None, None).
 
-    block は RESTRICTED_MODELS に一致するモデルでのみ評価する。それ以外では
-    どの条件も評価せず (None, None) を返す。measure / warn は従来どおり出るので
-    消費は台帳から追える。制限対象を広げたいときは
-    CODEX_H1_RESTRICTED_MODELS に カンマ区切りで部分文字列を渡す。
+    予算上限は全モデルへ適用。無進捗・反復停止の対象と優先順は維持する。
     """
     forced = state.get("forced_stop")
     if forced and forced != "budget-cap":
         return (forced, "wrapper stop remains active after budget epoch change")
-    if not is_restricted(state.get("model")):
-        return (None, None)
+    restricted = is_restricted(state.get("model"))
     gap = NOW - max(int(state["last_progress_ts"]), int(state.get("watchdog_started_ts") or 0))
-    if gap > int(state["no_progress_sec"]) and int(state["same_cmd_streak"]) >= SAME_CMD_THRESHOLD:
+    if restricted and gap > int(state["no_progress_sec"]) and int(state["same_cmd_streak"]) >= SAME_CMD_THRESHOLD:
         return (
             "no-progress-timeout",
             "%dmin no progress, same command repeated %dx"
@@ -1194,9 +1179,11 @@ def decide(state):
     if state["budget_usd"] > 0 and effective_spend >= state["budget_usd"]:
         return (
             "budget-cap",
-            "epoch spend $%.2f reached budget $%.2f (%s)"
+            "estimated epoch spend $%.2f reached budget $%.2f (%s)"
             % (effective_spend, state["budget_usd"], state["budget_source"]),
         )
+    if not restricted:
+        return (None, None)
     # #87: 反復上限は epoch 基準線からの差で測る。rebase が granted された委任は
     # iteration_baseline が押し上げられており、新 epoch の反復だけが数えられる。
     # 宣言が無い委任では baseline=0 なので、従来と同じ絶対値比較に退化する。
