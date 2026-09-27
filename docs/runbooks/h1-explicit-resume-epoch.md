@@ -2,6 +2,15 @@
 
 対象は Codex の H1 hook と wrapper。Thor のゲーム修正や新しいラウンドはこの手順の対象外。作業は承認済み PR の正確な SHA を確認してから、Codex の操作を止めた時間帯に行う。
 
+## 推定予算の契約（2026-09-27）
+
+- Codex の全モデル（Luna・Sol・未知モデル・未検出を含む）は、予算 epoch の推定額が既定 $25 に到達した次の PreToolUse で deny になる。上限未満は予算を理由に止めない。請求実額の取得・$25以内の請求保証・応答生成中の即時中断ではない。usage は内部 transcript、欠落時は tool call proxy、未知単価は既知最高単価で推計する。hosted環境への配備は本作業では確認しない。
+- `CODEX_H1_RESTRICTED_MODELS` は無進捗・反復停止だけを絞る（既定 `sol`）。予算からモデルを除外しない。`CODEX_H1_BUDGET_USD` の明示契約や既存の期限付き例外は別管理であり、例外対象には通常の $25 を保証しない。
+- 明示続行の単独指示と有効な `session_id` / `turn_id`、セッションまたはモデルの遷移が必要。同じscopeの続行だけ、遷移だけ、引用・否定・疑問、ID欠落では新epochにしない。未承認の遷移後にツールがdenyされた場合も、`budget_scope_session_id` / `budget_scope_model` を保持して後の明示続行を判定する。新epoch付与時だけscopeを更新する。
+- 新しいSolセッションへ渡す際は対象Issue、branch/worktree、差分・試験ログ、停止rule、旧epochの推定消費、残作業、撤収方法を引き継ぎ、最初に `作業を続けて下さい` を送る。今回はすでに起動された後続Solセッション1つのみ。hookは新しいセッションを起動せず、以降の自動連鎖を認めない。
+- 台帳の `restricted` は従来の無進捗・反復対象を示し、`budget_restricted=true` は全モデル予算判定を示す。旧支出と停止履歴を残し、hookとwrapperは同じepoch支出を読む。
+- 検証: `bash tests/test-h1-restricted-models.sh`。`H1_HOOK_UNDER_TEST` / `H1_LIB_UNDER_TEST` に配備先の絶対パスを渡すと、実ファイルを一時HOME・状態・台帳で発火できる。本番stateや実料金を増やす試験はしない。
+
 ## 配備前
 
 1. `hooks/codex/h1-stall-runtime.sh`、`scripts/lib/h1-runtime.sh` と H1 テストを承認済み SHA で確認する。`bash tests/test-h1-explicit-resume-epoch.sh` と既存 H1 テストの結果を保存する。

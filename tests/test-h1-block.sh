@@ -16,8 +16,8 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export AIDD_LEDGER_SOURCE=test
-# 2026-09-02 以降、block は CODEX_H1_RESTRICTED_MODELS に一致するモデルでのみ
-# 評価される（既定は "sol"）。このスイートは停止規則そのものを検査するので
+# 予算は全モデルへ適用。無進捗・反復停止はモデル範囲（既定 "sol"）を維持する。
+# このスイートは停止規則そのものを検査するので
 # ワイルドカードで全モデルを対象にする。既定の絞り込み自体は
 # tests/test-h1-restricted-models.sh が検査する。
 export CODEX_H1_RESTRICTED_MODELS="*"
