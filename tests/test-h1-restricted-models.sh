@@ -134,5 +134,17 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
     check(bool(luna),'Luna budget denial reaches isolated H1 ledger')
     check(all(r['subject']['budget_restricted'] and not r['subject']['restricted'] for r in luna),
           'ledger distinguishes universal budget from other model restriction')
+    # A stop made only by the wrapper watchdog must carry the same scope fields.
+    def stop_record(key, rule):
+        out = subprocess.check_output(['bash','-c','source "$1"; h1_stop_record "$2" "$3"','bash',str(lib),key,rule],
+                                      env=env,text=True).strip()
+        return json.loads(out)['subject']
+    luna_stop = stop_record('not-exempt', 'budget-cap')
+    check(luna_stop.get('model')=='gpt-6-luna', 'wrapper stop record carries model')
+    check(luna_stop.get('budget_restricted') is True and luna_stop.get('restricted') is False,
+          'wrapper stop record distinguishes universal budget from model restriction')
+    check('budget_epoch_spend_usd' in luna_stop, 'wrapper stop record carries epoch spend')
+    sol_stop = stop_record('nonbudget-gpt-6-sol', 'no-progress-timeout')
+    check(sol_stop.get('restricted') is True, 'wrapper stop record marks restricted models')
 print(f'--- {checks} passed, 0 failed ---')
 PY

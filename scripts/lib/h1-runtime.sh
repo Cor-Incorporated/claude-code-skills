@@ -184,12 +184,24 @@ h1_stop_record() {
     local file
     file="$(h1_state_file "$1")"
     python3 - "$file" "$2" <<'PY' 2>/dev/null || printf '{"component":"H1","event":"block","rule":"%s","detail":"wrapper watchdog stop","subject":{"delegation":"%s"}}' "$2" "$1"
-import json, sys
+import json, os, sys
 path, rule = sys.argv[1:3]
 try:
     s = json.load(open(path))
 except Exception:
     s = {}
+# Same scope fields as the hook's ledger rows, so watchdog-only stops can be told
+# apart in the ledger: the budget applies to every model (budget_restricted), while
+# "restricted" is the no-progress / iteration scope (same rule as h1_check).
+restricted_tokens = [
+    token.strip().lower()
+    for token in (os.environ.get("CODEX_H1_RESTRICTED_MODELS") or "sol").split(",")
+    if token.strip()
+]
+model_name = str(s.get("model") or "").lower()
+restricted = ("*" in restricted_tokens) or bool(
+    model_name and any(token in model_name for token in restricted_tokens)
+)
 print(json.dumps({
     "component": "H1", "event": "block", "rule": rule,
     "detail": "wrapper watchdog stopped the Codex run (%s)" % rule,
@@ -198,8 +210,13 @@ print(json.dumps({
         "spend_usd": s.get("spend_usd", 0.0),
         "budget_usd": s.get("budget_usd", 0.0),
         "budget_source": s.get("budget_source", "unknown"),
+        "budget_epoch": s.get("budget_epoch", 0),
+        "budget_epoch_spend_usd": s.get("budget_epoch_spend_usd", s.get("spend_usd", 0.0)),
         "iterations": s.get("iterations", 0),
         "tool_calls": s.get("tool_calls", 0),
+        "model": s.get("model", ""),
+        "restricted": restricted,
+        "budget_restricted": True,
         "enforced_by": "wrapper-watchdog",
     },
 }, ensure_ascii=False, separators=(",", ":")))
