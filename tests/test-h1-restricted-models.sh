@@ -162,13 +162,38 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
     check(state(key)['budget_epoch']==1,key+': transcript-only model cannot evidence a model change')
     # Without a session ID or delegation, separate runs keep separate state (keyed by
     # transcript) instead of pooling into default.json and sharing one budget (#402).
-    def event_without_ids(label, model, path):
+    # A late PreToolUse from the old session (same delegation) must not confirm the
+    # new session's pending scope with its own model (Codex review of #403).
+    key='pending-other-session'
+    old_path=transcript(key,'gpt-6-sol',41000000)
+    check(decision(event(key,'old','gpt-6-sol',old_path))=='deny',key+': old session reaches the cap')
+    new_path=transcript(key+'-new','gpt-6-sol',1000)
+    event(key,'new','',new_path,'UserPromptSubmit','resume','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': session change with resume grants one epoch')
+    event(key,'old','gpt-6-luna',old_path,turn='late')
+    check(state(key).get('budget_scope_model_pending') is True,key+': another session cannot confirm the scope')
+    event(key,'new','gpt-6-sol',new_path,'UserPromptSubmit','resume-again','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': unchanged model in the resumed session cannot regrant')
+    def event_without_ids(label, model, path, extras=None):
         p=dict(hook_event_name='PreToolUse',session_id='',model=model,turn_id='old',
-               cwd=tmp,transcript_path=str(path),tool_name='Bash',tool_input={'command':'pwd'})
+               cwd=tmp,tool_name='Bash',tool_input={'command':'pwd'})
+        if path is not None:
+            p['transcript_path']=str(path)
         run_env={k:v for k,v in env.items() if k!='CODEX_H1_DELEGATION'}
+        run_env.update(extras or {})
         proc=subprocess.run(['bash',str(hook)],input=json.dumps(p),text=True,capture_output=True,env=run_env)
         check(proc.returncode==0, label+' hook exit=0')
         return json.loads(proc.stdout or "{}")
+    # A run without IDs that first reported no transcript_path is tracked in
+    # default.json. When its transcript path appears, the cap must carry over
+    # instead of restarting from a fresh state (Codex review of #403). Run this
+    # before the per-transcript runs below, which must leave no default.json.
+    proxy={'CODEX_H1_PROXY_TOKENS_PER_CALL':'40000000'}
+    check(decision(event_without_ids('noid-proxy','gpt-6-luna',None,proxy))=='deny','noid-proxy: capped without a transcript')
+    late_path=transcript('noid-late','gpt-6-luna',1000)
+    check(decision(event_without_ids('noid-late','gpt-6-luna',late_path,proxy))=='deny',
+          'noid-late: cap carries over when the transcript path appears')
+    (home/'state'/'default.json').unlink()
     for run in ('a','b'):
         path=transcript('noid-'+run,'gpt-6-luna',30000000)
         out=event_without_ids('noid-'+run,'gpt-6-luna',path)

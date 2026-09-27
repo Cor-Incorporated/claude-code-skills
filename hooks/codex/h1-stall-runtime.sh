@@ -709,7 +709,9 @@ def apply_meter(state, records, measured):
         # The metered model can come from an older transcript turn (measure_spend
         # reads the last "model" string) or from state["model"] (the old scope), and
         # pinning either would let a later resume pass as a model change (#402).
-        if PAYLOAD_MODEL:
+        # Only the resumed session may confirm it: a late call from the old session
+        # (same delegation) reports the old session's model.
+        if PAYLOAD_MODEL and SID and SID == state.get("budget_scope_session_id"):
             state["budget_scope_model"] = PAYLOAD_MODEL
             state.pop("budget_scope_model_pending", None)
     elif not state.get("budget_scope_model"):
@@ -1323,6 +1325,32 @@ def deny_reason(rule, detail, state, path):
     ).replace("\n", " ")
 
 
+def seed_from_fallback(path):
+    """Start a new transcript-keyed state from default.json when that exists.
+
+    A run without IDs that first reported no transcript_path was tracked in
+    default.json. Carrying that state over keeps its spend and any cap when the
+    transcript path appears, instead of restarting from zero (#402). It may also
+    carry another ID-less run's spend; that errs on the side of stopping.
+    """
+    fallback = state_path("default")
+    if path.exists() or not fallback.exists():
+        return
+    try:
+        with fallback.with_suffix(".lock").open("a+") as fallback_lock:
+            fcntl.flock(fallback_lock, fcntl.LOCK_SH)
+            data = fallback.read_text(encoding="utf-8")
+        if not isinstance(json.loads(data), dict):
+            return
+        with tempfile.NamedTemporaryFile("w", dir=str(path.parent), delete=False,
+                                         encoding="utf-8") as stream:
+            stream.write(data)
+            temp = stream.name
+        os.replace(temp, path)
+    except (OSError, ValueError):
+        return
+
+
 def main():
     delegation, slug = resolve_delegation()
     path = state_path(slug)
@@ -1331,6 +1359,8 @@ def main():
     # delegation. A separate lock file survives atomic replacement of JSON.
     with path.with_suffix(".lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if slug.startswith("transcript-"):
+            seed_from_fallback(path)
         run_locked(delegation, path)
 
 

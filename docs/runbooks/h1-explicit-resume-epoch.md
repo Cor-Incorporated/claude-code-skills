@@ -8,8 +8,8 @@
 - `CODEX_H1_RESTRICTED_MODELS` は無進捗・反復停止だけを絞る（既定 `sol`）。予算からモデルを除外しない。`CODEX_H1_BUDGET_USD` を明示した実行では、その値を使う。今回の全ローカル配布で展示向けの期限付き `budget=0` 例外は撤収する。
 - 明示続行の単独指示と有効な `session_id` / `turn_id`、セッションまたはモデルの遷移が必要。同じscopeの続行だけ、遷移だけ、引用・否定・疑問、ID欠落では新epochにしない。未承認の遷移後にツールがdenyされた場合も、`budget_scope_session_id` / `budget_scope_model` を保持して後の明示続行を判定する。新epoch付与時だけscopeを更新する。
 - 新しいSolセッションへ渡す際は対象Issue、branch/worktree、差分・試験ログ、停止rule、旧epochの推定消費、残作業、撤収方法を引き継ぎ、最初に `作業を続けて下さい` を送る。今回はすでに起動された後続Solセッション1つのみ。hookは新しいセッションを起動せず、以降の自動連鎖を認めない。
-- 明示続行の依頼にモデルが無いときは、新しい予算 scope のモデルを未確定（`budget_scope_model_pending`）にし、その後の hook の payload に載ったモデル（今のターンのもの）で確定する。transcript から読んだモデルや直前に観測したモデルでは確定しない（古いターンや旧 scope のものがあり得る）。未確定の間は、モデル変更を続行の根拠にしない（#402）
-- `session_id` と `CODEX_H1_DELEGATION` のどちらも無い実行は、`transcript_path` の SHA-256（先頭 16 桁）で状態を分ける（`transcript-<hash>.json`）。3 つとも無いときだけ `default` を使う。別々の実行が 1 つの予算を共有しないため（#402）
+- 明示続行の依頼にモデルが無いときは、新しい予算 scope のモデルを未確定（`budget_scope_model_pending`）にし、その後、再開したセッション本人の hook の payload に載ったモデル（今のターンのもの）で確定する。transcript から読んだモデルや直前に観測したモデルでは確定しない（古いターンや旧 scope のものがあり得る）。未確定の間は、モデル変更を続行の根拠にしない（#402）
+- `session_id` と `CODEX_H1_DELEGATION` のどちらも無い実行は、`transcript_path` の SHA-256（先頭 16 桁）で状態を分ける（`transcript-<hash>.json`）。3 つとも無いときだけ `default` を使う。別々の実行が 1 つの予算を共有しないため（#402）。transcript 単位の状態を初めて作るときに `default.json` が残っていれば、それを引き継いで始める（transcript_path が後から現れた実行が上限を回避しないため。別の ID 無し実行の支出も引き継ぎ得るが、止める側に倒れる）
 - 台帳の `restricted` は従来の無進捗・反復対象を示し、`budget_restricted=true` は全モデル予算判定を示す。旧支出と停止履歴を残し、hookとwrapperは同じepoch支出を読む。
 - 検証: `bash tests/test-h1-restricted-models.sh`。`H1_HOOK_UNDER_TEST` / `H1_LIB_UNDER_TEST` に配備先の絶対パスを渡すと、実ファイルを一時HOME・状態・台帳で発火できる。本番stateや実料金を増やす試験はしない。
 
