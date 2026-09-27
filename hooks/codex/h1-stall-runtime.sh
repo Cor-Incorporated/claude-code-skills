@@ -269,13 +269,11 @@ def is_progress(cmd):
 
 
 def resolve_delegation():
-    raw = os.environ.get("CODEX_H1_DELEGATION") or SID
-    if not raw and TRANSCRIPT_PATH:
-        # Without a delegation or session ID, keep separate runs apart by their
-        # rollout file. Pooling them into one "default" state made unrelated runs
-        # share a single all-model budget (#402). Hash the path: it is a key only.
-        raw = "transcript-" + hashlib.sha256(TRANSCRIPT_PATH.encode("utf-8")).hexdigest()[:16]
-    raw = raw or "default"
+    # Runs with neither a delegation nor a session ID share one "default" state and
+    # budget on purpose (fail closed). Splitting them by transcript_path was tried
+    # for #402 and let a run escape its cap whenever the key changed, so it was
+    # reverted; see docs/runbooks/h1-explicit-resume-epoch.md.
+    raw = os.environ.get("CODEX_H1_DELEGATION") or SID or "default"
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", raw)[:120]
     return raw, (safe or "default")
 
@@ -1081,9 +1079,10 @@ def resume_epoch(state, path):
         state["budget_scope_model"] = PAYLOAD_MODEL
         state.pop("budget_scope_model_pending", None)
     else:
-        # The prompt carried no model: the new scope's model is unknown until the
-        # first real observation (apply_meter). Storing the old model here let a
-        # later resume in the same session pass as a model change (#402).
+        # The prompt carried no model: the new scope's model stays unknown until the
+        # resumed session's own hook payload reports one (apply_meter). Storing the
+        # old model here let a later resume in the same session pass as a model
+        # change (#402).
         state["budget_scope_model"] = ""
         state["budget_scope_model_pending"] = True
     state["last_warn_80"] = 0
@@ -1325,32 +1324,6 @@ def deny_reason(rule, detail, state, path):
     ).replace("\n", " ")
 
 
-def seed_from_fallback(path):
-    """Start a new transcript-keyed state from default.json when that exists.
-
-    A run without IDs that first reported no transcript_path was tracked in
-    default.json. Carrying that state over keeps its spend and any cap when the
-    transcript path appears, instead of restarting from zero (#402). It may also
-    carry another ID-less run's spend; that errs on the side of stopping.
-    """
-    fallback = state_path("default")
-    if path.exists() or not fallback.exists():
-        return
-    try:
-        with fallback.with_suffix(".lock").open("a+") as fallback_lock:
-            fcntl.flock(fallback_lock, fcntl.LOCK_SH)
-            data = fallback.read_text(encoding="utf-8")
-        if not isinstance(json.loads(data), dict):
-            return
-        with tempfile.NamedTemporaryFile("w", dir=str(path.parent), delete=False,
-                                         encoding="utf-8") as stream:
-            stream.write(data)
-            temp = stream.name
-        os.replace(temp, path)
-    except (OSError, ValueError):
-        return
-
-
 def main():
     delegation, slug = resolve_delegation()
     path = state_path(slug)
@@ -1359,8 +1332,6 @@ def main():
     # delegation. A separate lock file survives atomic replacement of JSON.
     with path.with_suffix(".lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if slug.startswith("transcript-"):
-            seed_from_fallback(path)
         run_locked(delegation, path)
 
 

@@ -174,31 +174,23 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
     check(state(key).get('budget_scope_model_pending') is True,key+': another session cannot confirm the scope')
     event(key,'new','gpt-6-sol',new_path,'UserPromptSubmit','resume-again','作業を続けて下さい')
     check(state(key)['budget_epoch']==1,key+': unchanged model in the resumed session cannot regrant')
-    def event_without_ids(label, model, path, extras=None):
+    def event_without_ids(label, model, path):
         p=dict(hook_event_name='PreToolUse',session_id='',model=model,turn_id='old',
-               cwd=tmp,tool_name='Bash',tool_input={'command':'pwd'})
-        if path is not None:
-            p['transcript_path']=str(path)
+               cwd=tmp,transcript_path=str(path),tool_name='Bash',tool_input={'command':'pwd'})
         run_env={k:v for k,v in env.items() if k!='CODEX_H1_DELEGATION'}
-        run_env.update(extras or {})
         proc=subprocess.run(['bash',str(hook)],input=json.dumps(p),text=True,capture_output=True,env=run_env)
         check(proc.returncode==0, label+' hook exit=0')
         return json.loads(proc.stdout or "{}")
-    # A run without IDs that first reported no transcript_path is tracked in
-    # default.json. When its transcript path appears, the cap must carry over
-    # instead of restarting from a fresh state (Codex review of #403). Run this
-    # before the per-transcript runs below, which must leave no default.json.
-    proxy={'CODEX_H1_PROXY_TOKENS_PER_CALL':'40000000'}
-    check(decision(event_without_ids('noid-proxy','gpt-6-luna',None,proxy))=='deny','noid-proxy: capped without a transcript')
-    late_path=transcript('noid-late','gpt-6-luna',1000)
-    check(decision(event_without_ids('noid-late','gpt-6-luna',late_path,proxy))=='deny',
-          'noid-late: cap carries over when the transcript path appears')
-    (home/'state'/'default.json').unlink()
-    for run in ('a','b'):
-        path=transcript('noid-'+run,'gpt-6-luna',30000000)
-        out=event_without_ids('noid-'+run,'gpt-6-luna',path)
-        check(decision(out)=='allow','noid-'+run+': separate run under the cap is allowed')
-    check(not (home/'state'/'default.json').exists(),'runs without ids do not pool into default.json')
+    # Documented limitation (#402, #403): runs with neither a session ID nor a
+    # delegation share default.json and one budget, failing closed. Splitting them
+    # by transcript_path let a run escape its cap whenever the key changed, so it was
+    # reverted. Pin the pooled behavior so a change that splits the state fails here.
+    first=transcript('noid-a','gpt-6-luna',30000000)
+    check(decision(event_without_ids('noid-a','gpt-6-luna',first))=='allow','noid-a: first run under the cap is allowed')
+    second=transcript('noid-b','gpt-6-luna',30000000)
+    check(decision(event_without_ids('noid-b','gpt-6-luna',second))=='deny',
+          'noid-b: runs without ids share one budget and fail closed')
+    check((home/'state'/'default.json').exists(),'runs without ids use default.json')
     # RESTRICTED_MODELS cannot exempt any model from the budget cap.
     path=transcript('not-exempt','gpt-6-luna',41000000)
     check(decision(event('not-exempt','luna','gpt-6-luna',path,extras={'CODEX_H1_RESTRICTED_MODELS':'terra'}))=='deny',
