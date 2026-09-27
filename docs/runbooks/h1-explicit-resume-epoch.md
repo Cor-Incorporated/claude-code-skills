@@ -13,7 +13,13 @@
 1. 新しい H1 本体と wrapper を先に隔離環境で検証してから、`~/.codex/hooks/h1-stall-runtime.sh` と `~/.claude/scripts/lib/h1-runtime.sh` へ配備する。フル `setup.sh` は他の settings・skills も更新するため、H1 だけを配備する場合は対象ファイルを個別に更新する。**repo の素の H1 本体をコピーすると現行の臨時例外も消える**。作業を止めた切替時間帯に配備・trust・読戻しを連続実行し、失敗時は直ちに一時例外付きバックアップへ戻す。
 2. `python3 scripts/register-codex-h1-hooks.py ~/.codex/hooks.json ~/.codex/hooks` で UserPromptSubmit に**同じ H1 本体**を登録する。`setup.sh` もこの登録器を呼ぶ。登録器は既存の PreToolUse と他 event を維持し、既存設定に PreToolUse H1 が無ければ変更せず失敗する。新規設定では PreToolUse の protect→H1 と UserPromptSubmit H1 を作る。UserPromptSubmit の matcher は不要。`bash tests/test-register-codex-h1-hooks.sh` の陰性・冪等テストを通す。
 3. Codex CLI の `/hooks` で新しい UserPromptSubmit hook を review・trust する。既存 PreToolUse 2 本も有効・trusted であることを同じ画面で確認する。Codex は非 managed hook の現在の定義 hash ごとに trust を記録する。`config.toml` の `trusted_hash` を手編集せず、`--dangerously-bypass-hook-trust` を配備の証拠にしない。既存 pair15 は位置と enabled を照合するだけで hash の検証にはならない。
-4. 配布元・配備先の SHA 一致、`hooks.json` の 3 登録、`/hooks` の trust 状態を読み戻す。隔離 fixture で fork の親累積除外・子消費計上、明示続行だけの reset、hook と watchdog の同一判定を確認する。実経路は安全な読取コマンドと H6 台帳の reset/判定行で確認し、新しいゲームラウンドは実行しない。
+4. 配布元・配備先の SHA 一致、`hooks.json` の 3 登録、`/hooks` の trust 状態を読み戻す。隔離 fixture で Desktop の ambient envelope を付けた明示続行、fork の親累積除外・子消費計上、明示続行だけの reset、hook と watchdog の同一判定を確認する。実経路は安全な読取コマンドと H6 台帳の reset/判定行で確認し、新しいゲームラウンドは実行しない。
+
+## Desktop入力と継承カウンタ
+
+- `UserPromptSubmit.prompt` が Desktop の `<in-app-browser-context source="ambient-ui-state">…</in-app-browser-context>` と `## My request:` を含む場合、その形を検査して最後の依頼本文だけを全文一致で判定する。ambient部、引用、否定、疑問、同一 session/model の続行だけでは予算をresetしない。実payloadが保存されていない事故事例の因果は、実Desktop再開の読戻しまで未確定と記録する。
+- `total_token_usage` のsnapshotと `token_usage_record.thread_token_usage.total_tokens` はfork間で別の累積系列になり得る。同じtranscript pathのevent差分だけを比較し、pathごとのsnapshotと未確定gap推計を保持する。初回eventがある場合は、そのevent自身の `last_token_usage` を引いたbaselineから、既に計上したresponse recordを除いて欠落分を推計する。response recordはresponse IDで一度だけ課金し、親/子のthread累積をevent snapshotとして使わない。
+- 追加の反証fixture: `bash tests/test-h1-inherited-counter-stream.sh` は別pathへの切替、元pathへの復帰、record遅着、record欠落の順を試す。回帰値は `$0.075342` の新応答に別streamの累積値を混ぜて `$16.897078` としないこと、および同一streamの未記録差分を残すこと。既存の `bash tests/test-h1-explicit-resume-epoch.sh` も遅着recordの清算を含めて通す。
 
 公式 [Codex Hooks 文書](https://learn.chatgpt.com/docs/hooks)は hook payload の `session_id`、`model`、`turn_id`、UserPromptSubmit の `prompt` を記載する一方、transcript 形式は安定した hook interface ではないと明記する。fork metadata や rollout の内部 JSON だけを恒久判定の唯一の根拠にしない。
 

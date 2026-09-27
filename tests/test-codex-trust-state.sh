@@ -28,6 +28,8 @@ trap 'rm -rf "$SB"' EXIT
 cat > "$SB/hooks.json" <<'JSON'
 {"hooks":{"PreToolUse":[{"matcher":".*","hooks":[
   {"type":"command","command":"bash /x/.codex/hooks/protect-branches-codex.sh"},
+  {"type":"command","command":"bash /x/.codex/hooks/h1-stall-runtime.sh"}]}],
+  "UserPromptSubmit":[{"hooks":[
   {"type":"command","command":"bash /x/.codex/hooks/h1-stall-runtime.sh"}]}]}}
 JSON
 
@@ -41,6 +43,10 @@ enabled = false
 
 [hooks.state."/x/.codex/hooks.json:pre_tool_use:0:1"]
 trusted_hash = "sha256:bbb"
+enabled = true
+
+[hooks.state."/x/.codex/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:ccc"
 enabled = true
 TOML
 out="$(run "$SB/disabled.toml")"
@@ -59,9 +65,9 @@ trusted_hash = "sha256:aaa"
 enabled = true
 TOML
 out="$(run "$SB/absent.toml")"
-if printf '%s' "$out" | grep -q 'h1-stall-runtime.sh' \
-   && printf '%s' "$out" | grep -q 'no trust entry'; then
-  ok "case2 hook without a trust entry is reported"
+if printf '%s' "$out" | grep -q 'pre_tool_use:0:1.*no trust entry' \
+   && printf '%s' "$out" | grep -q 'user_prompt_submit:0:0.*no trust entry'; then
+  ok "case2 missing PreToolUse and UserPromptSubmit trust entries are reported"
 else
   bad "case2 missing trust entry not reported" "$out"
 fi
@@ -72,6 +78,9 @@ cat > "$SB/ok.toml" <<'TOML'
 enabled = true
 
 [hooks.state."/x/.codex/hooks.json:pre_tool_use:0:1"]
+enabled = true
+
+[hooks.state."/x/.codex/hooks.json:user_prompt_submit:0:0"]
 enabled = true
 TOML
 n="$(run "$SB/ok.toml" | grep -c . || true)"
@@ -88,6 +97,9 @@ trusted_hash = "sha256:aaa"
 
 [hooks.state."/x/.codex/hooks.json:pre_tool_use:0:1"]
 trusted_hash = "sha256:bbb"
+
+[hooks.state."/x/.codex/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:ccc"
 TOML
 n="$(run "$SB/unset.toml" | grep -c . || true)"
 if [[ "$n" -eq 0 ]]; then

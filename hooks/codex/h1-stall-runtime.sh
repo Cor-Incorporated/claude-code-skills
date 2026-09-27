@@ -137,9 +137,20 @@ h1_transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/
 # Only the boolean is passed to the decision core. Raw user text is never put
 # in state or the H6 ledger. The transition and the user request must BOTH be
 # present before an epoch is granted; model/session change alone is insufficient.
+# Desktop may prefix the request with one ambient browser presentation envelope.
+# Strip only that complete, leading envelope and its immediately following marker;
+# never search arbitrary quoted text for a command. The ambient body cannot grant
+# resume, and the extracted request must still match a standalone command in full.
+# This handles a reproduced input shape, not proof of the incident's raw payload.
 h1_resume_intent=$(printf '%s' "$input" | jq -r '
-  (.prompt // "" | gsub("^[[:space:]]+|[[:space:]]+$"; "")) |
-  test("^(?:(?:作業を|実装を)?続けて(?:実装して)?(?:ください|下さい|お願いします)|(?:作業を)?(?:再開|続行)して(?:ください|下さい|お願いします)|引き続き実装してください|進めて(?:ください|下さい)?|OK[、,]?(?:では)?進めて|モデルを[A-Za-z0-9_.-]+に変更したので[、,]?続けて(?:ください|下さい)|H1予算をリセットして(?:続けて|再開して|続行して)(?:ください|下さい)|(?:please[[:space:]]+)?continue(?: the work| the implementation| implementation)?|(?:please[[:space:]]+)?resume(?: the work| the implementation| implementation)?|proceed)[。！!.]*$"; "i")
+  def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
+  def request_text:
+    if startswith("<in-app-browser-context source=\"ambient-ui-state\">") then
+      (try capture("^<in-app-browser-context source=\"ambient-ui-state\">\\r?\\n(?<ambient>(?:(?!</?in-app-browser-context\\b).)*)\\r?\\n</in-app-browser-context>[[:space:]]*## My request:[ \\t]*(?:\\r?\\n)+(?<request>.*)$"; "ms") catch null) |
+      if . == null then "" else .request end
+    else . end;
+  (.prompt // "" | if type == "string" then trim | request_text | trim else "" end) |
+  test("^(?:(?:作業を|実装を)?続けて(?:実装して)?(?:ください|下さい|お願いします)|H1を修正を行いました。[[:space:]]*続けて(?:ください|下さい|お願いします)|(?:作業を)?(?:再開|続行)して(?:ください|下さい|お願いします)|引き続き実装してください|進めて(?:ください|下さい)?|OK[、,]?(?:では)?進めて|モデルを[A-Za-z0-9_.-]+に変更したので[、,]?続けて(?:ください|下さい)|H1予算をリセットして(?:続けて|再開して|続行して)(?:ください|下さい)|(?:please[[:space:]]+)?continue(?: the work| the implementation| implementation)?|(?:please[[:space:]]+)?resume(?: the work| the implementation| implementation)?|proceed)[。！!.]*$"; "i")
 ' 2>/dev/null || true)
 # 北極星の分子（repo/branch 結合キー, aidd-governance#155）を決める cwd。
 # 2026-09-04 実測: ~/.codex/hooks.json は CODEX_H1_CWD を渡さないので os.getcwd() に
@@ -517,6 +528,50 @@ def usd_from(usage, model):
     return round(usd, 6), note
 
 
+def first_event_counter(path):
+    """Return the first event-stream baseline, subtracting only its own delta.
+
+    total_token_usage and token_usage_record.thread_token_usage have different
+    inherited offsets in forked Codex sessions. Keep event snapshots per file;
+    for a file first seen after records, its first event's last_token_usage is
+    the only local baseline that can be removed without comparing those two
+    lifetime counters.
+    """
+    try:
+        with path.open("rb") as stream:
+            for raw in stream:
+                try:
+                    row = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                payload = row.get("payload") or {}
+                if not isinstance(payload, dict):
+                    continue
+                info = payload.get("info") or {}
+                if not isinstance(info, dict):
+                    continue
+                if (row.get("type") != "event_msg" or payload.get("type") != "token_count"
+                        or not isinstance(info.get("total_token_usage"), dict)):
+                    continue
+                total = info["total_token_usage"]
+                last = info.get("last_token_usage")
+                if not isinstance(last, dict):
+                    return None
+                try:
+                    baseline = {
+                        key: max(0, int(total.get(key, 0) or 0) - int(last.get(key, 0) or 0))
+                        for key in ("input_tokens", "cached_input_tokens", "output_tokens", "total_tokens")
+                    }
+                except (TypeError, ValueError):
+                    return None
+                return baseline
+    except OSError:
+        return None
+    return None
+
+
 def measure_spend(tool_calls, started_ts, state=None):
     """Return (tokens, usd, budget_source)."""
     path = find_rollout(started_ts)
@@ -575,6 +630,17 @@ def usage_records(path, state):
     except OSError:
         return []
     previous_path = state.get("meter_path")
+    if previous_path and isinstance(state.get("usage_snapshot"), dict) \
+            and not state.get("usage_snapshot_path"):
+        # Tag a pre-stream-map state before meter_path changes on a fork switch.
+        state["usage_snapshot_path"] = previous_path
+    if key not in (state.get("meter_stream_baselines") or {}):
+        baseline = first_event_counter(path)
+        if baseline is not None:
+            state.setdefault("meter_stream_baselines", {})[key] = baseline
+    if isinstance(state.get("meter_gap_estimate_usd"), (int, float)) \
+            and "meter_gap_estimate_path" not in state and previous_path:
+        state["meter_gap_estimate_path"] = previous_path
     previous_offset = int(state.get("meter_offset") or 0)
     # Existing states were priced from cumulative total_token_usage. Scanning
     # their old records as new responses would double-charge them. Start at
@@ -586,6 +652,7 @@ def usage_records(path, state):
         state["charged_response_ids"] = []
         state["meter_mode"] = "record"
         state["budget_source"] = "rollout:legacy-record-baseline-estimate"
+        state["meter_legacy_baseline_path"] = key
         return []
     start = previous_offset if previous_path == key and previous_offset <= size else 0
     turn_models = state.get("turn_models")
@@ -649,6 +716,19 @@ def apply_meter(state, records, measured):
     tokens, absolute_usd, source, model, usage = measured
     state["model"] = model
     state["session_id"] = SID or state.get("session_id", "")
+    meter_key = state.get("meter_path") or ""
+    snapshots = state.setdefault("usage_snapshots_by_path", {})
+    prior_usage = snapshots.get(meter_key) if meter_key else None
+    if prior_usage is None and state.get("usage_snapshot_path") == meter_key:
+        prior_usage = state.get("usage_snapshot")
+    had_gap_map = isinstance(state.get("meter_gaps_by_path"), dict)
+    gaps = state.setdefault("meter_gaps_by_path", {})
+    if not had_gap_map and state.get("meter_gap_estimate_path"):
+        gaps[state["meter_gap_estimate_path"]] = {
+            "usd": float(state.get("meter_gap_estimate_usd") or 0),
+            "tokens": int(state.get("meter_gap_estimate_tokens") or 0),
+        }
+    active_gap = gaps.get(meter_key, {}) if meter_key else {}
     delta_usd = 0.0
     if records:
         state["meter_mode"] = "record"
@@ -671,6 +751,8 @@ def apply_meter(state, records, measured):
         uncertain_model = False
         unknown_rate = False
         recorded_components = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
+        accumulated = state.setdefault("meter_recorded_components_by_path", {})
+        path_recorded = accumulated.setdefault(meter_key, {key: 0 for key in recorded_components}) if meter_key else {}
         for rid, response_usage, thread_total, turn, record_model in records:
             if rid in seen:
                 continue
@@ -686,16 +768,17 @@ def apply_meter(state, records, measured):
             added += 1
             for key in recorded_components:
                 recorded_components[key] += int(response_usage.get(key, 0) or 0)
+                if meter_key:
+                    path_recorded[key] = int(path_recorded.get(key, 0) or 0) + int(response_usage.get(key, 0) or 0)
             if thread_total:
                 tokens = max(tokens, thread_total)
                 if state.get("budget_epoch") and not state.get("budget_epoch_baseline_record_tokens"):
                     state["budget_epoch_baseline_record_tokens"] = max(
                         0, thread_total - int(response_usage.get("total_tokens", 0) or 0)
                     )
-        pending_usd = float(state.get("meter_gap_estimate_usd") or 0)
-        pending_tokens = int(state.get("meter_gap_estimate_tokens") or 0)
+        pending_usd = float(active_gap.get("usd") or 0)
+        pending_tokens = int(active_gap.get("tokens") or 0)
         recorded_tokens = recorded_components["input_tokens"] + recorded_components["output_tokens"]
-        prior_usage = state.get("usage_snapshot")
         # The current cumulative increase may represent fresh responses in
         # this very batch. Reserve it before assigning delayed records to an
         # older estimate. If either snapshot is missing, the overlap cannot be
@@ -723,6 +806,9 @@ def apply_meter(state, records, measured):
             )
             state["meter_gap_estimate_usd"] = round(pending_usd - provisional, 6)
             state["meter_gap_estimate_tokens"] = pending_tokens - settle_tokens
+            if meter_key:
+                active_gap = {"usd": state["meter_gap_estimate_usd"],
+                              "tokens": state["meter_gap_estimate_tokens"]}
         if provisional:
             delta_usd -= provisional
         state["charged_response_ids"] = list(seen)
@@ -745,6 +831,34 @@ def apply_meter(state, records, measured):
                     state["meter_gap_estimate_tokens"] = int(state.get("meter_gap_estimate_tokens") or 0) + max(
                         0, missing["input_tokens"] + missing["output_tokens"]
                     )
+                    active_gap = {"usd": state["meter_gap_estimate_usd"],
+                                  "tokens": state["meter_gap_estimate_tokens"]}
+            elif meter_key:
+                # First sample for this stream: subtract the event stream's
+                # own inherited baseline, then remove records already charged.
+                baseline = (state.get("meter_stream_baselines") or {}).get(meter_key)
+                if isinstance(baseline, dict):
+                    initial_missing = {
+                        key: max(0, int(usage.get(key, 0) or 0) - int(baseline.get(key, 0) or 0)
+                                 - int(path_recorded.get(key, 0) or 0))
+                        for key in recorded_components
+                    }
+                    if initial_missing["input_tokens"] or initial_missing["output_tokens"]:
+                        partial_gap, _note = usd_from(initial_missing, model)
+                        delta_usd += partial_gap
+                        active_gap = {
+                            "usd": round(float(active_gap.get("usd") or 0) + partial_gap, 6),
+                            "tokens": int(active_gap.get("tokens") or 0)
+                                     + initial_missing["input_tokens"] + initial_missing["output_tokens"],
+                        }
+                        state["meter_gap_estimate_usd"] = active_gap["usd"]
+                        state["meter_gap_estimate_tokens"] = active_gap["tokens"]
+                        state["meter_gap_estimate_path"] = meter_key
+                else:
+                    state["budget_source"] = source + "+stream-baseline-unavailable"
+            if meter_key:
+                snapshots[meter_key] = usage
+                state["usage_snapshot_path"] = meter_key
             state["usage_snapshot"] = usage
         # A late response can have a cheaper model than a fresh response whose
         # cumulative tokens arrived without a record. The current interval's
@@ -765,7 +879,7 @@ def apply_meter(state, records, measured):
         # A turn can call several tools without a new model response. If the
         # cumulative counter advances without records, estimate only its delta
         # and label it; never add the full lifetime total again.
-        previous = state.get("usage_snapshot")
+        previous = prior_usage
         if isinstance(usage, dict):
             if isinstance(previous, dict):
                 delta = {
@@ -774,23 +888,63 @@ def apply_meter(state, records, measured):
                 }
                 delta_usd, _note = usd_from(delta, model)
                 observed = max(0, int(usage.get("total_tokens", 0) or 0) - int(previous.get("total_tokens", 0) or 0))
-                if observed:
-                    state["meter_gap_estimate_tokens"] = int(state.get("meter_gap_estimate_tokens") or 0) + observed
+                if delta_usd or observed:
+                    active_gap = {
+                        "usd": float(active_gap.get("usd") or 0),
+                        "tokens": int(active_gap.get("tokens") or 0) + observed,
+                    }
+                    state["meter_gap_estimate_tokens"] = active_gap["tokens"]
+                    state["meter_gap_estimate_path"] = meter_key
             elif int(state.get("tool_calls") or 0) > 1:
                 state["budget_source"] = "rollout:record-gap-unverified"
+            if prior_usage is None and meter_key:
+                baseline = (state.get("meter_stream_baselines") or {}).get(meter_key)
+                if isinstance(baseline, dict):
+                    charged = (state.get("meter_recorded_components_by_path") or {}).get(meter_key, {})
+                    missing = {
+                        key: max(0, int(usage.get(key, 0) or 0) - int(baseline.get(key, 0) or 0)
+                                 - int(charged.get(key, 0) or 0))
+                        for key in ("input_tokens", "cached_input_tokens", "output_tokens")
+                    }
+                    if missing["input_tokens"] or missing["output_tokens"]:
+                        delta_usd, _note = usd_from(missing, model)
+                        observed = missing["input_tokens"] + missing["output_tokens"]
+                        state["meter_gap_estimate_tokens"] = int(active_gap.get("tokens") or 0) + observed
+                        state["meter_gap_estimate_path"] = meter_key
+                        active_gap = {"usd": float(active_gap.get("usd") or 0),
+                                      "tokens": state["meter_gap_estimate_tokens"]}
+                else:
+                    state["budget_source"] = source + "+stream-baseline-unavailable"
+            if meter_key:
+                snapshots[meter_key] = usage
+                state["usage_snapshot_path"] = meter_key
             state["usage_snapshot"] = usage
         else:
             per_call = env_num("CODEX_H1_PROXY_TOKENS_PER_CALL", 20000.0)
             delta_usd, _note = usd_from({"input_tokens": int(per_call)}, model)
             state["budget_source"] = "proxy:record-gap-estimate"
         if delta_usd:
-            state["meter_gap_estimate_usd"] = round(
-                float(state.get("meter_gap_estimate_usd") or 0) + delta_usd, 6
-            )
             if isinstance(usage, dict):
+                # The active path's provisional charge is retained until
+                # delayed records from that same transcript reconcile it.
+                active_gap = {
+                    "usd": round(float(active_gap.get("usd") or 0) + delta_usd, 6),
+                    "tokens": int(active_gap.get("tokens") or 0),
+                }
+                state["meter_gap_estimate_usd"] = active_gap["usd"]
+                state["meter_gap_estimate_tokens"] = active_gap["tokens"]
+                state["meter_gap_estimate_path"] = meter_key
                 state["budget_source"] = "rollout:total_token_usage+record-gap-estimate"
+            else:
+                active_gap = {
+                    "usd": round(float(active_gap.get("usd") or 0) + delta_usd, 6),
+                    "tokens": int(active_gap.get("tokens") or 0),
+                }
+                state["meter_gap_estimate_usd"] = active_gap["usd"]
+                state["meter_gap_estimate_tokens"] = active_gap["tokens"]
+                state["meter_gap_estimate_path"] = meter_key
     elif isinstance(usage, dict):
-        previous = state.get("usage_snapshot")
+        previous = prior_usage
         if state.pop("budget_epoch_pending_baseline", False):
             # No response records: this is a lower-confidence fallback. The
             # inherited total is excluded, and the omission is labeled.
@@ -804,8 +958,23 @@ def apply_meter(state, records, measured):
             delta_usd, _note = usd_from(delta, model)
             state["budget_source"] = source + "+delta"
         else:
-            delta_usd = absolute_usd
-            state["budget_source"] = source
+            baseline = (state.get("meter_stream_baselines") or {}).get(meter_key)
+            if isinstance(baseline, dict):
+                delta = {
+                    key: max(0, int(usage.get(key, 0) or 0) - int(baseline.get(key, 0) or 0))
+                    for key in ("input_tokens", "cached_input_tokens", "output_tokens")
+                }
+                delta_usd, _note = usd_from(delta, model)
+                state["budget_source"] = source + "+stream-baseline-delta"
+            else:
+                # Without a same-stream baseline, its lifetime total may contain
+                # inherited parent usage. Preserve it as the first snapshot and
+                # label the missing baseline instead of pricing that history.
+                delta_usd = 0.0
+                state["budget_source"] = source + "+stream-baseline-unavailable"
+        if meter_key and isinstance(usage, dict):
+            snapshots[meter_key] = usage
+            state["usage_snapshot_path"] = meter_key
         state["usage_snapshot"] = usage
     else:
         previous = float(state.get("proxy_spend_usd") or 0)
@@ -814,6 +983,18 @@ def apply_meter(state, records, measured):
         state["budget_source"] = source
     state["spend_usd"] = max(0.0, round(float(state.get("spend_usd") or 0) + delta_usd, 6))
     state["spend_tokens"] = tokens
+    if meter_key:
+        if active_gap.get("usd") or active_gap.get("tokens"):
+            gaps[meter_key] = active_gap
+            state["meter_gap_estimate_path"] = meter_key
+            state["meter_gap_estimate_usd"] = active_gap.get("usd", 0.0)
+            state["meter_gap_estimate_tokens"] = active_gap.get("tokens", 0)
+        else:
+            gaps.pop(meter_key, None)
+            if state.get("meter_gap_estimate_path") == meter_key:
+                state.pop("meter_gap_estimate_path", None)
+                state["meter_gap_estimate_usd"] = 0.0
+                state["meter_gap_estimate_tokens"] = 0
     if state.get("budget_epoch"):
         state["budget_epoch_spend_usd"] = max(0.0, round(
             float(state.get("budget_epoch_spend_usd") or 0) + delta_usd, 6
@@ -855,6 +1036,8 @@ def resume_epoch(state, path):
     # subtract them from a newly granted budget interval.
     state.pop("meter_gap_estimate_usd", None)
     state.pop("meter_gap_estimate_tokens", None)
+    state.pop("meter_gap_estimate_path", None)
+    state.pop("meter_gaps_by_path", None)
     baseline = max((total for _, _, total, _, _ in records), default=0)
     if not baseline:
         baseline = max(int(state.get("spend_tokens") or 0), measured[0])

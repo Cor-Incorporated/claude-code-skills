@@ -71,6 +71,8 @@ seed_rollout() { # $1=model  $2=input_tokens  $3=output_tokens
   mkdir -p "$dir"
   cat >"$dir/rollout-2026-09-01T00-00-00-fixture.jsonl" <<EOF
 {"type":"session_meta","payload":{"model":"$1"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0},"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0}}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":$2,"cached_input_tokens":0,"output_tokens":$3,"total_tokens":$(($2 + $3))},"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0}}}}
 {"total_token_usage":{"input_tokens":$2,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":$3,"reasoning_output_tokens":0,"total_tokens":$(($2 + $3))}}
 EOF
 }

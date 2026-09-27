@@ -85,6 +85,8 @@ seed_rollout() {
   mkdir -p "$dir"
   cat >"$dir/rollout-2026-09-01T00-00-00-fixture.jsonl" <<EOF
 {"type":"session_meta","payload":{"model":"$1"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0},"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0}}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":$2,"cached_input_tokens":0,"output_tokens":$3,"total_tokens":$(($2 + $3))},"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0}}}}
 {"total_token_usage":{"input_tokens":$2,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":$3,"reasoning_output_tokens":0,"total_tokens":$(($2 + $3))}}
 EOF
 }
@@ -162,7 +164,7 @@ fi
 [[ "$(block_rows c2 budget-cap)" -ge 1 ]] \
   && ok "case2 ledger has rule=budget-cap block row" \
   || bad "case2 missing budget-cap block row"
-if grep -q '"budget_source":"rollout:total_token_usage"' "$LEDGER"; then
+if grep -q '"budget_source":"rollout:total_token_usage' "$LEDGER"; then
   ok "case2 spend came from the rollout transcript, not the proxy"
 else
   bad "case2 budget_source is not rollout:total_token_usage"
