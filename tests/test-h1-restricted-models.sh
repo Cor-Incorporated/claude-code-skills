@@ -125,6 +125,32 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
         check(decision(event(key,sid,model,path))=='deny',key+': transition alone denies')
         event(key,sid,model,path,'UserPromptSubmit','resume','作業を続けて下さい')
         check(state(key)['budget_epoch']==1,key+': explicit resume after a late scope grants one epoch')
+    # A resume prompt without a model leaves the new scope's model unconfirmed. The
+    # first real observation confirms it, so a second resume in the same session and
+    # model cannot pass as a model change and grant another epoch (#402).
+    key='nomodel-resume'
+    old_path=transcript(key,'gpt-6-sol',41000000)
+    check(decision(event(key,'old','gpt-6-sol',old_path))=='deny',key+': old session reaches the cap')
+    new_path=transcript(key+'-new','gpt-6-luna',1000)
+    event(key,'new','',new_path,'UserPromptSubmit','resume','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': session change with resume grants one epoch')
+    check(decision(event(key,'new','gpt-6-luna',new_path,turn='resume'))=='allow',key+': new epoch allows')
+    event(key,'new','gpt-6-luna',new_path,'UserPromptSubmit','resume-again','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': same session and model cannot regrant')
+    # Without a session ID or delegation, separate runs keep separate state (keyed by
+    # transcript) instead of pooling into default.json and sharing one budget (#402).
+    def event_without_ids(label, model, path):
+        p=dict(hook_event_name='PreToolUse',session_id='',model=model,turn_id='old',
+               cwd=tmp,transcript_path=str(path),tool_name='Bash',tool_input={'command':'pwd'})
+        run_env={k:v for k,v in env.items() if k!='CODEX_H1_DELEGATION'}
+        proc=subprocess.run(['bash',str(hook)],input=json.dumps(p),text=True,capture_output=True,env=run_env)
+        check(proc.returncode==0, label+' hook exit=0')
+        return json.loads(proc.stdout or "{}")
+    for run in ('a','b'):
+        path=transcript('noid-'+run,'gpt-6-luna',30000000)
+        out=event_without_ids('noid-'+run,'gpt-6-luna',path)
+        check(decision(out)=='allow','noid-'+run+': separate run under the cap is allowed')
+    check(not (home/'state'/'default.json').exists(),'runs without ids do not pool into default.json')
     # RESTRICTED_MODELS cannot exempt any model from the budget cap.
     path=transcript('not-exempt','gpt-6-luna',41000000)
     check(decision(event('not-exempt','luna','gpt-6-luna',path,extras={'CODEX_H1_RESTRICTED_MODELS':'terra'}))=='deny',

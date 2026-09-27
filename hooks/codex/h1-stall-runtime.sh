@@ -269,7 +269,13 @@ def is_progress(cmd):
 
 
 def resolve_delegation():
-    raw = os.environ.get("CODEX_H1_DELEGATION") or SID or "default"
+    raw = os.environ.get("CODEX_H1_DELEGATION") or SID
+    if not raw and TRANSCRIPT_PATH:
+        # Without a delegation or session ID, keep separate runs apart by their
+        # rollout file. Pooling them into one "default" state made unrelated runs
+        # share a single all-model budget (#402). Hash the path: it is a key only.
+        raw = "transcript-" + hashlib.sha256(TRANSCRIPT_PATH.encode("utf-8")).hexdigest()[:16]
+    raw = raw or "default"
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", raw)[:120]
     return raw, (safe or "default")
 
@@ -698,7 +704,13 @@ def apply_meter(state, records, measured):
     # setdefault kept the empty value and blocked a valid resume after a transition.
     if not state.get("budget_scope_session_id"):
         state["budget_scope_session_id"] = state.get("session_id") or SID
-    if not state.get("budget_scope_model"):
+    if state.get("budget_scope_model_pending"):
+        # Confirm a scope reset without a model on the first real observation. Use
+        # the model observed now, not state["model"], which is the old scope's (#402).
+        if model:
+            state["budget_scope_model"] = model
+            state.pop("budget_scope_model_pending", None)
+    elif not state.get("budget_scope_model"):
         state["budget_scope_model"] = state.get("model") or model
     state["model"] = model
     state["session_id"] = SID or state.get("session_id", "")
@@ -995,7 +1007,13 @@ def resume_epoch(state, path):
     if state.get("last_reset_turn_id") == TURN_ID and state.get("last_reset_session_id") == SID:
         return None
     previous_sid = state.get("budget_scope_session_id") or state.get("session_id") or state.get("first_prompt_session_id") or ""
-    previous_model = state.get("budget_scope_model") or state.get("model") or state.get("first_prompt_model") or ""
+    if state.get("budget_scope_model_pending"):
+        # The scope was reset by a prompt without a model and no tool call has
+        # confirmed the new model yet. The last observed model belongs to the old
+        # scope, so it cannot evidence a model change here (#402).
+        previous_model = ""
+    else:
+        previous_model = state.get("budget_scope_model") or state.get("model") or state.get("first_prompt_model") or ""
     if previous_sid and previous_sid != SID:
         reason = "explicit-user-resume:session"
     elif previous_model and PAYLOAD_MODEL and previous_model != PAYLOAD_MODEL:
@@ -1053,9 +1071,17 @@ def resume_epoch(state, path):
     except (OSError, ValueError):
         state["budget_epoch_scope_cwd"] = ""
     state["session_id"] = SID
-    state["model"] = PAYLOAD_MODEL or previous_model
+    state["model"] = PAYLOAD_MODEL or previous_model or state.get("model", "")
     state["budget_scope_session_id"] = SID
-    state["budget_scope_model"] = state["model"]
+    if PAYLOAD_MODEL:
+        state["budget_scope_model"] = PAYLOAD_MODEL
+        state.pop("budget_scope_model_pending", None)
+    else:
+        # The prompt carried no model: the new scope's model is unknown until the
+        # first real observation (apply_meter). Storing the old model here let a
+        # later resume in the same session pass as a model change (#402).
+        state["budget_scope_model"] = ""
+        state["budget_scope_model_pending"] = True
     state["last_warn_80"] = 0
     return reason
 
