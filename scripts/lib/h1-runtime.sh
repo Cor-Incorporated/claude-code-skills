@@ -45,7 +45,7 @@ h1_state_file() {
     printf '%s/%s.json' "$dir" "$(h1_slug "$1")"
 }
 
-# h1_init <delegation> [codex-cwd] — reset the shared state for a new run and
+# h1_init <delegation> [codex-cwd] — create the shared state for a new run and
 # export the ids the hook needs.  <codex-cwd> is the directory passed to
 # `codex -C`; the hook uses it to pick this delegation's rollout transcript
 # instead of whichever one was written to most recently, which is what keeps
@@ -64,9 +64,28 @@ h1_init() {
         "${CODEX_H1_BUDGET_USD:-25}" \
         "${CODEX_H1_MAX_ITERATIONS:-10}" \
         "${CODEX_H1_NO_PROGRESS_SEC:-2700}" <<'PY' 2>/dev/null || true
-import json, sys, time
+import fcntl, json, os, sys, tempfile, time
 path, delegation, budget, max_iter, no_progress = sys.argv[1:6]
 now = int(time.time())
+lock = open(path[:-5] + ".lock", "a+")
+fcntl.flock(lock, fcntl.LOCK_EX)
+if os.path.exists(path):
+    # A wrapper restart is not a user-authorized budget reset. The hook alone
+    # advances budget epochs after an explicit UserPromptSubmit. Refresh only
+    # contract knobs and the idle-watchdog start time, preserving all counters.
+    try:
+        s = json.load(open(path))
+        s["budget_usd"] = float(budget)
+        s["max_iterations"] = int(float(max_iter))
+        s["no_progress_sec"] = int(float(no_progress))
+        s["watchdog_started_ts"] = now
+        with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False) as f:
+            json.dump(s, f)
+            temp = f.name
+        os.replace(temp, path)
+    except (OSError, ValueError, TypeError):
+        pass
+    raise SystemExit(0)
 json.dump({
     "delegation": delegation, "started_ts": now, "last_progress_ts": now,
     "iterations": 0, "tool_calls": 0, "spend_tokens": 0, "spend_usd": 0.0,
@@ -75,6 +94,8 @@ json.dump({
     "no_progress_sec": int(float(no_progress)),
     "last_cmd_sha256": "", "same_cmd_streak": 0, "last_warn_80": 0,
     "last_heartbeat_ts": 0, "last_block_rule": "", "last_block_ts": 0,
+    "budget_epoch": 0, "budget_epoch_spend_usd": 0.0,
+    "watchdog_started_ts": now,
 }, open(path, "w"))
 PY
 }
@@ -94,9 +115,9 @@ except Exception:
     raise SystemExit(0)
 now = int(time.time())
 no_progress = int(s.get("no_progress_sec") or 2700)
-if s.get("last_block_rule"):
-    print(s["last_block_rule"]); raise SystemExit(0)
-
+forced = s.get("forced_stop")
+if forced and forced != "budget-cap":
+    print(forced); raise SystemExit(0)
 # 2026-09-02: hook 側と同じく、停止はモデルで絞る。一律の上限は実作業を止めた
 # （通常セッションが 301 tool call で spend=$5.34 に達して block）。model は
 # hook が rollout から読んで同じ state ファイルへ書く。読めていない（空）なら
@@ -113,16 +134,23 @@ restricted = ("*" in restricted_tokens) or bool(
 if not restricted:
     raise SystemExit(0)
 
-budget = float(s.get("budget_usd") or 0)
-if budget > 0 and float(s.get("spend_usd") or 0) >= budget:
-    print("budget-cap"); raise SystemExit(0)
-if int(s.get("iterations") or 0) > int(s.get("max_iterations") or 0):
-    print("max-iterations"); raise SystemExit(0)
-gap = now - int(s.get("last_progress_ts") or now)
+gap = now - max(int(s.get("last_progress_ts") or now), int(s.get("watchdog_started_ts") or 0))
 if gap > no_progress and int(s.get("same_cmd_streak") or 0) >= 3:
     print("no-progress-timeout"); raise SystemExit(0)
+budget = float(s.get("budget_usd") or 0)
+epoch_spend = float(s.get("budget_epoch_spend_usd", s.get("spend_usd") or 0))
+if budget > 0 and epoch_spend >= budget:
+    print("budget-cap"); raise SystemExit(0)
+sem = s.get("h1_semantics") if isinstance(s.get("h1_semantics"), dict) else {}
+try:
+    iteration_baseline = max(0, int(sem.get("iteration_baseline") or 0))
+except (TypeError, ValueError):
+    iteration_baseline = 0
+if int(s.get("iterations") or 0) - iteration_baseline > int(s.get("max_iterations") or 0):
+    print("rebase-required" if sem.get("transition") == "REBASE_REQUIRED" else "max-iterations")
+    raise SystemExit(0)
 # Idle stall: the hook cannot see this — no tool call has arrived at all.
-if now - int(os.path.getmtime(path)) > no_progress:
+if now - max(int(os.path.getmtime(path)), int(s.get("watchdog_started_ts") or 0)) > no_progress:
     print("no-progress-timeout")
 PY
 }
@@ -132,8 +160,10 @@ h1_mark_stop() {
     file="$(h1_state_file "$1")"
     [ -f "$file" ] || return 0
     python3 - "$file" "$rule" <<'PY' 2>/dev/null || true
-import json, sys, time
+import fcntl, json, os, sys, tempfile, time
 path, rule = sys.argv[1:3]
+lock = open(path[:-5] + ".lock", "a+")
+fcntl.flock(lock, fcntl.LOCK_EX)
 try:
     s = json.load(open(path))
 except Exception:
@@ -141,7 +171,13 @@ except Exception:
 s["forced_stop"] = rule
 s["last_block_rule"] = rule
 s["last_block_ts"] = int(time.time())
-json.dump(s, open(path, "w"))
+try:
+    with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False) as f:
+        json.dump(s, f)
+        temp = f.name
+    os.replace(temp, path)
+except OSError:
+    pass
 PY
     if declare -F aidd_ledger_append_record >/dev/null 2>&1; then
         aidd_ledger_append_record "$(h1_stop_record "$1" "$rule")" "codex" >/dev/null 2>&1 || true
@@ -236,8 +272,9 @@ h1_summary() {
     python3 - "$file" <<'PY' 2>/dev/null || printf 'H1: state unreadable\n'
 import json, sys
 s = json.load(open(sys.argv[1]))
-print("H1: spend $%.2f/$%.2f (%s) | tool_calls %s | iterations %s/%s | stop: %s"
-      % (float(s.get("spend_usd") or 0), float(s.get("budget_usd") or 0),
+print("H1: epoch spend $%.2f/$%.2f, total estimate $%.2f (%s) | tool_calls %s | iterations %s/%s | last block (history): %s"
+      % (float(s.get("budget_epoch_spend_usd", s.get("spend_usd") or 0)),
+         float(s.get("budget_usd") or 0), float(s.get("spend_usd") or 0),
          s.get("budget_source", "unknown"), s.get("tool_calls", 0),
          s.get("iterations", 0), s.get("max_iterations", 0),
          s.get("last_block_rule") or "none"))

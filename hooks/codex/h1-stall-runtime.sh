@@ -1,5 +1,5 @@
 #!/bin/bash
-# Codex PreToolUse: H1 非進捗ランタイム — the *block* half.
+# Codex PreToolUse / UserPromptSubmit: H1 非進捗ランタイム.
 #
 # Spec: design/harness-spec.md "### H1." and design/ops/harness/h1-stall-runtime.md
 #       (aidd-governance).  The measure/warn half already exists on the Claude
@@ -12,7 +12,8 @@
 # 790,087,141 tokens at an input:output ratio of 226:1.
 #
 # --- CODEX HOOK CONTRACT (differs from Claude Code) ----------------------------
-#   Input : JSON on stdin (.tool_input.command | .cmd | .shell_command | .command)
+#   Input : JSON on stdin. PreToolUse carries tool_input; UserPromptSubmit
+#           carries the user's prompt plus session_id/model/turn_id.
 #   Deny  : {"hookSpecificOutput":{...,"permissionDecision":"deny",...}} + exit 0
 #   Allow : {} + exit 0
 #   NEVER exit non-zero.  Codex treats a non-zero hook exit as hook failure and
@@ -21,7 +22,9 @@
 #   `set -e` is deliberately not used for the same reason.
 #
 # --- WHAT IS ACTUALLY OBSERVED HERE (do not overclaim) -------------------------
-# PreToolUse sees the *command string only*.  It never sees the tool result, a
+# PreToolUse sees the tool input, not the result. For Bash it uses the command
+# string. UserPromptSubmit observes an explicit continuation request but does
+# not increment tool_calls/iterations. PreToolUse never sees a
 # file diff, a commit oid, or an error message.  The H1 spec lists four progress
 # signals (commit / file change / new tool type / new error type); this hook
 # approximates the first two from the command text and implements neither of the
@@ -46,31 +49,34 @@
 # repeats the immediately preceding one.  Varied work never advances it; a
 # retry loop (pv2 PV2-5 "same grep repeated 7x") does.
 #
-# --- SPEND (spike answered 2026-09-01 — do not re-derive) ----------------------
-# Codex writes a cumulative token counter into its rollout transcript at
-#   ~/.codex/sessions/YYYY/MM/DD/rollout-<ISO>-<uuid>.jsonl
-# The LAST "total_token_usage" object in the file is the session total.  The
-# state file records which path produced the number:
-#   budget_source="rollout:total_token_usage"  — read from the transcript
-#   budget_source="proxy:toolcalls"            — transcript not found; spend is
-#                                                an ESTIMATE and every ledger row
-#                                                says so.
+# --- SPEND --------------------------------------------------------------------
+# The official hook payload's transcript_path selects the active rollout.
+# Its JSONL contents are not a stable API. Prefer new token_usage_record rows
+# (response_id deduplicates repeated rows); assign each row using turn_context
+# model or the observed UserPromptSubmit turn model. A per-file cursor avoids
+# rereading old records. If records are absent, use the CHANGE in the cumulative
+# total_token_usage counter; if the transcript is missing, estimate by tool
+# calls. budget_source labels each path and any uncertainty. spend_usd is an
+# estimated lifetime total, not an invoice. A clear user continuation plus a
+# session/model transition starts a budget epoch; only epoch spend is capped.
+# Old last_block_rule remains history, not the current verdict.
 # An unknown model is never treated as free: it is billed at the most expensive
 # known rate and budget_source is annotated "unknown-model:<name>@max-rate".
 #
 # --- FIRING CONDITIONS ---------------------------------------------------------
-#   block (a) no-progress-timeout : now-last_progress_ts > no_progress_sec
+#   block (a) no-progress-timeout : now-max(last_progress_ts,run_start) > timeout
 #                                   AND same_cmd_streak >= 3
-#   block (b) budget-cap          : spend_usd >= budget_usd
+#   block (b) budget-cap          : budget_epoch_spend_usd >= budget_usd
 #   block (c) max-iterations      : iterations > max_iterations
-#   warn      budget-warn-80      : spend_usd >= 80% of budget (once per delegation)
+#   warn      budget-warn-80      : epoch spend >= 80% of budget (once per epoch)
 #   warn      no-progress-timeout : same command 3 consecutive (before (a) trips)
 #   warn      heartbeat           : no heartbeat for 30 min
 #   measure   heartbeat           : every 15 min or 20 tool calls
 #
 # C4 適用限界 (短時間対話セッションには適用しない): all three block rules are
 # self-limiting on short sessions — (a) needs a 45-minute progress gap, (b) needs
-# a real $5 burn, (c) needs 10 repeated commands.  No separate session-length
+# an estimated $25 epoch burn on a restricted model, (c) needs 10 repeated
+# commands.  No separate session-length
 # knob is introduced.
 #
 # --- 廃止条件 (H1 spec) --------------------------------------------------------
@@ -89,6 +95,8 @@ fi
 [ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
 
 input=$(cat)
+h1_event=$(printf '%s' "$input" | jq -r '.hook_event_name // "PreToolUse"' 2>/dev/null || true)
+[[ "$h1_event" == "PreToolUse" || "$h1_event" == "UserPromptSubmit" ]] || { printf '%s\n' '{}'; exit 0; }
 
 emit_allow() {
   printf '%s\n' '{}'
@@ -123,6 +131,27 @@ h1_cmd=$(printf '%s' "$input" | jq -r '
 h1_sid=$(printf '%s' "$input" | jq -r '
   .session_id // .sessionId // .session.id // empty
 ' 2>/dev/null || true)
+h1_model=$(printf '%s' "$input" | jq -r '.model // empty' 2>/dev/null || true)
+h1_turn=$(printf '%s' "$input" | jq -r '.turn_id // empty' 2>/dev/null || true)
+h1_transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)
+# Only the boolean is passed to the decision core. Raw user text is never put
+# in state or the H6 ledger. The transition and the user request must BOTH be
+# present before an epoch is granted; model/session change alone is insufficient.
+# Desktop may prefix the request with one ambient browser presentation envelope.
+# Strip only that complete, leading envelope and its immediately following marker;
+# never search arbitrary quoted text for a command. The ambient body cannot grant
+# resume, and the extracted request must still match a standalone command in full.
+# This handles a reproduced input shape, not proof of the incident's raw payload.
+h1_resume_intent=$(printf '%s' "$input" | jq -r '
+  def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
+  def request_text:
+    if startswith("<in-app-browser-context source=\"ambient-ui-state\">") then
+      (try capture("^<in-app-browser-context source=\"ambient-ui-state\">\\r?\\n(?<ambient>(?:(?!</?in-app-browser-context\\b).)*)\\r?\\n</in-app-browser-context>[[:space:]]*## My request:[ \\t]*(?:\\r?\\n)+(?<request>.*)$"; "ms") catch null) |
+      if . == null then "" else .request end
+    else . end;
+  (.prompt // "" | if type == "string" then trim | request_text | trim else "" end) |
+  test("^(?:(?:作業を|実装を)?続けて(?:実装して)?(?:ください|下さい|お願いします)|H1を修正を行いました。[[:space:]]*続けて(?:ください|下さい|お願いします)|(?:作業を)?(?:再開|続行)して(?:ください|下さい|お願いします)|引き続き実装してください|進めて(?:ください|下さい)?|OK[、,]?(?:では)?進めて|モデルを[A-Za-z0-9_.-]+に変更したので[、,]?続けて(?:ください|下さい)|H1予算をリセットして(?:続けて|再開して|続行して)(?:ください|下さい)|(?:please[[:space:]]+)?continue(?: the work| the implementation| implementation)?|(?:please[[:space:]]+)?resume(?: the work| the implementation| implementation)?|proceed)[。！!.]*$"; "i")
+' 2>/dev/null || true)
 # 北極星の分子（repo/branch 結合キー, aidd-governance#155）を決める cwd。
 # 2026-09-04 実測: ~/.codex/hooks.json は CODEX_H1_CWD を渡さないので os.getcwd() に
 # 落ち、実セッション 5 件中 2 件で repo が空だった。payload に cwd 系の欄があれば
@@ -136,12 +165,17 @@ h1_sid=$(printf '%s' "$input" | jq -r '
 h1_cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)
 h1_keys=$(printf '%s' "$input" | jq -r 'if type=="object" then (keys|join(",")) else empty end' 2>/dev/null || true)
 
-verdict=$(H1_CMD="${h1_cmd:-}" H1_SID="${h1_sid:-}" H1_CWD="${h1_cwd:-}" H1_KEYS="${h1_keys:-}" python3 - <<'PY' 2>>"${CODEX_H1_DEBUG_LOG:-/dev/null}"
+verdict=$(H1_CMD="${h1_cmd:-}" H1_SID="${h1_sid:-}" H1_CWD="${h1_cwd:-}" H1_KEYS="${h1_keys:-}" \
+  H1_EVENT="${h1_event:-}" H1_MODEL="${h1_model:-}" H1_TURN="${h1_turn:-}" \
+  H1_TRANSCRIPT="${h1_transcript:-}" H1_RESUME_INTENT="${h1_resume_intent:-false}" \
+  python3 - <<'PY' 2>>"${CODEX_H1_DEBUG_LOG:-/dev/null}"
 import hashlib
+import fcntl
 import json
 import os
 import re
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -151,6 +185,11 @@ CMD = os.environ.get("H1_CMD", "")
 PAYLOAD_CWD = os.environ.get("H1_CWD", "")
 PAYLOAD_KEYS = os.environ.get("H1_KEYS", "")
 SID = os.environ.get("H1_SID", "")
+EVENT = os.environ.get("H1_EVENT", "PreToolUse")
+PAYLOAD_MODEL = os.environ.get("H1_MODEL", "")
+TURN_ID = os.environ.get("H1_TURN", "")
+TRANSCRIPT_PATH = os.environ.get("H1_TRANSCRIPT", "")
+RESUME_INTENT = os.environ.get("H1_RESUME_INTENT") == "true"
 
 
 def env_num(name, default, cast=float):
@@ -384,6 +423,12 @@ def load_state(path, delegation):
         "last_heartbeat_ts": 0,
         "last_block_rule": "",
         "last_block_ts": 0,
+        "budget_epoch": 0,
+        "budget_epoch_spend_usd": 0.0,
+        "budget_epoch_baseline_tokens": 0,
+        "budget_epoch_reason": "",
+        "last_reset_turn_id": "",
+        "session_id": "",
     }
     for key, value in defaults.items():
         state.setdefault(key, value)
@@ -407,7 +452,7 @@ def find_rollout(started_ts):
       4. Newest mtime.  This is a guess whenever more than one Codex process is
          running; it is the last resort, not the normal path.
     """
-    override = os.environ.get("CODEX_H1_ROLLOUT")
+    override = TRANSCRIPT_PATH or os.environ.get("CODEX_H1_ROLLOUT")
     if override:
         path = Path(override)
         return path if path.is_file() else None
@@ -483,7 +528,51 @@ def usd_from(usage, model):
     return round(usd, 6), note
 
 
-def measure_spend(tool_calls, started_ts):
+def first_event_counter(path):
+    """Return the first event-stream baseline, subtracting only its own delta.
+
+    total_token_usage and token_usage_record.thread_token_usage have different
+    inherited offsets in forked Codex sessions. Keep event snapshots per file;
+    for a file first seen after records, its first event's last_token_usage is
+    the only local baseline that can be removed without comparing those two
+    lifetime counters.
+    """
+    try:
+        with path.open("rb") as stream:
+            for raw in stream:
+                try:
+                    row = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                payload = row.get("payload") or {}
+                if not isinstance(payload, dict):
+                    continue
+                info = payload.get("info") or {}
+                if not isinstance(info, dict):
+                    continue
+                if (row.get("type") != "event_msg" or payload.get("type") != "token_count"
+                        or not isinstance(info.get("total_token_usage"), dict)):
+                    continue
+                total = info["total_token_usage"]
+                last = info.get("last_token_usage")
+                if not isinstance(last, dict):
+                    return None
+                try:
+                    baseline = {
+                        key: max(0, int(total.get(key, 0) or 0) - int(last.get(key, 0) or 0))
+                        for key in ("input_tokens", "cached_input_tokens", "output_tokens", "total_tokens")
+                    }
+                except (TypeError, ValueError):
+                    return None
+                return baseline
+    except OSError:
+        return None
+    return None
+
+
+def measure_spend(tool_calls, started_ts, state=None):
     """Return (tokens, usd, budget_source)."""
     path = find_rollout(started_ts)
     if path is not None:
@@ -497,12 +586,17 @@ def measure_spend(tool_calls, started_ts):
             except ValueError:
                 usage = {}
             if usage:
-                model = models[-1] if models else ""
+                model = PAYLOAD_MODEL or (models[-1] if models else "")
                 usd, note = usd_from(usage, model)
                 source = "rollout:total_token_usage"
                 if note:
                     source += "+" + note
-                return int(usage.get("total_tokens", 0) or 0), usd, source, model
+                return int(usage.get("total_tokens", 0) or 0), usd, source, model, usage
+        prior = (state or {}).get("usage_snapshot")
+        if isinstance(prior, dict):
+            model = PAYLOAD_MODEL or (state or {}).get("model", "")
+            usd, _note = usd_from(prior, model)
+            return int(prior.get("total_tokens", 0) or 0), usd, "rollout:last-observed-total", model, prior
     # Fallback: no transcript.  Estimate from tool calls at a documented rough
     # per-call token figure and label the number as an estimate everywhere.
     # 20k tokens/call is calibrated on the 2026-09-01 measurement: 790,087,141
@@ -518,7 +612,464 @@ def measure_spend(tool_calls, started_ts):
     (rate_in, _cached, _rate_out), _note = rate_for("")
     rate_in = env_num("CODEX_H1_PRICE_IN", rate_in)
     usd = round(tokens * rate_in / 1_000_000.0, 6)
-    return tokens, usd, "proxy:toolcalls", ""
+    return tokens, usd, "proxy:toolcalls", PAYLOAD_MODEL, None
+
+
+def usage_records(path, state):
+    """Best-effort per-response costs from the unstable rollout format.
+
+    The official hook payload (model/session/turn/transcript_path) selects the
+    active run. The transcript is only a metering source. A response_id is
+    charged once even when token_count rows or continuation files repeat it.
+    """
+    if path is None:
+        return []
+    key = str(path.resolve())
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    previous_path = state.get("meter_path")
+    if previous_path and isinstance(state.get("usage_snapshot"), dict) \
+            and not state.get("usage_snapshot_path"):
+        # Tag a pre-stream-map state before meter_path changes on a fork switch.
+        state["usage_snapshot_path"] = previous_path
+    if key not in (state.get("meter_stream_baselines") or {}):
+        baseline = first_event_counter(path)
+        if baseline is not None:
+            state.setdefault("meter_stream_baselines", {})[key] = baseline
+    if isinstance(state.get("meter_gap_estimate_usd"), (int, float)) \
+            and "meter_gap_estimate_path" not in state and previous_path:
+        state["meter_gap_estimate_path"] = previous_path
+    previous_offset = int(state.get("meter_offset") or 0)
+    # Existing states were priced from cumulative total_token_usage. Scanning
+    # their old records as new responses would double-charge them. Start at
+    # EOF once, keeping prior spend and marking the migration as an estimate.
+    if not previous_path and float(state.get("spend_usd") or 0) > 0 \
+            and "charged_response_ids" not in state:
+        state["meter_path"] = key
+        state["meter_offset"] = size
+        state["charged_response_ids"] = []
+        state["meter_mode"] = "record"
+        state["budget_source"] = "rollout:legacy-record-baseline-estimate"
+        state["meter_legacy_baseline_path"] = key
+        return []
+    start = previous_offset if previous_path == key and previous_offset <= size else 0
+    turn_models = state.get("turn_models")
+    if not isinstance(turn_models, dict):
+        turn_models = {}
+    records = []
+    try:
+        with path.open("rb") as stream:
+            stream.seek(start)
+            cursor = start
+            for raw in stream:
+                if not raw.endswith(b"\n"):
+                    break  # Leave an incomplete JSONL line for the next hook.
+                cursor = stream.tell()
+                try:
+                    row = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                payload = row.get("payload") or {}
+                if not isinstance(payload, dict):
+                    continue
+                if row.get("type") == "turn_context":
+                    if payload.get("turn_id") and payload.get("model"):
+                        turn_models[payload["turn_id"]] = payload["model"]
+                    continue
+                if row.get("type") != "token_usage_record":
+                    continue
+                usage = payload.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                rid = payload.get("response_id") or row.get("response_id")
+                if not rid:
+                    rid = "sha256:" + hashlib.sha256(raw).hexdigest()
+                thread = payload.get("thread_token_usage") or {}
+                thread_total = int(thread.get("total_tokens", 0) or 0) if isinstance(thread, dict) else 0
+                turn = payload.get("turn_id") or payload.get("root_turn_id") or ""
+                records.append((str(rid), usage, thread_total, turn, turn_models.get(turn, "")))
+            state["meter_offset"] = cursor
+    except OSError:
+        return []
+    state["meter_path"] = key
+    state["turn_models"] = dict(list(turn_models.items())[-128:])
+    return records
+
+
+def persist_state(path, state):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", delete=False) as stream:
+            json.dump(state, stream, ensure_ascii=False)
+            temp = stream.name
+        os.replace(temp, path)
+    except OSError:
+        pass
+
+
+def apply_meter(state, records, measured):
+    tokens, absolute_usd, source, model, usage = measured
+    state["model"] = model
+    state["session_id"] = SID or state.get("session_id", "")
+    meter_key = state.get("meter_path") or ""
+    snapshots = state.setdefault("usage_snapshots_by_path", {})
+    prior_usage = snapshots.get(meter_key) if meter_key else None
+    if prior_usage is None and state.get("usage_snapshot_path") == meter_key:
+        prior_usage = state.get("usage_snapshot")
+    had_gap_map = isinstance(state.get("meter_gaps_by_path"), dict)
+    gaps = state.setdefault("meter_gaps_by_path", {})
+    if not had_gap_map and state.get("meter_gap_estimate_path"):
+        gaps[state["meter_gap_estimate_path"]] = {
+            "usd": float(state.get("meter_gap_estimate_usd") or 0),
+            "tokens": int(state.get("meter_gap_estimate_tokens") or 0),
+        }
+    active_gap = gaps.get(meter_key, {}) if meter_key else {}
+    delta_usd = 0.0
+    if records:
+        state["meter_mode"] = "record"
+        seen = set(state.get("charged_response_ids") or [])
+        if "charged_response_ids" not in state and float(state.get("spend_usd") or 0) > 0:
+            # Migration from the old cumulative-price state: these records may
+            # already be included in spend_usd. Mark them as observed without
+            # charging a second time. Future response ids are charged once.
+            state["charged_response_ids"] = [rid for rid, _, _, _, _ in records]
+            state["budget_source"] = "rollout:legacy-record-baseline-estimate"
+            state["spend_tokens"] = max(tokens, state.get("spend_tokens", 0))
+            state["model"] = model
+            state["session_id"] = SID or state.get("session_id", "")
+            state["budget_epoch_spend_usd"] = (
+                state.get("budget_epoch_spend_usd", 0.0) if state.get("budget_epoch")
+                else state["spend_usd"]
+            )
+            return
+        added = 0
+        uncertain_model = False
+        unknown_rate = False
+        recorded_components = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
+        accumulated = state.setdefault("meter_recorded_components_by_path", {})
+        path_recorded = accumulated.setdefault(meter_key, {key: 0 for key in recorded_components}) if meter_key else {}
+        for rid, response_usage, thread_total, turn, record_model in records:
+            if rid in seen:
+                continue
+            seen.add(rid)
+            turn_model = (state.get("turn_models") or {}).get(turn, "")
+            resolved_model = record_model
+            if not resolved_model:
+                resolved_model = turn_model or model
+                uncertain_model = uncertain_model or not bool(turn_model)
+            cost, _note = usd_from(response_usage, resolved_model)
+            unknown_rate = unknown_rate or bool(_note)
+            delta_usd += cost
+            added += 1
+            for key in recorded_components:
+                recorded_components[key] += int(response_usage.get(key, 0) or 0)
+                if meter_key:
+                    path_recorded[key] = int(path_recorded.get(key, 0) or 0) + int(response_usage.get(key, 0) or 0)
+            if thread_total:
+                tokens = max(tokens, thread_total)
+                if state.get("budget_epoch") and not state.get("budget_epoch_baseline_record_tokens"):
+                    state["budget_epoch_baseline_record_tokens"] = max(
+                        0, thread_total - int(response_usage.get("total_tokens", 0) or 0)
+                    )
+        pending_usd = float(active_gap.get("usd") or 0)
+        pending_tokens = int(active_gap.get("tokens") or 0)
+        recorded_tokens = recorded_components["input_tokens"] + recorded_components["output_tokens"]
+        # The current cumulative increase may represent fresh responses in
+        # this very batch. Reserve it before assigning delayed records to an
+        # older estimate. If either snapshot is missing, the overlap cannot be
+        # proved, so retain the provisional charge conservatively.
+        current_event_tokens = recorded_tokens
+        current_event_cost = 0.0
+        if isinstance(usage, dict) and isinstance(prior_usage, dict):
+            current_event_tokens = max(
+                0, int(usage.get("total_tokens", 0) or 0)
+                - int(prior_usage.get("total_tokens", 0) or 0)
+            )
+            current_event_cost, _note = usd_from({
+                key: max(0, int(usage.get(key, 0) or 0)
+                         - int(prior_usage.get(key, 0) or 0))
+                for key in ("input_tokens", "cached_input_tokens", "output_tokens")
+            }, model)
+        provisional = 0.0
+        if added and pending_usd and pending_tokens and recorded_tokens:
+            settle_tokens = min(pending_tokens, max(0, recorded_tokens - current_event_tokens))
+            # Never subtract more than the actual new response charge. Unknown
+            # model/rate differences then remain conservatively in the budget.
+            provisional = min(
+                pending_usd, delta_usd,
+                round(pending_usd * settle_tokens / pending_tokens, 6),
+            )
+            state["meter_gap_estimate_usd"] = round(pending_usd - provisional, 6)
+            state["meter_gap_estimate_tokens"] = pending_tokens - settle_tokens
+            if meter_key:
+                active_gap = {"usd": state["meter_gap_estimate_usd"],
+                              "tokens": state["meter_gap_estimate_tokens"]}
+        if provisional:
+            delta_usd -= provisional
+        state["charged_response_ids"] = list(seen)
+        state.pop("budget_epoch_pending_baseline", None)
+        partial_gap = 0.0
+        if isinstance(usage, dict):
+            prior = prior_usage
+            if isinstance(prior, dict):
+                missing = {
+                    key: max(0, int(usage.get(key, 0) or 0)
+                             - int(prior.get(key, 0) or 0) - recorded_components[key])
+                    for key in recorded_components
+                }
+                if missing["input_tokens"] or missing["output_tokens"]:
+                    partial_gap, _note = usd_from(missing, model)
+                    delta_usd += partial_gap
+                    state["meter_gap_estimate_usd"] = round(
+                        float(state.get("meter_gap_estimate_usd") or 0) + partial_gap, 6
+                    )
+                    state["meter_gap_estimate_tokens"] = int(state.get("meter_gap_estimate_tokens") or 0) + max(
+                        0, missing["input_tokens"] + missing["output_tokens"]
+                    )
+                    active_gap = {"usd": state["meter_gap_estimate_usd"],
+                                  "tokens": state["meter_gap_estimate_tokens"]}
+            elif meter_key:
+                # First sample for this stream: subtract the event stream's
+                # own inherited baseline, then remove records already charged.
+                baseline = (state.get("meter_stream_baselines") or {}).get(meter_key)
+                if isinstance(baseline, dict):
+                    initial_missing = {
+                        key: max(0, int(usage.get(key, 0) or 0) - int(baseline.get(key, 0) or 0)
+                                 - int(path_recorded.get(key, 0) or 0))
+                        for key in recorded_components
+                    }
+                    if initial_missing["input_tokens"] or initial_missing["output_tokens"]:
+                        partial_gap, _note = usd_from(initial_missing, model)
+                        delta_usd += partial_gap
+                        active_gap = {
+                            "usd": round(float(active_gap.get("usd") or 0) + partial_gap, 6),
+                            "tokens": int(active_gap.get("tokens") or 0)
+                                     + initial_missing["input_tokens"] + initial_missing["output_tokens"],
+                        }
+                        state["meter_gap_estimate_usd"] = active_gap["usd"]
+                        state["meter_gap_estimate_tokens"] = active_gap["tokens"]
+                        state["meter_gap_estimate_path"] = meter_key
+                else:
+                    state["budget_source"] = source + "+stream-baseline-unavailable"
+            if meter_key:
+                snapshots[meter_key] = usage
+                state["usage_snapshot_path"] = meter_key
+            state["usage_snapshot"] = usage
+        # A late response can have a cheaper model than a fresh response whose
+        # cumulative tokens arrived without a record. The current interval's
+        # event estimate is an independent lower bound on its cost.
+        event_floor = max(0.0, round(current_event_cost - delta_usd, 6))
+        if event_floor:
+            delta_usd += event_floor
+        state["budget_source"] = (
+            "rollout:token_usage_record"
+            + ("+model-attribution-estimate" if uncertain_model else "")
+            + ("+unknown-model-max-rate" if unknown_rate else "")
+            + ("+reconciled-gap-estimate" if provisional else "")
+            + ("+partial-record-gap-estimate" if partial_gap else "")
+            + ("+event-price-floor-estimate" if event_floor else "")
+            if added or partial_gap or event_floor else state.get("budget_source", source)
+        )
+    elif state.get("meter_mode") == "record":
+        # A turn can call several tools without a new model response. If the
+        # cumulative counter advances without records, estimate only its delta
+        # and label it; never add the full lifetime total again.
+        previous = prior_usage
+        if isinstance(usage, dict):
+            if isinstance(previous, dict):
+                delta = {
+                    key: max(0, int(usage.get(key, 0) or 0) - int(previous.get(key, 0) or 0))
+                    for key in ("input_tokens", "cached_input_tokens", "output_tokens")
+                }
+                delta_usd, _note = usd_from(delta, model)
+                observed = max(0, int(usage.get("total_tokens", 0) or 0) - int(previous.get("total_tokens", 0) or 0))
+                if delta_usd or observed:
+                    active_gap = {
+                        "usd": float(active_gap.get("usd") or 0),
+                        "tokens": int(active_gap.get("tokens") or 0) + observed,
+                    }
+                    state["meter_gap_estimate_tokens"] = active_gap["tokens"]
+                    state["meter_gap_estimate_path"] = meter_key
+            elif int(state.get("tool_calls") or 0) > 1:
+                state["budget_source"] = "rollout:record-gap-unverified"
+            if prior_usage is None and meter_key:
+                baseline = (state.get("meter_stream_baselines") or {}).get(meter_key)
+                if isinstance(baseline, dict):
+                    charged = (state.get("meter_recorded_components_by_path") or {}).get(meter_key, {})
+                    missing = {
+                        key: max(0, int(usage.get(key, 0) or 0) - int(baseline.get(key, 0) or 0)
+                                 - int(charged.get(key, 0) or 0))
+                        for key in ("input_tokens", "cached_input_tokens", "output_tokens")
+                    }
+                    if missing["input_tokens"] or missing["output_tokens"]:
+                        delta_usd, _note = usd_from(missing, model)
+                        observed = missing["input_tokens"] + missing["output_tokens"]
+                        state["meter_gap_estimate_tokens"] = int(active_gap.get("tokens") or 0) + observed
+                        state["meter_gap_estimate_path"] = meter_key
+                        active_gap = {"usd": float(active_gap.get("usd") or 0),
+                                      "tokens": state["meter_gap_estimate_tokens"]}
+                else:
+                    state["budget_source"] = source + "+stream-baseline-unavailable"
+            if meter_key:
+                snapshots[meter_key] = usage
+                state["usage_snapshot_path"] = meter_key
+            state["usage_snapshot"] = usage
+        else:
+            per_call = env_num("CODEX_H1_PROXY_TOKENS_PER_CALL", 20000.0)
+            delta_usd, _note = usd_from({"input_tokens": int(per_call)}, model)
+            state["budget_source"] = "proxy:record-gap-estimate"
+        if delta_usd:
+            if isinstance(usage, dict):
+                # The active path's provisional charge is retained until
+                # delayed records from that same transcript reconcile it.
+                active_gap = {
+                    "usd": round(float(active_gap.get("usd") or 0) + delta_usd, 6),
+                    "tokens": int(active_gap.get("tokens") or 0),
+                }
+                state["meter_gap_estimate_usd"] = active_gap["usd"]
+                state["meter_gap_estimate_tokens"] = active_gap["tokens"]
+                state["meter_gap_estimate_path"] = meter_key
+                state["budget_source"] = "rollout:total_token_usage+record-gap-estimate"
+            else:
+                active_gap = {
+                    "usd": round(float(active_gap.get("usd") or 0) + delta_usd, 6),
+                    "tokens": int(active_gap.get("tokens") or 0),
+                }
+                state["meter_gap_estimate_usd"] = active_gap["usd"]
+                state["meter_gap_estimate_tokens"] = active_gap["tokens"]
+                state["meter_gap_estimate_path"] = meter_key
+    elif isinstance(usage, dict):
+        previous = prior_usage
+        if state.pop("budget_epoch_pending_baseline", False):
+            # No response records: this is a lower-confidence fallback. The
+            # inherited total is excluded, and the omission is labeled.
+            previous = usage
+            state["budget_source"] = source + "+pending-baseline-estimate"
+        elif isinstance(previous, dict):
+            delta = {
+                key: max(0, int(usage.get(key, 0) or 0) - int(previous.get(key, 0) or 0))
+                for key in ("input_tokens", "cached_input_tokens", "output_tokens")
+            }
+            delta_usd, _note = usd_from(delta, model)
+            state["budget_source"] = source + "+delta"
+        else:
+            baseline = (state.get("meter_stream_baselines") or {}).get(meter_key)
+            if isinstance(baseline, dict):
+                delta = {
+                    key: max(0, int(usage.get(key, 0) or 0) - int(baseline.get(key, 0) or 0))
+                    for key in ("input_tokens", "cached_input_tokens", "output_tokens")
+                }
+                delta_usd, _note = usd_from(delta, model)
+                state["budget_source"] = source + "+stream-baseline-delta"
+            else:
+                # Without a same-stream baseline, its lifetime total may contain
+                # inherited parent usage. Preserve it as the first snapshot and
+                # label the missing baseline instead of pricing that history.
+                delta_usd = 0.0
+                state["budget_source"] = source + "+stream-baseline-unavailable"
+        if meter_key and isinstance(usage, dict):
+            snapshots[meter_key] = usage
+            state["usage_snapshot_path"] = meter_key
+        state["usage_snapshot"] = usage
+    else:
+        previous = float(state.get("proxy_spend_usd") or 0)
+        delta_usd = max(0.0, absolute_usd - previous)
+        state["proxy_spend_usd"] = absolute_usd
+        state["budget_source"] = source
+    state["spend_usd"] = max(0.0, round(float(state.get("spend_usd") or 0) + delta_usd, 6))
+    state["spend_tokens"] = tokens
+    if meter_key:
+        if active_gap.get("usd") or active_gap.get("tokens"):
+            gaps[meter_key] = active_gap
+            state["meter_gap_estimate_path"] = meter_key
+            state["meter_gap_estimate_usd"] = active_gap.get("usd", 0.0)
+            state["meter_gap_estimate_tokens"] = active_gap.get("tokens", 0)
+        else:
+            gaps.pop(meter_key, None)
+            if state.get("meter_gap_estimate_path") == meter_key:
+                state.pop("meter_gap_estimate_path", None)
+                state["meter_gap_estimate_usd"] = 0.0
+                state["meter_gap_estimate_tokens"] = 0
+    if state.get("budget_epoch"):
+        state["budget_epoch_spend_usd"] = max(0.0, round(
+            float(state.get("budget_epoch_spend_usd") or 0) + delta_usd, 6
+        ))
+    else:
+        state["budget_epoch_spend_usd"] = state["spend_usd"]
+
+
+def resume_epoch(state, path):
+    if not RESUME_INTENT or not SID or not TURN_ID:
+        return None
+    if state.get("last_reset_turn_id") == TURN_ID and state.get("last_reset_session_id") == SID:
+        return None
+    previous_sid = state.get("session_id") or state.get("first_prompt_session_id") or ""
+    previous_model = state.get("model") or state.get("first_prompt_model") or ""
+    if previous_sid and previous_sid != SID:
+        reason = "explicit-user-resume:session"
+    elif previous_model and PAYLOAD_MODEL and previous_model != PAYLOAD_MODEL:
+        reason = "explicit-user-resume:model"
+    elif not previous_sid and int(state.get("tool_calls") or 0) == 0:
+        reason = "explicit-user-resume:new-session"
+    else:
+        return None
+    transcript = find_rollout(int(state["started_ts"]))
+    records = usage_records(transcript, state)
+    measured = measure_spend(int(state.get("tool_calls") or 0), int(state["started_ts"]), state)
+    if int(state.get("tool_calls") or 0) > 0 or float(state.get("spend_usd") or 0) > 0:
+        # Charge responses generated after the previous tool and before this
+        # user prompt to the OLD epoch. Then start the new budget interval.
+        apply_meter(state, records, measured)
+    else:
+        # Fresh fork state: inherited history is the baseline, never a charge.
+        seen = set(state.get("charged_response_ids") or [])
+        seen.update(rid for rid, _, _, _, _ in records)
+        state["charged_response_ids"] = list(seen)
+        if records:
+            state["meter_mode"] = "record"
+    # Provisional costs belong to the old epoch. Future responses must never
+    # subtract them from a newly granted budget interval.
+    state.pop("meter_gap_estimate_usd", None)
+    state.pop("meter_gap_estimate_tokens", None)
+    state.pop("meter_gap_estimate_path", None)
+    state.pop("meter_gaps_by_path", None)
+    baseline = max((total for _, _, total, _, _ in records), default=0)
+    if not baseline:
+        baseline = max(int(state.get("spend_tokens") or 0), measured[0])
+        if isinstance(measured[4], dict):
+            state["usage_snapshot"] = measured[4]
+            state["budget_epoch_pending_baseline"] = False
+        else:
+            # No stable usage sample yet. A later record is still counted;
+            # only the total_token_usage fallback needs a deferred baseline.
+            state["budget_epoch_pending_baseline"] = True
+    else:
+        state["budget_epoch_pending_baseline"] = False
+    state["budget_epoch"] = int(state.get("budget_epoch") or 0) + 1
+    state["budget_epoch_spend_usd"] = 0.0
+    state["budget_epoch_baseline_tokens"] = baseline
+    state["budget_epoch_baseline_record_tokens"] = 0
+    state["budget_epoch_baseline_usd"] = float(state.get("spend_usd") or 0)
+    state["budget_epoch_reason"] = reason
+    if state.get("forced_stop") == "budget-cap":
+        state.pop("forced_stop", None)
+    state["last_reset_turn_id"] = TURN_ID
+    state["last_reset_session_id"] = SID
+    try:
+        state["budget_epoch_scope_cwd"] = str(Path(
+            os.environ.get("CODEX_H1_CWD") or PAYLOAD_CWD or os.getcwd()
+        ).resolve())
+    except (OSError, ValueError):
+        state["budget_epoch_scope_cwd"] = ""
+    state["session_id"] = SID
+    state["model"] = PAYLOAD_MODEL or previous_model
+    state["last_warn_80"] = 0
+    return reason
 
 
 def subject_of(state):
@@ -528,6 +1079,12 @@ def subject_of(state):
         "last_progress_ts": iso(state["last_progress_ts"]),
         "budget_usd": state["budget_usd"],
         "budget_source": state["budget_source"],
+        "budget_epoch": state.get("budget_epoch", 0),
+        "budget_epoch_spend_usd": state.get("budget_epoch_spend_usd", state["spend_usd"]),
+        "budget_epoch_baseline_tokens": state.get("budget_epoch_baseline_tokens", 0),
+        "budget_epoch_baseline_record_tokens": state.get("budget_epoch_baseline_record_tokens", 0),
+        "budget_epoch_baseline_usd": state.get("budget_epoch_baseline_usd", 0),
+        "budget_epoch_reason": state.get("budget_epoch_reason", ""),
         "iterations": state["iterations"],
         "tool_calls": state["tool_calls"],
         "same_cmd_streak": state["same_cmd_streak"],
@@ -598,12 +1155,18 @@ def iteration_verdict(state, effective):
 
 
 def record(state, event, rule, detail):
+    subject = subject_of(state)
+    if rule == "budget-epoch-reset":
+        subject["previous_budget_epoch"] = max(0, int(state.get("budget_epoch") or 0) - 1)
+        subject["reset_turn_id"] = TURN_ID
+        subject["reset_session_id"] = SID
+        subject["scope_cwd"] = state.get("budget_epoch_scope_cwd", "")
     return {
         "component": "H1",
         "event": event,
         "rule": rule,
         "detail": detail,
-        "subject": subject_of(state),
+        "subject": subject,
     }
 
 
@@ -615,20 +1178,24 @@ def decide(state):
     消費は台帳から追える。制限対象を広げたいときは
     CODEX_H1_RESTRICTED_MODELS に カンマ区切りで部分文字列を渡す。
     """
+    forced = state.get("forced_stop")
+    if forced and forced != "budget-cap":
+        return (forced, "wrapper stop remains active after budget epoch change")
     if not is_restricted(state.get("model")):
         return (None, None)
-    gap = NOW - int(state["last_progress_ts"])
+    gap = NOW - max(int(state["last_progress_ts"]), int(state.get("watchdog_started_ts") or 0))
     if gap > int(state["no_progress_sec"]) and int(state["same_cmd_streak"]) >= SAME_CMD_THRESHOLD:
         return (
             "no-progress-timeout",
             "%dmin no progress, same command repeated %dx"
             % (gap // 60, state["same_cmd_streak"]),
         )
-    if state["budget_usd"] > 0 and state["spend_usd"] >= state["budget_usd"]:
+    effective_spend = state.get("budget_epoch_spend_usd", state["spend_usd"])
+    if state["budget_usd"] > 0 and effective_spend >= state["budget_usd"]:
         return (
             "budget-cap",
-            "spend $%.2f reached budget $%.2f (%s)"
-            % (state["spend_usd"], state["budget_usd"], state["budget_source"]),
+            "epoch spend $%.2f reached budget $%.2f (%s)"
+            % (effective_spend, state["budget_usd"], state["budget_source"]),
         )
     # #87: 反復上限は epoch 基準線からの差で測る。rebase が granted された委任は
     # iteration_baseline が押し上げられており、新 epoch の反復だけが数えられる。
@@ -656,7 +1223,7 @@ def advisory(state, records, blocked):
     if (
         state["budget_usd"] > 0
         and not state["last_warn_80"]
-        and state["spend_usd"] >= 0.8 * state["budget_usd"]
+        and state.get("budget_epoch_spend_usd", state["spend_usd"]) >= 0.8 * state["budget_usd"]
     ):
         state["last_warn_80"] = NOW
         records.append(
@@ -665,7 +1232,7 @@ def advisory(state, records, blocked):
                 "warn",
                 "budget-warn-80",
                 "spend $%.2f is >=80%% of budget $%.2f"
-                % (state["spend_usd"], state["budget_usd"]),
+                % (state.get("budget_epoch_spend_usd", state["spend_usd"]), state["budget_usd"]),
             )
         )
     if not blocked and int(state["same_cmd_streak"]) >= SAME_CMD_THRESHOLD:
@@ -716,19 +1283,27 @@ def advance_counters(state):
 
 
 def deny_reason(rule, detail, state, path):
+    resume = (
+        "予算停止後の続行には、セッション分岐またはモデル変更に加えて、"
+        "『続けて下さい』などの明示的な作業指示が必要です。疑問文では再開しません。"
+        if rule == "budget-cap" else
+        "継続する場合は委任契約の停止条件を見直してください。"
+    )
     return (
         "H1 非進捗ランタイム停止 [%s]: %s. "
-        "delegation=%s spend=$%.2f/$%.2f iterations=%d source=%s. "
-        "状態は %s に保存済み。継続する場合は委任契約の上限を見直してから再開してください。"
+        "delegation=%s epoch_spend=$%.2f/$%.2f total_estimate=$%.2f iterations=%d source=%s. "
+        "状態は %s に保存済み。%s"
         % (
             rule,
             detail,
             state["delegation"],
-            state["spend_usd"],
+            state.get("budget_epoch_spend_usd", state["spend_usd"]),
             state["budget_usd"],
+            state["spend_usd"],
             state["iterations"],
             state["budget_source"],
             path,
+            resume,
         )
     ).replace("\n", " ")
 
@@ -736,30 +1311,57 @@ def deny_reason(rule, detail, state, path):
 def main():
     delegation, slug = resolve_delegation()
     path = state_path(slug)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # State, transcript cursor and epoch grant are one transaction per
+    # delegation. A separate lock file survives atomic replacement of JSON.
+    with path.with_suffix(".lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        run_locked(delegation, path)
+
+
+def run_locked(delegation, path):
     state = load_state(path, delegation)
     state["delegation"] = delegation
+    if EVENT == "UserPromptSubmit":
+        record_worktree(state)
+        if TURN_ID and PAYLOAD_MODEL:
+            turn_models = state.get("turn_models")
+            if not isinstance(turn_models, dict):
+                turn_models = {}
+            turn_models[TURN_ID] = PAYLOAD_MODEL
+            state["turn_models"] = dict(list(turn_models.items())[-128:])
+        reason = resume_epoch(state, path)
+        if SID and not state.get("first_prompt_session_id"):
+            state["first_prompt_session_id"] = SID
+        if PAYLOAD_MODEL and not state.get("first_prompt_model"):
+            state["first_prompt_model"] = PAYLOAD_MODEL
+        records = [record(state, "measure", "budget-epoch-reset", reason)] if reason else []
+        if reason or SID or (TURN_ID and PAYLOAD_MODEL):
+            persist_state(path, state)
+        lines = ["allow", ""]
+        lines.extend(json.dumps(r, ensure_ascii=False, separators=(",", ":")) for r in records)
+        print("\n".join(lines))
+        return
     advance_counters(state)
     record_worktree(state)
-
-    tokens, usd, source, model = measure_spend(state["tool_calls"], int(state["started_ts"]))
-    state["model"] = model
-    state["spend_tokens"] = tokens
-    state["spend_usd"] = usd
-    state["budget_source"] = source
+    transcript = find_rollout(int(state["started_ts"]))
+    records_from_rollout = usage_records(transcript, state)
+    measured = measure_spend(state["tool_calls"], int(state["started_ts"]), state)
+    had_record_baseline = bool(state.get("budget_epoch_baseline_record_tokens"))
+    apply_meter(state, records_from_rollout, measured)
 
     rule, detail = decide(state)
     records = []
+    if not had_record_baseline and state.get("budget_epoch_baseline_record_tokens"):
+        records.append(record(state, "measure", "budget-epoch-record-baseline",
+                              "first per-response thread baseline; separate from cumulative token_count"))
     if rule:
         state["last_block_rule"] = rule
         state["last_block_ts"] = NOW
         records.append(record(state, "block", rule, detail))
     advisory(state, records, blocked=bool(rule))
 
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        pass
+    persist_state(path, state)
 
     reason = deny_reason(rule, detail, state, path) if rule else ""
     lines = ["deny" if rule else "allow", reason]
@@ -794,6 +1396,9 @@ if [[ -n "$records" ]] && declare -F aidd_ledger_append_record >/dev/null 2>&1; 
   done <<<"$records"
 fi
 
+if [[ "$h1_event" == "UserPromptSubmit" ]]; then
+  exit 0
+fi
 if [[ "$decision" == "deny" ]]; then
   emit_deny "${reason:-H1 非進捗ランタイム停止}"
 fi
