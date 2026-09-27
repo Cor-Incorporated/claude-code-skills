@@ -32,9 +32,9 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
                      thread_token_usage=dict(total_tokens=tokens)))]
         path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
         return path
-    def event(key, sid, model, path, kind='PreToolUse', turn='old', prompt='continue', extras=None):
+    def event(key, sid, model, path, kind='PreToolUse', turn='old', prompt='continue', extras=None, cwd=None):
         p=dict(hook_event_name=kind,session_id=sid,model=model,turn_id=turn,
-               cwd=tmp,transcript_path=str(path),tool_name='Bash',tool_input={'command':'pwd'})
+               cwd=cwd or tmp,transcript_path=str(path),tool_name='Bash',tool_input={'command':'pwd'})
         if kind=='UserPromptSubmit': p['prompt']=prompt
         proc=subprocess.run(['bash',str(hook)],input=json.dumps(p),text=True,capture_output=True,
                             env=dict(env,CODEX_H1_DELEGATION=key,**(extras or {})))
@@ -46,23 +46,52 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
         return subprocess.check_output(['bash','-c','source "$1"; h1_check "$2"','bash',str(lib),key],
                                        env=env,text=True).strip()
     # Use the actual built-in estimates: unknown models 1.25/in, nano 0.05/in.
-    for model,exact in [('gpt-6-luna',20000000),('gpt-6-sol',20000000),
-                        ('gpt-6-terra',20000000),('future-model',20000000),('',20000000),
-                        ('gpt-5-nano',500000000)]:
+    for model,exact in [('gpt-6-luna',40000000),('gpt-6-sol',40000000),
+                        ('gpt-6-terra',40000000),('future-model',40000000),('',40000000),
+                        ('gpt-5-nano',1000000000)]:
         for suffix,tokens,want in [('under',exact-1000,'allow'),('at',exact,'deny'),('over',exact+1000,'deny')]:
             key=(model or 'undetected')+'-'+suffix
             path=transcript(key,model,tokens)
             out=event(key,key,model,path)
-            check(decision(out)==want,f'{key}: default $25 {want}')
+            check(decision(out)==want,f'{key}: default $50 {want}')
             s=state(key)
-            check(s['budget_usd']==25,key+': default budget=25')
+            check(s['budget_usd']==50,key+': default budget=50')
             if model in ('gpt-6-luna','gpt-6-sol'):
                 print('OBSERVED',json.dumps(dict(case=key,output=out,state={k:s.get(k) for k in ('model','budget_usd','budget_epoch','budget_epoch_spend_usd','last_block_rule','budget_source')}),ensure_ascii=False))
             check(watchdog(key)==('budget-cap' if want=='deny' else ''),key+': hook/watchdog agree')
+    # Wrapper creation/restart shares the $50 contract without clearing usage.
+    subprocess.run(['bash','-c','source "$1"; h1_init wrapper "$2"','bash',str(lib),tmp],
+                   env=env,check=True)
+    check(state('wrapper')['budget_usd']==50,'wrapper default budget=50')
+    old=state('wrapper')
+    old.update(budget_usd=25,spend_usd=30,budget_epoch_spend_usd=30,
+               budget_epoch=2,last_block_rule='budget-cap',tool_calls=7)
+    (home/'state/wrapper.json').write_text(json.dumps(old))
+    subprocess.run(['bash','-c','source "$1"; h1_init wrapper "$2"','bash',str(lib),tmp],
+                   env=env,check=True)
+    check(state('wrapper')['budget_usd']==50,'wrapper restart refreshes budget=50')
+    check(all(state('wrapper')[k]==old[k] for k in ('spend_usd','budget_epoch_spend_usd',
+              'budget_epoch','last_block_rule','tool_calls')),'wrapper restart preserves history and epoch')
+    check(watchdog('wrapper')=='','raising cap is not a stale last-block denial')
+    # Missing transcripts still carry a labeled proxy estimate, including model not detected.
+    out=event('proxy','proxy','',home/'missing.jsonl',extras={'CODEX_H1_PROXY_TOKENS_PER_CALL':'40000000'})
+    check(decision(out)=='deny','undetected-model proxy at $50 denies')
+    check(state('proxy')['budget_source'].startswith('proxy:'),'proxy remains visibly estimated')
+    # The installed hook must no longer exempt the former exhibition project.
+    for name in ('kotoba-robocon','nfc-profile-card'):
+        key='project-'+name
+        path=transcript(key,'gpt-6-sol',40000000)
+        out=event(key,key,'gpt-6-sol',path,cwd='/Users/teradakousuke/Developer/'+name)
+        check(decision(out)=='deny',name+': default $50 denies without project relief')
+        check(state(key)['budget_usd']==50,name+': project budget matches default')
+    for key,tokens in [('warn-below',31999000),('warn-at',32000000)]:
+        path=transcript(key,'gpt-6-sol',tokens)
+        check(decision(event(key,key,'gpt-6-sol',path))=='allow',key+': below-cap warning cannot deny')
+        check(bool(state(key)['last_warn_80'])==(key=='warn-at'),key+': 80% warning boundary')
     # Session or model change alone cannot reset a stopped delegation.
     for transition in ('session','model'):
         key='transition-'+transition
-        path=transcript(key,'gpt-6-sol',21000000)
+        path=transcript(key,'gpt-6-sol',41000000)
         check(decision(event(key,'old','gpt-6-sol',path))=='deny',key+': old epoch stopped')
         sid='new' if transition=='session' else 'old'
         model='gpt-6-sol' if transition=='session' else 'gpt-6-luna'
@@ -84,7 +113,7 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
         event(key,sid,model,path,'UserPromptSubmit','same-scope','continue')
         check(state(key)['budget_epoch']==1,key+': same scope continuation cannot regrant')
     # RESTRICTED_MODELS cannot exempt any model from the budget cap.
-    path=transcript('not-exempt','gpt-6-luna',21000000)
+    path=transcript('not-exempt','gpt-6-luna',41000000)
     check(decision(event('not-exempt','luna','gpt-6-luna',path,extras={'CODEX_H1_RESTRICTED_MODELS':'terra'}))=='deny',
           'restricted-model override cannot exempt budget')
     # Preserve existing non-budget model gating (including watchdog).

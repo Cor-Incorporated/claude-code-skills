@@ -61,7 +61,7 @@ h1_init() {
         export CODEX_H1_CWD
     fi
     python3 - "$file" "$delegation" \
-        "${CODEX_H1_BUDGET_USD:-25}" \
+        "${CODEX_H1_BUDGET_USD:-50}" \
         "${CODEX_H1_MAX_ITERATIONS:-10}" \
         "${CODEX_H1_NO_PROGRESS_SEC:-2700}" <<'PY' 2>/dev/null || true
 import fcntl, json, os, sys, tempfile, time

@@ -75,7 +75,7 @@
 #
 # C4 適用限界 (短時間対話セッションには適用しない): all three block rules are
 # self-limiting on short sessions — (a) needs a 45-minute progress gap, (b) needs
-# an estimated $25 epoch burn on any model, (c) needs 10 repeated
+# an estimated $50 epoch burn on any model, (c) needs 10 repeated
 # commands.  No separate session-length
 # knob is introduced.
 #
@@ -200,11 +200,9 @@ def env_num(name, default, cast=float):
     return value if value >= 0 else default
 
 
-# 既定 $5 は 2026-09-02 に通常作業を止めた（301 tool call で spend=$5.34）。
-# 未知モデルは MAX_RATE で見積もられるため、$5 のままでは
-# 正当な作業まで止まる。通常セッション実測 $5.34 の約 5 倍を既定にし、
-# 暴走（2026-09-01 は 1 レーンで 88.8M tokens）は依然捕まえる。
-BUDGET_USD = env_num("CODEX_H1_BUDGET_USD", 25.0)
+# 既定 $5 / $25 は過去の値。2026-09-27のユーザー指示で全モデル推定 $50。
+# 請求実額の上限ではなく、次のPreToolUseで評価する予算epochの上限。
+BUDGET_USD = env_num("CODEX_H1_BUDGET_USD", 50.0)
 MAX_ITERATIONS = int(env_num("CODEX_H1_MAX_ITERATIONS", 10.0))
 NO_PROGRESS_SEC = int(env_num("CODEX_H1_NO_PROGRESS_SEC", 2700.0))
 HEARTBEAT_SEC = int(env_num("CODEX_H1_HEARTBEAT_SEC", 900.0))
@@ -230,7 +228,7 @@ PRICES = {
 MAX_RATE = max(PRICES.values(), key=lambda rate: rate[2])
 
 # --- 予算は全モデル、無進捗・反復停止は従来の対象モデル ------------------------
-# 2026-09-27: ユーザー指定により推定 $25 の予算は未知モデルにも適用する。
+# 2026-09-27: ユーザー指定により推定 $50 の予算は未知モデルにも適用する。
 # CODEX_H1_RESTRICTED_MODELS は無進捗・反復停止だけの対象。予算の除外には使わない。
 RESTRICTED_MODELS = [
     token.strip().lower()

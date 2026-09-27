@@ -3,6 +3,7 @@
 # This is an isolated hook fixture; it does not prove the incident's raw payload.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export H1_DESKTOP_LEDGER_LIB="$ROOT/hooks/lib/aidd-ledger.sh"
 export H1_DESKTOP_HOOK="${H1_DESKTOP_HOOK:-$ROOT/hooks/codex/h1-stall-runtime.sh}"
 python3 - <<'PY'
 import json
@@ -14,6 +15,9 @@ import time
 
 with tempfile.TemporaryDirectory(prefix="h1-desktop-intent-") as directory:
     root = Path(directory)
+    ledger_lib = root / ".claude/hooks/lib/aidd-ledger.sh"
+    ledger_lib.parent.mkdir(parents=True)
+    ledger_lib.write_bytes(Path(os.environ["H1_DESKTOP_LEDGER_LIB"]).read_bytes())
     transcript = root / "rollout.jsonl"
     usage = {"input_tokens": 1000, "cached_input_tokens": 0,
              "output_tokens": 0, "total_tokens": 1000}
@@ -23,7 +27,7 @@ with tempfile.TemporaryDirectory(prefix="h1-desktop-intent-") as directory:
     state_path.parent.mkdir()
     ledger = root / "ledger.jsonl"
     env = dict(os.environ, HOME=str(root), CODEX_H1_STATE_DIR=str(state_path.parent),
-               CODEX_H1_DELEGATION="desktop", CODEX_H1_BUDGET_USD="25",
+               CODEX_H1_DELEGATION="desktop", CODEX_H1_BUDGET_USD="50",
                CODEX_H1_RESTRICTED_MODELS="sol", AIDD_LEDGER_SOURCE="test",
                AIDD_LEDGER_PATH=str(ledger))
     passed = failed = 0
@@ -42,8 +46,8 @@ with tempfile.TemporaryDirectory(prefix="h1-desktop-intent-") as directory:
         state_path.write_text(json.dumps({
             "delegation": "desktop", "session_id": "old", "model": "gpt-6-sol",
             "started_ts": now, "last_progress_ts": now, "tool_calls": 1,
-            "spend_usd": 25.24129, "spend_tokens": 1000,
-            "budget_epoch": 0, "budget_epoch_spend_usd": 25.24129,
+            "spend_usd": 50.24129, "spend_tokens": 1000,
+            "budget_epoch": 0, "budget_epoch_spend_usd": 50.24129,
             "usage_snapshot": usage, "last_block_rule": "budget-cap"}))
         ledger.unlink(missing_ok=True)
         payload = {"hook_event_name": "UserPromptSubmit", "session_id": sid,
