@@ -705,10 +705,12 @@ def apply_meter(state, records, measured):
     if not state.get("budget_scope_session_id"):
         state["budget_scope_session_id"] = state.get("session_id") or SID
     if state.get("budget_scope_model_pending"):
-        # Confirm a scope reset without a model on the first real observation. Use
-        # the model observed now, not state["model"], which is the old scope's (#402).
-        if model:
-            state["budget_scope_model"] = model
+        # Confirm a scope reset without a model only from the current hook payload.
+        # The metered model can come from an older transcript turn (measure_spend
+        # reads the last "model" string) or from state["model"] (the old scope), and
+        # pinning either would let a later resume pass as a model change (#402).
+        if PAYLOAD_MODEL:
+            state["budget_scope_model"] = PAYLOAD_MODEL
             state.pop("budget_scope_model_pending", None)
     elif not state.get("budget_scope_model"):
         state["budget_scope_model"] = state.get("model") or model

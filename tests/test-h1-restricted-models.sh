@@ -137,6 +137,29 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
     check(decision(event(key,'new','gpt-6-luna',new_path,turn='resume'))=='allow',key+': new epoch allows')
     event(key,'new','gpt-6-luna',new_path,'UserPromptSubmit','resume-again','作業を続けて下さい')
     check(state(key)['budget_epoch']==1,key+': same session and model cannot regrant')
+    # The pending scope is confirmed only by a model attributable to the current turn
+    # (the hook payload). A model read from an older transcript turn must not pin it
+    # and later pass as a model change (Codex review of #403).
+    def transcript_with_total(sid, model, tokens):
+        # Rollouts that carry total_token_usage make measure_spend() read the model
+        # from the latest "model" string in the file, which can be an older turn's.
+        path = home/(sid+'.jsonl')
+        rows = [dict(type='session_meta', payload=dict(id=sid,model=model)),
+                dict(type='turn_context',payload=dict(turn_id='old',model=model)),
+                dict(type='event_msg',payload=dict(type='token_count',info=dict(total_token_usage=dict(
+                     input_tokens=tokens, cached_input_tokens=0, output_tokens=0, total_tokens=tokens))))]
+        path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+        return path
+    key='pending-payload-only'
+    old_path=transcript(key,'gpt-6-sol',41000000)
+    check(decision(event(key,'old','gpt-6-sol',old_path))=='deny',key+': old session reaches the cap')
+    new_path=transcript_with_total(key+'-new','gpt-6-luna',1000)
+    event(key,'new','',new_path,'UserPromptSubmit','resume','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': session change with resume grants one epoch')
+    check(decision(event(key,'new','',new_path,turn='resume'))=='allow',key+': tool call without a payload model allows')
+    check(state(key).get('budget_scope_model_pending') is True,key+': transcript-only model does not confirm the scope')
+    event(key,'new','gpt-6-sol',new_path,'UserPromptSubmit','resume-again','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': transcript-only model cannot evidence a model change')
     # Without a session ID or delegation, separate runs keep separate state (keyed by
     # transcript) instead of pooling into default.json and sharing one budget (#402).
     def event_without_ids(label, model, path):
