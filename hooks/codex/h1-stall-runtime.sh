@@ -693,8 +693,13 @@ def apply_meter(state, records, measured):
     tokens, absolute_usd, source, model, usage = measured
     # Preserve the budget scope across an unapproved transition. Observation
     # may update current session/model, but cannot consume the resume evidence.
-    state.setdefault("budget_scope_session_id", state.get("session_id") or SID)
-    state.setdefault("budget_scope_model", state.get("model") or model)
+    # An empty scope (a first PreToolUse without a session ID or model) is filled
+    # on the first non-empty observation and then kept until an authorized reset;
+    # setdefault kept the empty value and blocked a valid resume after a transition.
+    if not state.get("budget_scope_session_id"):
+        state["budget_scope_session_id"] = state.get("session_id") or SID
+    if not state.get("budget_scope_model"):
+        state["budget_scope_model"] = state.get("model") or model
     state["model"] = model
     state["session_id"] = SID or state.get("session_id", "")
     meter_key = state.get("meter_path") or ""

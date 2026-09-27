@@ -112,6 +112,19 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
         check(watchdog(key)=='',key+': watchdog allows new epoch')
         event(key,sid,model,path,'UserPromptSubmit','same-scope','continue')
         check(state(key)['budget_epoch']==1,key+': same scope continuation cannot regrant')
+    # The budget scope fills in on the first non-empty observation. A first
+    # PreToolUse without a session ID or model must not pin an empty scope that
+    # later blocks an explicit resume after a real transition (Codex review, 2026-09-28).
+    for missing in ('session','model'):
+        key='late-scope-'+missing
+        path=transcript(key,'' if missing=='model' else 'gpt-6-sol',41000000)
+        event(key,'' if missing=='session' else 'old','' if missing=='model' else 'gpt-6-sol',path)
+        check(decision(event(key,'old','gpt-6-sol',path))=='deny',key+': cap reached with known ids')
+        sid='new' if missing=='session' else 'old'
+        model='gpt-6-luna' if missing=='model' else 'gpt-6-sol'
+        check(decision(event(key,sid,model,path))=='deny',key+': transition alone denies')
+        event(key,sid,model,path,'UserPromptSubmit','resume','作業を続けて下さい')
+        check(state(key)['budget_epoch']==1,key+': explicit resume after a late scope grants one epoch')
     # RESTRICTED_MODELS cannot exempt any model from the budget cap.
     path=transcript('not-exempt','gpt-6-luna',41000000)
     check(decision(event('not-exempt','luna','gpt-6-luna',path,extras={'CODEX_H1_RESTRICTED_MODELS':'terra'}))=='deny',
