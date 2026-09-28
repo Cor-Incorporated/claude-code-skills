@@ -40,13 +40,47 @@ cmd_norm=$(printf '%s' "$cmd" \
   | sed -E 's/\\([_*`~|[:punct:]])/\1/g')
 _GIT_PUSH_RE='(^|[^[:alnum:]_-])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*push([^[:alnum:]_-]|$)'
 
+# 台帳 1 行（= JSON オブジェクト 1 個）を組み立てる。
+# 2026-09-25 実測: 実台帳 ~/.codex/hooks/guard-ledger.jsonl の 414 行中 62 行が
+# JSON として読めなかった。cmd_head を printf へ素のまま渡していたため、
+# Markdown エスケープされた `\_` / `\-\-repo` のバックスラッシュが Invalid \escape
+# になり、複数行コマンドは 1 件が複数行に割れていた。Claude 側の
+# hooks/lib/aidd-ledger.sh が 2026-09-02 に直したのと同じ欠陥。
+# 値の形は従来どおり（先頭 120 バイト、" は ' へ置換）。改行・タブ・復帰は空白へ
+# 寄せ、切り詰めで UTF-8 の文字を半端に残さない。
+# 組み立ては jq に任せ、jq が失敗したときだけ printf で書く。その経路では
+# バックスラッシュを倍化し、残った制御文字を落とす（jq が無い環境では、そもそも
+# 入力から cmd を読めず deny に至らない）。行は変数に受けてから 1 度だけ書くので、
+# jq が出力してから失敗しても 2 行にはならない。
+
+# 先頭 120 バイトを、UTF-8 の文字を途中で切らずに取る（hooks/lib/aidd-ledger.sh の
+# _aidd_truncate_utf8 と同じ）。文字の途中で切ると iconv -c は正しい前半を出した
+# うえで exit 1 を返すので、終了コードは見ない。
+_codex_truncate_utf8() {
+  if command -v iconv >/dev/null 2>&1; then
+    head -c 120 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null
+  else
+    head -c 120
+  fi
+}
+
+ledger_line() {
+  local ts cmd_head line
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cmd_head="$(printf '%s' "$cmd" | _codex_truncate_utf8 | tr '"' "'" | tr '\n\t\r' '   ')"
+  line="$(jq -cn --arg ts "$ts" --arg cmd_head "$cmd_head" \
+    '{ts: $ts, hook: "protect-branches-codex", decision: "deny", cmd_head: $cmd_head}' 2>/dev/null)" \
+    || line="$(printf '{"ts":"%s","hook":"protect-branches-codex","decision":"deny","cmd_head":"%s"}' \
+      "$ts" "$(printf '%s' "$cmd_head" | sed 's/\\/\\\\/g' | tr -d '\000-\037')")"
+  printf '%s\n' "$line"
+}
+
 emit_deny() {
   local msg="$1"
   mkdir -p "$(dirname "$LEDGER")" 2>/dev/null || true
-  printf '{"ts":"%s","hook":"protect-branches-codex","decision":"deny","cmd_head":"%s"}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    "$(printf '%s' "$cmd" | head -c 120 | tr '"' "'")" \
-    >>"$LEDGER" 2>/dev/null || true
+  # 2>/dev/null を先に置く。後ろに置くと、台帳を開けないときのエラーが hook の
+  # stderr へ出る（リダイレクトは左から順に処理される）。
+  ledger_line 2>/dev/null >>"$LEDGER" || true
   # Codex operational shape: permissionDecision deny
   # Codex acts on permissionDecision=deny with exit 0.
   # Non-zero exit is treated as hook failure and may fail-open (spike 2026-08-11).
