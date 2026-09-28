@@ -113,7 +113,7 @@ truthful.
 
 ## Skills
 
-- **Repo-owned** (28): `skills/*/SKILL.md` — each has YAML frontmatter + markdown body, following Anthropic progressive-disclosure structure.
+- **Repo-owned** (25): `skills/*/SKILL.md` — each has YAML frontmatter + markdown body, following Anthropic progressive-disclosure structure.
 - **Third-party** (installed by `setup.sh`, not vendored): `ctx7@0.3.6`, `gstack` (pinned commit, telemetry off), `uipro-cli@2.2.3`. These are gitignored and live under `~/.claude/skills/` after install.
 - gstack installs ~20 additional skills (browse, qa, ship, retro, etc.) listed in `.gitignore` under `skills/<name>/`.
 
