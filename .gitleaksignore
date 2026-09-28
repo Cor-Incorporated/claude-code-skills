@@ -1,0 +1,4 @@
+# gitleaks の誤検知を指紋（commit:file:rule:line）で 1 件ずつ除外する。規則やパスでは除外しない。
+# docs/audits/dogfooding-2026-04-08/CC-vs-OC-Dogfooding-Plan.md の「シナリオ 8: Docker build-arg シークレット」は、
+# ガードが sk- 形式の値を止めるかを試すための連番のダミー（15 文字）。実際のキーではない（#404）
+9a73da9b4184c05b4c751f6c561c42f80db05f9e:docs/audits/dogfooding-2026-04-08/CC-vs-OC-Dogfooding-Plan.md:generic-api-key:164
