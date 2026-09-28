@@ -12,16 +12,22 @@
 #     作られてから MIN_AGE_DAYS 日未満なら消さない。作られた日は reflog の最も古い記録で測り、
 #     分からなければ消さない
 #   - 未マージブランチは削除しない（git branch -d のみ、-D は使わない）
-#   - dirty な worktree はスキップして警告。設定（status.showUntrackedFiles=no）で隠れる未追跡ファイルも、
-#     assume-unchanged / skip-worktree で git status に出ない変更も dirty として扱う。ignore されたファイルも、
-#     handover の撤収基準 3 が「再生成可能」と列挙したもの（REGENERABLE_IGNORED）以外があれば残す
-#   - ディレクトリが見つからない worktree の管理情報は、最後に使われてから MIN_AGE_DAYS 日を過ぎたものだけ
-#     片付ける（git worktree prune --expire。dry-run は片付ける予定を表示する）
+#   - 消すと失われる作業がある worktree はスキップして警告（hidden_work）: 設定（status.showUntrackedFiles=no）で
+#     隠れる未追跡ファイル、assume-unchanged / skip-worktree で git status に出ない変更、lossy な clean filter
+#     （nbstripout など）で git status に出ない作業ツリーの中身。ignore されたファイルも、handover の撤収基準 3 が
+#     「再生成可能」と列挙したもの（REGENERABLE_IGNORED）以外があれば残す。--apply は消す直前にも確かめ直す
+#     （計画から削除までの間に gh の問い合わせで数秒ある）
+#   - ロックされた worktree は消さない
+#   - 計画は prune の前の worktree の一覧で立てる（--apply でも承認した dry-run と同じ計画になる）。
+#     ディレクトリが見つからない worktree の管理情報は、最後に使われてから MIN_AGE_DAYS 日を過ぎたものだけ
+#     片付ける（git worktree prune --expire。index の無い worktree は git が日数を見ずに片付ける）。
+#     片付けた worktree のブランチは、次の実行の dry-run に出てから消える
 #   - 現在checkout中のブランチ、渡されたパスの worktree、呼び出し元がいる worktree は触らない
 #   - open PR の有無を gh で確かめられないリモートブランチは消さない。origin が GitHub の URL でなければ
-#     確かめられないとみなす。origin が fork なら親リポジトリの PR も見る。そのブランチを base にする
-#     open PR（stacked PR）があっても消さない。残す worktree で checkout 中のブランチのリモートも消さない。
-#     消すときは、fetch したときの先端から動いていないことを --force-with-lease で確かめる
+#     確かめられないとみなす。origin が fork なら祖先のリポジトリ（親、その親…）の PR も見る。そのブランチを
+#     base にする open PR（stacked PR）があっても消さない。残す worktree で checkout 中のブランチのリモートも
+#     消さない（--apply では消す直前に、今も checkout 中でないことを確かめ直す）。消すときは refs/heads/ を
+#     指定し（同じ名前のタグを消さない）、fetch したときの先端から動いていないことを --force-with-lease で確かめる
 #   - fetch に失敗したらリモートは消さない
 #   - --apply --remote ではリモートを先に消す（upstream が残っていると git branch -d が拒否する）
 # dry-run も git fetch --prune で origin の追跡ブランチを更新する。--apply は計画を作り直すので、
@@ -35,6 +41,8 @@ MIN_AGE_DAYS=7
 # handover の撤収基準 3 が「再生成可能」と列挙したもの（skills/handover/common-clauses.md の表。
 # 実測で現れたものだけを載せる規定。pair19 が表と照合する）
 REGENERABLE_IGNORED=('**/__pycache__/**' '*.pyc')
+# fork の祖先をたどる上限（これより深ければ確かめられないとみなす）
+GH_PARENT_DEPTH=5
 
 REPO="${1:?usage: repo-janitor.sh <repo-path> [--apply] [--remote]}"
 shift
@@ -75,12 +83,23 @@ GH_REPO_ARGS=()
 origin_slug=$(git config --get remote.origin.url 2>/dev/null \
   | sed -nE 's#^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+)$#\2#p' | sed 's/\.git$//')
 [ -n "$origin_slug" ] && GH_REPO_ARGS=(-R "$origin_slug")
-# origin が fork なら、PR は親リポジトリにも出ている。親を確かめられなければ "?"（リモートは消さない）。
-# origin が GitHub の URL でなければ、gh がどのリポジトリの PR を見るか分からないので、これも "?"
-GH_PARENT="?"
+# origin が fork なら、PR は祖先のリポジトリ（親、fork の fork なら親の親…）にも出ている。たどり切れなければ
+# （gh が答えない・GH_PARENT_DEPTH より深い）確かめられないとみなし、リモートは消さない。origin が GitHub の
+# URL でなければ、gh がどのリポジトリの PR を見るか分からないので、これも確かめられないとみなす
+GH_PARENTS=()
+GH_PARENTS_OK=false
 if [ -n "$origin_slug" ]; then
-  GH_PARENT=$(gh repo view "$origin_slug" --json parent \
-    -q 'if .parent then .parent.owner.login + "/" + .parent.name else "" end' 2>/dev/null) || GH_PARENT="?"
+  _repo=$origin_slug
+  for _ in $(seq "$GH_PARENT_DEPTH"); do
+    _parent=$(gh repo view "$_repo" --json parent \
+      -q 'if .parent then .parent.owner.login + "/" + .parent.name else "" end' 2>/dev/null) || break
+    if [ -z "$_parent" ]; then
+      GH_PARENTS_OK=true
+      break
+    fi
+    GH_PARENTS+=("$_parent")
+    _repo=$_parent
+  done
 fi
 
 in_list() { # $1=値 $2...=リスト
@@ -177,6 +196,58 @@ unregenerable_ignored() {
   return 0
 }
 
+# lossy_filtered <worktree>: clean filter（nbstripout など）の付いた追跡中のファイルのうち、作業ツリーの中身が
+# index の blob と違うものを出す。lossy な filter を通すと HEAD と同じに見えるので git status に出ない
+# （git worktree remove も同じ理由で見落として消す）。Git LFS は作業ツリーと index が常に違うので除く。
+# 調べられなければ 1 を返す
+lossy_filtered() {
+  local files f raw idx
+  files=$(git -C "$1" ls-files -- ':(exclude,attr:!filter)' ':(exclude,attr:-filter)' \
+    ':(exclude,attr:filter=lfs)' 2>/dev/null) || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -f "$1/$f" ] || continue
+    raw=$(git -C "$1" hash-object --no-filters -- "$f" 2>/dev/null) || return 1
+    idx=$(git -C "$1" --literal-pathspecs ls-files -s -- "$f" 2>/dev/null | awk 'NR == 1 {print $2}')
+    [ "$raw" = "$idx" ] || printf '%s\n' "$f"
+  done <<<"$files"
+  return 0
+}
+
+# hidden_work <worktree>: 消すと失われる作業（ignore されたファイルを除く）があれば、理由を 1 行出して 0。
+# 無ければ 1。調べられなければ 0（消さない側）
+hidden_work() {
+  local wt="$1" st flags lossy
+  # 設定（status.showUntrackedFiles=no など）で隠れる未追跡ファイルも数える
+  if ! st=$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null); then
+    echo "状態を確かめられない"
+    return 0
+  fi
+  if [ -n "$st" ]; then
+    echo "dirty $(printf '%s\n' "$st" | wc -l | tr -d ' ')files"
+    return 0
+  fi
+  # assume-unchanged / skip-worktree の付いたファイルは、書き換えても git status に出ない
+  # （git worktree remove も同じ理由で見落として消す）。ls-files -v では小文字と S になる
+  if ! flags=$(git -C "$wt" ls-files -v 2>/dev/null); then
+    echo "状態を確かめられない"
+    return 0
+  fi
+  if printf '%s\n' "$flags" | grep -q '^[a-zS] '; then
+    echo "変更が git status に出ないファイルがある: assume-unchanged / skip-worktree"
+    return 0
+  fi
+  if ! lossy=$(lossy_filtered "$wt"); then
+    echo "状態を確かめられない"
+    return 0
+  fi
+  if [ -n "$lossy" ]; then
+    echo "clean filter で git status に出ない中身がある: $(printf '%s\n' "$lossy" | head -3 | tr '\n' ' ')"
+    return 0
+  fi
+  return 1
+}
+
 # git の拒否メッセージを 1 行にする（hint は落とす）
 reason() {
   printf '%s\n' "$1" | grep -v '^hint:' | tr -s ' \n' ' ' | sed 's/ $//'
@@ -191,18 +262,21 @@ CURRENT=$(git branch --show-current)
 
 # ---- 1) worktree ----
 echo "## Worktrees"
+# 計画は prune の前の一覧で立てる。--apply だけ先に prune すると、承認した dry-run で「checkout 中」として
+# 残したブランチを、ディレクトリの消えた worktree の管理情報と一緒に外して消してしまう
+WT_SNAPSHOT=$(git worktree list --porcelain)
 # ディレクトリが見つからない worktree の管理情報は、最後に使われてから（その worktree の index が
 # 書かれてから）MIN_AGE_DAYS 日を過ぎたものだけ片付ける。外付けディスクを外しているだけの worktree を、
-# 戻ってくる前に切り離さない
+# 戻ってくる前に切り離さない（index の無い worktree は、git が日数を見ずに片付ける）
 PRUNE_EXPIRE="${MIN_AGE_DAYS}.days.ago"
 if $APPLY; then
   git worktree prune -v --expire "$PRUNE_EXPIRE" 2>&1 | sed 's/^/- PRUNED: /'
 else
   git worktree prune -n -v --expire "$PRUNE_EXPIRE" 2>&1 | sed 's/^/- PRUNE 候補: /'
 fi
-MAIN_WT=$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)
+MAIN_WT=$(printf '%s\n' "$WT_SNAPSHOT" | sed -n 's/^worktree //p' | head -1)
+WT_LOCKED=$(printf '%s\n' "$WT_SNAPSHOT" | awk '/^worktree /{wt = substr($0, 10)} /^locked( |$)/{print wt}')
 WT_REMOVE=()  # 消す worktree
-WT_FREED=()   # それを消すと checkout が外れるブランチ
 while IFS= read -r wt; do
   [ "$wt" = "$MAIN_WT" ] && continue
   br=$(git -C "$wt" branch --show-current 2>/dev/null || echo "?")
@@ -219,23 +293,14 @@ while IFS= read -r wt; do
       continue
     fi
   fi
-  # 設定（status.showUntrackedFiles=no など）で隠れる未追跡ファイルも数える。調べられなければ消さない
-  if ! st=$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null); then
-    echo "- SKIP (状態を確かめられない): $wt [$br]"
+  # ロックされた worktree は消さない（git worktree remove も拒否するので、計画に出すと承認した内容と
+  # 実行が食い違う）
+  if printf '%s\n' "$WT_LOCKED" | grep -qxF -- "$wt"; then
+    echo "- SKIP (locked): $wt [$br]"
     continue
   fi
-  if [ -n "$st" ]; then
-    echo "- SKIP (dirty $(printf '%s\n' "$st" | wc -l | tr -d ' ')files): $wt [$br]"
-    continue
-  fi
-  # assume-unchanged / skip-worktree の付いたファイルは、書き換えても git status に出ない
-  # （git worktree remove も同じ理由で見落として消す）。ls-files -v では小文字と S になる
-  if ! flags=$(git -C "$wt" ls-files -v 2>/dev/null); then
-    echo "- SKIP (状態を確かめられない): $wt [$br]"
-    continue
-  fi
-  if printf '%s\n' "$flags" | grep -q '^[a-zS] '; then
-    echo "- SKIP (変更が git status に出ないファイルがある: assume-unchanged / skip-worktree): $wt [$br]"
+  if why=$(hidden_work "$wt"); then
+    echo "- SKIP (${why}): $wt [$br]"
     continue
   fi
   if echo "$br" | grep -Eq "$PROTECTED"; then
@@ -269,13 +334,24 @@ while IFS= read -r wt; do
       continue
     fi
     WT_REMOVE+=("$wt")
-    WT_FREED+=("$br")
     echo "- 削除候補: $wt [$br] — $BASE にマージ済み（${ENTERED}）・clean"
   else
     echo "- KEEP (unmerged): $wt [$br]"
   fi
-done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
+done < <(printf '%s\n' "$WT_SNAPSHOT" | sed -n 's/^worktree //p')
 echo ""
+
+# 残す worktree（消さないものすべて。main worktree も含む）で checkout 中のブランチ。ローカルもリモートも、
+# これに当たるものは消さない（同じブランチを 2 つの worktree で checkout していて片方だけ消す場合も残す）
+KEPT_BRANCHES=""
+while IFS=$'\t' read -r p b; do
+  [ -n "$p" ] || continue
+  in_list "$p" ${WT_REMOVE[@]+"${WT_REMOVE[@]}"} && continue
+  KEPT_BRANCHES="$KEPT_BRANCHES$b"$'\n'
+done < <(printf '%s\n' "$WT_SNAPSHOT" | awk '/^worktree /{wt = substr($0, 10)} /^branch /{print wt "\t" substr($0, 8)}')
+kept_checkout() { # $1=ブランチ名
+  printf '%s' "$KEPT_BRANCHES" | grep -qxF -- "refs/heads/$1"
+}
 
 # ---- 2) ローカルブランチ（マージ済みのみ） ----
 # %(refname:short) は同じ名前のタグがあると heads/<name> と表示するので、lstrip=2 で名前を取る
@@ -297,12 +373,12 @@ while IFS= read -r br; do
     echo "- KEEP (no own commits, first seen in $BASE $ENTERED, < $MIN_AGE_DAYS days or unknown): $br"
     continue
   fi
-  # worktree で checkout 中のブランチは、その worktree を消すときだけ候補にする
-  if git worktree list --porcelain | grep -qxF "branch refs/heads/$br"; then
-    if ! in_list "$br" ${WT_FREED[@]+"${WT_FREED[@]}"}; then
-      echo "- SKIP (checked out in worktree): $br"
-      continue
-    fi
+  # 残す worktree で checkout 中のブランチは消さない。消す worktree のブランチは、その worktree と一緒に候補にする
+  if kept_checkout "$br"; then
+    echo "- SKIP (checked out in worktree): $br"
+    continue
+  fi
+  if printf '%s\n' "$WT_SNAPSHOT" | grep -qxF -- "branch refs/heads/$br"; then
     echo "- 削除候補: ${br}（${ENTERED}、worktree と一緒に）"
   else
     echo "- 削除候補: ${br}（${ENTERED}）"
@@ -339,20 +415,24 @@ while IFS= read -r ref; do
     continue
   fi
   # 残す worktree で checkout 中のブランチは、リモートも消さない（その worktree の upstream を奪わない）
-  if git worktree list --porcelain | grep -qxF "branch refs/heads/$br" \
-    && ! in_list "$br" ${WT_FREED[@]+"${WT_FREED[@]}"}; then
+  if kept_checkout "$br"; then
     echo "- SKIP (残す worktree で checkout 中): origin/$br"
     continue
   fi
   # 裏取り: open PR が無いこと。gh で確かめられなければ消さない（open PR のブランチを消すと PR が閉じる）
   open=$(gh pr list ${GH_REPO_ARGS[@]+"${GH_REPO_ARGS[@]}"} --head "$br" --state open \
     --json number -q length 2>/dev/null) || open=""
-  # origin が fork なら、親リポジトリに出した PR も数える
-  if [ "$open" = 0 ] && [ -n "$GH_PARENT" ]; then
-    if [ "$GH_PARENT" = "?" ]; then
+  # origin が fork なら、祖先のリポジトリに出した PR も数える
+  if [ "$open" = 0 ]; then
+    if ! $GH_PARENTS_OK; then
       open=""
     else
-      open=$(gh pr list -R "$GH_PARENT" --head "$br" --state open --json number -q length 2>/dev/null) || open=""
+      for p in ${GH_PARENTS[@]+"${GH_PARENTS[@]}"}; do
+        n=$(gh pr list -R "$p" --head "$br" --state open --json number -q length 2>/dev/null) || n=""
+        [ "$n" = 0 ] && continue
+        open=$n
+        break
+      done
     fi
   fi
   case "$open" in
@@ -384,9 +464,22 @@ done < <(git for-each-ref --merged "$BASE_REF" --format='%(refname:lstrip=2)' re
 echo ""
 
 # ---- 4) 実行 ----
+# still_checked_out <ブランチ名>: 今（計画ではなく実行の時点で）どれかの worktree で checkout 中なら 0
+still_checked_out() {
+  git worktree list --porcelain | grep -qxF -- "branch refs/heads/$1"
+}
 apply_worktrees() {
-  local wt err
+  local wt err why ignored
   for wt in ${WT_REMOVE[@]+"${WT_REMOVE[@]}"}; do
+    # 計画から削除までの間（gh の問い合わせで数秒ある）に生まれた作業を失わないよう、消す直前に確かめ直す
+    if why=$(hidden_work "$wt"); then
+      echo "- SKIP (計画の後に変わった: ${why}): $wt"
+      continue
+    fi
+    if ! ignored=$(unregenerable_ignored "$wt") || [ -n "$ignored" ]; then
+      echo "- SKIP (計画の後に変わった: ignore されたファイル $(printf '%s\n' "$ignored" | head -3 | tr '\n' ' ')): $wt"
+      continue
+    fi
     if err=$(git worktree remove "$wt" 2>&1); then
       echo "- REMOVED: $wt"
     else
@@ -399,8 +492,14 @@ apply_remote() {
   $REMOTE || return 0
   for i in ${REMOTE_DELETE[@]+"${!REMOTE_DELETE[@]}"}; do
     br=${REMOTE_DELETE[$i]}
-    # fetch したときの先端から動いていたら消さない（その後に push されたコミットを失わない）
-    if err=$(git push --force-with-lease="refs/heads/$br:${REMOTE_SHA[$i]}" origin --delete "$br" 2>&1); then
+    # 消せなかった・残した worktree でまだ checkout 中なら、リモートも消さない
+    if still_checked_out "$br"; then
+      echo "- SKIP (worktree でまだ checkout 中): origin/$br"
+      continue
+    fi
+    # fetch したときの先端から動いていたら消さない（その後に push されたコミットを失わない）。消す ref は
+    # refs/heads/ で指定する（短い名前だと、ブランチが先に消えていれば同じ名前のタグを消し、両方あれば拒否される）
+    if err=$(git push --force-with-lease="refs/heads/$br:${REMOTE_SHA[$i]}" origin ":refs/heads/$br" 2>&1); then
       echo "- DELETED: origin/$br"
     else
       echo "- FAILED: origin/$br — $(reason "$err")"
@@ -410,6 +509,10 @@ apply_remote() {
 apply_local() {
   local br err
   for br in ${LOCAL_DELETE[@]+"${LOCAL_DELETE[@]}"}; do
+    if still_checked_out "$br"; then
+      echo "- SKIP (worktree でまだ checkout 中): $br"
+      continue
+    fi
     if err=$(git branch -d "$br" 2>&1); then
       echo "- DELETED: $br"
     else

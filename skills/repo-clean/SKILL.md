@@ -49,16 +49,27 @@ description: "Safely clean up merged worktrees, local branches, and remote branc
 - ローカル削除は `git branch -d` のみ（`-D` 強制削除は使わない）→ 未マージなら git 側が拒否する
 - `--apply --remote` はリモート → ローカルの順に消す。upstream が残っていると、基準ブランチに
   入っていても upstream より先に進んだブランチを `git branch -d` が拒否するため
-- リモートは open PR が無いことを gh で確かめてから消す。origin が fork なら親リポジトリの PR も見る。
-  確かめられなければ（gh が無い・未認証・親が分からない・origin が GitHub の URL でないなど）
-  `SKIP (open PR の有無を確かめられない)` として残す。そのブランチを base にする open PR（stacked PR）が
-  あるか、それを確かめられなければ残す（base を消すとその PR は閉じる）。残す worktree で checkout 中の
-  ブランチのリモートも消さない（`SKIP (残す worktree で checkout 中)`）。消すときは `--force-with-lease` で、
-  fetch した先端から動いていないことを確かめる
-- dirty の判定は設定に左右されない。`status.showUntrackedFiles=no` で隠れる未追跡ファイルも数え
-  （`--untracked-files=all`）、assume-unchanged / skip-worktree の付いたファイルがある worktree は、変更が
-  `git status` に出ないので消さない（`SKIP (変更が git status に出ないファイルがある …)`）。
-  `git worktree remove` も同じものを見落として消すため、その手前で止める
+- リモートは open PR が無いことを gh で確かめてから消す。origin が fork なら祖先のリポジトリ（親、fork の
+  fork なら親の親…、5 段まで）の PR も見る。確かめられなければ（gh が無い・未認証・祖先をたどり切れない・
+  origin が GitHub の URL でないなど）`SKIP (open PR の有無を確かめられない)` として残す。そのブランチを
+  base にする open PR（stacked PR）があるか、それを確かめられなければ残す（base を消すとその PR は閉じる）
+- 残す worktree（main worktree を含む）で checkout 中のブランチは、ローカルもリモートも消さない
+  （`SKIP (残す worktree で checkout 中)`。同じブランチを 2 つの worktree で checkout していて片方だけ消す場合も
+  残す）。`--apply` は消す直前に、今も checkout 中でないことを確かめ直す（`SKIP (worktree でまだ checkout 中)`）
+- リモートを消すときは `refs/heads/<branch>` を指定し（短い名前だと、ブランチが先に消えていれば同じ名前の
+  タグを消し、両方あれば拒否される）、`--force-with-lease` で fetch した先端から動いていないことを確かめる
+- 消すと失われる作業がある worktree は消さない。`git worktree remove` は次のものを見落として消すため、
+  その手前で止める:
+  - `status.showUntrackedFiles=no` で隠れる未追跡ファイル（`--untracked-files=all` で数える）
+  - `submodule.<name>.ignore` で隠れる submodule の変更（`--ignore-submodules=none` で数える）
+  - assume-unchanged / skip-worktree の付いたファイル（`SKIP (変更が git status に出ないファイルがある …)`）
+  - lossy な clean filter（nbstripout など）を通すと HEAD と同じに見えるが、作業ツリーの中身は index と
+    違うファイル（`SKIP (clean filter で git status に出ない中身がある …)`。Git LFS は作業ツリーと index が
+    常に違うので除く）
+
+  `--apply` は消す直前に同じ確認をやり直し、計画の後に変わっていれば消さない（`SKIP (計画の後に変わった: …)`）。
+  ほかにも git status から中身を隠す仕組みはありうる（上の 4 つで網羅したとは言えない）
+- ロックされた worktree は消さない（`SKIP (locked)`。`git worktree remove` も拒否する）
 - 基準ブランチは `refs/remotes/origin/<base>` の完全な名前で git に渡す（`origin/develop` という名前の
   ローカルブランチがあっても、そちらをマージ済みの判定に使わない）
 - fetch に失敗したらリモートは消さない（`SKIP (fetch に失敗したので消さない)`）。基準ブランチは fetch の
@@ -70,8 +81,13 @@ description: "Safely clean up merged worktrees, local branches, and remote branc
 - dry-run も `git fetch --prune` で origin の追跡ブランチを更新する
 - ディレクトリが見つからない worktree の管理情報は、最後に使われてから（その worktree の index が書かれて
   から）7 日を過ぎたものだけ `git worktree prune --expire` で片付ける。外付けディスクを外しているだけの
-  worktree を切り離さないため。dry-run は `- PRUNE 候補:`、`--apply` は `- PRUNED:` として表示する
-- `--apply` は計画を作り直す。承認した dry-run の直後に実行する（日付をまたぐと、7 日を越えた分が候補に加わりうる）
+  worktree を切り離さないため。ただし index の無い worktree（`git worktree add --no-checkout` など）は、git が
+  日数を見ずに片付ける。dry-run は `- PRUNE 候補:`、`--apply` は `- PRUNED:` として表示する
+- 計画は prune の前の worktree の一覧で立てる。片付けた worktree のブランチは、その回は
+  `SKIP (checked out in worktree)` のまま残り、次の実行の dry-run に出てから消える（承認していないものを
+  `--apply` が消さない）
+- `--apply` は計画を作り直す。承認した dry-run の直後に実行する（日付をまたぐと、7 日を越えた分が候補に加わりうる）。
+  計画と実行の差は、日付と、計画の後に worktree で起きた変化だけで、後者は消さない側にだけ倒れる
 - dirty な worktree・現在 checkout 中のブランチは自動スキップ
 - リモート削除は「基準ブランチにマージ済み + open PR なし」の二重チェック、かつ `--remote` 明示時のみ
 
