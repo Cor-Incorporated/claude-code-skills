@@ -9,7 +9,7 @@ description: "Safely clean up merged worktrees, local branches, and remote branc
 
 ## 手順
 
-1. **dry-run（read-only）を実行して計画を提示**:
+1. **dry-run（何も消さない。origin の追跡ブランチだけは fetch で更新される）を実行して計画を提示**:
    ```bash
    bash ~/.claude/scripts/repo-janitor.sh <repoパス>
    ```
@@ -36,11 +36,23 @@ description: "Safely clean up merged worktrees, local branches, and remote branc
 - 基準ブランチに入ってから `MIN_AGE_DAYS`（7）日未満の worktree・ローカル・リモートは消さない。
   入った日は、基準ブランチの first-parent を二分探索して tip を含む最初のコミットの日付で測る
   （tip の最終コミット日ではない）。日数は tests/test-pairs-link.sh の pair19 が規則と照合する
+- worktree と、自分のコミットが無いブランチ（先端が基準ブランチの first-parent 上にある。develop から
+  作ったばかりのブランチなど）は、作られてから 7 日未満なら消さない。作られた日は reflog の最も古い
+  記録で測り、分からなければ消さない（`KEEP (worktree created …)` / `KEEP (no own commits, …)`）
+- 入った日は「基準ブランチに入ったコミットの日付」で、origin/develop が動いた日ではない。fast-forward や、
+  ローカルで作ったマージを後から push した場合は、実際より古く見える
 - ローカル削除は `git branch -d` のみ（`-D` 強制削除は使わない）→ 未マージなら git 側が拒否する
 - `--apply --remote` はリモート → ローカルの順に消す。upstream が残っていると、基準ブランチに
   入っていても upstream より先に進んだブランチを `git branch -d` が拒否するため
+- リモートは open PR が無いことを gh で確かめてから消す。確かめられなければ（gh が無い・未認証など）
+  `SKIP (open PR の有無を確かめられない)` として残す。消すときは `--force-with-lease` で、fetch した
+  先端から動いていないことを確かめる
 - `origin/HEAD` は基準ブランチの別名なので、リモートの一覧に出さない
 - repo のパスへ移動できなければ何もせず終了する（今いるディレクトリを掃除しない）
+- 渡したパスの worktree と、呼び出し元がいる worktree は消さない（`SKIP (この実行が使っている worktree)`）
+- 呼び出し元の `GIT_DIR`・`GIT_WORK_TREE` などは引き継がない
+- dry-run も `git fetch --prune` で origin の追跡ブランチを更新する（`git worktree prune` は `--apply` のときだけ）
+- `--apply` は計画を作り直す。承認した dry-run の直後に実行する（日付をまたぐと、7 日を越えた分が候補に加わりうる）
 - dirty な worktree・現在 checkout 中のブランチは自動スキップ
 - リモート削除は「基準ブランチにマージ済み + open PR なし」の二重チェック、かつ `--remote` 明示時のみ
 
