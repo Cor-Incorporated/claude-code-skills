@@ -133,7 +133,10 @@ cache "$D/rust" target
 repo "$D/py" 100
 cache "$D/py" .venv
 touch "$D/py/.venv/pyvenv.cfg"
-repo "$D/data" 100
+# data/ keeps target/ and venv/ that are not build output; they are ignored, so not work
+mkdir -p "$D/data"
+printf 'target/\nvenv/\n' >"$D/data/.gitignore"
+repo "$D/data" 100 .gitignore
 cache "$D/data" target
 cache "$D/data" venv
 cache "$D/data/target/web"
@@ -141,6 +144,14 @@ cache "$D/data/target/web"
 repo "$D/trackedcache" 100 node_modules/patch.js
 printf 'edited\n' >>"$D/trackedcache/node_modules/patch.js"
 cache "$D/trackedcache" .next
+# an old repository whose node_modules/ holds a git checkout committed 1 day ago
+repo "$D/nestedgit" 100
+repo "$D/nestedgit/node_modules/dep" 1
+# an old repository with an untracked user file under target/ that is not a build directory
+repo "$D/targetwork" 100
+mkdir -p "$D/targetwork/target"
+printf 'notes\n' >"$D/targetwork/target/notes.txt"
+cache "$D/targetwork" .next
 # an old repository that commits a file under node_modules/ and leaves it unchanged
 repo "$D/trackedclean" 100 node_modules/source.js
 # an old repository that ignores data/, with an active repository under data/target/
@@ -204,6 +215,9 @@ check "--apply keeps the other caches of a repository with a tracked edit under 
   [ -d "$D/trackedcache/.next" ]
 check "--apply keeps the cache of a repository whose status cannot be read" [ -d "$D/brokenstatus/node_modules" ]
 check "--apply keeps a cache that holds a tracked file" [ -f "$D/trackedclean/node_modules/source.js" ]
+check "--apply keeps a cache that holds a git repository" [ -d "$D/nestedgit/node_modules/dep/.git" ]
+check "--apply keeps the other caches of a repository with untracked work under a non-build target/" \
+  [ -d "$D/targetwork/.next" ]
 check "--apply keeps an active repository's cache under a non-build target/" \
   [ -d "$D/parentdata/data/target/inner/node_modules" ]
 check "--apply does not suggest archiving the repository with no commits" \
@@ -225,6 +239,9 @@ else
   touch "$E/alpha/node_modules/locked/file"
   chmod 000 "$E/alpha/node_modules/locked"
   repo "$E/beta" 100
+  # gamma's own directory is read-only, so its cache cannot be removed from it
+  repo "$E/gamma" 100
+  chmod 555 "$E/gamma"
 
   DEV_DIR="$E" bash "$SCRIPT" >"$SB/perm-dry.log" 2>&1
   check "dry-run continues past an unreadable cache" grep -q "candidate .*/beta/node_modules" "$SB/perm-dry.log"
@@ -232,10 +249,12 @@ else
   DEV_DIR="$E" bash "$SCRIPT" --apply >"$SB/perm-apply.log" 2>&1
   rc=$?
   check "--apply deletes the next project's cache" [ ! -e "$E/beta/node_modules" ]
+  check "--apply keeps a cache it cannot fully inspect" [ -f "$E/alpha/node_modules/blob" ]
+  check "--apply warns about a cache it cannot fully inspect" grep -q "WARN.*alpha/node_modules" "$SB/perm-apply.log"
   check "--apply exits non-zero when a cache cannot be deleted" [ "$rc" -ne 0 ]
-  check "--apply warns about the cache it could not delete" grep -q "WARN.*alpha/node_modules" "$SB/perm-apply.log"
+  check "--apply warns about the cache it could not delete" grep -q "WARN.*gamma/node_modules" "$SB/perm-apply.log"
   check "--apply does not report the undeletable cache as deleted" \
-    not_listed "DELETED .*alpha/node_modules" "$SB/perm-apply.log"
+    not_listed "DELETED .*gamma/node_modules" "$SB/perm-apply.log"
   check "--apply counts only what it deleted" \
     grep -q "合計: $(deleted_total "$SB/perm-apply.log") MB" "$SB/perm-apply.log"
 fi
@@ -281,10 +300,21 @@ PY
     'MAX_DEPTH=7' 'MAX_DEPTH=4'
   caught_by no-recurse-into-target "--apply deletes a cache under a target/ that is not a build directory" \
     '      sweep "$t" $((depth - $(printf' '      continue; sweep "$t" $((depth - $(printf'
-  caught_by du-stops-the-sweep "dry-run continues past an unreadable cache" \
-    '{ du -sm "$t" 2>/dev/null || true; }' 'du -sm "$t" 2>/dev/null'
-  caught_by rm-failure-hidden "--apply exits non-zero when a cache cannot be deleted" \
-    'if rm -rf "$t"; then' 'if rm -rf "$t" || true; then'
+  caught_by nested-git-deleted "--apply keeps a cache that holds a git repository" \
+    '    if [ -n "$nested" ]; then' '    if false; then'
+  caught_by maybe-cache-filtered \
+    "--apply keeps the other caches of a repository with untracked work under a non-build target/" \
+    'looks_like_cache "$wt/${BASH_REMATCH[1]}"; then continue; fi' 'true; then continue; fi'
+  # These three rely on the permission fixtures, which root cannot build.
+  if [ "$(id -u)" -ne 0 ]; then
+    caught_by du-stops-the-sweep "dry-run continues past an unreadable cache" \
+      '{ du -sm "$t" 2>/dev/null || true; }' 'du -sm "$t" 2>/dev/null'
+    caught_by inspect-failure-ignored "--apply keeps a cache it cannot fully inspect" \
+      'if ! nested=$(find "$t" -name .git -print -quit 2>/dev/null); then' \
+      'if ! nested=$(find "$t" -name .git -print -quit 2>/dev/null || true); then'
+    caught_by rm-failure-hidden "--apply does not report the undeletable cache as deleted" \
+      'if rm -rf "$t"; then' 'if rm -rf "$t" || true; then'
+  fi
   caught_by tracked-files-deleted "--apply keeps a cache that holds a tracked file" \
     '      [ -z "$tracked" ] || continue' '      :'
   caught_by archive-prunes-target \

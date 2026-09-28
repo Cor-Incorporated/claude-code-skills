@@ -21,8 +21,10 @@ APPLY=false
 
 CACHE_NAMES=(node_modules .venv venv __pycache__ .next .mypy_cache .ruff_cache .pytest_cache target)
 # git status の未追跡の行のうち成果物のものは「未コミットの作業」に数えない（.gitignore して
-# いないリポジトリのため）。追跡中のファイルの変更は、成果物の名前の下にあっても作業に数える
-UNTRACKED_CACHE_RE='^\?\? (.*/)?(node_modules|\.venv|venv|__pycache__|\.next|\.mypy_cache|\.ruff_cache|\.pytest_cache|target)(/|$)'
+# いないリポジトリのため）。追跡中のファイルの変更は、成果物の名前の下にあっても作業に数える。
+# target/・venv/・.venv/ の下は、そのディレクトリが成果物と確かめられたときだけ数えない
+UNTRACKED_CACHE_RE='^\?\? (.*/)?(node_modules|__pycache__|\.next|\.mypy_cache|\.ruff_cache|\.pytest_cache)(/|$)'
+UNTRACKED_MAYBE_RE='^\?\? ((.*/)?(target|venv|\.venv))(/|$)'
 today_epoch=$(date +%s)
 
 # 判定はリポジトリ群（main checkout と linked worktree。git の共通ディレクトリで束ねる）の単位で
@@ -53,6 +55,11 @@ is_stale() { # $1=dir $2=days → 0 if last commit older than days
       # 状態を読めない worktree（index の破損など）は作業の有無が分からないので使用中とみなす
       if ! st=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null); then rc=1; break; fi
       work=$(printf '%s\n' "$st" | grep -v '^$' | grep -Ev "$UNTRACKED_CACHE_RE" || true)
+      work=$(printf '%s\n' "$work" | while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        if [[ $line =~ $UNTRACKED_MAYBE_RE ]] && looks_like_cache "$wt/${BASH_REMATCH[1]}"; then continue; fi
+        printf '%s\n' "$line"
+      done)
       if [ -n "$work" ]; then rc=1; break; fi
     done < <(git -C "$d" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
   fi
@@ -101,7 +108,7 @@ archivable() {
 # sweep <探す場所> <残りの深さ> <プロジェクト>: 成果物を探し、それを含むリポジトリ群が
 # 古いものだけ数える（--apply なら消す）。成果物ではない target/・venv/ の中も探す
 sweep() {
-  local start="$1" depth="$2" project="$3" t rel root mb tracked
+  local start="$1" depth="$2" project="$3" t rel root mb tracked nested
   [ "$depth" -ge 1 ] || return 0
   while IFS= read -r -d '' t; do
     if ! looks_like_cache "$t"; then
@@ -125,6 +132,17 @@ sweep() {
       continue
     fi
     [ "$mb" -lt 10 ] && continue
+    # 中に git リポジトリ（.git）がある成果物は消さない（node_modules/ や venv/src/ の中の checkout
+    # には未コミットの作業がありうる）。中を確かめられなければ消さない
+    if ! nested=$(find "$t" -name .git -print -quit 2>/dev/null); then
+      failed=$((failed + 1))
+      echo "WARN: 中を確かめられないので飛ばす: $t" >&2
+      continue
+    fi
+    if [ -n "$nested" ]; then
+      echo "KEEP (中に git リポジトリがある): $t"
+      continue
+    fi
     if [ "$APPLY" = true ]; then
       if rm -rf "$t"; then
         total_mb=$((total_mb + mb))
