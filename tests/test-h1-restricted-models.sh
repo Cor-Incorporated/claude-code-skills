@@ -125,6 +125,92 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
         check(decision(event(key,sid,model,path))=='deny',key+': transition alone denies')
         event(key,sid,model,path,'UserPromptSubmit','resume','作業を続けて下さい')
         check(state(key)['budget_epoch']==1,key+': explicit resume after a late scope grants one epoch')
+    # A resume prompt without a model leaves the new scope's model unconfirmed. The
+    # first real observation confirms it, so a second resume in the same session and
+    # model cannot pass as a model change and grant another epoch (#402).
+    key='nomodel-resume'
+    old_path=transcript(key,'gpt-6-sol',41000000)
+    check(decision(event(key,'old','gpt-6-sol',old_path))=='deny',key+': old session reaches the cap')
+    new_path=transcript(key+'-new','gpt-6-luna',1000)
+    event(key,'new','',new_path,'UserPromptSubmit','resume','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': session change with resume grants one epoch')
+    check(decision(event(key,'new','gpt-6-luna',new_path,turn='resume'))=='allow',key+': new epoch allows')
+    event(key,'new','gpt-6-luna',new_path,'UserPromptSubmit','resume-again','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': same session and model cannot regrant')
+    # The pending scope is confirmed only by a model attributable to the current turn
+    # (the hook payload). A model read from an older transcript turn must not pin it
+    # and later pass as a model change (Codex review of #403).
+    def transcript_with_total(sid, model, tokens):
+        # Rollouts that carry total_token_usage make measure_spend() read the model
+        # from the latest "model" string in the file, which can be an older turn's.
+        path = home/(sid+'.jsonl')
+        rows = [dict(type='session_meta', payload=dict(id=sid,model=model)),
+                dict(type='turn_context',payload=dict(turn_id='old',model=model)),
+                dict(type='event_msg',payload=dict(type='token_count',info=dict(total_token_usage=dict(
+                     input_tokens=tokens, cached_input_tokens=0, output_tokens=0, total_tokens=tokens))))]
+        path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+        return path
+    key='pending-payload-only'
+    old_path=transcript(key,'gpt-6-sol',41000000)
+    check(decision(event(key,'old','gpt-6-sol',old_path))=='deny',key+': old session reaches the cap')
+    new_path=transcript_with_total(key+'-new','gpt-6-luna',1000)
+    event(key,'new','',new_path,'UserPromptSubmit','resume','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': session change with resume grants one epoch')
+    check(decision(event(key,'new','',new_path,turn='resume'))=='allow',key+': tool call without a payload model allows')
+    check(state(key).get('budget_scope_model_pending') is True,key+': transcript-only model does not confirm the scope')
+    event(key,'new','gpt-6-sol',new_path,'UserPromptSubmit','resume-again','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': transcript-only model cannot evidence a model change')
+    # Without a session ID or delegation, separate runs keep separate state (keyed by
+    # transcript) instead of pooling into default.json and sharing one budget (#402).
+    # A late PreToolUse from the old session (same delegation) must not confirm the
+    # new session's pending scope with its own model (Codex review of #403).
+    key='pending-other-session'
+    old_path=transcript(key,'gpt-6-sol',41000000)
+    check(decision(event(key,'old','gpt-6-sol',old_path))=='deny',key+': old session reaches the cap')
+    new_path=transcript(key+'-new','gpt-6-sol',1000)
+    event(key,'new','',new_path,'UserPromptSubmit','resume','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': session change with resume grants one epoch')
+    event(key,'old','gpt-6-luna',old_path,turn='late')
+    check(state(key).get('budget_scope_model_pending') is True,key+': another session cannot confirm the scope')
+    event(key,'new','gpt-6-sol',new_path,'UserPromptSubmit','resume-again','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': unchanged model in the resumed session cannot regrant')
+    # A scope reset without a model stays unconfirmed for the rest of the epoch
+    # (fail closed; Codex review of #403, rounds 4 and 5). Neither a delayed call from
+    # an earlier turn nor a model-bearing prompt confirms it, so a model change in the
+    # same session cannot grant another epoch; a session change still can.
+    key='pending-stays'
+    old_path=transcript(key,'gpt-6-sol',41000000)
+    check(decision(event(key,'old','gpt-6-sol',old_path))=='deny',key+': old session reaches the cap')
+    new_path=transcript(key+'-new','',1000)
+    event(key,'new','',new_path,'UserPromptSubmit','resume','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': session change with resume grants one epoch')
+    event(key,'new','gpt-6-luna',new_path,turn='early')
+    event(key,'new','gpt-6-sol',new_path,'UserPromptSubmit','status','進捗を教えて')
+    check(state(key).get('budget_scope_model_pending') is True,
+          key+': delayed earlier-turn calls and model-bearing prompts do not confirm the scope')
+    event(key,'new','gpt-6-sol',new_path,'UserPromptSubmit','again','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': a delayed earlier-turn model cannot evidence a model change')
+    event(key,'new','gpt-6-luna',new_path,'UserPromptSubmit','switch','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': a model change in the same session cannot grant (fail closed)')
+    event(key,'newer','gpt-6-luna',new_path,'UserPromptSubmit','next','作業を続けて下さい')
+    check(state(key)['budget_epoch']==2,key+': a session change still grants the next epoch')
+    def event_without_ids(label, model, path):
+        p=dict(hook_event_name='PreToolUse',session_id='',model=model,turn_id='old',
+               cwd=tmp,transcript_path=str(path),tool_name='Bash',tool_input={'command':'pwd'})
+        run_env={k:v for k,v in env.items() if k!='CODEX_H1_DELEGATION'}
+        proc=subprocess.run(['bash',str(hook)],input=json.dumps(p),text=True,capture_output=True,env=run_env)
+        check(proc.returncode==0, label+' hook exit=0')
+        return json.loads(proc.stdout or "{}")
+    # Documented limitation (#402, #403): runs with neither a session ID nor a
+    # delegation share default.json and one budget, failing closed. Splitting them
+    # by transcript_path let a run escape its cap whenever the key changed, so it was
+    # reverted. Pin the pooled behavior so a change that splits the state fails here.
+    first=transcript('noid-a','gpt-6-luna',30000000)
+    check(decision(event_without_ids('noid-a','gpt-6-luna',first))=='allow','noid-a: first run under the cap is allowed')
+    second=transcript('noid-b','gpt-6-luna',30000000)
+    check(decision(event_without_ids('noid-b','gpt-6-luna',second))=='deny',
+          'noid-b: runs without ids share one budget and fail closed')
+    check((home/'state'/'default.json').exists(),'runs without ids use default.json')
     # RESTRICTED_MODELS cannot exempt any model from the budget cap.
     path=transcript('not-exempt','gpt-6-luna',41000000)
     check(decision(event('not-exempt','luna','gpt-6-luna',path,extras={'CODEX_H1_RESTRICTED_MODELS':'terra'}))=='deny',
