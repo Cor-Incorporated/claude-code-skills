@@ -7,6 +7,10 @@
 # この hook は監督の実セッション冒頭で必ず走る。したがって最優先の性質は
 # 「絶対に人の作業を止めない」であり、その次が「持ち越しを見落とさない」である。
 # 両方を実測する。
+#
+# shellcheck disable=SC2015,SC2016
+#   SC2015: ok() は常に 0 を返すので `A && ok || bad` は if-then-else として働く。
+#   SC2016: 変異体の置換対象は、展開させない生の文字列として単引用符で書く。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOOK="$ROOT/hooks/aidd-carryover-reconcile.sh"
@@ -15,6 +19,9 @@ SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 export AIDD_LEDGER_SOURCE=test
 export HOME="$SB/home"
+# 手で登録した持ち越しは CLAUDE_CODE_SESSION_ID のセッションに紐づく。入力の session_id "t" と
+# そろえる（このテストを走らせているセッション自身の id を持ち込まない）。
+export CLAUDE_CODE_SESSION_ID=t
 mkdir -p "$HOME/.claude/hooks/lib"
 cp "$ROOT/hooks/lib/aidd-ledger.sh" "$HOME/.claude/hooks/lib/aidd-ledger.sh"
 LEDGER="$HOME/.claude/hooks/ledger/guard-ledger.jsonl"
@@ -34,6 +41,39 @@ run_hook() {
   local hook="$1"; shift
   printf '{"session_id":"t","source":"startup"}' \
     | env "$@" bash "$hook" >"$SB/out" 2>"$SB/err"
+}
+
+# seed <id> <session> [登録からの秒数] — 未解決・owner 未宣言の持ち越しを 1 件、登録したセッション付きで
+# 台帳へ置く。register --session を使わず保存形式へ直接書くのは、--session を解さない修正前の CLI に対しても
+# 同じ前提を作るため（修正前で実測すると登録が失敗し、「止まらない」が偽 PASS になる）。
+seed() {
+  python3 - "$AIDD_ASYNC_STATE" "$1" "$2" "${3:-0}" <<'PY'
+import json, os, sys, time
+state, ident, session, age = sys.argv[1:5]
+json.dump({"id": ident, "kind": "cd-run", "detail": "seed " + ident, "owner": "",
+           "check_cmd": "", "source": "manual", "session": session,
+           "registered_ts": int(time.time()) - int(age), "resolved_ts": 0,
+           "resolved": False, "conclusion": ""},
+          open(os.path.join(state, ident + ".json"), "w", encoding="utf-8"), ensure_ascii=False)
+PY
+}
+
+# build_skew_cli <out> — --session を解さない台帳 CLI（この変更より前の CLI と同じく unknown flag で拒否する）
+build_skew_cli() {
+  python3 - "$ASYNC" "$1" <<'PY'
+import sys
+src, out = sys.argv[1:3]
+text = open(src, encoding="utf-8").read()
+needle = '      --session) need_value "$1" $#; session="$2"; shift 2 ;;\n'
+if text.count(needle) not in (0, 2):
+    raise SystemExit(1)
+open(out, "w", encoding="utf-8").write(text.replace(needle, ""))
+PY
+}
+
+# skew_cli_ok <cli> — 版ずれ CLI の前提: unresolved は動き、unresolved --session は拒否する
+skew_cli_ok() {
+  [ -f "$1" ] && bash "$1" unresolved >/dev/null 2>&1 && ! bash "$1" unresolved --session B >/dev/null 2>&1
 }
 
 ledger_has() {
@@ -137,7 +177,8 @@ rc=$?
 
 reset_state c5c
 printf '' | env AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME" bash "$HOOK" >/dev/null 2>&1
-[[ "$?" -eq 0 ]] && ok "case5 空 stdin でも exit 0" || bad "case5 空 stdin で落ちた"
+rc=$?
+[[ "$rc" -eq 0 ]] && ok "case5 空 stdin でも exit 0" || bad "case5 空 stdin で落ちた (rc=$rc)"
 
 echo
 echo "=== case 6: プロンプト本文を読まない・出さない（人間ゲート） ==="
@@ -169,8 +210,68 @@ grep -q "run-test-1" "$SB/out" \
   || ok "case7 同時に存在しても test 系だけが除かれる"
 
 echo
+echo "=== case 8: 他セッションの持ち越しには「触らない」印を付ける（2026-09-28 の干渉） ==="
+echo "    台帳は全セッションで共有。印が無いと、無関係なセッションが他人の持ち越しを resolve / owner 宣言する。"
+reset_state c8
+seed run-other-8 A
+seed run-mine-8 t
+run_hook "$HOOK" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+rc=$?
+[[ "$rc" -eq 0 ]] && ok "case8 exit 0" || bad "case8 rc=$rc"
+grep -q "run-other-8" "$SB/out" && grep -q "run-mine-8" "$SB/out" \
+  && ok "case8 自分の分も他セッションの分も照合対象として出す（隠さない）" \
+  || bad "case8 どちらかが出ない: $(cat "$SB/out")"
+n_label=$(grep "登録元: 別セッション（session=A、登録から " "$SB/out" | grep -c "このセッションからは resolve / owner 宣言しない")
+[[ "$n_label" -eq 1 ]] \
+  && ok "case8 他セッションの分にだけ「触らない」印が 1 件付く" \
+  || bad "case8 印の件数が ${n_label}（期待 1）: $(cat "$SB/out")"
+
+echo
+echo "=== case 10: 登録から時間がたった他セッションの持ち越しは、照合してよいと言う ==="
+echo "    「触らない」とだけ書くと、登録したセッションが終わった持ち越しをだれも照合しない（#96 の無人区間）。"
+reset_state c10
+seed run-old-10 A 10800
+seed run-new-10 A
+run_hook "$HOOK" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+grep "登録元: 別セッション（session=A、登録から 3.0 時間）" "$SB/out" | grep -q "終わっている可能性" \
+  && grep "登録元: 別セッション（session=A、登録から 3.0 時間）" "$SB/out" | grep -q "resolve するか、owner を宣言してよい" \
+  && ok "case10 3 時間たった他セッションの持ち越しには「終わっている可能性。照合してよい」と付ける" \
+  || bad "case10 時間のたった持ち越しの印が違う: $(cat "$SB/out")"
+n_keep=$(grep -c "このセッションからは resolve / owner 宣言しない" "$SB/out")
+[[ "$n_keep" -eq 1 ]] \
+  && ok "case10 時間のたっていない方にだけ「触らない」と付ける" \
+  || bad "case10 「触らない」の件数が ${n_keep}（期待 1）"
+
+echo
+echo "=== case 9: 台帳 CLI が --session を知らない版ずれでも沈黙しない ==="
+SKEW="$SB/skew"; mkdir -p "$SKEW/hooks/lib" "$SKEW/scripts"
+cp "$HOOK" "$SKEW/hooks/aidd-carryover-reconcile.sh"
+cp "$ROOT/hooks/lib/aidd-ledger.sh" "$SKEW/hooks/lib/aidd-ledger.sh"
+build_skew_cli "$SKEW/scripts/async-work.sh"
+reset_state c9
+skew_cli_ok "$SKEW/scripts/async-work.sh" \
+  && ok "case9 前提: 版ずれ CLI は unresolved に答え、--session だけを拒否する" \
+  || bad "case9 前提: 版ずれ CLI を作れない — 以下は反証にならない"
+seed run-skew-9 A
+run_hook "$SKEW/hooks/aidd-carryover-reconcile.sh" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+grep -q "run-skew-9" "$SB/out" \
+  && ok "case9 版ずれでも持ち越しを出す（「持ち越し 0」と誤解させない）" \
+  || bad "case9 版ずれで沈黙した"
+
+echo
 echo "=== 変異体: 条件を外すと同じシナリオが黙る／誤って主張する ==="
-MUT="$SB/mut"; mkdir -p "$MUT"
+# 変異体はリポジトリと同じレイアウトへ置く。hooks/ の 1 つ上に scripts/ が無いと hook は台帳 CLI を
+# 解決できず沈黙するため、「沈黙する」を期待する変異体が条件を外した効果と無関係に PASS する
+# （2026-09-28 まで変異(1) はこの偽 PASS だった）。対照として無変異の写しが持ち越しを出すことを先に確かめる。
+MUT="$SB/mut/hooks"; mkdir -p "$MUT" "$SB/mut/scripts"
+cp "$ASYNC" "$SB/mut/scripts/async-work.sh"
+cp "$HOOK" "$MUT/control.sh"
+reset_state m0
+seed run-m0 A
+run_hook "$MUT/control.sh" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+grep -q "run-m0" "$SB/out" \
+  && ok "対照 変異体の配置でも無変異の hook は持ち越しを出す（配置由来の沈黙ではない）" \
+  || bad "対照 変異体の配置で台帳 CLI を解決できない — 以下の変異体は反証にならない"
 mutate() {
   python3 - "$1" "$2" "$3" "$4" <<'PY'
 import sys
@@ -183,8 +284,8 @@ PY
 }
 
 # (1) 未解決の抽出を空にする -> case2 が沈黙する
-if mutate "$HOOK" 'unresolved="$(bash "$ASYNC_SH" unresolved 2>/dev/null || true)"' \
-   'unresolved=""' "$MUT/blind.sh"; then
+if mutate "$HOOK" 'if ! unresolved="$(bash "$ASYNC_SH" unresolved --session "$session" 2>/dev/null)"; then' \
+   'unresolved=""; if false; then' "$MUT/blind.sh"; then
   reset_state m1
   bash "$ASYNC" register --id run-m1 --kind cd-run --detail open >/dev/null
   run_hook "$MUT/blind.sh" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
@@ -208,6 +309,43 @@ if mutate "$HOOK" "  printf '[carryover] scripts/async-work.sh が見つから�
     || bad "変異(不在警告除去) それでも警告が出る = case5 は別経路が出していた"
 else
   bad "変異(不在警告除去) 対象が見つからない — 反証不能"
+fi
+
+# (3) 他セッションの印を外す -> case8 の「触らない」印が消える
+if mutate "$HOOK" '    if session and not r.get("mine"):' '    if False:' "$MUT/nolabel.sh"; then
+  reset_state m3
+  seed run-m3 A
+  run_hook "$MUT/nolabel.sh" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+  grep -q "run-m3" "$SB/out" && ! grep -q "登録元: 別セッション" "$SB/out" \
+    && ok "変異(他セッション印除去) 他人の持ち越しが無印で出る = 印は効いていた" \
+    || bad "変異(他セッション印除去) 何も変わらない = case8 は別経路が出していた"
+else
+  bad "変異(他セッション印除去) 対象が見つからない — 反証不能"
+fi
+
+# (4) 版ずれ時の再照会を外す -> case9 が沈黙する
+if mutate "$HOOK" '  unresolved="$(bash "$ASYNC_SH" unresolved 2>/dev/null || true)"' '  unresolved=""' \
+   "$SKEW/hooks/nofallback.sh"; then
+  reset_state m4
+  seed run-m4 A
+  run_hook "$SKEW/hooks/nofallback.sh" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+  [[ ! -s "$SB/out" ]] \
+    && ok "変異(版ずれ時の再照会除去) 版ずれで沈黙する = case9 は再照会が作っていた" \
+    || bad "変異(版ずれ時の再照会除去) それでも出る = case9 は別経路が出していた"
+else
+  bad "変異(版ずれ時の再照会除去) 対象が見つからない — 反証不能"
+fi
+
+# (5) 時間のたった持ち越しの印を「触らない」に戻す -> case10 の「照合してよい」が消える
+if mutate "$HOOK" '        if r.get("stale"):' '        if False:' "$MUT/nostale.sh"; then
+  reset_state m5
+  seed run-m5 A 10800
+  run_hook "$MUT/nostale.sh" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+  grep -q "run-m5" "$SB/out" && ! grep -q "終わっている可能性" "$SB/out" \
+    && ok "変異(時間のたった持ち越しも「触らない」) 照合してよいと言わなくなる = case10 は判定が作っていた" \
+    || bad "変異(時間のたった持ち越しも「触らない」) 何も変わらない = case10 は別経路が出していた"
+else
+  bad "変異(時間のたった持ち越しも「触らない」) 対象が見つからない — 反証不能"
 fi
 
 echo

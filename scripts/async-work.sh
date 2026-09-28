@@ -18,6 +18,13 @@
 # --- この台帳が持つ事実 --------------------------------------------------------
 #   1 件 = 「ターンをまたいで生き続ける作業」1 つ。kind は cd-run / lane / generic。
 #   register した時点で unresolved。resolve で終端する。
+#   session = 登録したセッション（Claude Code の session_id）。台帳は全セッションで共有である。
+#   Stop hook は自分のセッションの持ち越しで止め、他セッション・登録元不明の持ち越しは、登録から
+#   FOREIGN_TTL_HOURS 時間たつまでは情報として出すだけにする（2026-09-28、別セッションが自動登録した
+#   corsweb2024 の run と ai-cluster の nohup が、無関係なセッションのターン終了を止めた）。
+#   たったものは全セッションで止める。登録したセッションが終わっていれば、ほかに照合する主体が
+#   いないからである（#96 の無人区間。session_id からは「生きている別セッション」と「終わった
+#   セッション」を区別できない）。
 #
 #   **resolve は conclusion を要求する。** status=in_progress / queued / running を
 #   終端の根拠として受け付けない。#96 の核心は「in_progress を根拠に前進と報告した」
@@ -32,21 +39,28 @@
 set -uo pipefail
 
 STATE_DIR="${AIDD_ASYNC_STATE:-$HOME/.claude/state/async-work}"
+# 他セッション・登録元不明の持ち越しを「登録したセッションが照合する」とみなす時間。過ぎたら全セッションで止める
+FOREIGN_TTL_HOURS="${AIDD_ASYNC_FOREIGN_TTL_HOURS:-2}"
 
 die() { printf 'async-work: %s\n' "$*" >&2; exit 2; }
+# need_value <フラグ> <残りの引数の数>: 値の無いフラグで shift 2 が失敗し、同じ引数を読み続けるのを防ぐ
+need_value() { [ "$2" -ge 2 ] || die "$1 には値が要る"; }
 
 slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-120; }
 
 cmd_register() {
-  local id="" kind="generic" detail="" owner="" check_cmd="" source="manual"
+  # session の既定値は Claude Code が Bash に渡す CLAUDE_CODE_SESSION_ID（hook の session_id と同じ値）。
+  # 手で登録した持ち越しも、登録したセッションに紐づける
+  local id="" kind="generic" detail="" owner="" check_cmd="" source="manual" session="${CLAUDE_CODE_SESSION_ID:-}"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --id) id="${2:-}"; shift 2 ;;
-      --kind) kind="${2:-}"; shift 2 ;;
-      --detail) detail="${2:-}"; shift 2 ;;
-      --owner) owner="${2:-}"; shift 2 ;;
-      --check-cmd) check_cmd="${2:-}"; shift 2 ;;
-      --source) source="${2:-}"; shift 2 ;;
+      --id) need_value "$1" $#; id="$2"; shift 2 ;;
+      --kind) need_value "$1" $#; kind="$2"; shift 2 ;;
+      --detail) need_value "$1" $#; detail="$2"; shift 2 ;;
+      --owner) need_value "$1" $#; owner="$2"; shift 2 ;;
+      --check-cmd) need_value "$1" $#; check_cmd="$2"; shift 2 ;;
+      --source) need_value "$1" $#; source="$2"; shift 2 ;;
+      --session) need_value "$1" $#; session="$2"; shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac
   done
@@ -56,18 +70,37 @@ cmd_register() {
     *) die "--kind must be cd-run|lane|generic (got: $kind)" ;;
   esac
   mkdir -p "$STATE_DIR" 2>/dev/null || die "cannot create $STATE_DIR"
-  local file="$STATE_DIR/$(slug "$id").json"
-  # 既に解決済みの id を再登録した場合は新しい持ち越しとして開き直す。
-  python3 - "$file" "$id" "$kind" "$detail" "$owner" "$check_cmd" "$source" <<'PY' \
+  local file
+  file="$STATE_DIR/$(slug "$id").json"
+  # 未解決の持ち越しを登録し直す（owner の宣言など）ときは、登録したセッションと登録時刻を保ち、
+  # 登録し直した側を updated_by に残す。登録元を上書きすると、自分の持ち越しを別の session で
+  # 登録し直すだけで停止判定から外せてしまう。解決済みの id を登録し直すと、新しい持ち越しとして開き直す。
+  python3 - "$file" "$id" "$kind" "$detail" "$owner" "$check_cmd" "$source" "$session" <<'PY' \
     || die "register failed"
 import json, sys, time
-path, ident, kind, detail, owner, check_cmd, source = sys.argv[1:8]
-json.dump({
+path, ident, kind, detail, owner, check_cmd, source, session = sys.argv[1:9]
+now = int(time.time())
+row = {
     "id": ident, "kind": kind, "detail": detail, "owner": owner,
-    "check_cmd": check_cmd, "source": source,
-    "registered_ts": int(time.time()), "resolved_ts": 0,
+    "check_cmd": check_cmd, "source": source, "session": session,
+    "registered_ts": now, "resolved_ts": 0,
     "resolved": False, "conclusion": "",
-}, open(path, "w"), ensure_ascii=False)
+}
+try:
+    old = json.load(open(path, encoding="utf-8"))
+except (OSError, ValueError):
+    old = None
+if isinstance(old, dict) and not old.get("resolved"):
+    row["session"] = str(old.get("session") or "")
+    row["registered_ts"] = old.get("registered_ts") or now
+    row["updated_by"] = session
+    row["updated_ts"] = now
+json.dump(row, open(path, "w"), ensure_ascii=False)
+# 登録元不明の持ち越しは、登録から時間がたつまでどのセッションの停止も止めない。黙ってそうならないよう言う
+if not row["session"]:
+    sys.stderr.write(
+        "async-work: 注意: session が空のため、%s は登録元不明の持ち越しになる（登録から時間がたつまで、"
+        "どのセッションの停止も止めない）。止めるセッションを決めるなら --session <id>\n" % ident)
 PY
   printf '%s\n' "$file"
 }
@@ -80,8 +113,8 @@ cmd_resolve() {
   local id="" conclusion=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --id) id="${2:-}"; shift 2 ;;
-      --conclusion) conclusion="${2:-}"; shift 2 ;;
+      --id) need_value "$1" $#; id="$2"; shift 2 ;;
+      --conclusion) need_value "$1" $#; conclusion="$2"; shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac
   done
@@ -94,7 +127,8 @@ cmd_resolve() {
       die "conclusion='$conclusion' は終端ではない。status=in_progress を根拠に完了扱いしてはならない (#96)。gh run view --json conclusion で読み出すこと。"
     fi
   done
-  local file="$STATE_DIR/$(slug "$id").json"
+  local file
+  file="$STATE_DIR/$(slug "$id").json"
   [ -f "$file" ] || die "未登録の id: $id"
   python3 - "$file" "$conclusion" <<'PY' || die "resolve failed"
 import json, sys, time
@@ -119,22 +153,37 @@ PY
 #
 # 除くのは「見えなくする」ためではない。`list` には出るし、`--include-test` で
 # いつでも出せる。停止判定の入力から外すだけである。
+#
+# --session <id> を渡すと、各行に次を付ける（濾過はしない。停止判定は自分の分で止め、他セッションの分は
+# 情報として出すので、両方が要る）。分類もここが唯一の点で、2 つの hook はこの結果を読むだけにする:
+#   mine   その session が登録した。session を持たない行（登録元不明）は false
+#   age_s  登録からの秒数（登録時刻が分からなければ null）
+#   stale  mine でなく、登録から FOREIGN_TTL_HOURS 時間以上たった（時刻が分からなければ true）
+# 形の違う行（オブジェクトでない JSON）は飛ばす。1 件で一覧全体を落とすと、停止判定が素通しになる。
 cmd_unresolved() {
-  local include_test=0
+  local include_test=0 session=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --include-test) include_test=1; shift ;;
+      --session) need_value "$1" $#; session="$2"; shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac
   done
-  python3 - "$STATE_DIR" "$include_test" <<'PY'
-import glob, json, os, sys
-state, include_test = sys.argv[1], sys.argv[2] == "1"
+  python3 - "$STATE_DIR" "$include_test" "$session" "$FOREIGN_TTL_HOURS" <<'PY'
+import glob, json, os, sys, time
+state, include_test, current = sys.argv[1], sys.argv[2] == "1", sys.argv[3]
+try:
+    ttl = float(sys.argv[4]) * 3600
+except ValueError:
+    ttl = 2 * 3600
+now = time.time()
 rows = []
 for path in sorted(glob.glob(os.path.join(state, "*.json"))):
     try:
         row = json.load(open(path, encoding="utf-8"))
     except (OSError, ValueError):
+        continue
+    if not isinstance(row, dict):
         continue
     if row.get("resolved"):
         continue
@@ -142,6 +191,12 @@ for path in sorted(glob.glob(os.path.join(state, "*.json"))):
     if not include_test and (source == "test" or source.startswith("test:")):
         continue
     row["owned"] = bool(str(row.get("owner") or "").strip())
+    registered_by = str(row.get("session") or "")
+    row["mine"] = bool(current) and registered_by == current
+    ts = row.get("registered_ts")
+    known = isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts > 0
+    row["age_s"] = int(now - ts) if known else None
+    row["stale"] = (not row["mine"]) and (not known or now - ts >= ttl)
     rows.append(row)
 print(json.dumps(rows, ensure_ascii=False))
 PY
@@ -155,6 +210,8 @@ for path in sorted(glob.glob(os.path.join(state, "*.json"))):
     try:
         row = json.load(open(path, encoding="utf-8"))
     except (OSError, ValueError):
+        continue
+    if not isinstance(row, dict):
         continue
     print("%-10s %-8s %-28s %s" % (
         "resolved" if row.get("resolved") else "OPEN",
@@ -175,15 +232,19 @@ usage: async-work.sh <register|resolve|unresolved|list|clear> [flags]
 
   register --id <id> [--kind cd-run|lane|generic] [--detail <text>]
            [--owner <次に確認する主体>] [--check-cmd <確認コマンド>] [--source <who>]
+           [--session <登録したセッション>]  既定は $CLAUDE_CODE_SESSION_ID
+           未解決の id を登録し直すと、登録したセッションと登録時刻は保つ（登録し直した側は updated_by）
   resolve  --id <id> --conclusion <success|failure|cancelled|...>
            in_progress / queued / running 等は終端として受け付けない (#96)
-  unresolved [--include-test]
+  unresolved [--include-test] [--session <id>]
                未解決を JSON 配列で。test 系 source は既定で除く
                （停止判定の入力から外すため。list には出る）
+               --session を渡すと各行に mine / age_s / stale を付ける
   list         人間向け一覧
 
 env:
-  AIDD_ASYNC_STATE   台帳ディレクトリ (既定: ~/.claude/state/async-work)
+  AIDD_ASYNC_STATE              台帳ディレクトリ (既定: ~/.claude/state/async-work)
+  AIDD_ASYNC_FOREIGN_TTL_HOURS  他セッション・登録元不明の持ち越しを全セッションで止めるまでの時間 (既定: 2)
 EOF
   exit 2
 }

@@ -68,10 +68,26 @@ print(ti.get("command") or ti.get("cmd") or d.get("command") or "")
 ' 2>/dev/null || true)"
 [ -n "$cmd" ] || exit 0
 
+# 登録したセッション。台帳は全セッションで共有なので、Stop hook が自分の持ち越しだけで止められる
+# よう、hook の入力の session_id を記録する（空でない文字列で前後に空白が無いものだけ。無ければ
+# CLAUDE_CODE_SESSION_ID）。
+session="$(printf '%s' "$input" | python3 -c '
+import json, sys
+try:
+    v = json.load(sys.stdin).get("session_id")
+except Exception:
+    v = None
+print(v if isinstance(v, str) and v and v == v.strip() else "")
+' 2>/dev/null || true)"
+[ -n "$session" ] || session="${CLAUDE_CODE_SESSION_ID:-}"
+
 # 分類。1 行 1 件 "<kind>\t<id>\t<detail>" を出す。
 # コマンド文字列は argv で渡す。`python3 - <<'PY'` はプログラム自体を stdin から
 # 読むので、同じ stdin へパイプすると sys.stdin.read() が空になる。
-matches="$(python3 - "$cmd" <<'PY' 2>/dev/null || true
+# heredoc は関数に入れる。$( ) の中に置くと、macOS の /bin/bash 3.2 は本文の Python のコメントにある
+# 対でない括弧まで構文として読み、hook ごと構文エラーになる（自動登録が黙って止まる）。
+classify() {
+  python3 - "$1" <<'PY'
 import hashlib, re, sys, time
 
 cmd = sys.argv[1]
@@ -141,21 +157,29 @@ if re.search(AT_COMMAND + r"nohup\s", scan):
 for kind, ident_, detail in out:
     print("%s\t%s\t%s" % (kind, ident_, detail))
 PY
-)"
+}
+matches="$(classify "$cmd" 2>/dev/null || true)"
 [ -n "$matches" ] || exit 0
 
 while IFS=$'\t' read -r kind ident detail; do
   [ -n "$ident" ] || continue
-  bash "$ASYNC_SH" register --id "$ident" --kind "$kind" --detail "$detail" \
-    --source "$REGISTER_SOURCE" >/dev/null 2>&1 || continue
+  stored_session="$session"
+  if ! bash "$ASYNC_SH" register --id "$ident" --kind "$kind" --detail "$detail" \
+    --source "$REGISTER_SOURCE" --session "$session" >/dev/null 2>&1; then
+    # 台帳 CLI が --session を知らない版ずれでも登録は落とさない（登録元の記録だけを諦める）。
+    bash "$ASYNC_SH" register --id "$ident" --kind "$kind" --detail "$detail" \
+      --source "$REGISTER_SOURCE" >/dev/null 2>&1 || continue
+    stored_session=""
+  fi
   printf '[async-work] 持ち越し登録: %s (%s)\n' "$ident" "$detail" >&2
   if declare -F aidd_ledger_append_record >/dev/null 2>&1; then
-    python3 - "$kind" "$ident" "$detail" <<'PY' | while IFS= read -r row; do
+    python3 - "$kind" "$ident" "$detail" "$stored_session" <<'PY' | while IFS= read -r row; do
 import json, sys
-kind, ident, detail = sys.argv[1:4]
+kind, ident, detail, session = sys.argv[1:5]
 print(json.dumps({"component": "H1", "event": "measure", "rule": "async-work-registered",
                   "detail": detail,
-                  "subject": {"id": ident, "kind": kind, "source": "posttooluse-auto"}},
+                  "subject": {"id": ident, "kind": kind, "source": "posttooluse-auto",
+                              "session": session}},
                  ensure_ascii=False, separators=(",", ":")))
 PY
       aidd_ledger_append_record "$row" "claude-code" >/dev/null 2>&1 || true
