@@ -12,11 +12,16 @@
 #     作られてから MIN_AGE_DAYS 日未満なら消さない。作られた日は reflog の最も古い記録で測り、
 #     分からなければ消さない
 #   - 未マージブランチは削除しない（git branch -d のみ、-D は使わない）
-#   - dirty な worktree はスキップして警告。ignore されたファイルも、handover の撤収基準 3 が
-#     「再生成可能」と列挙したもの（REGENERABLE_IGNORED）以外があれば残す
+#   - dirty な worktree はスキップして警告。設定（status.showUntrackedFiles=no）で隠れる未追跡ファイルも、
+#     assume-unchanged / skip-worktree で git status に出ない変更も dirty として扱う。ignore されたファイルも、
+#     handover の撤収基準 3 が「再生成可能」と列挙したもの（REGENERABLE_IGNORED）以外があれば残す
+#   - ディレクトリが見つからない worktree の管理情報は、最後に使われてから MIN_AGE_DAYS 日を過ぎたものだけ
+#     片付ける（git worktree prune --expire。dry-run は片付ける予定を表示する）
 #   - 現在checkout中のブランチ、渡されたパスの worktree、呼び出し元がいる worktree は触らない
-#   - open PR の有無を gh で確かめられないリモートブランチは消さない。origin が fork なら親リポジトリの
-#     PR も見る。消すときは、fetch したときの先端から動いていないことを --force-with-lease で確かめる
+#   - open PR の有無を gh で確かめられないリモートブランチは消さない。origin が GitHub の URL でなければ
+#     確かめられないとみなす。origin が fork なら親リポジトリの PR も見る。そのブランチを base にする
+#     open PR（stacked PR）があっても消さない。残す worktree で checkout 中のブランチのリモートも消さない。
+#     消すときは、fetch したときの先端から動いていないことを --force-with-lease で確かめる
 #   - fetch に失敗したらリモートは消さない
 #   - --apply --remote ではリモートを先に消す（upstream が残っていると git branch -d が拒否する）
 # dry-run も git fetch --prune で origin の追跡ブランチを更新する。--apply は計画を作り直すので、
@@ -60,6 +65,9 @@ if git show-ref --verify --quiet refs/remotes/origin/develop; then BASE=origin/d
 elif git show-ref --verify --quiet refs/remotes/origin/main; then BASE=origin/main
 else BASE=origin/master; fi
 BASE_NAME=${BASE#origin/}
+# git へは完全な名前で渡す。短い名前は、refs/heads/origin/develop のようなローカルブランチがあると
+# そちらに解決され、基準ブランチに入っていないものをマージ済みと判定してしまう
+BASE_REF="refs/remotes/$BASE"
 
 # gh は upstream remote を origin より優先して別のリポジトリの PR を見ることがあるので、origin を明示する。
 # URL は insteadOf を展開する前の設定値から取る（ミラーへ振り向けていても GitHub 上の名前で PR を探す）
@@ -67,8 +75,9 @@ GH_REPO_ARGS=()
 origin_slug=$(git config --get remote.origin.url 2>/dev/null \
   | sed -nE 's#^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+)$#\2#p' | sed 's/\.git$//')
 [ -n "$origin_slug" ] && GH_REPO_ARGS=(-R "$origin_slug")
-# origin が fork なら、PR は親リポジトリにも出ている。親を確かめられなければ "?"（リモートは消さない）
-GH_PARENT=""
+# origin が fork なら、PR は親リポジトリにも出ている。親を確かめられなければ "?"（リモートは消さない）。
+# origin が GitHub の URL でなければ、gh がどのリポジトリの PR を見るか分からないので、これも "?"
+GH_PARENT="?"
 if [ -n "$origin_slug" ]; then
   GH_PARENT=$(gh repo view "$origin_slug" --json parent \
     -q 'if .parent then .parent.owner.login + "/" + .parent.name else "" end' 2>/dev/null) || GH_PARENT="?"
@@ -88,7 +97,7 @@ NOW=$(date +%s)
 AGE_LIMIT=$((MIN_AGE_DAYS * 86400))
 # 基準ブランチの first-parent を古い順に並べる（bash 3.2 には mapfile が無い）
 FP=()
-while IFS= read -r c; do FP+=("$c"); done < <(git rev-list --first-parent --reverse "$BASE" 2>/dev/null)
+while IFS= read -r c; do FP+=("$c"); done < <(git rev-list --first-parent --reverse "$BASE_REF" 2>/dev/null)
 
 # too_young <commit>: 基準ブランチに入ってから MIN_AGE_DAYS 日未満なら 0 を返し、ENTERED に入った日を入れる。
 # 入った日 = first-parent を二分探索して、commit を含む最初のコミットの日付。
@@ -150,7 +159,7 @@ observed_young() {
     if git merge-base --is-ancestor "$1" "$h" 2>/dev/null && { [ -z "$first" ] || [ "$e" -lt "$first" ]; }; then
       first=$e
     fi
-  done < <(git reflog show --date=unix --format='%H %gd' "refs/remotes/$BASE" 2>/dev/null)
+  done < <(git reflog show --date=unix --format='%H %gd' "$BASE_REF" 2>/dev/null)
   [ -n "$first" ] || return 0
   ENTERED=$(date -r "$first" +%F 2>/dev/null || date -d "@$first" +%F 2>/dev/null || echo "$first")
   [ $((NOW - first)) -lt "$AGE_LIMIT" ]
@@ -182,7 +191,15 @@ CURRENT=$(git branch --show-current)
 
 # ---- 1) worktree ----
 echo "## Worktrees"
-$APPLY && { git worktree prune 2>/dev/null || true; }
+# ディレクトリが見つからない worktree の管理情報は、最後に使われてから（その worktree の index が
+# 書かれてから）MIN_AGE_DAYS 日を過ぎたものだけ片付ける。外付けディスクを外しているだけの worktree を、
+# 戻ってくる前に切り離さない
+PRUNE_EXPIRE="${MIN_AGE_DAYS}.days.ago"
+if $APPLY; then
+  git worktree prune -v --expire "$PRUNE_EXPIRE" 2>&1 | sed 's/^/- PRUNED: /'
+else
+  git worktree prune -n -v --expire "$PRUNE_EXPIRE" 2>&1 | sed 's/^/- PRUNE 候補: /'
+fi
 MAIN_WT=$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)
 WT_REMOVE=()  # 消す worktree
 WT_FREED=()   # それを消すと checkout が外れるブランチ
@@ -202,16 +219,30 @@ while IFS= read -r wt; do
       continue
     fi
   fi
-  dirty=$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$dirty" -gt 0 ]; then
-    echo "- SKIP (dirty ${dirty}files): $wt [$br]"
+  # 設定（status.showUntrackedFiles=no など）で隠れる未追跡ファイルも数える。調べられなければ消さない
+  if ! st=$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null); then
+    echo "- SKIP (状態を確かめられない): $wt [$br]"
+    continue
+  fi
+  if [ -n "$st" ]; then
+    echo "- SKIP (dirty $(printf '%s\n' "$st" | wc -l | tr -d ' ')files): $wt [$br]"
+    continue
+  fi
+  # assume-unchanged / skip-worktree の付いたファイルは、書き換えても git status に出ない
+  # （git worktree remove も同じ理由で見落として消す）。ls-files -v では小文字と S になる
+  if ! flags=$(git -C "$wt" ls-files -v 2>/dev/null); then
+    echo "- SKIP (状態を確かめられない): $wt [$br]"
+    continue
+  fi
+  if printf '%s\n' "$flags" | grep -q '^[a-zS] '; then
+    echo "- SKIP (変更が git status に出ないファイルがある: assume-unchanged / skip-worktree): $wt [$br]"
     continue
   fi
   if echo "$br" | grep -Eq "$PROTECTED"; then
     echo "- SKIP (protected): $wt [$br]"
     continue
   fi
-  if [ -n "$br" ] && git merge-base --is-ancestor "refs/heads/$br" "$BASE" 2>/dev/null; then
+  if [ -n "$br" ] && git merge-base --is-ancestor "refs/heads/$br" "$BASE_REF" 2>/dev/null; then
     if too_young "refs/heads/$br"; then
       echo "- KEEP (entered $BASE_NAME $ENTERED, < $MIN_AGE_DAYS days): $wt [$br]"
       continue
@@ -277,7 +308,7 @@ while IFS= read -r br; do
     echo "- 削除候補: ${br}（${ENTERED}）"
   fi
   LOCAL_DELETE+=("$br")
-done < <(git for-each-ref --merged "$BASE" --format='%(refname:lstrip=2)' refs/heads)
+done < <(git for-each-ref --merged "$BASE_REF" --format='%(refname:lstrip=2)' refs/heads)
 echo ""
 
 # ---- 3) リモートブランチ（--remote 指定時のみ・open PR なしの裏取り付き） ----
@@ -307,6 +338,12 @@ while IFS= read -r ref; do
     echo "- KEEP (no own commits, first seen in $BASE $ENTERED, < $MIN_AGE_DAYS days or unknown): origin/$br"
     continue
   fi
+  # 残す worktree で checkout 中のブランチは、リモートも消さない（その worktree の upstream を奪わない）
+  if git worktree list --porcelain | grep -qxF "branch refs/heads/$br" \
+    && ! in_list "$br" ${WT_FREED[@]+"${WT_FREED[@]}"}; then
+    echo "- SKIP (残す worktree で checkout 中): origin/$br"
+    continue
+  fi
   # 裏取り: open PR が無いこと。gh で確かめられなければ消さない（open PR のブランチを消すと PR が閉じる）
   open=$(gh pr list ${GH_REPO_ARGS[@]+"${GH_REPO_ARGS[@]}"} --head "$br" --state open \
     --json number -q length 2>/dev/null) || open=""
@@ -327,10 +364,23 @@ while IFS= read -r ref; do
       echo "- SKIP (open PRあり): origin/$br"
       continue ;;
   esac
+  # このブランチを base にする open PR（stacked PR）があれば消さない（base を消すとその PR は閉じる）。
+  # 確かめられなければ消さない
+  stacked=$(gh pr list ${GH_REPO_ARGS[@]+"${GH_REPO_ARGS[@]}"} --base "$br" --state open \
+    --json number -q length 2>/dev/null) || stacked=""
+  case "$stacked" in
+    0) ;;
+    '' | *[!0-9]*)
+      echo "- SKIP (このブランチを base にする open PR の有無を確かめられない): origin/$br"
+      continue ;;
+    *)
+      echo "- SKIP (このブランチを base にする open PR あり): origin/$br"
+      continue ;;
+  esac
   REMOTE_DELETE+=("$br")
   REMOTE_SHA+=("$(git rev-parse "refs/remotes/$ref")")
   echo "- 削除候補: origin/${br}（${ENTERED}、open PR なし）$($REMOTE || echo ' ※--remote未指定のため実行対象外')"
-done < <(git for-each-ref --merged "$BASE" --format='%(refname:lstrip=2)' refs/remotes/origin)
+done < <(git for-each-ref --merged "$BASE_REF" --format='%(refname:lstrip=2)' refs/remotes/origin)
 echo ""
 
 # ---- 4) 実行 ----

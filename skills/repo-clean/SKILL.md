@@ -50,15 +50,27 @@ description: "Safely clean up merged worktrees, local branches, and remote branc
 - `--apply --remote` はリモート → ローカルの順に消す。upstream が残っていると、基準ブランチに
   入っていても upstream より先に進んだブランチを `git branch -d` が拒否するため
 - リモートは open PR が無いことを gh で確かめてから消す。origin が fork なら親リポジトリの PR も見る。
-  確かめられなければ（gh が無い・未認証・親が分からないなど）`SKIP (open PR の有無を確かめられない)` と
-  して残す。消すときは `--force-with-lease` で、fetch した先端から動いていないことを確かめる
+  確かめられなければ（gh が無い・未認証・親が分からない・origin が GitHub の URL でないなど）
+  `SKIP (open PR の有無を確かめられない)` として残す。そのブランチを base にする open PR（stacked PR）が
+  あるか、それを確かめられなければ残す（base を消すとその PR は閉じる）。残す worktree で checkout 中の
+  ブランチのリモートも消さない（`SKIP (残す worktree で checkout 中)`）。消すときは `--force-with-lease` で、
+  fetch した先端から動いていないことを確かめる
+- dirty の判定は設定に左右されない。`status.showUntrackedFiles=no` で隠れる未追跡ファイルも数え
+  （`--untracked-files=all`）、assume-unchanged / skip-worktree の付いたファイルがある worktree は、変更が
+  `git status` に出ないので消さない（`SKIP (変更が git status に出ないファイルがある …)`）。
+  `git worktree remove` も同じものを見落として消すため、その手前で止める
+- 基準ブランチは `refs/remotes/origin/<base>` の完全な名前で git に渡す（`origin/develop` という名前の
+  ローカルブランチがあっても、そちらをマージ済みの判定に使わない）
 - fetch に失敗したらリモートは消さない（`SKIP (fetch に失敗したので消さない)`）。基準ブランチは fetch の
   後で選ぶ
 - `origin/HEAD` は基準ブランチの別名なので、リモートの一覧に出さない
 - repo のパスへ移動できなければ何もせず終了する（今いるディレクトリを掃除しない）
 - 渡したパスの worktree と、呼び出し元がいる worktree は消さない（`SKIP (この実行が使っている worktree)`）
 - 呼び出し元の `GIT_DIR`・`GIT_WORK_TREE` などは引き継がない
-- dry-run も `git fetch --prune` で origin の追跡ブランチを更新する（`git worktree prune` は `--apply` のときだけ）
+- dry-run も `git fetch --prune` で origin の追跡ブランチを更新する
+- ディレクトリが見つからない worktree の管理情報は、最後に使われてから（その worktree の index が書かれて
+  から）7 日を過ぎたものだけ `git worktree prune --expire` で片付ける。外付けディスクを外しているだけの
+  worktree を切り離さないため。dry-run は `- PRUNE 候補:`、`--apply` は `- PRUNED:` として表示する
 - `--apply` は計画を作り直す。承認した dry-run の直後に実行する（日付をまたぐと、7 日を越えた分が候補に加わりうる）
 - dirty な worktree・現在 checkout 中のブランチは自動スキップ
 - リモート削除は「基準ブランチにマージ済み + open PR なし」の二重チェック、かつ `--remote` 明示時のみ
