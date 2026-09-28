@@ -26,6 +26,12 @@
 # 0 件なら沈黙する（毎セッション冒頭に定型文を出すと読まれなくなる — C14 の
 # 保守税と同じ理由）。
 #
+# --- 他セッションの持ち越しには印を付ける ---------------------------------------
+# 台帳は全セッションで共有である。他セッションが登録した持ち越しをここで「照合せよ」とだけ
+# 出すと、無関係なセッションが他人の台帳を resolve / owner 宣言してしまう（前例あり:
+# 「私のループが誤って上書きしたため訂正」）。入力の session_id と登録元が違う持ち越しには、
+# このセッションからは触らない旨を付ける。
+#
 # --- 廃止条件 -----------------------------------------------------------------
 # 出力された持ち越しが 30 日間一度も resolve されない → 台帳が「書くだけ」に
 # 劣化した証拠として棚卸し issue。発火ゼロ 90 日 → 降格候補（H6 共通様式）。
@@ -46,7 +52,15 @@ do
   [ -f "$_cand" ] && ASYNC_SH="$_cand" && break
 done
 
+input="$(cat 2>/dev/null || true)"
 command -v python3 >/dev/null 2>&1 || exit 0
+session="$(printf '%s' "$input" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("session_id") or "")
+except Exception:
+    print("")
+' 2>/dev/null || true)"
 if [ -z "$ASYNC_SH" ]; then
   # 台帳 CLI が無い = 照合できない。「持ち越し 0」と誤解させないため沈黙するが、
   # 効いていないことは stderr へ残す（無言で無効化しない — #348 の教訓）。
@@ -54,10 +68,14 @@ if [ -z "$ASYNC_SH" ]; then
   exit 0
 fi
 
-unresolved="$(bash "$ASYNC_SH" unresolved 2>/dev/null || true)"
+# 台帳 CLI が --session を知らない版ずれでは、印を付けずに従来どおり全件を出す（沈黙しない）。
+if ! unresolved="$(bash "$ASYNC_SH" unresolved --session "$session" 2>/dev/null)"; then
+  session=""
+  unresolved="$(bash "$ASYNC_SH" unresolved 2>/dev/null || true)"
+fi
 [ -n "$unresolved" ] || exit 0
 
-report="$(python3 - "$unresolved" <<'PY' 2>/dev/null || true
+report="$(python3 - "$unresolved" "$session" <<'PY' 2>/dev/null || true
 import json, sys
 
 try:
@@ -66,6 +84,7 @@ except Exception:
     rows = []
 if not isinstance(rows, list) or not rows:
     raise SystemExit(0)
+session = sys.argv[2] if len(sys.argv) > 2 else ""
 
 # 出すのは id / kind / detail / owner のみ。プロンプト本文は元から持たない。
 lines = ["## 前ターンからの持ち越し（未解決の非同期作業 %d 件）" % len(rows), ""]
@@ -74,6 +93,9 @@ for r in rows[:20]:
     lines.append("- [%s] `%s` — %s" % (r.get("kind", ""), r.get("id", ""),
                                        r.get("detail", "")))
     lines.append("  - 確認する主体: %s" % (owner if owner else "**未宣言**"))
+    if session and not r.get("mine"):
+        lines.append("  - 登録元: 別セッション（session=%s）。このセッションからは resolve / owner 宣言しない"
+                     % (r.get("session") or "不明"))
     if r.get("check_cmd"):
         lines.append("  - 確認: `%s`" % r["check_cmd"])
 if len(rows) > 20:

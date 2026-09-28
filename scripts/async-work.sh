@@ -18,6 +18,9 @@
 # --- この台帳が持つ事実 --------------------------------------------------------
 #   1 件 = 「ターンをまたいで生き続ける作業」1 つ。kind は cd-run / lane / generic。
 #   register した時点で unresolved。resolve で終端する。
+#   session = 登録したセッション（Claude Code の session_id）。台帳は全セッションで共有なので、
+#   Stop hook は自分のセッションの持ち越しだけで止める（2026-09-28、別セッションが自動登録した
+#   corsweb2024 の run と ai-cluster の nohup が、無関係なセッションのターン終了を止めた）。
 #
 #   **resolve は conclusion を要求する。** status=in_progress / queued / running を
 #   終端の根拠として受け付けない。#96 の核心は「in_progress を根拠に前進と報告した」
@@ -38,7 +41,9 @@ die() { printf 'async-work: %s\n' "$*" >&2; exit 2; }
 slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-120; }
 
 cmd_register() {
-  local id="" kind="generic" detail="" owner="" check_cmd="" source="manual"
+  # session の既定値は Claude Code が Bash に渡す CLAUDE_CODE_SESSION_ID（hook の session_id と同じ値）。
+  # 手で登録した持ち越しも、登録したセッションに紐づける
+  local id="" kind="generic" detail="" owner="" check_cmd="" source="manual" session="${CLAUDE_CODE_SESSION_ID:-}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --id) id="${2:-}"; shift 2 ;;
@@ -47,6 +52,7 @@ cmd_register() {
       --owner) owner="${2:-}"; shift 2 ;;
       --check-cmd) check_cmd="${2:-}"; shift 2 ;;
       --source) source="${2:-}"; shift 2 ;;
+      --session) session="${2:-}"; shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac
   done
@@ -55,16 +61,20 @@ cmd_register() {
     cd-run | lane | generic) ;;
     *) die "--kind must be cd-run|lane|generic (got: $kind)" ;;
   esac
+  # session が空の持ち越しは「登録元不明」。どのセッションの停止も止めず、冒頭照合と停止時の
+  # 情報表示にだけ出る。黙ってそうならないよう、登録した側に言う。
+  [ -n "$session" ] || printf 'async-work: 注意: session が空のため、%s はどのセッションの停止も止めない（冒頭照合と停止時の情報表示にだけ出る）。止めるセッションを決めるなら --session <id>\n' "$id" >&2
   mkdir -p "$STATE_DIR" 2>/dev/null || die "cannot create $STATE_DIR"
-  local file="$STATE_DIR/$(slug "$id").json"
+  local file
+  file="$STATE_DIR/$(slug "$id").json"
   # 既に解決済みの id を再登録した場合は新しい持ち越しとして開き直す。
-  python3 - "$file" "$id" "$kind" "$detail" "$owner" "$check_cmd" "$source" <<'PY' \
+  python3 - "$file" "$id" "$kind" "$detail" "$owner" "$check_cmd" "$source" "$session" <<'PY' \
     || die "register failed"
 import json, sys, time
-path, ident, kind, detail, owner, check_cmd, source = sys.argv[1:8]
+path, ident, kind, detail, owner, check_cmd, source, session = sys.argv[1:9]
 json.dump({
     "id": ident, "kind": kind, "detail": detail, "owner": owner,
-    "check_cmd": check_cmd, "source": source,
+    "check_cmd": check_cmd, "source": source, "session": session,
     "registered_ts": int(time.time()), "resolved_ts": 0,
     "resolved": False, "conclusion": "",
 }, open(path, "w"), ensure_ascii=False)
@@ -94,7 +104,8 @@ cmd_resolve() {
       die "conclusion='$conclusion' は終端ではない。status=in_progress を根拠に完了扱いしてはならない (#96)。gh run view --json conclusion で読み出すこと。"
     fi
   done
-  local file="$STATE_DIR/$(slug "$id").json"
+  local file
+  file="$STATE_DIR/$(slug "$id").json"
   [ -f "$file" ] || die "未登録の id: $id"
   python3 - "$file" "$conclusion" <<'PY' || die "resolve failed"
 import json, sys, time
@@ -119,17 +130,22 @@ PY
 #
 # 除くのは「見えなくする」ためではない。`list` には出るし、`--include-test` で
 # いつでも出せる。停止判定の入力から外すだけである。
+#
+# --session <id> を渡すと、各行に mine（その session が登録した）を付ける。濾過はしない:
+# 停止判定は自分の分で止め、他セッションの分は情報として出すので、両方が要る。
+# session を持たない行（この項目を足す前の登録や、session を渡さない手動登録）は mine=false。
 cmd_unresolved() {
-  local include_test=0
+  local include_test=0 session=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --include-test) include_test=1; shift ;;
+      --session) session="${2:-}"; shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac
   done
-  python3 - "$STATE_DIR" "$include_test" <<'PY'
+  python3 - "$STATE_DIR" "$include_test" "$session" <<'PY'
 import glob, json, os, sys
-state, include_test = sys.argv[1], sys.argv[2] == "1"
+state, include_test, current = sys.argv[1], sys.argv[2] == "1", sys.argv[3]
 rows = []
 for path in sorted(glob.glob(os.path.join(state, "*.json"))):
     try:
@@ -142,6 +158,8 @@ for path in sorted(glob.glob(os.path.join(state, "*.json"))):
     if not include_test and (source == "test" or source.startswith("test:")):
         continue
     row["owned"] = bool(str(row.get("owner") or "").strip())
+    registered_by = str(row.get("session") or "")
+    row["mine"] = bool(current) and registered_by == current
     rows.append(row)
 print(json.dumps(rows, ensure_ascii=False))
 PY
@@ -175,11 +193,13 @@ usage: async-work.sh <register|resolve|unresolved|list|clear> [flags]
 
   register --id <id> [--kind cd-run|lane|generic] [--detail <text>]
            [--owner <次に確認する主体>] [--check-cmd <確認コマンド>] [--source <who>]
+           [--session <登録したセッション>]  既定は $CLAUDE_CODE_SESSION_ID
   resolve  --id <id> --conclusion <success|failure|cancelled|...>
            in_progress / queued / running 等は終端として受け付けない (#96)
-  unresolved [--include-test]
+  unresolved [--include-test] [--session <id>]
                未解決を JSON 配列で。test 系 source は既定で除く
                （停止判定の入力から外すため。list には出る）
+               --session を渡すと各行に mine（その session の登録か）を付ける
   list         人間向け一覧
 
 env:

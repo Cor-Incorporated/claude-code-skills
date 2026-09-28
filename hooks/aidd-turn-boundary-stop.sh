@@ -22,6 +22,15 @@
 #   したがって本装置の効果は「無人区間の発生を、宣言なしには始められなくする」
 #   ことであって「無人区間を検知すること」ではない。
 #
+# --- 止めるのは自分のセッションの持ち越しだけ ---------------------------------
+#   台帳（~/.claude/state/async-work）は全セッションで共有である。2026-09-28、別セッションが
+#   自動登録した corsweb2024 の run 2 件と ai-cluster の nohup が、無関係な claude-code-skills の
+#   セッションのターン終了を止め、そのセッションは他人の持ち越しを resolve / owner 宣言する
+#   しかなかった（他人の台帳を書き換える）。停止判定は入力の session_id と一致する持ち越し
+#   だけで行い、他セッション・session 不明の持ち越しは情報として出す（止めない）。
+#   入力に session_id が無いときは、誰の持ち越しか区別できないので従来どおり全件で止める
+#   （黙ってガードを無効にしない）。
+#
 # --- 無限ループ防止 -------------------------------------------------------------
 #   stop_hook_active=true は「前回の Stop hook が停止を拒否したため継続している」
 #   状態を指す。ここで再び拒否すると停止できなくなる。必ず素通しする。
@@ -70,11 +79,24 @@ if [ "$active" = "true" ]; then
   exit 0
 fi
 
-unresolved="$(bash "$ASYNC_SH" unresolved 2>/dev/null || echo '[]')"
+session="$(printf '%s' "$input" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("session_id") or "")
+except Exception:
+    print("")
+' 2>/dev/null || true)"
+
+# 台帳 CLI が --session を知らない（hooks だけ新しく配備された版ずれ）と非 0 で終わる。そのときは
+# 誰の持ち越しか区別できないので session を捨て、従来どおり全件で判定する（空配列で素通しにしない）。
+if ! unresolved="$(bash "$ASYNC_SH" unresolved --session "$session" 2>/dev/null)"; then
+  session=""
+  unresolved="$(bash "$ASYNC_SH" unresolved 2>/dev/null || echo '[]')"
+fi
 
 # データは argv で渡す。`python3 - <<'PY'` は **プログラム自体を stdin から読む**
 # ので、同じ stdin へ JSON をパイプすると json.load(sys.stdin) が空を掴む。
-verdict="$(python3 - "$unresolved" "${AIDD_LANE_TARGET:-0}" <<'PY' 2>/dev/null || true
+verdict="$(python3 - "$unresolved" "${AIDD_LANE_TARGET:-0}" "$session" <<'PY' 2>/dev/null || true
 import json, sys
 
 try:
@@ -83,12 +105,19 @@ except Exception:
     rows = []
 if not isinstance(rows, list):
     rows = []
+session = sys.argv[3] if len(sys.argv) > 3 else ""
+
+# 自分のセッションの持ち越しだけで止める。session_id が分からないときは区別できないので
+# 全件を自分の分として扱う（従来どおり）。
+def mine(r):
+    return bool(r.get("mine")) if session else True
 
 # owner が宣言されている持ち越しは「次に誰がいつ確認するか」が書かれている。
 # #96 の要求は「確認する主体を宣言せずに終えない」ことであって、非同期作業を
 # 禁じることではない。宣言済みは warn に落とす。
-unowned = [r for r in rows if not r.get("owned")]
-owned = [r for r in rows if r.get("owned")]
+unowned = [r for r in rows if not r.get("owned") and mine(r)]
+owned = [r for r in rows if r.get("owned") and mine(r)]
+others = [r for r in rows if not r.get("owned") and not mine(r)]
 
 # #95: 目標並列度が宣言されているとき、稼働レーン数が下回ったままターンを
 # 終えるのは「枠が空いたのに埋めなかった」ことである。
@@ -97,7 +126,8 @@ try:
     target = int(sys.argv[2])
 except (IndexError, ValueError):
     target = 0
-lanes = [r for r in rows if r.get("kind") == "lane"]
+# 稼働レーンは自分のセッションの分と、session を持たない（この項目を足す前の）登録を数える。
+lanes = [r for r in rows if r.get("kind") == "lane" and (mine(r) or not r.get("session"))]
 deficit = max(0, target - len(lanes)) if target > 0 else 0
 
 lines = []
@@ -120,6 +150,18 @@ if unowned:
     lines.append("  (b) 次に誰がいつ確認するかを宣言する:")
     lines.append("        scripts/async-work.sh register --id <id> --kind <kind> \\")
     lines.append("            --owner '<誰が・いつ>' --check-cmd '<確認コマンド>'")
+if others:
+    if lines:
+        lines.append("")
+    lines.append(
+        "（情報）他セッション・登録元不明の未宣言の持ち越し %d 件。このセッションの停止は止めない。"
+        "登録したセッションが照合するので、ここから resolve / owner 宣言しないこと:" % len(others)
+    )
+    for row in others[:10]:
+        lines.append(
+            "  - [%s] %s : %s（session=%s）" % (row.get("kind", ""), row.get("id", ""),
+                                             row.get("detail", ""), row.get("session") or "不明")
+        )
 if deficit > 0:
     lines.append("")
     lines.append(
@@ -135,6 +177,7 @@ print(json.dumps({
     "block": bool(unowned) or deficit > 0,
     "unowned": len(unowned),
     "owned": len(owned),
+    "others": len(others),
     "lanes": len(lanes),
     "target": target,
     "deficit": deficit,
@@ -158,9 +201,9 @@ import json, sys
 v = json.load(sys.stdin)
 print(json.dumps({
     "component": "H1", "event": sys.argv[1], "rule": sys.argv[2],
-    "detail": "unowned=%d owned=%d lanes=%d/%d" % (
-        v["unowned"], v["owned"], v["lanes"], v["target"]),
-    "subject": {"unowned": v["unowned"], "owned": v["owned"],
+    "detail": "unowned=%d owned=%d others=%d lanes=%d/%d" % (
+        v["unowned"], v["owned"], v["others"], v["lanes"], v["target"]),
+    "subject": {"unowned": v["unowned"], "owned": v["owned"], "others": v["others"],
                 "lanes": v["lanes"], "lane_target": v["target"],
                 "deficit": v["deficit"]},
 }, ensure_ascii=False, separators=(",", ":")))
@@ -178,6 +221,12 @@ if [ "$should_block" != "yes" ]; then
   # 宣言済みの持ち越しがあるなら、素通しはするが記録は残す。
   owned_n="$(printf '%s' "$verdict" | python3 -c 'import json,sys; print(json.load(sys.stdin)["owned"])' 2>/dev/null || echo 0)"
   [ "${owned_n:-0}" -gt 0 ] && append_ledger warn async-work-owned
+  # 他セッションの未宣言の持ち越しは止めないが、見えるように出して記録する。
+  others_n="$(printf '%s' "$verdict" | python3 -c 'import json,sys; print(json.load(sys.stdin)["others"])' 2>/dev/null || echo 0)"
+  if [ "${others_n:-0}" -gt 0 ]; then
+    append_ledger warn async-work-other-session
+    printf '%s\n' "$(printf '%s' "$verdict" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reason"])')" >&2
+  fi
   exit 0
 fi
 

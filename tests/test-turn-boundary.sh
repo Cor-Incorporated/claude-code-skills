@@ -14,6 +14,10 @@
 # 本スイートが実測するのは「持ち越しがある状態で停止しようとしたら止まるか」
 # であって「無人区間を検知できるか」ではない。後者は Stop hook では原理的に
 # 不可能であり、テストでもそう主張しない。
+#
+# shellcheck disable=SC2015,SC2016
+#   SC2015: ok() は常に 0 を返すので `A && ok || bad` は if-then-else として働く。
+#   SC2016: 変異体の置換対象は、展開させない生の文字列として単引用符で書く。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STOP_HOOK="$ROOT/hooks/aidd-turn-boundary-stop.sh"
@@ -23,6 +27,9 @@ SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 export AIDD_LEDGER_SOURCE=test
 export HOME="$SB/home"
+# 手で登録した持ち越しは CLAUDE_CODE_SESSION_ID のセッションに紐づく。停止の入力の session_id "t" と
+# そろえる（このテストを走らせているセッション自身の id を持ち込まない）。
+export CLAUDE_CODE_SESSION_ID=t
 mkdir -p "$HOME/.claude/hooks/lib"
 cp "$ROOT/hooks/lib/aidd-ledger.sh" "$HOME/.claude/hooks/lib/aidd-ledger.sh"
 LEDGER="$HOME/.claude/hooks/ledger/guard-ledger.jsonl"
@@ -48,6 +55,39 @@ run_stop() {
   local hook="$1" active="$2"
   shift 2
   stop_payload "$active" | env "$@" bash "$hook" 2>"$SB/stop.err"
+}
+
+# seed <id> <session> — 未解決・owner 未宣言の持ち越しを 1 件、登録したセッション付きで台帳へ置く。
+# register --session を使わず保存形式へ直接書くのは、--session を解さない修正前の CLI に対しても
+# 同じ前提を作るため（修正前で実測すると登録が失敗し、「止まらない」が偽 PASS になる）。
+seed() {
+  python3 - "$AIDD_ASYNC_STATE" "$1" "$2" <<'PY'
+import json, os, sys, time
+state, ident, session = sys.argv[1:4]
+json.dump({"id": ident, "kind": "cd-run", "detail": "seed " + ident, "owner": "",
+           "check_cmd": "", "source": "manual", "session": session,
+           "registered_ts": int(time.time()), "resolved_ts": 0,
+           "resolved": False, "conclusion": ""},
+          open(os.path.join(state, ident + ".json"), "w", encoding="utf-8"), ensure_ascii=False)
+PY
+}
+
+# build_skew_cli <out> — --session を解さない台帳 CLI（この変更より前の CLI と同じく unknown flag で拒否する）
+build_skew_cli() {
+  python3 - "$ASYNC" "$1" <<'PY'
+import sys
+src, out = sys.argv[1:3]
+text = open(src, encoding="utf-8").read()
+needle = '      --session) session="${2:-}"; shift 2 ;;\n'
+if text.count(needle) not in (0, 2):
+    raise SystemExit(1)
+open(out, "w", encoding="utf-8").write(text.replace(needle, ""))
+PY
+}
+
+# skew_cli_ok <cli> — 版ずれ CLI の前提: unresolved は動き、unresolved --session は拒否する
+skew_cli_ok() {
+  [ -f "$1" ] && bash "$1" unresolved >/dev/null 2>&1 && ! bash "$1" unresolved --session B >/dev/null 2>&1
 }
 
 ledger_has() {
@@ -238,7 +278,8 @@ src=$(bash "$ASYNC" unresolved --include-test | python3 -c 'import json,sys; pri
   && ok "case10 source が test 系として記録される（${src}）" \
   || bad "case10 source が test 系でない: $src"
 run_stop "$STOP_HOOK" false AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
-[[ "$?" -eq 0 ]] \
+rc=$?
+[[ "$rc" -eq 0 ]] \
   && ok "case10 test 登録だけならターンを止めない" \
   || bad "case10 test 登録でターンが止まった"
 
@@ -255,6 +296,129 @@ run_stop "$STOP_HOOK" false AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
   && ok "case10 未設定の登録は従来どおりターンを止める" \
   || bad "case10 本物でターンが止まらなくなった"
 
+
+echo
+echo "=== case 11: 他セッションの持ち越しでは止めない（2026-09-28 の干渉の再現） ==="
+echo "    由来: 台帳は全セッションで共有。別セッションが自動登録した corsweb2024 の run と"
+echo "    ai-cluster の nohup が、無関係なセッションのターン終了を止めた。"
+# stop_payload_as <session|""> -> 停止の入力。空なら session_id を持たない
+stop_payload_as() {
+  python3 -c 'import json,sys; d={"stop_hook_active": False}
+if sys.argv[1]: d["session_id"] = sys.argv[1]
+print(json.dumps(d))' "$1"
+}
+run_stop_as() {
+  local hook="$1" who="$2"
+  shift 2
+  stop_payload_as "$who" | env "$@" bash "$hook" 2>"$SB/stop.err"
+}
+reset_state c11
+seed run-other A
+n=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+[[ "$n" -eq 1 ]] \
+  && ok "case11 前提: セッション A の未宣言の持ち越しが台帳に 1 件ある" \
+  || bad "case11 前提: 台帳の持ち越しが $n 件（期待 1）— 以下は反証にならない"
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 0 ]] \
+  && ok "case11 セッション A の未宣言の持ち越しでは、セッション B は止まらない" \
+  || bad "case11 セッション A の持ち越しがセッション B を止めた (rc=$rc)"
+grep -q "run-other" "$SB/stop.err" && grep -q "他セッション" "$SB/stop.err" \
+  && ok "case11 他セッションの持ち越しは情報として名指しする（黙って消さない）" \
+  || bad "case11 他セッションの持ち越しが見えない: $(cat "$SB/stop.err")"
+ledger_has async-work-other-session warn \
+  && ok "case11 台帳に rule=async-work-other-session event=warn 行" \
+  || bad "case11 台帳に他セッションの warn 行がない"
+
+echo
+echo "=== case 12: 自分のセッションの持ち越しでは従来どおり止める ==="
+reset_state c12
+seed run-mine B
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 2 ]] \
+  && ok "case12 セッション B の未宣言の持ち越しはセッション B を止める" \
+  || bad "case12 自分の持ち越しで止まらない (rc=$rc)"
+
+echo
+echo "=== case 13: 自動登録は登録したセッションを記録する ==="
+reset_state c13
+python3 -c 'import json; print(json.dumps({"session_id":"A","tool_input":{"command":"gh workflow run cd.yml"}}))' \
+  | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$REG_HOOK" >/dev/null 2>&1
+got=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r[0].get("session","") if r else "")')
+[[ "$got" == "A" ]] \
+  && ok "case13 PostToolUse の入力の session_id が台帳に入る" \
+  || bad "case13 自動登録の session が '$got'（期待 A）"
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 0 ]] \
+  && ok "case13 他セッションが自動登録した持ち越しでは止まらない" \
+  || bad "case13 他セッションの自動登録で止まった"
+
+echo
+echo "=== case 14: 手で登録した持ち越しは CLAUDE_CODE_SESSION_ID のセッションに紐づく ==="
+reset_state c14
+env CLAUDE_CODE_SESSION_ID=C AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$ASYNC" register --id run-manual --kind cd-run --detail m >/dev/null
+got=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r[0].get("session","") if r else "")')
+[[ "$got" == "C" ]] \
+  && ok "case14 手動登録の session は CLAUDE_CODE_SESSION_ID（C）" \
+  || bad "case14 手動登録の session が '$got'（期待 C）"
+reset_state c14b
+env CLAUDE_CODE_SESSION_ID=C AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$ASYNC" register --id run-flag --kind cd-run --detail m --session D >/dev/null 2>&1
+got=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r[0].get("session","") if r else "")')
+[[ "$got" == "D" ]] \
+  && ok "case14 --session を渡せば既定より優先する（D）" \
+  || bad "case14 --session の session が '$got'（期待 D）"
+
+echo
+echo "=== case 15: 停止の入力に session_id が無ければ、区別できないので全件で止める ==="
+reset_state c15
+seed run-anyone A
+run_stop_as "$STOP_HOOK" "" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+[[ "$?" -eq 2 ]] \
+  && ok "case15 session_id の無い停止は、他セッションの持ち越しでも止める（ガードを黙って外さない）" \
+  || bad "case15 session_id が無いのに止まらなかった"
+
+echo
+echo "=== case 16: 台帳 CLI が --session を知らない版ずれでも、黙って素通しにしない ==="
+echo "    hooks/ と scripts/ は別々に配られうる。古い CLI は --session を unknown flag で拒否する。"
+# 版ずれの配置: 新しい hook + --session を解さない CLI（この変更より前の CLI と同じ拒否をする）
+SKEW="$SB/skew"
+mkdir -p "$SKEW/hooks" "$SKEW/scripts"
+cp "$STOP_HOOK" "$SKEW/hooks/aidd-turn-boundary-stop.sh"
+cp "$REG_HOOK" "$SKEW/hooks/aidd-async-register.sh"
+build_skew_cli "$SKEW/scripts/async-work.sh"
+reset_state c16
+skew_cli_ok "$SKEW/scripts/async-work.sh" \
+  && ok "case16 前提: 版ずれ CLI は unresolved に答え、--session だけを拒否する" \
+  || bad "case16 前提: 版ずれ CLI を作れない — 以下は反証にならない"
+seed run-skew A
+run_stop_as "$SKEW/hooks/aidd-turn-boundary-stop.sh" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 2 ]] \
+  && ok "case16 版ずれでは区別できないので、従来どおり全件で止める（空配列で素通ししない）" \
+  || bad "case16 版ずれで停止判定が素通しになった (rc=$rc)"
+reset_state c16b
+post_payload 'gh workflow run v2-alpha-cd.yml --ref develop' \
+  | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$SKEW/hooks/aidd-async-register.sh" >/dev/null 2>&1
+n=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+[[ "$n" -eq 1 ]] \
+  && ok "case16 版ずれでも自動登録は落とさない（登録元の記録だけを諦める）" \
+  || bad "case16 版ずれで自動登録が消えた（$n 件）"
+
+echo
+echo "=== case 17: session を持たない登録は、その旨を登録した側に言う ==="
+reset_state c17
+env -u CLAUDE_CODE_SESSION_ID AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" \
+  bash "$ASYNC" register --id run-nosession --kind cd-run --detail n >/dev/null 2>"$SB/reg.err"
+grep -q "session が空" "$SB/reg.err" \
+  && ok "case17 session が空の登録は stderr で注意する（黙って誰も止めない持ち越しにしない）" \
+  || bad "case17 session が空でも無言: $(cat "$SB/reg.err")"
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 0 ]] && grep -q "session=不明" "$SB/stop.err" \
+  && ok "case17 登録元不明の持ち越しは情報として出す（止めない）" \
+  || bad "case17 登録元不明の扱いが違う (rc=$rc): $(cat "$SB/stop.err")"
 
 echo
 echo "=== 変異体: 条件を外すと同じシナリオが素通しすることの実測 ==="
@@ -275,7 +439,7 @@ open(out, "w", encoding="utf-8").write(text.replace(needle, replacement, 1))
 PY
 }
 
-if mutate "$STOP_HOOK" 'unowned = [r for r in rows if not r.get("owned")]' \
+if mutate "$STOP_HOOK" 'unowned = [r for r in rows if not r.get("owned") and mine(r)]' \
       'unowned = []' "$MUT/nounowned.sh"; then
   reset_state m1
   bash "$ASYNC" register --id run-m1 --kind cd-run --detail "open" >/dev/null
@@ -309,6 +473,59 @@ if mutate "$ASYNC" 'for word in $NON_TERMINAL; do' 'for word in ; do' "$MUT/note
   fi
 else
   bad "変異(非終端語リスト除去) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$STOP_HOOK" 'unowned = [r for r in rows if not r.get("owned") and mine(r)]' \
+      'unowned = [r for r in rows if not r.get("owned")]' "$MUT/allsessions.sh"; then
+  reset_state m4
+  seed run-m4 A
+  run_stop_as "$MUT/allsessions.sh" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+  [[ "$?" -eq 2 ]] \
+    && ok "変異(セッションで絞らない) 他セッションの持ち越しで止まる = case11 は絞り込みが作っていた" \
+    || bad "変異(セッションで絞らない) それでも止まらない = case11 は別条件が出している"
+else
+  bad "変異(セッションで絞らない) 対象が見つからない — 反証不能"
+fi
+
+MUTR="$SB/mutants/hooks/nosession-register.sh"
+if mutate "$REG_HOOK" '--source "$REGISTER_SOURCE" --session "$session"' '--source "$REGISTER_SOURCE"' "$MUTR"; then
+  reset_state m5
+  python3 -c 'import json; print(json.dumps({"session_id":"A","tool_input":{"command":"gh workflow run cd.yml"}}))' \
+    | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$MUTR" >/dev/null 2>&1
+  got=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r[0].get("session","") if r else "")')
+  [[ "$got" != "A" ]] \
+    && ok "変異(自動登録で session を渡さない) 登録元が A にならない（${got}）= case13 は受け渡しが作っていた" \
+    || bad "変異(自動登録で session を渡さない) それでも A = case13 は別経路が出している"
+else
+  bad "変異(自動登録で session を渡さない) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$STOP_HOOK" 'if ! unresolved="$(bash "$ASYNC_SH" unresolved --session "$session" 2>/dev/null)"; then' \
+      'if ! unresolved="$(bash "$ASYNC_SH" unresolved --session "$session" 2>/dev/null || echo "[]")"; then' \
+      "$SKEW/hooks/nofallback.sh"; then
+  reset_state m6
+  seed run-m6 A
+  run_stop_as "$SKEW/hooks/nofallback.sh" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+  rc=$?
+  [[ "$rc" -eq 0 ]] \
+    && ok "変異(版ずれ時の再照会除去) 版ずれで素通しになる = case16 の停止は再照会が作っていた" \
+    || bad "変異(版ずれ時の再照会除去) それでも止まる (rc=$rc) = case16 は別条件が出している"
+else
+  bad "変異(版ずれ時の再照会除去) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$REG_HOOK" '    || bash "$ASYNC_SH" register --id "$ident" --kind "$kind" --detail "$detail" \
+      --source "$REGISTER_SOURCE" >/dev/null 2>&1 \
+' '' "$SKEW/hooks/noretry-register.sh"; then
+  reset_state m7
+  post_payload 'gh workflow run v2-alpha-cd.yml --ref develop' \
+    | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$SKEW/hooks/noretry-register.sh" >/dev/null 2>&1
+  n=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+  [[ "$n" -eq 0 ]] \
+    && ok "変異(版ずれ時の再登録除去) 版ずれで自動登録が消える = case16 の登録は再登録が作っていた" \
+    || bad "変異(版ずれ時の再登録除去) それでも登録される（$n 件）= case16 は別経路が出している"
+else
+  bad "変異(版ずれ時の再登録除去) 対象が見つからない — 反証不能"
 fi
 
 echo
