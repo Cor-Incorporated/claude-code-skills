@@ -43,7 +43,10 @@ is_stale() { # $1=dir $2=days → 0 if last commit older than days
   if [ -n "$last" ] && [ $(( (today_epoch - last) / 86400 )) -ge "$days" ]; then
     rc=0
     # 未コミットの作業がある worktree が 1 つでもあれば使用中。grep -q は pipefail の下で
-    # 上流の SIGPIPE が失敗扱いになるので、変数に受けてから調べる
+    # 上流の SIGPIPE が失敗扱いになるので、変数に受けてから調べる。
+    # 既知の制限: .git/worktrees を読めないと git worktree list が一部の worktree を黙って落とす
+    # ことがあり、その worktree の未コミットの作業は見えない（その場合に消えうるのは、再生成
+    # できる成果物だけ。追跡中のファイルを含む成果物は下の sweep が消さない）
     while IFS= read -r wt; do
       [ -d "$wt" ] || continue  # 消えた worktree（prunable）は作業を持てない
       # 未追跡のディレクトリは畳まれて表示される（packages/ など）ので、ファイル単位に展開して見る。
@@ -82,21 +85,23 @@ for n in "${CACHE_NAMES[@]}"; do prune_args+=(-name "$n" -o); done
 unset 'prune_args[${#prune_args[@]}-1]'
 
 # archivable <プロジェクト> <日数>: プロジェクトが古く、中にあるリポジトリもすべて古いときだけ 0。
-# git 管理外のフォルダでも、中に使用中のリポジトリがあれば _archive へ移す提案はしない
+# git 管理外のフォルダでも、中に使用中のリポジトリがあれば _archive へ移す提案はしない。
+# 名前だけで成果物と決められない target/・venv/・.venv/ の中も探す
 archivable() {
   local g
   is_stale "$1" "$2" || return 1
   while IFS= read -r -d '' g; do
     is_stale "$(dirname "$g")" "$2" || return 1
   done < <(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" \
-    \( -type d \( "${prune_args[@]}" \) -prune \) -o \( -name .git -print0 -prune \) 2>/dev/null)
+    \( -type d \( -name node_modules -o -name __pycache__ -o -name .next -o -name .mypy_cache \
+    -o -name .ruff_cache -o -name .pytest_cache \) -prune \) -o \( -name .git -print0 -prune \) 2>/dev/null)
   return 0
 }
 
 # sweep <探す場所> <残りの深さ> <プロジェクト>: 成果物を探し、それを含むリポジトリ群が
 # 古いものだけ数える（--apply なら消す）。成果物ではない target/・venv/ の中も探す
 sweep() {
-  local start="$1" depth="$2" project="$3" t rel root mb
+  local start="$1" depth="$2" project="$3" t rel root mb tracked
   [ "$depth" -ge 1 ] || return 0
   while IFS= read -r -d '' t; do
     if ! looks_like_cache "$t"; then
@@ -107,6 +112,12 @@ sweep() {
     # 入れ子のリポジトリ（worktree・別の clone）の成果物は、そのリポジトリ群の古さで判定する
     root=$(owning_root "$t" "$project")
     is_stale "$root" "$STALE_DAYS" || continue
+    # 追跡中のファイルを含む成果物は消さない（コミット済みの node_modules/ など。消すと作業ツリー
+    # から追跡中のファイルが消える）。調べられなければ消さない側に倒す
+    if [ -e "$root/.git" ]; then
+      tracked=$(git -C "$root" ls-files -- "${t#"$root"/}" 2>/dev/null) || continue
+      [ -z "$tracked" ] || continue
+    fi
     # 読めないファイルがあっても掃除を止めない（pipefail で代入ごと落ちないようにする）
     mb=$( { du -sm "$t" 2>/dev/null || true; } | awk 'NR==1 {print $1}')
     if [ -z "$mb" ]; then

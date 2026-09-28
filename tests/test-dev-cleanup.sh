@@ -140,6 +140,15 @@ cache "$D/data/target/web"
 # an old repository that commits a file under node_modules/ and has an uncommitted edit to it
 repo "$D/trackedcache" 100 node_modules/patch.js
 printf 'edited\n' >>"$D/trackedcache/node_modules/patch.js"
+cache "$D/trackedcache" .next
+# an old repository that commits a file under node_modules/ and leaves it unchanged
+repo "$D/trackedclean" 100 node_modules/source.js
+# an old repository that ignores data/, with an active repository under data/target/
+# (target/ there is not a build directory)
+mkdir -p "$D/parentdata"
+printf 'data/\n' >"$D/parentdata/.gitignore"
+repo "$D/parentdata" 200 .gitignore
+repo "$D/parentdata/data/target/inner" 1
 # an old repository where git status fails (git log still works)
 repo "$D/brokenstatus" 100
 git -C "$D/brokenstatus" config status.showUntrackedFiles bogus
@@ -191,13 +200,20 @@ check "--apply keeps target/ without Cargo.toml or pom.xml" [ -d "$D/data/target
 check "--apply keeps venv/ without pyvenv.cfg" [ -d "$D/data/venv" ]
 check "--apply keeps a cache holding a tracked file with an uncommitted edit" \
   [ -f "$D/trackedcache/node_modules/patch.js" ]
+check "--apply keeps the other caches of a repository with a tracked edit under node_modules/" \
+  [ -d "$D/trackedcache/.next" ]
 check "--apply keeps the cache of a repository whose status cannot be read" [ -d "$D/brokenstatus/node_modules" ]
+check "--apply keeps a cache that holds a tracked file" [ -f "$D/trackedclean/node_modules/source.js" ]
+check "--apply keeps an active repository's cache under a non-build target/" \
+  [ -d "$D/parentdata/data/target/inner/node_modules" ]
 check "--apply does not suggest archiving the repository with no commits" \
   not_listed "ARCHIVE.*: unborn " "$SB/apply.log"
 check "dry-run suggests archiving a folder outside git with no repository inside" \
   grep -q "ARCHIVE.*: plain " "$SB/dry.log"
 check "dry-run does not suggest archiving a folder with an active repository inside" \
   not_listed "ARCHIVE.*: group " "$SB/dry.log"
+check "dry-run does not suggest archiving a repository with an active one under a non-build target/" \
+  not_listed "ARCHIVE.*: parentdata " "$SB/dry.log"
 
 # An unreadable or undeletable cache must neither stop the sweep nor count as freed.
 if [ "$(id -u)" -eq 0 ]; then
@@ -248,7 +264,7 @@ PY
   }
   caught_by no-dirty-check "--apply keeps the cache of a worktree with an uncommitted edit" \
     'if [ -n "$work" ]; then rc=1; break; fi' ':'
-  caught_by tracked-edits-filtered "--apply keeps a cache holding a tracked file with an uncommitted edit" \
+  caught_by tracked-edits-filtered "--apply keeps the other caches of a repository with a tracked edit under node_modules/" \
     "UNTRACKED_CACHE_RE='^\\?\\? (.*/)?(" "UNTRACKED_CACHE_RE='^...(.*/)?("
   caught_by status-failure-ignored "--apply keeps the cache of a repository whose status cannot be read" \
     'if ! st=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null); then rc=1; break; fi' \
@@ -269,6 +285,11 @@ PY
     '{ du -sm "$t" 2>/dev/null || true; }' 'du -sm "$t" 2>/dev/null'
   caught_by rm-failure-hidden "--apply exits non-zero when a cache cannot be deleted" \
     'if rm -rf "$t"; then' 'if rm -rf "$t" || true; then'
+  caught_by tracked-files-deleted "--apply keeps a cache that holds a tracked file" \
+    '      [ -z "$tracked" ] || continue' '      :'
+  caught_by archive-prunes-target \
+    "dry-run does not suggest archiving a repository with an active one under a non-build target/" \
+    '\( -name node_modules -o -name __pycache__' '\( -name target -o -name node_modules -o -name __pycache__'
   caught_by archive-ignores-nested "dry-run does not suggest archiving a folder with an active repository inside" \
     'if archivable "$dir" "$ARCHIVE_DAYS"; then' 'if is_stale "$dir" "$ARCHIVE_DAYS"; then'
 fi
