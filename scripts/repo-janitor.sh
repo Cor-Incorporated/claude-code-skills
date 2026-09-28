@@ -12,10 +12,12 @@
 #     作られてから MIN_AGE_DAYS 日未満なら消さない。作られた日は reflog の最も古い記録で測り、
 #     分からなければ消さない
 #   - 未マージブランチは削除しない（git branch -d のみ、-D は使わない）
-#   - dirty な worktree はスキップして警告
+#   - dirty な worktree はスキップして警告。ignore されたファイルも、handover の撤収基準 3 が
+#     「再生成可能」と列挙したもの（REGENERABLE_IGNORED）以外があれば残す
 #   - 現在checkout中のブランチ、渡されたパスの worktree、呼び出し元がいる worktree は触らない
-#   - open PR の有無を gh で確かめられないリモートブランチは消さない。消すときは、fetch した
-#     ときの先端から動いていないことを --force-with-lease で確かめる
+#   - open PR の有無を gh で確かめられないリモートブランチは消さない。origin が fork なら親リポジトリの
+#     PR も見る。消すときは、fetch したときの先端から動いていないことを --force-with-lease で確かめる
+#   - fetch に失敗したらリモートは消さない
 #   - --apply --remote ではリモートを先に消す（upstream が残っていると git branch -d が拒否する）
 # dry-run も git fetch --prune で origin の追跡ブランチを更新する。--apply は計画を作り直すので、
 # 承認した dry-run の直後に実行する（日付をまたぐと 7 日を越えた分が候補に加わりうる）
@@ -25,6 +27,9 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
   GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
 
 MIN_AGE_DAYS=7
+# handover の撤収基準 3 が「再生成可能」と列挙したもの（skills/handover/common-clauses.md の表。
+# 実測で現れたものだけを載せる規定。pair19 が表と照合する）
+REGENERABLE_IGNORED=('**/__pycache__/**' '*.pyc')
 
 REPO="${1:?usage: repo-janitor.sh <repo-path> [--apply] [--remote]}"
 shift
@@ -44,19 +49,30 @@ REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: $REPO は git リ�
 cd "$REPO_ROOT" || exit 1
 REPO_ROOT=$(pwd -P)
 
-# 統合ブランチの決定 (develop 優先)
+FETCH_OK=true
+git fetch --prune origin >/dev/null 2>&1 || {
+  FETCH_OK=false
+  echo "WARN: fetch失敗（オフライン?）。ローカル情報のみで判定し、リモートは消さない。"
+}
+
+# 統合ブランチの決定 (develop 優先)。fetch の後で選ぶ（前回の fetch 以降に作られた develop を見落とさない）
 if git show-ref --verify --quiet refs/remotes/origin/develop; then BASE=origin/develop
 elif git show-ref --verify --quiet refs/remotes/origin/main; then BASE=origin/main
 else BASE=origin/master; fi
 BASE_NAME=${BASE#origin/}
 
-git fetch --prune origin >/dev/null 2>&1 || echo "WARN: fetch失敗（オフライン?）。ローカル情報のみで判定します。"
-
-# gh は upstream remote を origin より優先して別のリポジトリの PR を見ることがあるので、origin を明示する
+# gh は upstream remote を origin より優先して別のリポジトリの PR を見ることがあるので、origin を明示する。
+# URL は insteadOf を展開する前の設定値から取る（ミラーへ振り向けていても GitHub 上の名前で PR を探す）
 GH_REPO_ARGS=()
-origin_slug=$(git remote get-url origin 2>/dev/null \
+origin_slug=$(git config --get remote.origin.url 2>/dev/null \
   | sed -nE 's#^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+)$#\2#p' | sed 's/\.git$//')
 [ -n "$origin_slug" ] && GH_REPO_ARGS=(-R "$origin_slug")
+# origin が fork なら、PR は親リポジトリにも出ている。親を確かめられなければ "?"（リモートは消さない）
+GH_PARENT=""
+if [ -n "$origin_slug" ]; then
+  GH_PARENT=$(gh repo view "$origin_slug" --json parent \
+    -q 'if .parent then .parent.owner.login + "/" + .parent.name else "" end' 2>/dev/null) || GH_PARENT="?"
+fi
 
 in_list() { # $1=値 $2...=リスト
   local x="$1" y
@@ -110,6 +126,46 @@ created_recently() {
   [ -n "$e" ] || return 0
   CREATED=$(date -r "$e" +%F 2>/dev/null || date -d "@$e" +%F 2>/dev/null || echo "$e")
   [ $((NOW - e)) -lt "$AGE_LIMIT" ]
+}
+
+# regenerable <path>: REGENERABLE_IGNORED のどれかに当たれば 0（先頭に / を付けて ** を先頭の要素にも当てる）
+regenerable() {
+  local pat
+  for pat in "${REGENERABLE_IGNORED[@]}"; do
+    # shellcheck disable=SC2053 # 右辺は意図して glob として照合する
+    [[ "/$1" == $pat ]] && return 0
+  done
+  return 1
+}
+
+# observed_young <commit>: 手元の origin/<base> の reflog で、commit を初めて含んだ記録が MIN_AGE_DAYS 日未満か、
+# 記録が無ければ 0。自分のコミットが無い（fast-forward で入った）先端は、コミットの日付では入った日が
+# 分からないので、こちらで測る
+observed_young() {
+  local line h e first=""
+  while IFS= read -r line; do
+    h=${line%% *}
+    e=$(printf '%s\n' "$line" | sed -nE 's/.*@\{([0-9]+)\}$/\1/p')
+    [ -n "$e" ] || continue
+    if git merge-base --is-ancestor "$1" "$h" 2>/dev/null && { [ -z "$first" ] || [ "$e" -lt "$first" ]; }; then
+      first=$e
+    fi
+  done < <(git reflog show --date=unix --format='%H %gd' "refs/remotes/$BASE" 2>/dev/null)
+  [ -n "$first" ] || return 0
+  ENTERED=$(date -r "$first" +%F 2>/dev/null || date -d "@$first" +%F 2>/dev/null || echo "$first")
+  [ $((NOW - first)) -lt "$AGE_LIMIT" ]
+}
+
+# unregenerable_ignored <worktree>: ignore されたファイルのうち、再生成可能と列挙されていないものを出す。
+# 調べられなければ 1 を返す
+unregenerable_ignored() {
+  local st line
+  st=$(git -C "$1" status --porcelain --ignored=traditional --untracked-files=all 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case "$line" in '!! '*) ;; *) continue ;; esac
+    regenerable "${line#!! }" || printf '%s\n' "${line#!! }"
+  done <<<"$st"
+  return 0
 }
 
 # git の拒否メッセージを 1 行にする（hint は落とす）
@@ -168,6 +224,19 @@ while IFS= read -r wt; do
       echo "- KEEP (no own commits, branch created $CREATED, < $MIN_AGE_DAYS days or unknown): $wt [$br]"
       continue
     fi
+    if $ON_CHAIN && observed_young "refs/heads/$br"; then
+      echo "- KEEP (no own commits, first seen in $BASE $ENTERED, < $MIN_AGE_DAYS days or unknown): $wt [$br]"
+      continue
+    fi
+    # ignore されたファイルも、再生成可能と列挙されたもの以外があれば残す（git worktree remove は一緒に消す）
+    if ! ignored=$(unregenerable_ignored "$wt"); then
+      echo "- SKIP (ignore されたファイルを確かめられない): $wt [$br]"
+      continue
+    fi
+    if [ -n "$ignored" ]; then
+      echo "- SKIP (ignore されたファイルがある: $(printf '%s\n' "$ignored" | head -3 | tr '\n' ' ')): $wt [$br]"
+      continue
+    fi
     WT_REMOVE+=("$wt")
     WT_FREED+=("$br")
     echo "- 削除候補: $wt [$br] — $BASE にマージ済み（${ENTERED}）・clean"
@@ -191,6 +260,10 @@ while IFS= read -r br; do
   fi
   if $ON_CHAIN && created_recently "$REPO_ROOT" "refs/heads/$br"; then
     echo "- KEEP (no own commits, created $CREATED, < $MIN_AGE_DAYS days or unknown): $br"
+    continue
+  fi
+  if $ON_CHAIN && observed_young "refs/heads/$br"; then
+    echo "- KEEP (no own commits, first seen in $BASE $ENTERED, < $MIN_AGE_DAYS days or unknown): $br"
     continue
   fi
   # worktree で checkout 中のブランチは、その worktree を消すときだけ候補にする
@@ -217,6 +290,11 @@ while IFS= read -r ref; do
   br=${ref#origin/}
   [ -z "$br" ] && continue
   echo "$br" | grep -Eq "$PROTECTED" && continue # リモートの保護ブランチ
+  # fetch に失敗したら、古い情報のままリモートを消さない
+  if ! $FETCH_OK; then
+    echo "- SKIP (fetch に失敗したので消さない): origin/$br"
+    continue
+  fi
   if too_young "refs/remotes/$ref"; then
     echo "- KEEP (entered $BASE_NAME $ENTERED, < $MIN_AGE_DAYS days): origin/$br"
     continue
@@ -225,9 +303,21 @@ while IFS= read -r ref; do
     echo "- KEEP (no own commits, first fetched $CREATED, < $MIN_AGE_DAYS days or unknown): origin/$br"
     continue
   fi
+  if $ON_CHAIN && observed_young "refs/remotes/$ref"; then
+    echo "- KEEP (no own commits, first seen in $BASE $ENTERED, < $MIN_AGE_DAYS days or unknown): origin/$br"
+    continue
+  fi
   # 裏取り: open PR が無いこと。gh で確かめられなければ消さない（open PR のブランチを消すと PR が閉じる）
   open=$(gh pr list ${GH_REPO_ARGS[@]+"${GH_REPO_ARGS[@]}"} --head "$br" --state open \
     --json number -q length 2>/dev/null) || open=""
+  # origin が fork なら、親リポジトリに出した PR も数える
+  if [ "$open" = 0 ] && [ -n "$GH_PARENT" ]; then
+    if [ "$GH_PARENT" = "?" ]; then
+      open=""
+    else
+      open=$(gh pr list -R "$GH_PARENT" --head "$br" --state open --json number -q length 2>/dev/null) || open=""
+    fi
+  fi
   case "$open" in
     0) ;;
     '' | *[!0-9]*)

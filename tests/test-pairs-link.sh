@@ -710,6 +710,7 @@ else:
         )
 
 # pair19: 機械掃除の「マージ済み + 7 日」— 規則と撤収基準（宣言）↔ repo-janitor.sh の MIN_AGE_DAYS（強制）
+# と、撤収基準 3 の「再生成可能として除外してよいもの」の表 ↔ repo-janitor.sh の REGENERABLE_IGNORED
 # 規則は 2026-07 から「repo-clean skill / H11 で 7 日」と宣言していたが、repo-janitor.sh には
 # 日数の判定が無く、2026-09-28 の dry-run は 3 日前に develop へ入った worktree とブランチを
 # 削除候補に挙げた。宣言だけあって強制が無かった。日数を 3 か所で数値照合する。
@@ -731,10 +732,29 @@ else:
         f"declaration(skills/handover/common-clauses.md「最終コミットから N 日以上」)={clause_d} "
         f"enforcement(scripts/repo-janitor.sh MIN_AGE_DAYS)={janitor_d}"
     )
+    # 撤収基準 3 の表（見出しの後の最初の表）の 1 列目にある `...` を集める
+    cc_text = cc.read_text(encoding="utf-8")
+    anchor = cc_text.find("再生成可能として除外してよいもの")
+    table_patterns: set[str] = set()
+    if anchor >= 0:
+        for line in cc_text[anchor:].splitlines()[1:]:
+            if line.startswith("|") and not line.startswith("|---"):
+                first = line.split("|")[1]
+                table_patterns.update(re.findall(r"`([^`]+)`", first))
+            elif table_patterns:
+                break
+    m_regen = re.search(r"^REGENERABLE_IGNORED=\(([^)]*)\)$", jn.read_text(encoding="utf-8"), re.M)
+    janitor_patterns = set(re.findall(r"'([^']+)'", m_regen.group(1))) if m_regen else set()
+    detail_regen = (
+        f"declaration(skills/handover/common-clauses.md 再生成可能の表)={sorted(table_patterns)} "
+        f"enforcement(scripts/repo-janitor.sh REGENERABLE_IGNORED)={sorted(janitor_patterns)}"
+    )
     if None in (rule_d, clause_d, janitor_d) or len({rule_d, clause_d, janitor_d}) != 1:
         bad("pair19 mechanical-cleanup age: declaration/enforcement mismatch", detail)
+    elif not table_patterns or table_patterns != janitor_patterns:
+        bad("pair19 regenerable patterns: declaration/enforcement mismatch", detail_regen)
     else:
-        ok(f"pair19 mechanical-cleanup age {janitor_d} days: {detail}")
+        ok(f"pair19 mechanical-cleanup age {janitor_d} days, regenerable {sorted(janitor_patterns)}: {detail}")
 
 # 3 値で出す。skipped は「照合できなかった」であって「通った」ではない。
 print(f"--- {PASS} passed, {len(SKIPPED)} skipped, {FAIL} failed ---")

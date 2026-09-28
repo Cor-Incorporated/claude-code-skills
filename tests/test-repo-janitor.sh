@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # scripts/repo-janitor.sh deletes only what entered the base branch 7 or more days ago
 # (rules/git-workflow.md「機械掃除は マージ済み + 7 日 限定」) and, for worktrees and branches with no
-# commits of their own, only what was created 7 or more days ago. It never lists origin/HEAD, never
-# touches protected branches, the worktree it runs from or was given, a branch checked out in a kept
-# worktree, or a remote branch whose open PRs gh cannot confirm; it passes -R owner/repo to gh,
-# deletes remote branches before local ones (so git branch -d is not refused by an upstream it is
-# ahead of), guards each remote delete with --force-with-lease, reports refusals with git's reason,
-# and stops when it cannot cd.
+# commits of their own, only what was created and first seen in the base 7 or more days ago. It never
+# lists origin/HEAD, never touches protected branches, the worktree it runs from or was given, a
+# branch checked out in a kept worktree, a worktree holding ignored files that the handover criteria
+# do not list as regenerable, or a remote branch whose open PRs (in origin or its fork parent) gh
+# cannot rule out; it picks the base after fetching, keeps remote branches when fetch fails, passes
+# -R owner/repo to gh, deletes remote branches before local ones (so git branch -d is not refused by
+# an upstream it is ahead of), guards each remote delete with --force-with-lease, reports refusals
+# with git's reason, and stops when it cannot cd.
 # Everything runs in throwaway repositories under mktemp with gh stubbed; --apply runs only there.
 # The test also writes mutants of the janitor and runs itself against each one
 # (JANITOR_UNDER_TEST) to show that the check pinning that behavior fails without it.
@@ -44,20 +46,31 @@ git config --global commit.gpgsign false
 git config --global init.defaultBranch develop
 git config --global advice.detachedHead false
 
-# gh stub for `gh pr list ... --head <branch> --state open --json number -q length`: prints the
-# number of open PRs (1 for branches in FAKE_GH_OPEN, else 0), fails for branches in FAKE_GH_FAIL,
-# and appends its arguments to GH_LOG when that is set.
+# gh stub. `gh repo view ...` prints FAKE_GH_PARENT (fails when FAKE_GH_PARENT_FAIL is set).
+# `gh pr list [-R <repo>] --head <branch> --state open --json number -q length` prints 1 for branches
+# in FAKE_GH_OPEN or <repo>:<branch> pairs in FAKE_GH_OPEN_AT, else 0, and fails for branches in
+# FAKE_GH_FAIL. Every call appends its arguments to GH_LOG when that is set.
 mkdir -p "$SB/bin"
 cat >"$SB/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 [ -n "${GH_LOG:-}" ] && printf '%s\n' "$*" >>"$GH_LOG"
+if [ "${1:-}" = repo ] && [ "${2:-}" = view ]; then
+  [ -n "${FAKE_GH_PARENT_FAIL:-}" ] && exit 1
+  printf '%s\n' "${FAKE_GH_PARENT:-}"
+  exit 0
+fi
 head=""
+repo=""
 while [ $# -gt 0 ]; do
-  [ "$1" = --head ] && head="${2:-}"
+  case "$1" in
+    --head) head="${2:-}" ;;
+    -R) repo="${2:-}" ;;
+  esac
   shift
 done
 for b in ${FAKE_GH_FAIL:-}; do [ "$b" = "$head" ] && exit 1; done
 for b in ${FAKE_GH_OPEN:-}; do [ "$b" = "$head" ] && { echo 1; exit 0; }; done
+for b in ${FAKE_GH_OPEN_AT:-}; do [ "$b" = "$repo:$head" ] && { echo 1; exit 0; }; done
 echo 0
 EOF
 chmod +x "$SB/bin/gh"
@@ -104,7 +117,9 @@ not_matching() { # <extended regex> <text>
 
 git init -q --bare "$O"
 git clone -q "$O" "$R" 2>/dev/null
-at 30 -C "$R" commit -q --allow-empty -m init
+printf '*.log\n__pycache__/\n' >"$R/.gitignore"
+git -C "$R" add .gitignore
+at 30 -C "$R" commit -q -m init
 git -C "$R" push -q origin develop
 git -C "$R" remote set-head origin develop
 
@@ -117,7 +132,7 @@ git -C "$R" push -q -u origin ahead
 at 14 -C "$R" commit -q --allow-empty -m ahead-2
 git -C "$R" checkout -q develop
 merge ahead 11
-for b in wt-old-br dirty-br self-br resume-br gh-down; do
+for b in wt-old-br dirty-br self-br resume-br log-br gh-down; do
   feature "$b" 13
   merge "$b" 11
 done
@@ -125,21 +140,33 @@ feature mainlike 14
 merge mainlike 13
 feature open-pr 12
 merge open-pr 10
-# ff-old: a develop commit from 10 days ago (created then), directly followed by a merge from 1 day ago
+# ff-old: a develop commit from 10 days ago (created, and pushed to origin/develop, then),
+# directly followed by a merge from 1 day ago
 at 10 -C "$R" commit -q --allow-empty -m direct
 at 10 -C "$R" branch ff-old
+at 10 -C "$R" push -q origin develop
 feature new-merged 2
 merge new-merged 1
 feature wt-new-br 2
 merge wt-new-br 1
+# ffnew: an old commit on an old branch, fast-forwarded into develop and pushed today
+at 15 -C "$R" checkout -q -b ffnew develop
+at 15 -C "$R" commit -q --allow-empty -m ffnew
+git -C "$R" checkout -q develop
+git -C "$R" merge -q --ff-only ffnew
 git -C "$R" push -q origin develop old-merged open-pr new-merged gh-down
 git -C "$R" push -q origin mainlike:refs/heads/main
 at 10 -C "$R" push -q origin ff-old
 at 11 -C "$R" worktree add -q "$W/wt-old" wt-old-br
+mkdir -p "$W/wt-old/__pycache__"
+printf 'x' >"$W/wt-old/__pycache__/mod.cpython-311.pyc"
 git -C "$R" worktree add -q "$W/wt-new" wt-new-br
 at 11 -C "$R" worktree add -q "$W/dirty" dirty-br
 printf 'work in progress\n' >"$W/dirty/notes.txt"
 at 11 -C "$R" worktree add -q "$W/self" self-br
+# an ignored raw log is evidence, not a regenerable artifact
+at 11 -C "$R" worktree add -q "$W/logwt" log-br
+printf 'raw evidence\n' >"$W/logwt/run.log"
 # created today: a worktree on an old merged branch, and a worktree and a branch with no own commits
 git -C "$R" worktree add -q "$W/resume" resume-br
 git -C "$R" worktree add -q -b fresh "$W/fresh" ff-old
@@ -174,8 +201,12 @@ check "dry-run keeps the worktree whose branch entered develop 1 day ago" \
 check "dry-run lists the branch that entered develop 12 days ago" matching '- 削除候補: old-merged（' "$SB/dry.log"
 check "dry-run lists a branch whose tip is itself a develop commit from 10 days ago" \
   matching '- 削除候補: ff-old（' "$SB/dry.log"
+check "dry-run keeps a branch fast-forwarded into develop today" \
+  matching '- KEEP \(no own commits, first seen in origin/develop [0-9-]{10}, .*\): ffnew$' "$SB/dry.log"
 check "dry-run lists the merged worktree and its branch" matching '- 削除候補: .*/wt-old \[wt-old-br\]' "$SB/dry.log"
 check "dry-run lists the branch of the worktree it removes" matching '- 削除候補: wt-old-br（' "$SB/dry.log"
+check "dry-run skips a worktree with an ignored file that is not regenerable" \
+  matching '- SKIP \(ignore されたファイルがある: run\.log' "$SB/dry.log"
 check "dry-run skips the remote branch with an open PR" matching '- SKIP \(open PRあり\): origin/open-pr' "$SB/dry.log"
 check "dry-run skips a remote branch whose PRs cannot be checked" \
   matching '- SKIP \(open PR の有無を確かめられない\): origin/gh-down' "$SB/dry.log"
@@ -201,16 +232,18 @@ check "the janitor ignores GIT_DIR inherited from the caller" grep -qF -- '- 削
 (cd "$W/self" && bash "$JANITOR" "$R" --apply --remote) >"$SB/apply.log" 2>&1
 rc=$?
 check "--apply exits 0" [ "$rc" -eq 0 ]
-check "--apply removes the old worktree" [ ! -e "$W/wt-old" ]
+check "--apply removes the old worktree (its only ignored files are regenerable)" [ ! -e "$W/wt-old" ]
 check "--apply keeps the new worktree" [ -d "$W/wt-new" ]
 check "--apply keeps the worktree it runs from" [ -d "$W/self" ]
 check "--apply keeps a worktree created today on an old merged branch" [ -d "$W/resume" ]
 check "--apply keeps a worktree created today with no commits of its own" [ -d "$W/fresh" ]
+check "--apply keeps a worktree with an ignored file that is not regenerable" [ -f "$W/logwt/run.log" ]
 check "--apply keeps the dirty worktree" [ -f "$W/dirty/notes.txt" ]
 check "--apply deletes the old local branches" lacks "$R" old-merged ff-old wt-old-br mainlike
 check "--apply keeps the new local branches" has "$R" new-merged wt-new-br
-check "--apply keeps the branches of kept worktrees" has "$R" dirty-br self-br resume-br fresh
+check "--apply keeps the branches of kept worktrees" has "$R" dirty-br self-br resume-br fresh log-br
 check "--apply keeps a branch created today with no commits of its own" has "$R" fresh-br
+check "--apply keeps a branch fast-forwarded into develop today" has "$R" ffnew
 check "--apply --remote deletes a local branch that was ahead of its upstream" lacks "$R" ahead
 check "--apply deletes the old remote branches" lacks "$O" old-merged ff-old ahead lagging
 check "--apply keeps the new remote branch" has "$O" new-merged
@@ -244,22 +277,62 @@ bash "$JANITOR" "$L/repo" --apply --remote >"$SB/lease.log" 2>&1
 check "--apply --remote keeps a remote branch that moved after the fetch" has "$L/origin.git" mover
 check "--apply --remote reports the stale lease" matching '- FAILED: origin/mover — .*stale info' "$SB/lease.log"
 
-# gh gets -R owner/repo for a GitHub origin (fetch is refused offline; the refs are local).
+# A failed fetch means the plan is stale: remote branches must be kept.
+F="$SB/fetchfail"
+git init -q --bare "$F/origin.git"
+git clone -q "$F/origin.git" "$F/repo" 2>/dev/null
+at 30 -C "$F/repo" commit -q --allow-empty -m init
+git -C "$F/repo" checkout -q -b fb
+at 13 -C "$F/repo" commit -q --allow-empty -m fb
+git -C "$F/repo" checkout -q develop
+at 11 -C "$F/repo" merge -q --no-ff -m "merge fb" fb
+git -C "$F/repo" push -q origin develop fb
+git -C "$F/repo" remote set-url origin "$F/missing.git"
+git -C "$F/repo" remote set-url --push origin "$F/origin.git"
+bash "$JANITOR" "$F/repo" --apply --remote >"$SB/fetchfail.log" 2>&1
+check "--apply --remote keeps remote branches when fetch fails" has "$F/origin.git" fb
+check "--apply --remote says why it kept them" matching '- SKIP \(fetch に失敗したので消さない\): origin/fb' "$SB/fetchfail.log"
+
+# The base branch is picked after fetching: develop created on origin since the last fetch counts.
+N="$SB/newbase"
+git init -q --bare "$N/origin.git"
+git -C "$N/origin.git" symbolic-ref HEAD refs/heads/main
+git init -q -b main "$N/seed"
+at 30 -C "$N/seed" commit -q --allow-empty -m init
+git -C "$N/seed" remote add origin "$N/origin.git"
+git -C "$N/seed" push -q origin main
+git clone -q "$N/origin.git" "$N/repo" 2>/dev/null
+git -C "$N/seed" checkout -q -b develop
+at 20 -C "$N/seed" commit -q --allow-empty -m develop
+git -C "$N/seed" push -q origin develop
+out=$(bash "$JANITOR" "$N/repo" 2>&1)
+check "dry-run picks the base branch after fetching" grep -qF -- '基準ブランチ: origin/develop（' <<<"$out"
+
+# gh gets -R owner/repo for a GitHub origin, and also looks at the fork's parent. The GitHub URLs
+# are rewritten to a local origin with insteadOf, so fetch works offline.
 G="$SB/ghrepo"
-git init -q "$G"
-at 30 -C "$G" commit -q --allow-empty -m init
-git -C "$G" checkout -q -b oldbr
-at 13 -C "$G" commit -q --allow-empty -m oldbr
-git -C "$G" checkout -q develop
-at 11 -C "$G" merge -q --no-ff -m "merge oldbr" oldbr
-git -C "$G" update-ref refs/remotes/origin/develop develop
-git -C "$G" update-ref refs/remotes/origin/oldbr oldbr
-git -C "$G" remote add origin https://github.com/acme/widgets.git
-GIT_ALLOW_PROTOCOL=file GH_LOG="$SB/gh-https.log" bash "$JANITOR" "$G" >/dev/null 2>&1
+git init -q --bare "$G/origin.git"
+git clone -q "$G/origin.git" "$G/repo" 2>/dev/null
+at 30 -C "$G/repo" commit -q --allow-empty -m init
+git -C "$G/repo" checkout -q -b oldbr
+at 13 -C "$G/repo" commit -q --allow-empty -m oldbr
+git -C "$G/repo" checkout -q develop
+at 11 -C "$G/repo" merge -q --no-ff -m "merge oldbr" oldbr
+git -C "$G/repo" push -q origin develop oldbr
+git -C "$G/repo" config url."$G/origin.git".insteadOf https://github.com/acme/widgets.git
+git -C "$G/repo" config --add url."$G/origin.git".insteadOf git@github.com:acme/widgets.git
+git -C "$G/repo" remote set-url origin https://github.com/acme/widgets.git
+GH_LOG="$SB/gh-https.log" bash "$JANITOR" "$G/repo" >/dev/null 2>&1
 check "gh gets -R owner/repo for an https origin" grep -qF -- '-R acme/widgets' "$SB/gh-https.log"
-git -C "$G" remote set-url origin git@github.com:acme/widgets.git
-GIT_ALLOW_PROTOCOL=file GH_LOG="$SB/gh-scp.log" bash "$JANITOR" "$G" >/dev/null 2>&1
+git -C "$G/repo" remote set-url origin git@github.com:acme/widgets.git
+GH_LOG="$SB/gh-scp.log" bash "$JANITOR" "$G/repo" >/dev/null 2>&1
 check "gh gets -R owner/repo for an scp-style origin" grep -qF -- '-R acme/widgets' "$SB/gh-scp.log"
+FAKE_GH_PARENT=acme/upstream FAKE_GH_OPEN_AT=acme/upstream:oldbr bash "$JANITOR" "$G/repo" >"$SB/gh-fork.log" 2>&1
+check "dry-run skips a branch with an open PR in the fork's parent" \
+  matching '- SKIP \(open PRあり\): origin/oldbr' "$SB/gh-fork.log"
+FAKE_GH_PARENT_FAIL=1 bash "$JANITOR" "$G/repo" >"$SB/gh-noparent.log" 2>&1
+check "dry-run skips remote branches when the fork parent cannot be checked" \
+  matching '- SKIP \(open PR の有無を確かめられない\): origin/oldbr' "$SB/gh-noparent.log"
 
 # A path that cannot be entered must stop the janitor, not clean the current directory's repo.
 out=$(cd "$R" && bash "$JANITOR" "$SB/no-such-dir" 2>&1)
@@ -307,6 +380,11 @@ PY
   caught_by no-branch-creation-check "--apply keeps a branch created today with no commits of its own" \
     $'  if $ON_CHAIN && created_recently "$REPO_ROOT" "refs/heads/$br"; then\n    echo "- KEEP (no own commits, created' \
     $'  if false; then\n    echo "- KEEP (no own commits, created'
+  caught_by no-fast-forward-check "dry-run keeps a branch fast-forwarded into develop today" \
+    $'  if $ON_CHAIN && observed_young "refs/heads/$br"; then\n    echo "- KEEP (no own commits, first seen in $BASE $ENTERED, < $MIN_AGE_DAYS days or unknown): $br"' \
+    $'  if false; then\n    echo "- KEEP (no own commits, first seen in $BASE $ENTERED, < $MIN_AGE_DAYS days or unknown): $br"'
+  caught_by ignored-files-removed "--apply keeps a worktree with an ignored file that is not regenerable" \
+    '    if [ -n "$ignored" ]; then' '    if false; then'
   caught_by removes-its-own-worktree "--apply keeps the worktree it runs from" \
     '  if [ -n "$real" ]; then' '  if false; then'
   caught_by protected-remote-deleted "--apply keeps origin/main" \
@@ -316,7 +394,15 @@ PY
   caught_by no-gh-repo "gh gets -R owner/repo for an https origin" \
     '[ -n "$origin_slug" ] && GH_REPO_ARGS=(-R "$origin_slug")' ':'
   caught_by gh-failure-deletes "--apply keeps a remote branch whose PRs cannot be checked" \
-    '--json number -q length 2>/dev/null) || open=""' '--json number -q length 2>/dev/null) || open=0'
+    $'\n    --json number -q length 2>/dev/null) || open=""' $'\n    --json number -q length 2>/dev/null) || open=0'
+  caught_by no-parent-check "dry-run skips a branch with an open PR in the fork's parent" \
+    '  if [ "$open" = 0 ] && [ -n "$GH_PARENT" ]; then' '  if false; then'
+  caught_by fetch-failure-ignored "--apply --remote keeps remote branches when fetch fails" \
+    $'  FETCH_OK=false\n' $'  FETCH_OK=true\n'
+  fetch_block=$'FETCH_OK=true\ngit fetch --prune origin >/dev/null 2>&1 || {\n  FETCH_OK=false\n  echo "WARN: fetch失敗（オフライン?）。ローカル情報のみで判定し、リモートは消さない。"\n}\n'
+  base_block=$'\n# 統合ブランチの決定 (develop 優先)。fetch の後で選ぶ（前回の fetch 以降に作られた develop を見落とさない）\nif git show-ref --verify --quiet refs/remotes/origin/develop; then BASE=origin/develop\nelif git show-ref --verify --quiet refs/remotes/origin/main; then BASE=origin/main\nelse BASE=origin/master; fi\nBASE_NAME=${BASE#origin/}\n'
+  caught_by base-before-fetch "dry-run picks the base branch after fetching" \
+    "$fetch_block$base_block" "$base_block$fetch_block"
   caught_by no-lease "--apply --remote keeps a remote branch that moved after the fetch" \
     'git push --force-with-lease="refs/heads/$br:${REMOTE_SHA[$i]}" origin --delete "$br"' \
     'git push origin --delete "$br"'

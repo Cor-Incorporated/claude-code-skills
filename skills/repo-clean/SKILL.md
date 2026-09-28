@@ -39,14 +39,21 @@ description: "Safely clean up merged worktrees, local branches, and remote branc
 - worktree と、自分のコミットが無いブランチ（先端が基準ブランチの first-parent 上にある。develop から
   作ったばかりのブランチなど）は、作られてから 7 日未満なら消さない。作られた日は reflog の最も古い
   記録で測り、分からなければ消さない（`KEEP (worktree created …)` / `KEEP (no own commits, …)`）
-- 入った日は「基準ブランチに入ったコミットの日付」で、origin/develop が動いた日ではない。fast-forward や、
-  ローカルで作ったマージを後から push した場合は、実際より古く見える
+- 入った日は「基準ブランチに入ったコミットの日付」。自分のコミットが無い先端（fast-forward で入った
+  ものを含む）は、コミットの日付では分からないので、手元の `origin/<base>` の reflog で初めてそれを
+  含んだ日も 7 日以上前であることを求める（`KEEP (no own commits, first seen in …)`）。ローカルで
+  作ったマージを後から push した場合は、実際より古く見える（既知の制限）
+- ignore されたファイルがある worktree は、handover の撤収基準 3 が「再生成可能」と列挙したもの
+  （`**/__pycache__/**`, `*.pyc`）以外があれば消さない（`git worktree remove` は ignore されたファイルも
+  一緒に消す）。列挙は `skills/handover/common-clauses.md` の表が正で、pair19 が janitor と照合する
 - ローカル削除は `git branch -d` のみ（`-D` 強制削除は使わない）→ 未マージなら git 側が拒否する
 - `--apply --remote` はリモート → ローカルの順に消す。upstream が残っていると、基準ブランチに
   入っていても upstream より先に進んだブランチを `git branch -d` が拒否するため
-- リモートは open PR が無いことを gh で確かめてから消す。確かめられなければ（gh が無い・未認証など）
-  `SKIP (open PR の有無を確かめられない)` として残す。消すときは `--force-with-lease` で、fetch した
-  先端から動いていないことを確かめる
+- リモートは open PR が無いことを gh で確かめてから消す。origin が fork なら親リポジトリの PR も見る。
+  確かめられなければ（gh が無い・未認証・親が分からないなど）`SKIP (open PR の有無を確かめられない)` と
+  して残す。消すときは `--force-with-lease` で、fetch した先端から動いていないことを確かめる
+- fetch に失敗したらリモートは消さない（`SKIP (fetch に失敗したので消さない)`）。基準ブランチは fetch の
+  後で選ぶ
 - `origin/HEAD` は基準ブランチの別名なので、リモートの一覧に出さない
 - repo のパスへ移動できなければ何もせず終了する（今いるディレクトリを掃除しない）
 - 渡したパスの worktree と、呼び出し元がいる worktree は消さない（`SKIP (この実行が使っている worktree)`）
