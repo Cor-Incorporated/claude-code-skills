@@ -702,17 +702,12 @@ def apply_meter(state, records, measured):
     # setdefault kept the empty value and blocked a valid resume after a transition.
     if not state.get("budget_scope_session_id"):
         state["budget_scope_session_id"] = state.get("session_id") or SID
-    if state.get("budget_scope_model_pending"):
-        # Confirm a scope reset without a model only from the current hook payload.
-        # The metered model can come from an older transcript turn (measure_spend
-        # reads the last "model" string) or from state["model"] (the old scope), and
-        # pinning either would let a later resume pass as a model change (#402).
-        # Only the resumed session may confirm it: a late call from the old session
-        # (same delegation) reports the old session's model.
-        if PAYLOAD_MODEL and SID and SID == state.get("budget_scope_session_id"):
-            state["budget_scope_model"] = PAYLOAD_MODEL
-            state.pop("budget_scope_model_pending", None)
-    elif not state.get("budget_scope_model"):
+    # A scope reset by a prompt without a model stays unconfirmed for the rest of
+    # the epoch (#402). Later observations cannot be attributed to the resumed turn:
+    # the metered model can come from an older transcript turn, and hook events from
+    # older turns or the old session can arrive late. Confirming from any of them
+    # let a later resume pass as a model change (Codex review of #403).
+    if not state.get("budget_scope_model_pending") and not state.get("budget_scope_model"):
         state["budget_scope_model"] = state.get("model") or model
     state["model"] = model
     state["session_id"] = SID or state.get("session_id", "")
@@ -1010,9 +1005,9 @@ def resume_epoch(state, path):
         return None
     previous_sid = state.get("budget_scope_session_id") or state.get("session_id") or state.get("first_prompt_session_id") or ""
     if state.get("budget_scope_model_pending"):
-        # The scope was reset by a prompt without a model and no tool call has
-        # confirmed the new model yet. The last observed model belongs to the old
-        # scope, so it cannot evidence a model change here (#402).
+        # The scope was reset by a prompt without a model, so its model is unknown
+        # for this epoch. Nothing can evidence a model change; a session change still
+        # can (#402).
         previous_model = ""
     else:
         previous_model = state.get("budget_scope_model") or state.get("model") or state.get("first_prompt_model") or ""
@@ -1079,10 +1074,10 @@ def resume_epoch(state, path):
         state["budget_scope_model"] = PAYLOAD_MODEL
         state.pop("budget_scope_model_pending", None)
     else:
-        # The prompt carried no model: the new scope's model stays unknown until the
-        # resumed session's own hook payload reports one (apply_meter). Storing the
-        # old model here let a later resume in the same session pass as a model
-        # change (#402).
+        # The prompt carried no model: the new scope's model stays unknown for the
+        # rest of this epoch (see apply_meter), so only a session change can grant
+        # the next one. Storing the old model here let a later resume in the same
+        # session pass as a model change (#402).
         state["budget_scope_model"] = ""
         state["budget_scope_model_pending"] = True
     state["last_warn_80"] = 0
@@ -1347,14 +1342,6 @@ def run_locked(delegation, path):
             turn_models[TURN_ID] = PAYLOAD_MODEL
             state["turn_models"] = dict(list(turn_models.items())[-128:])
         reason = resume_epoch(state, path)
-        # A model-bearing prompt from the resumed session confirms a pending scope,
-        # but only after its own resume decision, so it never serves as its own
-        # "previous" model. Otherwise a scope left pending by model-less payloads
-        # could never recognize a later authorized model change (#402).
-        if (not reason and state.get("budget_scope_model_pending") and PAYLOAD_MODEL
-                and SID and SID == state.get("budget_scope_session_id")):
-            state["budget_scope_model"] = PAYLOAD_MODEL
-            state.pop("budget_scope_model_pending", None)
         if SID and not state.get("first_prompt_session_id"):
             state["first_prompt_session_id"] = SID
         if PAYLOAD_MODEL and not state.get("first_prompt_model"):
