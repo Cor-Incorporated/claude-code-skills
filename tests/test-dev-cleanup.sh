@@ -99,6 +99,12 @@ repo "$D/oldrepo" 200 .gitignore
 g -C "$D/oldrepo" worktree add -q "$D/oldrepo/.worktrees/claude/feat" -b feat
 commit_at "$D/oldrepo/.worktrees/claude/feat" 1
 cache "$D/oldrepo/.worktrees/claude/feat"
+# an old checkout whose only recent commit is on a branch that is not checked out anywhere
+# (no worktree, so the result cannot depend on which path is judged first)
+repo "$D/branchonly" 200
+g -C "$D/branchonly" checkout -q -b recent
+commit_at "$D/branchonly" 1
+g -C "$D/branchonly" checkout -q -
 # an old repository whose worktree has an uncommitted edit
 mkdir -p "$D/wiprepo"
 ignore_worktrees "$D/wiprepo"
@@ -172,6 +178,8 @@ check "--apply keeps an active worktree's cache inside an old repository" \
   [ -d "$D/oldrepo/.worktrees/claude/feat/node_modules" ]
 check "--apply keeps the old repository's own cache while its worktree is active" \
   [ -d "$D/oldrepo/node_modules" ]
+check "--apply keeps the cache of an old checkout whose other branch has a recent commit" \
+  [ -d "$D/branchonly/node_modules" ]
 check "--apply keeps the cache of a worktree with an uncommitted edit" \
   [ -d "$D/wiprepo/.worktrees/claude/wip/node_modules" ]
 check "--apply keeps the repository's own cache while its worktree has an uncommitted edit" \
@@ -247,7 +255,7 @@ PY
     'st=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null || true)'
   caught_by untracked-collapsed "dry-run lists the stale cache" \
     'status --porcelain --untracked-files=all' 'status --porcelain'
-  caught_by head-only "--apply keeps an active worktree's cache inside an old repository" \
+  caught_by head-only "--apply keeps the cache of an old checkout whose other branch has a recent commit" \
     'log -1 --all --format' 'log -1 --format'
   caught_by no-owning-root "--apply keeps an active repository's cache inside a plain folder" \
     'root=$(owning_root "$t" "$project")' 'root=$project'
