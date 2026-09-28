@@ -166,6 +166,8 @@ git -C "$D/brokenstatus" config status.showUntrackedFiles bogus
 # an old repository with an active checkout inside packages/app/node_modules/
 repo "$D/archnested" 200
 repo "$D/archnested/packages/app/node_modules/dep" 1
+# a folder outside git with an active checkout nine levels down
+repo "$D/deepnested/a/b/c/d/e/f/g/h/inner" 1
 
 DEV_DIR="$D" bash "$SCRIPT" >"$SB/dry.log" 2>&1
 rc=$?
@@ -233,6 +235,8 @@ check "dry-run does not suggest archiving a repository with an active one under 
   not_listed "ARCHIVE.*: parentdata " "$SB/dry.log"
 check "dry-run does not suggest archiving a repository with an active checkout inside node_modules/" \
   not_listed "ARCHIVE.*: archnested " "$SB/dry.log"
+check "dry-run does not suggest archiving a folder with an active checkout nine levels down" \
+  not_listed "ARCHIVE.*: deepnested " "$SB/dry.log"
 check "--apply keeps a cache that holds an active checkout" [ -d "$D/archnested/packages/app/node_modules/dep/.git" ]
 
 # The caller's git environment must not redirect the checks to another repository.
@@ -344,12 +348,15 @@ PY
     '      [ -z "$tracked" ] || continue' '      :'
   caught_by archive-prunes-target \
     "dry-run does not suggest archiving a repository with an active one under a non-build target/" \
-    'roots=$(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" -name .git -print -prune 2>/dev/null)' \
-    'roots=$(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" \( -type d -name target -prune \) -o \( -name .git -print -prune \) 2>/dev/null)'
+    'roots=$(find "$1" -mindepth 2 -name .git -print -prune 2>/dev/null)' \
+    'roots=$(find "$1" -mindepth 2 \( -type d -name target -prune \) -o \( -name .git -print -prune \) 2>/dev/null)'
   caught_by archive-prunes-caches \
     "dry-run does not suggest archiving a repository with an active checkout inside node_modules/" \
-    'roots=$(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" -name .git -print -prune 2>/dev/null)' \
-    'roots=$(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" \( -type d -name node_modules -prune \) -o \( -name .git -print -prune \) 2>/dev/null)'
+    'roots=$(find "$1" -mindepth 2 -name .git -print -prune 2>/dev/null)' \
+    'roots=$(find "$1" -mindepth 2 \( -type d -name node_modules -prune \) -o \( -name .git -print -prune \) 2>/dev/null)'
+  caught_by archive-depth-limit "dry-run does not suggest archiving a folder with an active checkout nine levels down" \
+    'roots=$(find "$1" -mindepth 2 -name .git -print -prune 2>/dev/null)' \
+    'roots=$(find "$1" -mindepth 2 -maxdepth 7 -name .git -print -prune 2>/dev/null)'
   caught_by archive-ignores-nested "dry-run does not suggest archiving a folder with an active repository inside" \
     'if archivable "$dir" "$ARCHIVE_DAYS"; then' 'if is_stale "$dir" "$ARCHIVE_DAYS"; then'
   caught_by git-env-inherited "--apply ignores GIT_DIR inherited from the caller" \

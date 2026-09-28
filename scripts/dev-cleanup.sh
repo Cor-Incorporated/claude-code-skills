@@ -96,12 +96,13 @@ unset 'prune_args[${#prune_args[@]}-1]'
 
 # archivable <プロジェクト> <日数>: プロジェクトが古く、中にあるリポジトリもすべて古いときだけ 0。
 # git 管理外のフォルダでも、中に使用中のリポジトリがあれば _archive へ移す提案はしない。
-# 成果物（node_modules/ など）の中の checkout も探す。中を全部探せなければ（読めないディレクトリが
+# 成果物（node_modules/ など）の中の checkout も、深さの上限なしで探す（提案は 180 日以上古い
+# プロジェクトにだけ出すので、全部探しても重くならない）。中を全部探せなければ（読めないディレクトリが
 # ある等）提案しない
 archivable() {
   local g roots
   is_stale "$1" "$2" || return 1
-  roots=$(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" -name .git -print -prune 2>/dev/null) || return 1
+  roots=$(find "$1" -mindepth 2 -name .git -print -prune 2>/dev/null) || return 1
   while IFS= read -r g; do
     [ -n "$g" ] || continue
     is_stale "$(dirname "$g")" "$2" || return 1
