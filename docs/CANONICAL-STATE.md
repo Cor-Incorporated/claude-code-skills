@@ -12,7 +12,7 @@
 | Events | 6 (SessionStart / PreToolUse / PostToolUse / PostToolUseFailure / PreCompact / Stop) |
 | Hard-block PreToolUse | **4** (`git-push-guard`, `protect-branches`, `block-local-hooks-write`, plus SessionStart `validate-no-local-hooks`) |
 | Lane launch gate (PreToolUse:Bash) | **1** (`lane-launch-gate.sh` — 基点が古い / 同族修理が N=3 に達したレーンの発射を止める。tail-risk ではなく双方可逆なので既定は網ではなくコマンド位置同定。aidd-governance#91 / #88) |
-| Turn-boundary block (Stop) | **1** (`aidd-turn-boundary-stop.sh` — 未完了の非同期作業を残したままターンを終えさせない。止めるのは入力の session_id が登録したセッションと一致する持ち越しだけで、他セッション・登録元不明の分は情報として出す（台帳は全セッション共有。2026-09-28 の干渉）。PreToolUse ではないので上の hard-block 4 には数えない。aidd-governance#96 / #95) |
+| Turn-boundary block (Stop) | **1** (`aidd-turn-boundary-stop.sh` — 未完了の非同期作業を残したままターンを終えさせない。止めるのは入力の session_id が登録したセッションと一致する持ち越しで、他セッション・登録元不明の分は登録から AIDD_ASYNC_FOREIGN_TTL_HOURS（既定 2）時間たつまでは情報として出し、たったら全セッションで止める（台帳は全セッション共有。2026-09-28 の干渉。登録したセッションが終わっていれば照合する主体がいない）。PreToolUse ではないので上の hard-block 4 には数えない。aidd-governance#96 / #95) |
 | Deploy path | `setup.sh` copies hooks/rules/skills/settings from **this repo's current branch** into `~/.claude` |
 
 ### Hard blocks (tail-risk; keep)

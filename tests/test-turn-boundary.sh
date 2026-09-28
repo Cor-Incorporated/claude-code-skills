@@ -57,18 +57,20 @@ run_stop() {
   stop_payload "$active" | env "$@" bash "$hook" 2>"$SB/stop.err"
 }
 
-# seed <id> <session> — 未解決・owner 未宣言の持ち越しを 1 件、登録したセッション付きで台帳へ置く。
-# register --session を使わず保存形式へ直接書くのは、--session を解さない修正前の CLI に対しても
-# 同じ前提を作るため（修正前で実測すると登録が失敗し、「止まらない」が偽 PASS になる）。
+# seed <id> <session|-> [登録からの秒数] [kind] [owner] — 未解決の持ち越しを 1 件、保存形式へ直接置く
+# （"-" なら session の項目を持たない行 = この項目を足す前の登録）。register --session を使わないのは、
+# --session を解さない修正前の CLI に対しても同じ前提を作るため（修正前で実測すると登録が失敗し、
+# 「止まらない」が偽 PASS になる）。
 seed() {
-  python3 - "$AIDD_ASYNC_STATE" "$1" "$2" <<'PY'
+  python3 - "$AIDD_ASYNC_STATE" "$1" "$2" "${3:-0}" "${4:-cd-run}" "${5:-}" <<'PY'
 import json, os, sys, time
-state, ident, session = sys.argv[1:4]
-json.dump({"id": ident, "kind": "cd-run", "detail": "seed " + ident, "owner": "",
-           "check_cmd": "", "source": "manual", "session": session,
-           "registered_ts": int(time.time()), "resolved_ts": 0,
-           "resolved": False, "conclusion": ""},
-          open(os.path.join(state, ident + ".json"), "w", encoding="utf-8"), ensure_ascii=False)
+state, ident, session, age, kind, owner = sys.argv[1:7]
+row = {"id": ident, "kind": kind, "detail": "seed " + ident, "owner": owner,
+       "check_cmd": "", "source": "manual", "registered_ts": int(time.time()) - int(age),
+       "resolved_ts": 0, "resolved": False, "conclusion": ""}
+if session != "-":
+    row["session"] = session
+json.dump(row, open(os.path.join(state, ident + ".json"), "w", encoding="utf-8"), ensure_ascii=False)
 PY
 }
 
@@ -78,7 +80,7 @@ build_skew_cli() {
 import sys
 src, out = sys.argv[1:3]
 text = open(src, encoding="utf-8").read()
-needle = '      --session) session="${2:-}"; shift 2 ;;\n'
+needle = '      --session) need_value "$1" $#; session="$2"; shift 2 ;;\n'
 if text.count(needle) not in (0, 2):
     raise SystemExit(1)
 open(out, "w", encoding="utf-8").write(text.replace(needle, ""))
@@ -88,6 +90,30 @@ PY
 # skew_cli_ok <cli> — 版ずれ CLI の前提: unresolved は動き、unresolved --session は拒否する
 skew_cli_ok() {
   [ -f "$1" ] && bash "$1" unresolved >/dev/null 2>&1 && ! bash "$1" unresolved --session B >/dev/null 2>&1
+}
+
+ledger_lines() {
+  if [ -f "$LEDGER" ]; then wc -l <"$LEDGER" | tr -d ' '; else echo 0; fi
+}
+
+# ledger_has_since <行数> <rule> <event>: その行数より後に追記された行に rule / event があるか
+ledger_has_since() {
+  python3 - "$LEDGER" "$1" "$2" "$3" <<'PY'
+import json, os, sys
+path, start, rule, event = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+if not os.path.exists(path):
+    raise SystemExit(1)
+for i, line in enumerate(open(path, encoding="utf-8")):
+    if i < start:
+        continue
+    try:
+        row = json.loads(line)
+    except ValueError:
+        continue
+    if row.get("rule") == rule and row.get("event") == event:
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
 }
 
 ledger_has() {
@@ -421,6 +447,190 @@ rc=$?
   || bad "case17 登録元不明の扱いが違う (rc=$rc): $(cat "$SB/stop.err")"
 
 echo
+echo "=== case 18: 登録から時間がたった他セッションの未宣言の持ち越しは、全セッションで止める ==="
+echo "    登録したセッションが終わっていれば（プロセスの終了・/clear）、ほかに照合する主体がいない（#96）。"
+echo "    session_id からは「生きている別セッション」と「終わったセッション」を区別できない。"
+reset_state c18
+seed run-orphan A 10800
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 2 ]] \
+  && ok "case18 登録から 3 時間たったセッション A の未宣言の持ち越しは、セッション B も止める" \
+  || bad "case18 時間のたった他セッションの持ち越しで止まらない (rc=$rc)"
+grep -q "run-orphan" "$SB/stop.err" && grep -q "終わっている可能性" "$SB/stop.err" \
+  && ok "case18 拒否理由が「登録したセッションは終わっている可能性がある」と言う" \
+  || bad "case18 拒否理由が違う: $(cat "$SB/stop.err")"
+
+echo
+echo "=== case 19: session を持たない（この項目を足す前の）古い未宣言の持ち越しも、全セッションで止める ==="
+reset_state c19
+seed run-legacy - 10800
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 2 ]] \
+  && ok "case19 登録元不明で 3 時間たった持ち越しは止める（配備の時点で黙って素通しにしない）" \
+  || bad "case19 登録元不明の古い持ち越しで止まらない (rc=$rc)"
+
+echo
+echo "=== case 20: 「時間がたった」の閾値は AIDD_ASYNC_FOREIGN_TTL_HOURS で変えられる ==="
+reset_state c20
+seed run-ttl A 10800
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" AIDD_ASYNC_FOREIGN_TTL_HOURS=10
+rc=$?
+[[ "$rc" -eq 0 ]] \
+  && ok "case20 閾値 10 時間なら、3 時間たった他セッションの持ち越しでは止めない" \
+  || bad "case20 閾値を変えても止まった (rc=$rc)"
+
+echo
+echo "=== case 21: 登録し直しても、登録したセッションと登録時刻は変わらない ==="
+echo "    登録元を上書きできると、自分の持ち越しを別の session で登録し直すだけで停止判定から外せる。"
+reset_state c21
+bash "$ASYNC" register --id run-keep --kind cd-run --detail k --session B >/dev/null 2>&1
+ts_before=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["registered_ts"])' "$AIDD_ASYNC_STATE/run-keep.json")
+bash "$ASYNC" register --id run-keep --kind cd-run --detail k --session elsewhere >/dev/null 2>&1
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 2 ]] \
+  && ok "case21 別の session で登録し直しても、セッション B の持ち越しはセッション B を止める" \
+  || bad "case21 登録し直しで自分の持ち越しが停止判定から外れた (rc=$rc)"
+python3 - "$AIDD_ASYNC_STATE/run-keep.json" "$ts_before" <<'PY' \
+  && ok "case21 session=B・登録時刻は保ち、登録し直した側を updated_by に残す" \
+  || bad "case21 登録し直しで登録元か登録時刻が変わった: $(cat "$AIDD_ASYNC_STATE/run-keep.json")"
+import json, sys
+row = json.load(open(sys.argv[1]))
+assert row.get("session") == "B", row
+assert str(row.get("registered_ts")) == sys.argv[2], row
+assert row.get("updated_by") == "elsewhere", row
+PY
+
+echo
+echo "=== case 22: 台帳 CLI が mine / stale を返さない（--session を黙って無視する古い版）なら全件で止める ==="
+OLDCLI="$SB/oldcli"
+mkdir -p "$OLDCLI/hooks" "$OLDCLI/scripts"
+cp "$STOP_HOOK" "$OLDCLI/hooks/aidd-turn-boundary-stop.sh"
+cat >"$OLDCLI/scripts/async-work.sh" <<'EOF'
+#!/usr/bin/env bash
+# 97260e8 相当: unresolved は引数を見ず、保存した行に owned だけを付けて返す
+python3 - "${AIDD_ASYNC_STATE:?}" <<'PY'
+import glob, json, os, sys
+rows = []
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
+    row = json.load(open(path))
+    if row.get("resolved"):
+        continue
+    row["owned"] = bool(str(row.get("owner") or "").strip())
+    rows.append(row)
+print(json.dumps(rows))
+PY
+EOF
+reset_state c22
+seed run-oldcli B
+run_stop_as "$OLDCLI/hooks/aidd-turn-boundary-stop.sh" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 2 ]] \
+  && ok "case22 分類を返さない CLI でも、自分の未宣言の持ち越しで止める（素通しにしない）" \
+  || bad "case22 分類を返さない CLI で素通しになった (rc=$rc)"
+
+echo
+echo "=== case 23 (#95): 稼働レーンはセッションを問わず数える ==="
+echo "    /clear や再起動で session が変わっても、走っているレーンは減っていない（重複レーンを作らせない）。"
+reset_state c23
+seed lane-a1 A 0 lane codex-parallel
+seed lane-a2 A 0 lane codex-parallel
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" AIDD_LANE_TARGET=2
+rc=$?
+[[ "$rc" -eq 0 ]] \
+  && ok "case23 セッション A のレーン 2 本で、セッション B の目標 2 は満たされる" \
+  || bad "case23 他セッションのレーンを数えず欠員とした (rc=$rc): $(cat "$SB/stop.err")"
+
+echo
+echo "=== case 24: session_id が文字列でない・前後に空白があるときは、区別できないので全件で止める ==="
+reset_state c24
+seed run-mine24 B
+for sid in 123 '" B"' '["B"]'; do
+  printf '{"stop_hook_active":false,"session_id":%s}' "$sid" \
+    | env AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$STOP_HOOK" 2>"$SB/stop.err"
+  rc=$?
+  [[ "$rc" -eq 2 ]] \
+    && ok "case24 session_id=${sid} では全件で止める" \
+    || bad "case24 session_id=${sid} で素通しになった (rc=$rc)"
+done
+
+echo
+echo "=== case 25: 値の無いフラグは止まらずに回り続けない（exit 2） ==="
+# no_hang <説明> <cmd...>: 5 秒以内に終わり exit 2 であること
+no_hang() {
+  local desc="$1" pid rc i
+  shift
+  "$@" >/dev/null 2>&1 &
+  pid=$!
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    bad "case25 ${desc} が 5 秒たっても終わらない"
+    return
+  fi
+  wait "$pid"
+  rc=$?
+  [[ "$rc" -eq 2 ]] && ok "case25 ${desc} は exit 2" || bad "case25 ${desc} の exit が $rc"
+}
+reset_state c25
+no_hang "unresolved --session（値なし）" env AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$ASYNC" unresolved --session
+no_hang "register --id（値なし）" env AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$ASYNC" register --id
+
+echo
+echo "=== case 26: 形の違う台帳ファイル 1 件で、停止判定を素通しにしない ==="
+reset_state c26
+printf '[]\n' >"$AIDD_ASYNC_STATE/not-an-object.json"
+seed run-mine26 B
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 2 ]] \
+  && ok "case26 オブジェクトでない JSON があっても、自分の未宣言の持ち越しで止める" \
+  || bad "case26 形の違うファイル 1 件で素通しになった (rc=$rc)"
+
+echo
+echo "=== case 27: 止めるときも、他セッションの持ち越しは台帳に warn を残す ==="
+reset_state c27
+seed run-mine27 B
+seed run-other27 A
+since=$(ledger_lines)
+run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+rc=$?
+[[ "$rc" -eq 2 ]] && ledger_has_since "$since" async-work-other-session warn \
+  && ok "case27 拒否したターンでも rule=async-work-other-session event=warn 行が残る" \
+  || bad "case27 拒否したターンで他セッションの warn 行がない (rc=$rc)"
+
+echo
+echo "=== case 28: 版ずれで登録元を記録できなかったとき、台帳の行も登録元を名乗らない ==="
+reset_state c28
+since=$(ledger_lines)
+python3 -c 'import json; print(json.dumps({"session_id":"A","tool_input":{"command":"gh workflow run cd.yml"}}))' \
+  | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$SKEW/hooks/aidd-async-register.sh" >/dev/null 2>&1
+python3 - "$LEDGER" "$since" <<'PY' \
+  && ok "case28 版ずれで登録した行の subject.session は空（保存した持ち越しと一致）" \
+  || bad "case28 保存していない登録元を台帳の行が名乗っている"
+import json, sys
+rows = [json.loads(l) for i, l in enumerate(open(sys.argv[1], encoding="utf-8")) if i >= int(sys.argv[2]) and l.strip()]
+reg = [r for r in rows if r.get("rule") == "async-work-registered"]
+assert reg, "no async-work-registered row"
+assert reg[-1]["subject"].get("session", "") == "", reg[-1]
+PY
+
+echo
+echo "=== case 29: hook と台帳 CLI は /bin/bash でも構文として読める ==="
+echo "    macOS の /bin/bash 3.2 は \$( ) の中の heredoc の本文まで構文として読む。自動登録が黙って止まっていた。"
+for f in "$STOP_HOOK" "$REG_HOOK" "$ROOT/hooks/aidd-carryover-reconcile.sh" "$ASYNC"; do
+  /bin/bash -n "$f" 2>"$SB/parse.err" \
+    && ok "case29 /bin/bash -n $(basename "$f")" \
+    || bad "case29 /bin/bash -n $(basename "$f"): $(cat "$SB/parse.err")"
+done
+
+echo
 echo "=== 変異体: 条件を外すと同じシナリオが素通しすることの実測 ==="
 # 変異体はリポジトリと同じレイアウトへ置く。hooks/ の 1 つ上に scripts/ が無いと
 # hook は台帳 CLI を解決できず exit 0 で素通しするため、条件を外した効果ではなく
@@ -456,7 +666,9 @@ if mutate "$STOP_HOOK" 'if [ "$active" = "true" ]; then' 'if false; then' "$MUT/
   reset_state m2
   bash "$ASYNC" register --id run-m2 --kind cd-run --detail "open" >/dev/null
   run_stop "$MUT/noguard.sh" true AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
-  [[ "$?" -eq 2 ]] \
+  rc=$?
+  # exit 2 は bash の構文エラーでもあるので、拒否理由も確かめる
+  [[ "$rc" -eq 2 ]] && grep -q "未完了の非同期作業" "$SB/stop.err" \
     && ok "変異(stop_hook_active ガード除去) 継続中も拒否する = ガードは効いていた" \
     || bad "変異(stop_hook_active ガード除去) 何も変わらない = 無限ループ防止が無い"
 else
@@ -480,7 +692,8 @@ if mutate "$STOP_HOOK" 'unowned = [r for r in rows if not r.get("owned") and min
   reset_state m4
   seed run-m4 A
   run_stop_as "$MUT/allsessions.sh" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
-  [[ "$?" -eq 2 ]] \
+  rc=$?
+  [[ "$rc" -eq 2 ]] && grep -q "run-m4" "$SB/stop.err" \
     && ok "変異(セッションで絞らない) 他セッションの持ち越しで止まる = case11 は絞り込みが作っていた" \
     || bad "変異(セッションで絞らない) それでも止まらない = case11 は別条件が出している"
 else
@@ -492,10 +705,11 @@ if mutate "$REG_HOOK" '--source "$REGISTER_SOURCE" --session "$session"' '--sour
   reset_state m5
   python3 -c 'import json; print(json.dumps({"session_id":"A","tool_input":{"command":"gh workflow run cd.yml"}}))' \
     | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$MUTR" >/dev/null 2>&1
-  got=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r[0].get("session","") if r else "")')
-  [[ "$got" != "A" ]] \
-    && ok "変異(自動登録で session を渡さない) 登録元が A にならない（${got}）= case13 は受け渡しが作っていた" \
-    || bad "変異(自動登録で session を渡さない) それでも A = case13 は別経路が出している"
+  got=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; r=json.load(sys.stdin); print("%d:%s" % (len(r), r[0].get("session","") if r else ""))')
+  # 登録はされ（1 件）、登録元は CLI の既定（CLAUDE_CODE_SESSION_ID=t）になる。登録されないだけなら空振り
+  [[ "$got" == "1:t" ]] \
+    && ok "変異(自動登録で session を渡さない) 登録元が A でなく既定の t になる = case13 は受け渡しが作っていた" \
+    || bad "変異(自動登録で session を渡さない) 結果が ${got}（期待 1:t）= case13 は別経路が出している"
 else
   bad "変異(自動登録で session を渡さない) 対象が見つからない — 反証不能"
 fi
@@ -514,18 +728,182 @@ else
   bad "変異(版ずれ時の再照会除去) 対象が見つからない — 反証不能"
 fi
 
-if mutate "$REG_HOOK" '    || bash "$ASYNC_SH" register --id "$ident" --kind "$kind" --detail "$detail" \
-      --source "$REGISTER_SOURCE" >/dev/null 2>&1 \
-' '' "$SKEW/hooks/noretry-register.sh"; then
+if mutate "$REG_HOOK" '    bash "$ASYNC_SH" register --id "$ident" --kind "$kind" --detail "$detail" \
+      --source "$REGISTER_SOURCE" >/dev/null 2>&1 || continue
+' '    continue
+' "$SKEW/hooks/noretry-register.sh"; then
   reset_state m7
   post_payload 'gh workflow run v2-alpha-cd.yml --ref develop' \
     | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$SKEW/hooks/noretry-register.sh" >/dev/null 2>&1
   n=$(bash "$ASYNC" unresolved | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
-  [[ "$n" -eq 0 ]] \
+  # 変異体が構文として読めること（読めずに何も登録しないだけなら空振り）
+  bash -n "$SKEW/hooks/noretry-register.sh" && [[ "$n" -eq 0 ]] \
     && ok "変異(版ずれ時の再登録除去) 版ずれで自動登録が消える = case16 の登録は再登録が作っていた" \
     || bad "変異(版ずれ時の再登録除去) それでも登録される（$n 件）= case16 は別経路が出している"
 else
   bad "変異(版ずれ時の再登録除去) 対象が見つからない — 反証不能"
+fi
+
+# layout <名前> <hook> <CLI> → hook と台帳 CLI をリポジトリと同じ配置（hooks/ の隣に scripts/）へ置き、
+# hook の path を出す（hook は ../scripts/async-work.sh を使う）
+layout() {
+  local d="$SB/ml-$1"
+  mkdir -p "$d/hooks" "$d/scripts"
+  cp "$2" "$d/hooks/$(basename "$2")"
+  cp "$3" "$d/scripts/async-work.sh"
+  printf '%s\n' "$d/hooks/$(basename "$2")"
+}
+
+if mutate "$STOP_HOOK" 'orphaned = [r for r in foreign if r.get("stale")]' 'orphaned = []' "$MUT/noorphan.sh"; then
+  reset_state m8
+  seed run-m8 A 10800
+  run_stop_as "$MUT/noorphan.sh" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+  rc=$?
+  [[ "$rc" -eq 0 ]] \
+    && ok "変異(時間のたった他セッション分で止めない) case18 が素通しになる = 止めていたのはこの判定" \
+    || bad "変異(時間のたった他セッション分で止めない) それでも止まる (rc=$rc) = case18 は別条件が出している"
+else
+  bad "変異(時間のたった他セッション分で止めない) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$STOP_HOOK" 'if session and any("mine" not in r or "stale" not in r for r in rows):' 'if False:' \
+      "$OLDCLI/hooks/noskewcheck.sh"; then
+  reset_state m9
+  seed run-m9 B
+  run_stop_as "$OLDCLI/hooks/noskewcheck.sh" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+  rc=$?
+  [[ "$rc" -eq 0 ]] \
+    && ok "変異(分類の無い CLI を見分けない) case22 が素通しになる = 止めていたのはこの確認" \
+    || bad "変異(分類の無い CLI を見分けない) それでも止まる (rc=$rc) = case22 は別条件が出している"
+else
+  bad "変異(分類の無い CLI を見分けない) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$STOP_HOOK" 'lanes = [r for r in rows if r.get("kind") == "lane"]' \
+      'lanes = [r for r in rows if r.get("kind") == "lane" and mine(r)]' "$MUT/minelanes.sh"; then
+  reset_state m10
+  seed lane-m10a A 0 lane codex-parallel
+  seed lane-m10b A 0 lane codex-parallel
+  run_stop_as "$MUT/minelanes.sh" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" AIDD_LANE_TARGET=2
+  rc=$?
+  [[ "$rc" -eq 2 ]] && grep -q "目標並列度" "$SB/stop.err" \
+    && ok "変異(自分のレーンだけ数える) case23 が欠員になる = 全セッションで数えていた" \
+    || bad "変異(自分のレーンだけ数える) 何も変わらない (rc=$rc) = case23 は別条件が出している"
+else
+  bad "変異(自分のレーンだけ数える) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$STOP_HOOK" 'print(v if isinstance(v, str) and v and v == v.strip() else "")' \
+      'print(v if v is not None else "")' "$MUT/rawsession.sh"; then
+  reset_state m11
+  seed run-m11 B
+  printf '{"stop_hook_active":false,"session_id":123}' \
+    | env AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$MUT/rawsession.sh" 2>"$SB/stop.err"
+  rc=$?
+  [[ "$rc" -eq 0 ]] \
+    && ok "変異(session_id を検めない) 数値の session_id で素通しになる = case24 は検めが作っていた" \
+    || bad "変異(session_id を検めない) それでも止まる (rc=$rc) = case24 は別条件が出している"
+else
+  bad "変異(session_id を検めない) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$ASYNC" '    row["session"] = str(old.get("session") or "")
+' '' "$SB/cli-overwrite.sh"; then
+  reset_state m12
+  bash "$SB/cli-overwrite.sh" register --id run-m12 --kind cd-run --detail k --session B >/dev/null 2>&1
+  bash "$SB/cli-overwrite.sh" register --id run-m12 --kind cd-run --detail k --session elsewhere >/dev/null 2>&1
+  run_stop_as "$STOP_HOOK" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+  rc=$?
+  [[ "$rc" -eq 0 ]] \
+    && ok "変異(登録し直しで登録元を上書き) 自分の持ち越しが停止判定から外れる = case21 は保持が作っていた" \
+    || bad "変異(登録し直しで登録元を上書き) それでも止まる (rc=$rc) = case21 は別条件が出している"
+else
+  bad "変異(登録し直しで登録元を上書き) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$ASYNC" 'row["stale"] = (not row["mine"]) and (not known or now - ts >= ttl)' 'row["stale"] = False' \
+      "$SB/cli-nostale.sh"; then
+  hook=$(layout m13 "$STOP_HOOK" "$SB/cli-nostale.sh")
+  reset_state m13
+  seed run-m13 A 10800
+  run_stop_as "$hook" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+  rc=$?
+  [[ "$rc" -eq 0 ]] \
+    && ok "変異(台帳 CLI が経過時間を見ない) case18 が素通しになる = 閾値は CLI が判定していた" \
+    || bad "変異(台帳 CLI が経過時間を見ない) それでも止まる (rc=$rc) = case18 は別条件が出している"
+else
+  bad "変異(台帳 CLI が経過時間を見ない) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$ASYNC" 'need_value() { [ "$2" -ge 2 ] || die "$1 には値が要る"; }' 'need_value() { :; }' \
+      "$SB/cli-noneed.sh"; then
+  reset_state m14
+  env AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$SB/cli-noneed.sh" unresolved --session >/dev/null 2>&1 &
+  pid=$!
+  for i in 1 2 3 4 5 6; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    ok "変異(値の検めを除去) 値の無い --session で止まらなくなる = case25 は検めが作っていた"
+  else
+    wait "$pid"
+    rc=$?
+    [[ "$rc" -ne 2 ]] \
+      && ok "変異(値の検めを除去) 値の無い --session が exit ${rc} になる = case25 は検めが作っていた" \
+      || bad "変異(値の検めを除去) それでも exit 2 = case25 は別条件が出している"
+  fi
+else
+  bad "変異(値の検めを除去) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$ASYNC" '    if not isinstance(row, dict):
+        continue
+    if row.get("resolved"):' '    if row.get("resolved"):' "$SB/cli-anyrow.sh"; then
+  hook=$(layout m15 "$STOP_HOOK" "$SB/cli-anyrow.sh")
+  reset_state m15
+  printf '[]\n' >"$AIDD_ASYNC_STATE/not-an-object.json"
+  seed run-m15 B
+  run_stop_as "$hook" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+  rc=$?
+  [[ "$rc" -eq 0 ]] \
+    && ok "変異(形の違う行を飛ばさない) case26 が素通しになる = 飛ばしていたのはこの確認" \
+    || bad "変異(形の違う行を飛ばさない) それでも止まる (rc=$rc) = case26 は別条件が出している"
+else
+  bad "変異(形の違う行を飛ばさない) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$STOP_HOOK" '[ "${others_n:-0}" -gt 0 ] && append_ledger warn async-work-other-session
+' '' "$MUT/nowarn.sh"; then
+  reset_state m16
+  seed run-m16mine B
+  seed run-m16other A
+  since=$(ledger_lines)
+  run_stop_as "$MUT/nowarn.sh" B AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE"
+  ledger_has_since "$since" async-work-other-session warn \
+    && bad "変異(他セッション分の warn を書かない) それでも warn 行がある = case27 は別経路が出している" \
+    || ok "変異(他セッション分の warn を書かない) 拒否したターンの warn 行が消える = 書いていたのはこの行"
+else
+  bad "変異(他セッション分の warn を書かない) 対象が見つからない — 反証不能"
+fi
+
+if mutate "$REG_HOOK" '"$stored_session" <<'"'"'PY'"'"'' '"$session" <<'"'"'PY'"'"'' "$SKEW/hooks/claims-session.sh"; then
+  reset_state m17
+  since=$(ledger_lines)
+  python3 -c 'import json; print(json.dumps({"session_id":"A","tool_input":{"command":"gh workflow run cd.yml"}}))' \
+    | env -u AIDD_LEDGER_SOURCE AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" bash "$SKEW/hooks/claims-session.sh" >/dev/null 2>&1
+  python3 - "$LEDGER" "$since" <<'PY' \
+    && ok "変異(台帳の行に渡した session を書く) 保存していない登録元を名乗る = case28 は区別が作っていた" \
+    || bad "変異(台帳の行に渡した session を書く) 何も変わらない = case28 は別経路が出している"
+import json, sys
+rows = [json.loads(l) for i, l in enumerate(open(sys.argv[1], encoding="utf-8")) if i >= int(sys.argv[2]) and l.strip()]
+reg = [r for r in rows if r.get("rule") == "async-work-registered"]
+assert reg and reg[-1]["subject"].get("session") == "A", reg
+PY
+else
+  bad "変異(台帳の行に渡した session を書く) 対象が見つからない — 反証不能"
 fi
 
 echo

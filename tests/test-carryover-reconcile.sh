@@ -43,16 +43,16 @@ run_hook() {
     | env "$@" bash "$hook" >"$SB/out" 2>"$SB/err"
 }
 
-# seed <id> <session> — 未解決・owner 未宣言の持ち越しを 1 件、登録したセッション付きで台帳へ置く。
-# register --session を使わず保存形式へ直接書くのは、--session を解さない修正前の CLI に対しても
+# seed <id> <session> [登録からの秒数] — 未解決・owner 未宣言の持ち越しを 1 件、登録したセッション付きで
+# 台帳へ置く。register --session を使わず保存形式へ直接書くのは、--session を解さない修正前の CLI に対しても
 # 同じ前提を作るため（修正前で実測すると登録が失敗し、「止まらない」が偽 PASS になる）。
 seed() {
-  python3 - "$AIDD_ASYNC_STATE" "$1" "$2" <<'PY'
+  python3 - "$AIDD_ASYNC_STATE" "$1" "$2" "${3:-0}" <<'PY'
 import json, os, sys, time
-state, ident, session = sys.argv[1:4]
+state, ident, session, age = sys.argv[1:5]
 json.dump({"id": ident, "kind": "cd-run", "detail": "seed " + ident, "owner": "",
            "check_cmd": "", "source": "manual", "session": session,
-           "registered_ts": int(time.time()), "resolved_ts": 0,
+           "registered_ts": int(time.time()) - int(age), "resolved_ts": 0,
            "resolved": False, "conclusion": ""},
           open(os.path.join(state, ident + ".json"), "w", encoding="utf-8"), ensure_ascii=False)
 PY
@@ -64,7 +64,7 @@ build_skew_cli() {
 import sys
 src, out = sys.argv[1:3]
 text = open(src, encoding="utf-8").read()
-needle = '      --session) session="${2:-}"; shift 2 ;;\n'
+needle = '      --session) need_value "$1" $#; session="$2"; shift 2 ;;\n'
 if text.count(needle) not in (0, 2):
     raise SystemExit(1)
 open(out, "w", encoding="utf-8").write(text.replace(needle, ""))
@@ -221,10 +221,26 @@ rc=$?
 grep -q "run-other-8" "$SB/out" && grep -q "run-mine-8" "$SB/out" \
   && ok "case8 自分の分も他セッションの分も照合対象として出す（隠さない）" \
   || bad "case8 どちらかが出ない: $(cat "$SB/out")"
-n_label=$(grep -c "登録元: 別セッション（session=A）。このセッションからは resolve / owner 宣言しない" "$SB/out")
+n_label=$(grep "登録元: 別セッション（session=A、登録から " "$SB/out" | grep -c "このセッションからは resolve / owner 宣言しない")
 [[ "$n_label" -eq 1 ]] \
   && ok "case8 他セッションの分にだけ「触らない」印が 1 件付く" \
   || bad "case8 印の件数が ${n_label}（期待 1）: $(cat "$SB/out")"
+
+echo
+echo "=== case 10: 登録から時間がたった他セッションの持ち越しは、照合してよいと言う ==="
+echo "    「触らない」とだけ書くと、登録したセッションが終わった持ち越しをだれも照合しない（#96 の無人区間）。"
+reset_state c10
+seed run-old-10 A 10800
+seed run-new-10 A
+run_hook "$HOOK" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+grep "登録元: 別セッション（session=A、登録から 3.0 時間）" "$SB/out" | grep -q "終わっている可能性" \
+  && grep "登録元: 別セッション（session=A、登録から 3.0 時間）" "$SB/out" | grep -q "resolve するか、owner を宣言してよい" \
+  && ok "case10 3 時間たった他セッションの持ち越しには「終わっている可能性。照合してよい」と付ける" \
+  || bad "case10 時間のたった持ち越しの印が違う: $(cat "$SB/out")"
+n_keep=$(grep -c "このセッションからは resolve / owner 宣言しない" "$SB/out")
+[[ "$n_keep" -eq 1 ]] \
+  && ok "case10 時間のたっていない方にだけ「触らない」と付ける" \
+  || bad "case10 「触らない」の件数が ${n_keep}（期待 1）"
 
 echo
 echo "=== case 9: 台帳 CLI が --session を知らない版ずれでも沈黙しない ==="
@@ -318,6 +334,18 @@ if mutate "$HOOK" '  unresolved="$(bash "$ASYNC_SH" unresolved 2>/dev/null || tr
     || bad "変異(版ずれ時の再照会除去) それでも出る = case9 は別経路が出していた"
 else
   bad "変異(版ずれ時の再照会除去) 対象が見つからない — 反証不能"
+fi
+
+# (5) 時間のたった持ち越しの印を「触らない」に戻す -> case10 の「照合してよい」が消える
+if mutate "$HOOK" '        if r.get("stale"):' '        if False:' "$MUT/nostale.sh"; then
+  reset_state m5
+  seed run-m5 A 10800
+  run_hook "$MUT/nostale.sh" AIDD_ASYNC_STATE="$AIDD_ASYNC_STATE" HOME="$HOME"
+  grep -q "run-m5" "$SB/out" && ! grep -q "終わっている可能性" "$SB/out" \
+    && ok "変異(時間のたった持ち越しも「触らない」) 照合してよいと言わなくなる = case10 は判定が作っていた" \
+    || bad "変異(時間のたった持ち越しも「触らない」) 何も変わらない = case10 は別経路が出していた"
+else
+  bad "変異(時間のたった持ち越しも「触らない」) 対象が見つからない — 反証不能"
 fi
 
 echo
