@@ -1347,6 +1347,14 @@ def run_locked(delegation, path):
             turn_models[TURN_ID] = PAYLOAD_MODEL
             state["turn_models"] = dict(list(turn_models.items())[-128:])
         reason = resume_epoch(state, path)
+        # A model-bearing prompt from the resumed session confirms a pending scope,
+        # but only after its own resume decision, so it never serves as its own
+        # "previous" model. Otherwise a scope left pending by model-less payloads
+        # could never recognize a later authorized model change (#402).
+        if (not reason and state.get("budget_scope_model_pending") and PAYLOAD_MODEL
+                and SID and SID == state.get("budget_scope_session_id")):
+            state["budget_scope_model"] = PAYLOAD_MODEL
+            state.pop("budget_scope_model_pending", None)
         if SID and not state.get("first_prompt_session_id"):
             state["first_prompt_session_id"] = SID
         if PAYLOAD_MODEL and not state.get("first_prompt_model"):

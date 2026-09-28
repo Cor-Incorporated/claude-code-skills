@@ -174,6 +174,22 @@ with tempfile.TemporaryDirectory(prefix='h1-all-model-') as tmp:
     check(state(key).get('budget_scope_model_pending') is True,key+': another session cannot confirm the scope')
     event(key,'new','gpt-6-sol',new_path,'UserPromptSubmit','resume-again','作業を続けて下さい')
     check(state(key)['budget_epoch']==1,key+': unchanged model in the resumed session cannot regrant')
+    # A model-bearing prompt from the resumed session confirms a scope left pending
+    # by model-less payloads; otherwise a later authorized model change could never
+    # reset the epoch (Codex review of #403, round 4).
+    key='pending-prompt-confirm'
+    old_path=transcript(key,'gpt-6-sol',41000000)
+    check(decision(event(key,'old','gpt-6-sol',old_path))=='deny',key+': old session reaches the cap')
+    new_path=transcript(key+'-new','',1000)
+    event(key,'new','',new_path,'UserPromptSubmit','resume','作業を続けて下さい')
+    check(state(key)['budget_epoch']==1,key+': session change with resume grants one epoch')
+    event(key,'new','',new_path,turn='resume')
+    event(key,'new','gpt-6-sol',new_path,'UserPromptSubmit','status','進捗を教えて')
+    s=state(key)
+    check(s.get('budget_scope_model')=='gpt-6-sol' and not s.get('budget_scope_model_pending'),
+          key+': a model-bearing prompt from the resumed session confirms the scope')
+    event(key,'new','gpt-6-luna',new_path,'UserPromptSubmit','switch','作業を続けて下さい')
+    check(state(key)['budget_epoch']==2,key+': a later authorized model change still grants an epoch')
     def event_without_ids(label, model, path):
         p=dict(hook_event_name='PreToolUse',session_id='',model=model,turn_id='old',
                cwd=tmp,transcript_path=str(path),tool_name='Bash',tool_input={'command':'pwd'})
