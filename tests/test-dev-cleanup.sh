@@ -8,13 +8,15 @@
 # yet — and a failure that stops the sweep or is reported as freed. It also pins caches that must
 # be found: deep inside a worktree, inside a stale repository nested in an active one, and under a
 # target/ that is not a build directory.
-# DEV_SCRIPT points the checks at another copy of the script (e.g. a mutated one) so they can be
-# shown to fail.
+# The test writes mutants of the script and runs itself against each one (DEV_SCRIPT) to show that
+# the check pinning each behavior fails without it.
 set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SCRIPT="${DEV_SCRIPT:-$ROOT/scripts/dev-cleanup.sh}"
+SELF="$ROOT/tests/$(basename "$0")"
+SRC="$ROOT/scripts/dev-cleanup.sh"
+SCRIPT="${DEV_SCRIPT:-$SRC}"
 SB=$(mktemp -d) || exit 1
 trap 'chmod -R u+rwx "$SB" 2>/dev/null; rm -rf "$SB"' EXIT
 pass=0
@@ -129,6 +131,12 @@ repo "$D/data" 100
 cache "$D/data" target
 cache "$D/data" venv
 cache "$D/data/target/web"
+# an old repository that commits a file under node_modules/ and has an uncommitted edit to it
+repo "$D/trackedcache" 100 node_modules/patch.js
+printf 'edited\n' >>"$D/trackedcache/node_modules/patch.js"
+# an old repository where git status fails (git log still works)
+repo "$D/brokenstatus" 100
+git -C "$D/brokenstatus" config status.showUntrackedFiles bogus
 
 DEV_DIR="$D" bash "$SCRIPT" >"$SB/dry.log" 2>&1
 rc=$?
@@ -173,8 +181,15 @@ check "--apply keeps the active parent's own cache" [ -d "$D/activeparent/node_m
 check "--apply keeps a linked worktree's cache" [ -d "$D/linked/node_modules" ]
 check "--apply keeps target/ without Cargo.toml or pom.xml" [ -d "$D/data/target" ]
 check "--apply keeps venv/ without pyvenv.cfg" [ -d "$D/data/venv" ]
+check "--apply keeps a cache holding a tracked file with an uncommitted edit" \
+  [ -f "$D/trackedcache/node_modules/patch.js" ]
+check "--apply keeps the cache of a repository whose status cannot be read" [ -d "$D/brokenstatus/node_modules" ]
 check "--apply does not suggest archiving the repository with no commits" \
   not_listed "ARCHIVE.*: unborn " "$SB/apply.log"
+check "dry-run suggests archiving a folder outside git with no repository inside" \
+  grep -q "ARCHIVE.*: plain " "$SB/dry.log"
+check "dry-run does not suggest archiving a folder with an active repository inside" \
+  not_listed "ARCHIVE.*: group " "$SB/dry.log"
 
 # An unreadable or undeletable cache must neither stop the sweep nor count as freed.
 if [ "$(id -u)" -eq 0 ]; then
@@ -199,6 +214,55 @@ else
     not_listed "DELETED .*alpha/node_modules" "$SB/perm-apply.log"
   check "--apply counts only what it deleted" \
     grep -q "合計: $(deleted_total "$SB/perm-apply.log") MB" "$SB/perm-apply.log"
+fi
+
+# Mutants: each removes one behavior; the check that pins it must fail.
+# The old/new texts below are literal script source, so they must not expand.
+# shellcheck disable=SC2016
+if [ -z "${DEV_SCRIPT:-}" ]; then
+  # caught_by <name> <expected FAIL line> <old text> <new text>
+  caught_by() {
+    local m="$SB/mutant-$1.sh" out
+    if ! python3 - "$SRC" "$m" "$3" "$4" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+text = open(src, encoding="utf-8").read()
+if text.count(old) != 1:
+    sys.exit(f"expected one occurrence, found {text.count(old)}")
+open(dst, "w", encoding="utf-8").write(text.replace(old, new))
+PY
+    then
+      check "mutant $1 can be written" false
+      return
+    fi
+    out=$(DEV_SCRIPT="$m" bash "$SELF" 2>&1)
+    check "mutant $1 is caught by: $2" grep -qF "FAIL: $2" <<<"$out"
+  }
+  caught_by no-dirty-check "--apply keeps the cache of a worktree with an uncommitted edit" \
+    'if [ -n "$work" ]; then rc=1; break; fi' ':'
+  caught_by tracked-edits-filtered "--apply keeps a cache holding a tracked file with an uncommitted edit" \
+    "UNTRACKED_CACHE_RE='^\\?\\? (.*/)?(" "UNTRACKED_CACHE_RE='^...(.*/)?("
+  caught_by status-failure-ignored "--apply keeps the cache of a repository whose status cannot be read" \
+    'if ! st=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null); then rc=1; break; fi' \
+    'st=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null || true)'
+  caught_by untracked-collapsed "dry-run lists the stale cache" \
+    'status --porcelain --untracked-files=all' 'status --porcelain'
+  caught_by head-only "--apply keeps an active worktree's cache inside an old repository" \
+    'log -1 --all --format' 'log -1 --format'
+  caught_by no-owning-root "--apply keeps an active repository's cache inside a plain folder" \
+    'root=$(owning_root "$t" "$project")' 'root=$project'
+  caught_by gate-on-top-level "--apply deletes a stale repository's cache inside an active one" \
+    '  sweep "$dir" "$MAX_DEPTH" "$dir"' '  if is_stale "$dir" "$STALE_DAYS"; then sweep "$dir" "$MAX_DEPTH" "$dir"; fi'
+  caught_by maxdepth-4 "--apply deletes a stale worktree's cache six levels down" \
+    'MAX_DEPTH=7' 'MAX_DEPTH=4'
+  caught_by no-recurse-into-target "--apply deletes a cache under a target/ that is not a build directory" \
+    '      sweep "$t" $((depth - $(printf' '      continue; sweep "$t" $((depth - $(printf'
+  caught_by du-stops-the-sweep "dry-run continues past an unreadable cache" \
+    '{ du -sm "$t" 2>/dev/null || true; }' 'du -sm "$t" 2>/dev/null'
+  caught_by rm-failure-hidden "--apply exits non-zero when a cache cannot be deleted" \
+    'if rm -rf "$t"; then' 'if rm -rf "$t" || true; then'
+  caught_by archive-ignores-nested "dry-run does not suggest archiving a folder with an active repository inside" \
+    'if archivable "$dir" "$ARCHIVE_DAYS"; then' 'if is_stale "$dir" "$ARCHIVE_DAYS"; then'
 fi
 
 printf '%d passed, %d failed\n' "$pass" "$fail"

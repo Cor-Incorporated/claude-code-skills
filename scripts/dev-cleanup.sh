@@ -20,8 +20,9 @@ APPLY=false
 [ "${1:-}" = "--apply" ] && APPLY=true
 
 CACHE_NAMES=(node_modules .venv venv __pycache__ .next .mypy_cache .ruff_cache .pytest_cache target)
-# git status に出る成果物は「未コミットの作業」に数えない（.gitignore していないリポジトリのため）
-CACHE_PATH_RE='(^|/)(node_modules|\.venv|venv|__pycache__|\.next|\.mypy_cache|\.ruff_cache|\.pytest_cache|target)(/|$)'
+# git status の未追跡の行のうち成果物のものは「未コミットの作業」に数えない（.gitignore して
+# いないリポジトリのため）。追跡中のファイルの変更は、成果物の名前の下にあっても作業に数える
+UNTRACKED_CACHE_RE='^\?\? (.*/)?(node_modules|\.venv|venv|__pycache__|\.next|\.mypy_cache|\.ruff_cache|\.pytest_cache|target)(/|$)'
 today_epoch=$(date +%s)
 
 # 判定はリポジトリ群（main checkout と linked worktree。git の共通ディレクトリで束ねる）の単位で
@@ -29,7 +30,7 @@ today_epoch=$(date +%s)
 family_memo=""
 
 is_stale() { # $1=dir $2=days → 0 if last commit older than days
-  local d="$1" days="$2" common key hit last rc wt work
+  local d="$1" days="$2" common key hit last rc wt st work
   [ -e "$d/.git" ] || return 0  # git管理外は stale 扱い（.git がファイルの linked worktree は git 管理）
   common=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
   key="$common|$days"
@@ -44,9 +45,11 @@ is_stale() { # $1=dir $2=days → 0 if last commit older than days
     # 未コミットの作業がある worktree が 1 つでもあれば使用中。grep -q は pipefail の下で
     # 上流の SIGPIPE が失敗扱いになるので、変数に受けてから調べる
     while IFS= read -r wt; do
-      # 未追跡のディレクトリは畳まれて表示される（packages/ など）ので、ファイル単位に展開して見る
-      work=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null | cut -c4- \
-        | grep -Ev "$CACHE_PATH_RE" || true)
+      [ -d "$wt" ] || continue  # 消えた worktree（prunable）は作業を持てない
+      # 未追跡のディレクトリは畳まれて表示される（packages/ など）ので、ファイル単位に展開して見る。
+      # 状態を読めない worktree（index の破損など）は作業の有無が分からないので使用中とみなす
+      if ! st=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null); then rc=1; break; fi
+      work=$(printf '%s\n' "$st" | grep -v '^$' | grep -Ev "$UNTRACKED_CACHE_RE" || true)
       if [ -n "$work" ]; then rc=1; break; fi
     done < <(git -C "$d" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
   fi
@@ -77,6 +80,18 @@ looks_like_cache() {
 prune_args=()
 for n in "${CACHE_NAMES[@]}"; do prune_args+=(-name "$n" -o); done
 unset 'prune_args[${#prune_args[@]}-1]'
+
+# archivable <プロジェクト> <日数>: プロジェクトが古く、中にあるリポジトリもすべて古いときだけ 0。
+# git 管理外のフォルダでも、中に使用中のリポジトリがあれば _archive へ移す提案はしない
+archivable() {
+  local g
+  is_stale "$1" "$2" || return 1
+  while IFS= read -r -d '' g; do
+    is_stale "$(dirname "$g")" "$2" || return 1
+  done < <(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" \
+    \( -type d \( "${prune_args[@]}" \) -prune \) -o \( -name .git -print0 -prune \) 2>/dev/null)
+  return 0
+}
 
 # sweep <探す場所> <残りの深さ> <プロジェクト>: 成果物を探し、それを含むリポジトリ群が
 # 古いものだけ数える（--apply なら消す）。成果物ではない target/・venv/ の中も探す
@@ -126,7 +141,7 @@ for dir in "$DEV_DIR"/*/; do
   # 使用中のプロジェクトの中にある古い入れ子のリポジトリも見るため、全プロジェクトを探す
   sweep "$dir" "$MAX_DEPTH" "$dir"
 
-  if is_stale "$dir" "$ARCHIVE_DAYS"; then
+  if archivable "$dir" "$ARCHIVE_DAYS"; then
     echo "ARCHIVE候補 (${ARCHIVE_DAYS}日+ コミットなし): $name → mv '$dir' '$DEV_DIR/_archive/'"
   fi
 done
