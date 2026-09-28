@@ -5,13 +5,17 @@
 # lists origin/HEAD, never touches protected branches (local, remote, or checked out in a worktree), the
 # worktree it runs from or was given, a branch checked out in a kept worktree (nor its remote branch),
 # a worktree with changes git status hides (untracked files under status.showUntrackedFiles=no,
-# assume-unchanged or skip-worktree edits), a worktree holding ignored files that the handover
-# criteria do not list as regenerable, or a remote branch whose open PRs (in origin or its fork
-# parent, as head or as base of a stacked PR) gh cannot rule out, including when origin is not a
-# GitHub URL. It resolves the base as refs/remotes/..., prunes the admin data of a vanished worktree
-# only after MIN_AGE_DAYS, picks the base after fetching, keeps remote branches when fetch fails, passes
-# -R owner/repo to gh, deletes remote branches before local ones (so git branch -d is not refused by
-# an upstream it is ahead of), guards each remote delete with --force-with-lease, reports refusals
+# assume-unchanged or skip-worktree edits, content a lossy clean filter hides, submodule edits that
+# submodule.<name>.ignore hides), a locked worktree, a worktree holding ignored files that the handover
+# criteria do not list as regenerable (also when they appear between the plan and the removal), or a
+# remote branch whose open PRs (in origin or any fork ancestor, as head or as base of a stacked PR) gh
+# cannot rule out, including when origin is not a GitHub URL. It plans from the worktree list taken
+# before pruning, so --apply deletes nothing the dry-run showed as kept; it resolves the base as
+# refs/remotes/..., prunes the admin data of a vanished worktree only after MIN_AGE_DAYS, picks the
+# base after fetching, keeps remote branches when fetch fails, passes -R owner/repo to gh, deletes
+# remote branches before local ones (so git branch -d is not refused by an upstream it is ahead of),
+# re-checks right before each remote delete that no worktree still has the branch checked out, deletes
+# exactly refs/heads/<branch> (never a tag of the same name) under --force-with-lease, reports refusals
 # with git's reason, and stops when it cannot cd.
 # Everything runs in throwaway repositories under mktemp with gh stubbed; --apply runs only there.
 # The test also writes mutants of the janitor and runs itself against each one
@@ -50,19 +54,28 @@ git config --global commit.gpgsign false
 git config --global init.defaultBranch develop
 git config --global advice.detachedHead false
 
-# gh stub. `gh repo view ...` prints FAKE_GH_PARENT (fails when FAKE_GH_PARENT_FAIL is set).
+# gh stub. `gh repo view <repo> ...` prints the parent that FAKE_GH_PARENTS maps <repo> to
+# (<repo>=<parent> pairs; nothing if unmapped) and fails when FAKE_GH_PARENT_FAIL is set.
 # `gh pr list [-R <repo>] --head <branch> --state open --json number -q length` prints 1 for branches
 # in FAKE_GH_OPEN or <repo>:<branch> pairs in FAKE_GH_OPEN_AT, else 0, and fails for branches in
-# FAKE_GH_FAIL. `gh pr list ... --base <branch> ...` prints 1 for branches in FAKE_GH_BASE_OPEN, else 0,
-# and fails for branches in FAKE_GH_BASE_FAIL. Every call appends its arguments to GH_LOG when that is set.
+# FAKE_GH_FAIL. `gh pr list ... --base <branch> ...` prints 1 for branches in FAKE_GH_BASE_OPEN or
+# <repo>:<branch> pairs in FAKE_GH_BASE_OPEN_AT, else 0, and fails for branches in FAKE_GH_BASE_FAIL.
+# The first `gh pr list` call creates FAKE_GH_TOUCH when that is set (a file that appears while the
+# janitor is still planning). Every call appends its arguments to GH_LOG when that is set.
 mkdir -p "$SB/bin"
 cat >"$SB/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 [ -n "${GH_LOG:-}" ] && printf '%s\n' "$*" >>"$GH_LOG"
 if [ "${1:-}" = repo ] && [ "${2:-}" = view ]; then
   [ -n "${FAKE_GH_PARENT_FAIL:-}" ] && exit 1
-  printf '%s\n' "${FAKE_GH_PARENT:-}"
+  for pair in ${FAKE_GH_PARENTS:-}; do
+    [ "${pair%%=*}" = "${3:-}" ] && { printf '%s\n' "${pair#*=}"; exit 0; }
+  done
+  printf '\n'
   exit 0
+fi
+if [ -n "${FAKE_GH_TOUCH:-}" ] && [ ! -e "$FAKE_GH_TOUCH" ]; then
+  printf 'appeared during planning\n' >"$FAKE_GH_TOUCH"
 fi
 head=""
 base=""
@@ -78,6 +91,7 @@ done
 if [ -n "$base" ]; then
   for b in ${FAKE_GH_BASE_FAIL:-}; do [ "$b" = "$base" ] && exit 1; done
   for b in ${FAKE_GH_BASE_OPEN:-}; do [ "$b" = "$base" ] && { echo 1; exit 0; }; done
+  for b in ${FAKE_GH_BASE_OPEN_AT:-}; do [ "$b" = "$repo:$base" ] && { echo 1; exit 0; }; done
   echo 0
   exit 0
 fi
@@ -150,7 +164,8 @@ git -C "$R" push -q -u origin ahead
 at 14 -C "$R" commit -q --allow-empty -m ahead-2
 git -C "$R" checkout -q develop
 merge ahead 11
-for b in wt-old-br dirty-br self-br resume-br log-br gh-down stackbase stackfail gone-new-br gone-old-br; do
+for b in wt-old-br dirty-br self-br resume-br log-br gh-down stackbase stackfail gone-new-br gone-old-br \
+  lk-br tw-br race-br; do
   feature "$b" 13
   merge "$b" 11
 done
@@ -182,7 +197,14 @@ at 15 -C "$R" commit -q --allow-empty -m ffremote
 git -C "$R" checkout -q develop
 git -C "$R" merge -q --ff-only ffremote
 at 15 -C "$R" push -q origin ffremote
-git -C "$R" push -q origin develop old-merged open-pr new-merged gh-down dirty-br stackbase stackfail
+# ffwt-br: the same again, for a worktree below (a separate branch, so that worktree does not also keep
+# ffnew and hide the local fast-forward check)
+at 15 -C "$R" checkout -q -b ffwt-br develop
+at 15 -C "$R" commit -q --allow-empty -m ffwt-br
+git -C "$R" checkout -q develop
+git -C "$R" merge -q --ff-only ffwt-br
+git -C "$R" push -q origin develop old-merged open-pr new-merged gh-down dirty-br stackbase stackfail \
+  wt-old-br gone-old-br lk-br tw-br race-br
 git -C "$R" push -q origin mainlike:refs/heads/main
 at 10 -C "$R" push -q origin ff-old
 at 11 -C "$R" worktree add -q "$W/wt-old" wt-old-br
@@ -205,7 +227,16 @@ git -C "$R" push -q origin fresh-br
 at 11 -C "$R" worktree add -q -b sw-base "$W/switched" ff-old
 git -C "$W/switched" switch -q -c sw-new ff-old
 # a worktree created 11 days ago on a branch fast-forwarded into develop today
-at 11 -C "$R" worktree add -q "$W/ffwt" ffnew
+at 11 -C "$R" worktree add -q "$W/ffwt" ffwt-br
+# a locked worktree (on an external disk, say): git worktree remove refuses it, so the plan must not list it
+at 11 -C "$R" worktree add -q "$W/lk" lk-br
+git -C "$R" worktree lock --reason "external disk" "$W/lk"
+# one branch checked out in two worktrees: the clean one can go, the dirty one stays with the branch
+at 11 -C "$R" worktree add -q "$W/tw-clean" tw-br
+at 11 -C "$R" worktree add -q -f "$W/tw-dirty" tw-br
+printf 'draft\n' >"$W/tw-dirty/draft.txt"
+# a clean worktree that gains an ignored raw log while the janitor is still planning (FAKE_GH_TOUCH)
+at 11 -C "$R" worktree add -q "$W/race" race-br
 # a worktree on a protected branch
 at 11 -C "$R" worktree add -q "$W/wt-stg" stg
 # worktrees whose directories vanished: gone-new was last used today, gone-old 10 days ago
@@ -275,11 +306,18 @@ check "dry-run skips a worktree on a protected branch" matching '- SKIP \(protec
 check "dry-run keeps a worktree switched today to a new branch with no commits of its own" \
   matching '- KEEP \(no own commits, branch created [0-9-]{10}, .*\): .*/switched \[sw-new\]$' "$SB/dry.log"
 check "dry-run keeps a worktree whose branch was fast-forwarded into develop today" \
-  matching '- KEEP \(no own commits, first seen in origin/develop [0-9-]{10}, .*\): .*/ffwt \[ffnew\]$' "$SB/dry.log"
+  matching '- KEEP \(no own commits, first seen in origin/develop [0-9-]{10}, .*\): .*/ffwt \[ffwt-br\]$' "$SB/dry.log"
 check "dry-run shows the admin data it would prune for a worktree gone 10 days" \
   matching '- PRUNE 候補: Removing worktrees/gone-old: ' "$SB/dry.log"
 check "dry-run does not plan to prune a worktree that vanished today" \
   not_matching 'PRUNE 候補: .*gone-new' "$(cat "$SB/dry.log")"
+check "dry-run keeps the branch of the worktree it would prune (still checked out in this plan)" \
+  matching '- SKIP \(checked out in worktree\): gone-old-br$' "$SB/dry.log"
+check "dry-run skips a locked worktree" matching '- SKIP \(locked\): .*/lk \[lk-br\]$' "$SB/dry.log"
+check "dry-run keeps the remote branch of a branch that a kept worktree also checks out" \
+  matching '- SKIP \(残す worktree で checkout 中\): origin/tw-br$' "$SB/dry.log"
+check "dry-run lists the clean worktree that --apply will find changed" \
+  matching '- 削除候補: .*/race \[race-br\]' "$SB/dry.log"
 
 out=$(bash "$JANITOR" "$W/self" 2>&1)
 check "dry-run skips the worktree it was given" \
@@ -291,8 +329,9 @@ at 30 -C "$SB/elsewhere" commit -q --allow-empty -m elsewhere
 out=$(GIT_DIR="$SB/elsewhere/.git" GIT_WORK_TREE="$SB/elsewhere" bash "$JANITOR" "$R" 2>&1)
 check "the janitor ignores GIT_DIR inherited from the caller" grep -qF -- '- 削除候補: old-merged（' <<<"$out"
 
-# The real run starts inside the self worktree, which must survive it.
-(cd "$W/self" && bash "$JANITOR" "$R" --apply --remote) >"$SB/apply.log" 2>&1
+# The real run starts inside the self worktree, which must survive it. While it is still planning, the
+# race worktree gains an ignored raw log (the gh stub writes it on the first PR query).
+(cd "$W/self" && FAKE_GH_TOUCH="$W/race/run.log" bash "$JANITOR" "$R" --apply --remote) >"$SB/apply.log" 2>&1
 rc=$?
 check "--apply exits 0" [ "$rc" -eq 0 ]
 check "--apply removes the old worktree (its only ignored files are regenerable)" [ ! -e "$W/wt-old" ]
@@ -333,6 +372,20 @@ check "--apply prunes the admin data of a worktree gone 10 days" \
 check "--apply reports what it pruned" matching '- PRUNED: Removing worktrees/gone-old: ' "$SB/apply.log"
 check "--apply reports why git refused to delete a branch" \
   matching "- FAILED \(-d拒否\): lagging — .*not fully merged" "$SB/apply.log"
+check "--apply keeps the branch of a worktree it pruned in this run (the approved dry-run kept it)" \
+  has "$R" gone-old-br
+check "--apply --remote keeps the remote branch of a worktree it pruned in this run" has "$O" gone-old-br
+check "--apply --remote deletes the remote branch of a worktree it removes" lacks "$O" wt-old-br
+check "--apply keeps a locked worktree" [ -d "$W/lk" ]
+check "--apply --remote keeps the remote branch of a locked worktree" has "$O" lk-br
+check "--apply removes the clean one of two worktrees on the same branch" [ ! -e "$W/tw-clean" ]
+check "--apply keeps a branch that a kept worktree still checks out" has "$R" tw-br
+check "--apply --remote keeps the remote branch that a kept worktree still checks out" has "$O" tw-br
+check "--apply keeps a worktree that gained an ignored file after the plan" [ -f "$W/race/run.log" ]
+check "--apply says why it kept the worktree it planned to remove" \
+  matching '- SKIP \(計画の後に変わった: ignore されたファイル run\.log.*\): .*/race$' "$SB/apply.log"
+check "--apply --remote keeps the remote branch of a worktree it did not remove after all" has "$O" race-br
+check "--apply keeps the branch of a worktree it did not remove after all" has "$R" race-br
 
 # --force-with-lease: fetch from a mirror taken before the branch moved, push to the real origin.
 L="$SB/lease"
@@ -407,12 +460,22 @@ check "gh gets -R owner/repo for an https origin" grep -qF -- '-R acme/widgets' 
 git -C "$G/repo" remote set-url origin git@github.com:acme/widgets.git
 GH_LOG="$SB/gh-scp.log" bash "$JANITOR" "$G/repo" >/dev/null 2>&1
 check "gh gets -R owner/repo for an scp-style origin" grep -qF -- '-R acme/widgets' "$SB/gh-scp.log"
-FAKE_GH_PARENT=acme/upstream FAKE_GH_OPEN_AT=acme/upstream:oldbr bash "$JANITOR" "$G/repo" >"$SB/gh-fork.log" 2>&1
+FAKE_GH_PARENTS=acme/widgets=acme/upstream FAKE_GH_OPEN_AT=acme/upstream:oldbr \
+  bash "$JANITOR" "$G/repo" >"$SB/gh-fork.log" 2>&1
 check "dry-run skips a branch with an open PR in the fork's parent" \
   matching '- SKIP \(open PRあり\): origin/oldbr' "$SB/gh-fork.log"
 FAKE_GH_PARENT_FAIL=1 bash "$JANITOR" "$G/repo" >"$SB/gh-noparent.log" 2>&1
 check "dry-run skips remote branches when the fork parent cannot be checked" \
   matching '- SKIP \(open PR の有無を確かめられない\): origin/oldbr' "$SB/gh-noparent.log"
+# A fork of a fork: the PR can target the root, two levels up.
+FAKE_GH_PARENTS="acme/widgets=acme/upstream acme/upstream=acme/root" FAKE_GH_OPEN_AT=acme/root:oldbr \
+  bash "$JANITOR" "$G/repo" >"$SB/gh-forkfork.log" 2>&1
+check "dry-run skips a branch with an open PR in the fork's grandparent" \
+  matching '- SKIP \(open PRあり\): origin/oldbr' "$SB/gh-forkfork.log"
+# The stacked-PR query must ask origin by name too (gh may otherwise ask the upstream remote).
+FAKE_GH_BASE_OPEN_AT=acme/widgets:oldbr bash "$JANITOR" "$G/repo" >"$SB/gh-stacked.log" 2>&1
+check "dry-run skips a branch that an open PR in origin (asked by -R) uses as its base" \
+  matching '- SKIP \(このブランチを base にする open PR あり\): origin/oldbr' "$SB/gh-stacked.log"
 
 # origin that is not a GitHub URL: gh cannot tell which repository's PRs it sees, so remote branches stay.
 P="$SB/plainorigin"
@@ -451,14 +514,23 @@ check "--apply --remote keeps a remote branch that only a local branch named ori
 # Changes git status hides: untracked files under status.showUntrackedFiles=no, and edits to
 # skip-worktree / assume-unchanged files. git worktree remove misses them too, so the janitor must not
 # get that far. The control worktree is clean and must go, so the scenario is not vacuous.
+# A lossy clean filter (the nbstripout pattern) hides working-tree content from git status once it is
+# added: *.ipynb drops OUTPUT lines. *.bin is under a stand-in for Git LFS, whose working tree always
+# differs from the index; it must not keep the control worktree.
 H="$SB/hidden"
 git init -q --bare "$H/origin.git"
 git clone -q "$H/origin.git" "$H/repo" 2>/dev/null
 git -C "$H/repo" config status.showUntrackedFiles no
+git -C "$H/repo" config filter.strip.clean "sed '/^OUTPUT/d'"
+git -C "$H/repo" config filter.lfs.clean "sed 's/^REAL/POINTER/'"
+git -C "$H/repo" config filter.lfs.smudge "sed 's/^POINTER/REAL/'"
+printf '*.ipynb filter=strip\n*.bin filter=lfs\n' >"$H/repo/.gitattributes"
 printf 'base\n' >"$H/repo/conf.txt"
-git -C "$H/repo" add conf.txt
+printf 'cell 1\n' >"$H/repo/nb.ipynb"
+printf 'REAL data\n' >"$H/repo/data.bin"
+git -C "$H/repo" add .gitattributes conf.txt nb.ipynb data.bin
 at 30 -C "$H/repo" commit -q -m init
-for b in hu-br sw-br au-br ctl-br; do
+for b in hu-br sw-br au-br ctl-br fl-br; do
   git -C "$H/repo" checkout -q -b "$b" develop
   at 13 -C "$H/repo" commit -q --allow-empty -m "$b"
   git -C "$H/repo" checkout -q develop
@@ -474,6 +546,9 @@ at 11 -C "$H/repo" worktree add -q "$H/wt/assumed" au-br
 git -C "$H/wt/assumed" update-index --assume-unchanged conf.txt
 printf 'local edit\n' >"$H/wt/assumed/conf.txt"
 at 11 -C "$H/repo" worktree add -q "$H/wt/control" ctl-br
+at 11 -C "$H/repo" worktree add -q "$H/wt/filtered" fl-br
+printf 'OUTPUT 42\n' >>"$H/wt/filtered/nb.ipynb"
+git -C "$H/wt/filtered" add nb.ipynb
 bash "$JANITOR" "$H/repo" --apply >"$SB/hidden.log" 2>&1
 check "--apply keeps a worktree whose untracked file status.showUntrackedFiles=no hides" \
   [ -f "$H/wt/untracked/draft.md" ]
@@ -482,6 +557,65 @@ check "--apply keeps a worktree with an assume-unchanged file it edited" grep -q
 check "--apply still removes a clean worktree in the same repository" [ ! -e "$H/wt/control" ]
 check "--apply says why it kept the worktree with a hidden edit" \
   matching '- SKIP \(変更が git status に出ないファイルがある: .*\): .*/skipped \[sw-br\]$' "$SB/hidden.log"
+check "--apply keeps a worktree whose lossy clean filter hides working-tree content" \
+  grep -qx 'OUTPUT 42' "$H/wt/filtered/nb.ipynb"
+check "--apply says which file the clean filter hides" \
+  matching '- SKIP \(clean filter で git status に出ない中身がある: nb\.ipynb.*\): .*/filtered \[fl-br\]$' "$SB/hidden.log"
+
+# A submodule edit that submodule.<name>.ignore=all hides from the default git status. (git worktree
+# remove refuses a worktree with a populated submodule anyway, so the plan is what shows the check.)
+SM="$SB/submod"
+git init -q --bare "$SM/origin.git"
+git clone -q "$SM/origin.git" "$SM/repo" 2>/dev/null
+git init -q "$SM/libsrc"
+printf 'v1\n' >"$SM/libsrc/lib.txt"
+git -C "$SM/libsrc" add lib.txt
+at 30 -C "$SM/libsrc" commit -q -m lib
+at 30 -C "$SM/repo" commit -q --allow-empty -m init
+git -C "$SM/repo" -c protocol.file.allow=always submodule add -q "$SM/libsrc" lib >/dev/null 2>&1
+git -C "$SM/repo" config -f .gitmodules submodule.lib.ignore all
+git -C "$SM/repo" add .gitmodules
+at 30 -C "$SM/repo" commit -q -m "add lib"
+git -C "$SM/repo" checkout -q -b sm-br
+at 13 -C "$SM/repo" commit -q --allow-empty -m sm-br
+git -C "$SM/repo" checkout -q develop
+at 11 -C "$SM/repo" merge -q --no-ff -m "merge sm-br" sm-br
+git -C "$SM/repo" push -q origin develop
+at 11 -C "$SM/repo" worktree add -q "$SM/wt/subwt" sm-br
+git -C "$SM/wt/subwt" -c protocol.file.allow=always submodule update -q --init >/dev/null 2>&1
+printf 'edited\n' >>"$SM/wt/subwt/lib/lib.txt"
+bash "$JANITOR" "$SM/repo" >"$SB/submod.log" 2>&1
+check "dry-run skips a worktree whose submodule edit submodule.<name>.ignore=all hides" \
+  matching '- SKIP \(dirty [0-9]+files\): .*/subwt \[sm-br\]$' "$SB/submod.log"
+
+# Tags with the same name as a merged remote branch. The delete must name refs/heads/: a short name
+# is refused when both exist, and deletes the tag when the branch is already gone. Fetch from a mirror
+# taken before `gone` lost its branch; push to the real origin.
+TQ="$SB/tagclash"
+git init -q --bare "$TQ/origin.git"
+git clone -q "$TQ/origin.git" "$TQ/repo" 2>/dev/null
+at 30 -C "$TQ/repo" commit -q --allow-empty -m init
+for b in both gone; do
+  git -C "$TQ/repo" checkout -q -b "$b"
+  at 13 -C "$TQ/repo" commit -q --allow-empty -m "$b"
+  git -C "$TQ/repo" checkout -q develop
+  at 11 -C "$TQ/repo" merge -q --no-ff -m "merge $b" "$b"
+done
+git -C "$TQ/repo" push -q origin develop both gone
+git -C "$TQ/repo" tag tag-both both
+git -C "$TQ/repo" tag tag-gone gone
+git -C "$TQ/repo" push -q origin refs/tags/tag-both:refs/tags/both refs/tags/tag-gone:refs/tags/gone
+git clone -q --bare "$TQ/origin.git" "$TQ/mirror.git"
+git -C "$TQ/origin.git" update-ref -d refs/heads/gone
+git -C "$TQ/repo" config url."$TQ/mirror.git".insteadOf https://github.com/acme/tagclash.git
+git -C "$TQ/repo" config url."$TQ/origin.git".pushInsteadOf https://github.com/acme/tagclash.git
+git -C "$TQ/repo" remote set-url origin https://github.com/acme/tagclash.git
+bash "$JANITOR" "$TQ/repo" --apply --remote >"$SB/tagclash.log" 2>&1
+check "--apply --remote deletes a remote branch that shares its name with a tag" lacks "$TQ/origin.git" both
+check "--apply --remote keeps the tag with the same name as the branch it deletes" \
+  git -C "$TQ/origin.git" show-ref --verify --quiet refs/tags/both
+check "--apply --remote never deletes a tag when the branch of that name is already gone" \
+  git -C "$TQ/origin.git" show-ref --verify --quiet refs/tags/gone
 
 # A path that cannot be entered must stop the janitor, not clean the current directory's repo.
 out=$(cd "$R" && bash "$JANITOR" "$SB/no-such-dir" 2>&1)
@@ -494,8 +628,14 @@ check "a path it cannot enter prints no plan" not_matching '^## Worktrees' "$out
 # shellcheck disable=SC2016
 if [ -z "${JANITOR_UNDER_TEST:-}" ]; then
   # Each mutant run builds its own sandbox, so up to MUTANT_JOBS of them run at once; the verdicts are
-  # checked after all of them finish (bash 3.2 has no `wait -n`, so it then waits for the whole batch).
+  # checked after all of them finish. bash 4.3+ waits for any one job (`wait -n`, whose status is that
+  # job's: a caught mutant exits 1, so it must not fall through to waiting for all); bash 3.2 has no
+  # `wait -n` and waits for the whole batch.
   MUTANT_JOBS=${MUTANT_JOBS:-4}
+  WAIT_ANY=false
+  if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -ge 3 ]; }; then
+    WAIT_ANY=true
+  fi
   M_NAMES=()
   M_EXPECT=()
   # caught_by <name> <expected FAIL line> <old text> <new text>
@@ -517,7 +657,7 @@ PY
     M_EXPECT+=("$2")
     JANITOR_UNDER_TEST="$m" bash "$SELF" >"$SB/mutant-$1.out" 2>&1 &
     if [ "$(jobs -rp | wc -l)" -ge "$MUTANT_JOBS" ]; then
-      wait -n 2>/dev/null || wait
+      if $WAIT_ANY; then wait -n || :; else wait; fi
     fi
   }
   caught_by no-age-filter "dry-run keeps the branch that entered develop 1 day ago" \
@@ -541,20 +681,23 @@ PY
   caught_by no-fast-forward-check "dry-run keeps a branch fast-forwarded into develop today" \
     $'  if $ON_CHAIN && observed_young "refs/heads/$br"; then\n    echo "- KEEP (no own commits, first seen in $BASE $ENTERED, < $MIN_AGE_DAYS days or unknown): $br"' \
     $'  if false; then\n    echo "- KEEP (no own commits, first seen in $BASE $ENTERED, < $MIN_AGE_DAYS days or unknown): $br"'
-  caught_by ignored-files-removed "--apply keeps a worktree with an ignored file that is not regenerable" \
+  # The plan-time checks below are also re-run right before removal (--apply), which keeps the worktree
+  # anyway, so their mutants show in the plan the user approves: the dry-run.
+  caught_by ignored-files-removed "dry-run skips a worktree with an ignored file that is not regenerable" \
     '    if [ -n "$ignored" ]; then' '    if false; then'
   caught_by removes-its-own-worktree "--apply keeps the worktree it runs from" \
     '  if [ -n "$real" ]; then' '  if false; then'
   caught_by protected-remote-deleted "--apply keeps origin/main" \
     '  echo "$br" | grep -Eq "$PROTECTED" && continue # リモートの保護ブランチ' ''
   caught_by kept-worktree-branch-listed "dry-run does not list a branch checked out in a kept worktree" \
-    '    if ! in_list "$br" ${WT_FREED[@]+"${WT_FREED[@]}"}; then' '    if false; then'
+    $'  if kept_checkout "$br"; then\n    echo "- SKIP (checked out in worktree): $br"' \
+    $'  if false; then\n    echo "- SKIP (checked out in worktree): $br"'
   caught_by no-gh-repo "gh gets -R owner/repo for an https origin" \
     '[ -n "$origin_slug" ] && GH_REPO_ARGS=(-R "$origin_slug")' ':'
   caught_by gh-failure-deletes "--apply keeps a remote branch whose PRs cannot be checked" \
     $'\n    --json number -q length 2>/dev/null) || open=""' $'\n    --json number -q length 2>/dev/null) || open=0'
   caught_by no-parent-check "dry-run skips a branch with an open PR in the fork's parent" \
-    '  if [ "$open" = 0 ] && [ -n "$GH_PARENT" ]; then' '  if false; then'
+    '  if [ "$open" = 0 ]; then' '  if false; then'
   caught_by fetch-failure-ignored "--apply --remote keeps remote branches when fetch fails" \
     $'  FETCH_OK=false\n' $'  FETCH_OK=true\n'
   fetch_block=$'FETCH_OK=true\ngit fetch --prune origin >/dev/null 2>&1 || {\n  FETCH_OK=false\n  echo "WARN: fetch失敗（オフライン?）。ローカル情報のみで判定し、リモートは消さない。"\n}\n'
@@ -562,8 +705,8 @@ PY
   caught_by base-before-fetch "dry-run picks the base branch after fetching" \
     "$fetch_block$base_block" "$base_block$fetch_block"
   caught_by no-lease "--apply --remote keeps a remote branch that moved after the fetch" \
-    'git push --force-with-lease="refs/heads/$br:${REMOTE_SHA[$i]}" origin --delete "$br"' \
-    'git push origin --delete "$br"'
+    'git push --force-with-lease="refs/heads/$br:${REMOTE_SHA[$i]}" origin ":refs/heads/$br"' \
+    'git push origin ":refs/heads/$br"'
   caught_by git-env-inherited "the janitor ignores GIT_DIR inherited from the caller" \
     $'unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \\\n  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE\n' \
     $':\n'
@@ -577,14 +720,15 @@ PY
   caught_by prune-no-expire "--apply keeps the admin data of a worktree whose directory vanished today" \
     'PRUNE_EXPIRE="${MIN_AGE_DAYS}.days.ago"' 'PRUNE_EXPIRE=now'
   caught_by non-github-deletes "--apply --remote keeps remote branches when origin is not a GitHub URL" \
-    $'GH_PARENT="?"\nif [ -n "$origin_slug" ]; then' $'GH_PARENT=""\nif [ -n "$origin_slug" ]; then'
+    $'GH_PARENTS_OK=false\nif [ -n "$origin_slug" ]; then' $'GH_PARENTS_OK=true\nif [ -n "$origin_slug" ]; then'
   caught_by no-stacked-check "--apply keeps a remote branch that an open PR uses as its base" \
     '  stacked=$(gh pr list' '  stacked=0; : $(gh pr list'
   caught_by stacked-failure-deletes "--apply keeps a remote branch whose stacked PRs cannot be checked" \
     '2>/dev/null) || stacked=""' '2>/dev/null) || stacked=0'
   caught_by kept-worktree-remote-deleted \
-    "--apply --remote keeps the remote branch of a branch checked out in a kept worktree" \
-    $'  if git worktree list --porcelain | grep -qxF "branch refs/heads/$br" \\\n' $'  if false \\\n'
+    "dry-run skips the remote branch of a branch checked out in a kept worktree" \
+    $'  if kept_checkout "$br"; then\n    echo "- SKIP (残す worktree で checkout 中): origin/$br"' \
+    $'  if false; then\n    echo "- SKIP (残す worktree で checkout 中): origin/$br"'
   caught_by local-protected-deleted "--apply keeps a local protected branch (master)" \
     $'  echo "$br" | grep -Eq "$PROTECTED" && continue\n  [ "$br" = "$CURRENT" ]' $'  [ "$br" = "$CURRENT" ]'
   caught_by worktree-protected-removed "--apply keeps a worktree on a protected branch (stg)" \
@@ -601,6 +745,30 @@ PY
   caught_by tag-shadows-branch "dry-run keeps the branch that entered develop 1 day ago" \
     $'  if too_young "refs/heads/$br"; then\n    echo "- KEEP (entered $BASE_NAME $ENTERED, < $MIN_AGE_DAYS days): $br"' \
     $'  if too_young "$br"; then\n    echo "- KEEP (entered $BASE_NAME $ENTERED, < $MIN_AGE_DAYS days): $br"'
+  caught_by plan-after-prune "--apply keeps the branch of a worktree it pruned in this run (the approved dry-run kept it)" \
+    'WT_SNAPSHOT=$(git worktree list --porcelain)' \
+    'WT_SNAPSHOT=$($APPLY && git worktree prune --expire "${MIN_AGE_DAYS}.days.ago"; git worktree list --porcelain)'
+  caught_by locked-planned "dry-run skips a locked worktree" \
+    '"$WT_LOCKED" | grep -qxF -- "$wt"; then' '"$WT_LOCKED" | grep -qxF -- "$wt" && false; then'
+  caught_by kept-from-whole-list "--apply --remote deletes the remote branch of a worktree it removes" \
+    '  in_list "$p" ${WT_REMOVE[@]+"${WT_REMOVE[@]}"} && continue' '  :'
+  caught_by no-live-remote-recheck "--apply --remote keeps the remote branch of a worktree it did not remove after all" \
+    $'    if still_checked_out "$br"; then\n      echo "- SKIP (worktree でまだ checkout 中): origin/$br"' \
+    $'    if false; then\n      echo "- SKIP (worktree でまだ checkout 中): origin/$br"'
+  caught_by no-recheck-before-remove "--apply keeps a worktree that gained an ignored file after the plan" \
+    '    if ! ignored=$(unregenerable_ignored "$wt") || [ -n "$ignored" ]; then' '    if false; then'
+  caught_by lossy-filter-ignored "--apply keeps a worktree whose lossy clean filter hides working-tree content" \
+    '  if [ -n "$lossy" ]; then' '  if false; then'
+  caught_by lfs-counted-as-lossy "--apply still removes a clean worktree in the same repository" \
+    "':(exclude,attr:filter=lfs)'" "':(exclude,attr:filter=none)'"
+  caught_by delete-by-short-name "--apply --remote never deletes a tag when the branch of that name is already gone" \
+    'origin ":refs/heads/$br"' 'origin --delete "$br"'
+  caught_by stacked-without-repo "dry-run skips a branch that an open PR in origin (asked by -R) uses as its base" \
+    '  stacked=$(gh pr list ${GH_REPO_ARGS[@]+"${GH_REPO_ARGS[@]}"} --base' '  stacked=$(gh pr list --base'
+  caught_by submodule-edits-hidden "dry-run skips a worktree whose submodule edit submodule.<name>.ignore=all hides" \
+    ' --ignore-submodules=none 2>/dev/null); then' ' 2>/dev/null); then'
+  caught_by parent-only "dry-run skips a branch with an open PR in the fork's grandparent" \
+    'for _ in $(seq "$GH_PARENT_DEPTH"); do' 'for _ in 1; do'
   wait
   for i in ${M_NAMES[@]+"${!M_NAMES[@]}"}; do
     check "mutant ${M_NAMES[$i]} is caught by: ${M_EXPECT[$i]}" \
