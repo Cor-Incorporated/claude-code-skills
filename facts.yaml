@@ -179,3 +179,16 @@ pairs:
       red の条件は「新規登録に陰性テストが無い」「回帰」「baseline の腐敗」の
       3 つだけで、分母は北極星（担保率）の天井を決めているにすぎない。
       狭い分母は未担保 13 本を記録から消す — それは #97 が問う受動性そのもの。
+  - id: mechanical-cleanup-merged-7-days
+    pair: pair19
+    declaration: rules/git-workflow.md#機械掃除は「マージ済み + 7 日」限定 + skills/handover/common-clauses.md#陳腐化した worktree を機械的に掃除する基準 2
+    enforcement: scripts/repo-janitor.sh (MIN_AGE_DAYS)
+    note: |
+      規則は「repo-clean skill / H11 で マージ済み + 7 日」と宣言していたが、repo-clean の実行器
+      repo-janitor.sh は 2026-07-06 にリポジトリの外（~/.claude/scripts/）へ直接置かれ、日数の
+      判定を持たなかった。2026-09-28 の claude-code-skills の dry-run は、2026-09-25 に develop へ
+      入った worktree 2 本とリモートブランチ 1 本を削除候補に挙げた。
+      janitor が使う日付は「基準ブランチに入った日」（first-parent を二分探索して tip を含む最初の
+      コミットの日付）で、最終コミットの日付以後になるので、handover の撤収基準 2（最終コミット
+      から 7 日以上）より厳しいか等しい。pair19 は 3 か所の日数を数値照合し、片側だけ変えると
+      3 つの値を挙げて red になる。

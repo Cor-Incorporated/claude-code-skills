@@ -709,6 +709,33 @@ else:
             f"{len(covered_other)} covered but not settings.json-registered)"
         )
 
+# pair19: 機械掃除の「マージ済み + 7 日」— 規則と撤収基準（宣言）↔ repo-janitor.sh の MIN_AGE_DAYS（強制）
+# 規則は 2026-07 から「repo-clean skill / H11 で 7 日」と宣言していたが、repo-janitor.sh には
+# 日数の判定が無く、2026-09-28 の dry-run は 3 日前に develop へ入った worktree とブランチを
+# 削除候補に挙げた。宣言だけあって強制が無かった。日数を 3 か所で数値照合する。
+gw = ROOT / "rules" / "git-workflow.md"
+cc = ROOT / "skills" / "handover" / "common-clauses.md"
+jn = ROOT / "scripts" / "repo-janitor.sh"
+missing = [str(p) for p in (gw, cc, jn) if not p.is_file()]
+if missing:
+    bad("pair19 source file missing", f"missing={missing}")
+else:
+    m_rule = re.search(r"マージ済み \+ (\d+) 日", gw.read_text(encoding="utf-8"))
+    m_clause = re.search(r"最終コミットから \*\*(\d+) 日以上\*\*", cc.read_text(encoding="utf-8"))
+    m_janitor = re.search(r"^MIN_AGE_DAYS=(\d+)$", jn.read_text(encoding="utf-8"), re.M)
+    rule_d = m_rule.group(1) if m_rule else None
+    clause_d = m_clause.group(1) if m_clause else None
+    janitor_d = m_janitor.group(1) if m_janitor else None
+    detail = (
+        f"declaration(rules/git-workflow.md「マージ済み + N 日」)={rule_d} "
+        f"declaration(skills/handover/common-clauses.md「最終コミットから N 日以上」)={clause_d} "
+        f"enforcement(scripts/repo-janitor.sh MIN_AGE_DAYS)={janitor_d}"
+    )
+    if None in (rule_d, clause_d, janitor_d) or len({rule_d, clause_d, janitor_d}) != 1:
+        bad("pair19 mechanical-cleanup age: declaration/enforcement mismatch", detail)
+    else:
+        ok(f"pair19 mechanical-cleanup age {janitor_d} days: {detail}")
+
 # 3 値で出す。skipped は「照合できなかった」であって「通った」ではない。
 print(f"--- {PASS} passed, {len(SKIPPED)} skipped, {FAIL} failed ---")
 if SKIPPED:
