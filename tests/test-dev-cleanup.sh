@@ -163,6 +163,9 @@ repo "$D/parentdata/data/target/inner" 1
 # an old repository where git status fails (git log still works)
 repo "$D/brokenstatus" 100
 git -C "$D/brokenstatus" config status.showUntrackedFiles bogus
+# an old repository with an active checkout inside packages/app/node_modules/
+repo "$D/archnested" 200
+repo "$D/archnested/packages/app/node_modules/dep" 1
 
 DEV_DIR="$D" bash "$SCRIPT" >"$SB/dry.log" 2>&1
 rc=$?
@@ -228,6 +231,23 @@ check "dry-run does not suggest archiving a folder with an active repository ins
   not_listed "ARCHIVE.*: group " "$SB/dry.log"
 check "dry-run does not suggest archiving a repository with an active one under a non-build target/" \
   not_listed "ARCHIVE.*: parentdata " "$SB/dry.log"
+check "dry-run does not suggest archiving a repository with an active checkout inside node_modules/" \
+  not_listed "ARCHIVE.*: archnested " "$SB/dry.log"
+check "--apply keeps a cache that holds an active checkout" [ -d "$D/archnested/packages/app/node_modules/dep/.git" ]
+
+# The caller's git environment must not redirect the checks to another repository.
+V="$SB/envvars"
+repo "$V/active" 1
+repo "$V/old" 100
+GIT_DIR="$V/old/.git" GIT_WORK_TREE="$V/old" DEV_DIR="$V" bash "$SCRIPT" --apply >"$SB/env.log" 2>&1
+check "--apply ignores GIT_DIR inherited from the caller" [ -d "$V/active/node_modules" ]
+
+# With no project at all, the unmatched glob must not become a project named "*".
+mkdir -p "$SB/empty"
+DEV_DIR="$SB/empty" bash "$SCRIPT" >"$SB/empty.log" 2>&1
+rc=$?
+check "an empty DEV_DIR exits 0" [ "$rc" -eq 0 ]
+check "an empty DEV_DIR suggests nothing" not_listed "ARCHIVE" "$SB/empty.log"
 
 # An unreadable or undeletable cache must neither stop the sweep nor count as freed.
 if [ "$(id -u)" -eq 0 ]; then
@@ -242,9 +262,14 @@ else
   # gamma's own directory is read-only, so its cache cannot be removed from it
   repo "$E/gamma" 100
   chmod 555 "$E/gamma"
+  # delta is a folder outside git that cannot be fully searched
+  mkdir -p "$E/delta/locked"
+  chmod 000 "$E/delta/locked"
 
   DEV_DIR="$E" bash "$SCRIPT" >"$SB/perm-dry.log" 2>&1
   check "dry-run continues past an unreadable cache" grep -q "candidate .*/beta/node_modules" "$SB/perm-dry.log"
+  check "dry-run does not suggest archiving a folder it cannot fully search" \
+    not_listed "ARCHIVE.*: delta " "$SB/perm-dry.log"
 
   DEV_DIR="$E" bash "$SCRIPT" --apply >"$SB/perm-apply.log" 2>&1
   rc=$?
@@ -319,9 +344,21 @@ PY
     '      [ -z "$tracked" ] || continue' '      :'
   caught_by archive-prunes-target \
     "dry-run does not suggest archiving a repository with an active one under a non-build target/" \
-    '\( -name node_modules -o -name __pycache__' '\( -name target -o -name node_modules -o -name __pycache__'
+    'roots=$(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" -name .git -print -prune 2>/dev/null)' \
+    'roots=$(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" \( -type d -name target -prune \) -o \( -name .git -print -prune \) 2>/dev/null)'
+  caught_by archive-prunes-caches \
+    "dry-run does not suggest archiving a repository with an active checkout inside node_modules/" \
+    'roots=$(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" -name .git -print -prune 2>/dev/null)' \
+    'roots=$(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" \( -type d -name node_modules -prune \) -o \( -name .git -print -prune \) 2>/dev/null)'
   caught_by archive-ignores-nested "dry-run does not suggest archiving a folder with an active repository inside" \
     'if archivable "$dir" "$ARCHIVE_DAYS"; then' 'if is_stale "$dir" "$ARCHIVE_DAYS"; then'
+  caught_by git-env-inherited "--apply ignores GIT_DIR inherited from the caller" \
+    $'unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \\\n  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE\n' \
+    $':\n'
+  if [ "$(id -u)" -ne 0 ]; then
+    caught_by archive-ignores-search-failure "dry-run does not suggest archiving a folder it cannot fully search" \
+      '-name .git -print -prune 2>/dev/null) || return 1' '-name .git -print -prune 2>/dev/null) || true'
+  fi
 fi
 
 printf '%d passed, %d failed\n' "$pass" "$fail"

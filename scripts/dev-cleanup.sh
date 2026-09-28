@@ -10,6 +10,9 @@
 #   bash dev-cleanup.sh            # dry-run（レポートのみ）
 #   bash dev-cleanup.sh --apply    # 成果物を実削除
 set -euo pipefail
+# 呼び出し元の git 環境（hook の中など）を引き継ぐと、git -C でも別のリポジトリを調べてしまう
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
 
 DEV_DIR="${DEV_DIR:-$HOME/Developer}"
 STALE_DAYS=90
@@ -93,15 +96,16 @@ unset 'prune_args[${#prune_args[@]}-1]'
 
 # archivable <プロジェクト> <日数>: プロジェクトが古く、中にあるリポジトリもすべて古いときだけ 0。
 # git 管理外のフォルダでも、中に使用中のリポジトリがあれば _archive へ移す提案はしない。
-# 名前だけで成果物と決められない target/・venv/・.venv/ の中も探す
+# 成果物（node_modules/ など）の中の checkout も探す。中を全部探せなければ（読めないディレクトリが
+# ある等）提案しない
 archivable() {
-  local g
+  local g roots
   is_stale "$1" "$2" || return 1
-  while IFS= read -r -d '' g; do
+  roots=$(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" -name .git -print -prune 2>/dev/null) || return 1
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
     is_stale "$(dirname "$g")" "$2" || return 1
-  done < <(find "$1" -mindepth 2 -maxdepth "$MAX_DEPTH" \
-    \( -type d \( -name node_modules -o -name __pycache__ -o -name .next -o -name .mypy_cache \
-    -o -name .ruff_cache -o -name .pytest_cache \) -prune \) -o \( -name .git -print0 -prune \) 2>/dev/null)
+  done <<<"$roots"
   return 0
 }
 
@@ -164,6 +168,7 @@ total_mb=0
 failed=0
 for dir in "$DEV_DIR"/*/; do
   dir="${dir%/}"
+  [ -d "$dir" ] || continue  # プロジェクトが 1 つも無いと glob がそのまま残る
   name="$(basename "$dir")"
   case "$name" in _archive|_repo-backups|_sandbox) continue ;; esac
 
