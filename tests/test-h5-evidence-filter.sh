@@ -124,7 +124,7 @@ run_gate "hooks/foo.sh" "$(guard_body '陰性テストは intentionally missing 
 expect_rc 1 "マーカーが無く散文の否定行だけなら数えない"
 
 # --- C: 大文字小文字とマーカー表記のゆれ ------------------------------------
-# has_marker は grep -i なので、フィルタ側も同じ寛容さでなければならない。
+# has_marker は大文字小文字を区別しない（Python の (?i)）ので、フィルタ側も同じ寛容さでなければならない。
 # 片側だけ case-sensitive だと `Expect Red` と書くだけでゲートを迂回できる。
 echo "C. 大文字小文字の非対称でゲートを迂回できないこと"
 run_gate "hooks/foo.sh" "$(guard_body 'H5-NEGATIVE: Expect Red')"

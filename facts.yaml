@@ -146,6 +146,9 @@ pairs:
       なぜ h5-admission では足りないか（2026-09-03 実測）:
       scripts/h5-admission-check.sh の has_marker() は PR 本文の
       `H5-NEGATIVE:` の後ろに 9 文字以上あるかを見るだけである。実測 3 本:
+      （2026-10-01 に、マーカーは同じ行に 20 文字以上（Python の文字数）にし、本文やコメントで
+      台帳に触れるだけでは台帳の証拠にしないようにした（corsweb2024 #375 の移植）。
+      A は 20 文字以上なので今も通る。h5 が PR 単位の宣言しか見ない、という結論は変わらない）
         A 新規 hook + "HOOK_DIR=/tmp/unfixed bash ... -> 6 failed" → exit 0
         B 新規 hook + テストファイルを 1 つも足さず散文だけ        → exit 0
         C 新規 hook + マーカー無し（対照）                        → exit 1

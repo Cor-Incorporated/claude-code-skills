@@ -597,7 +597,7 @@ fi
 #   - マーカーを持たない散文行は従来どおり行ごと落とす（元の穴を開けない）
 #
 # マーカー値が実質を持つかは **各消費側の既存の長さ判定** が決める
-# （has_marker の `.{8,}` / ACL の `.{19,}` / H5-E2E-OUT の 20 文字）。
+# （has_marker の H5_MARKER_MIN = 20 文字。Python で文字数を数える / ACL の `.{19,}` / H5-E2E-OUT の 20 文字）。
 # ここで新しい閾値を書くと同じ事実が 2 箇所になり、片方だけ動く。書かないこと。
 # 置換後 `H5-NEGATIVE: 未記入` は `H5-NEGATIVE:  ` になり `\S` を失って落ちる。
 #
@@ -613,7 +613,8 @@ _H5_META_RE='intentionally missing|expect red|do not merge|falsification only|�
 # （この節自体が行をずらすため）: h5_acl_change_gate の ACL-CHANGE、e2e_reason
 # ブロックの H5-E2E / H5-E2E-OUT、has_marker の H5-NEGATIVE / LEDGER / RETIRE、
 # subtraction ゲートの H5-SUBTRACTION。
-# has_marker は grep -i なので、ここの address にも I を付ける。片側だけ
+# has_marker は大文字小文字を区別しない（Python の (?i)。2026-10-01 までは grep -i）ので、
+# ここの address にも I を付ける。片側だけ
 # case-sensitive だと `Expect Red` と書くだけでゲートを迂回できる。
 _H5_MARKER_RE='^[[:space:]]*(H5-[A-Za-z0-9_-]+|ACL-CHANGE)[[:space:]]*:'
 # 空マーカーを残すな。値が空になったマーカー行を本文に残すと、e2e_reason
@@ -718,34 +719,64 @@ missing=()
 
 # Prefer explicit machine markers (H5-NEGATIVE: / H5-LEDGER: / H5-RETIRE:)
 # Fall back to Japanese/English section content of sufficient length.
+#
+# マーカーの値は、同じ行に H5_MARKER_MIN（20）文字以上。節の中身と同じ最低限である。
+# 2026-10-01 まで has_marker は grep の `\S.{8,}`（9 文字以上）で、`H5-RETIRE: 90日で退役` の
+# ような中身の無い宣言が通っていた（Cor-Incorporated/corsweb2024 #375）。
+# 数えるのは Python の文字数。grep の `.` は C ロケールではバイトを数え、日本語 1 文字が 3 になる
+# （ロケールで判定が変わる）。コロンの後は、改行以外の空白なら何でもよい（全角の空白も）。
+# `<...>` のままのプレースホルダーは数えない。本文は環境変数ではなく標準入力で渡す
+# （Linux では環境変数 1 つが 128 KiB までで、長い本文は python3 の起動ごと落ちる）。
+H5_MARKER_MIN=20
+# 下の Python は単引用符で囲んである。$ と \ は Python の正規表現のもので、シェルに展開させない。
+# shellcheck disable=SC2016
+H5_MARKER_PY='
+import re, sys
+key = sys.argv[1]
+body = sys.stdin.read()
+pattern = r"(?im)(?:^|\s)H5-" + re.escape(key) + r":[^\S\n]*(\S.*)$"
+contents = [m.group(1).rstrip() for m in re.finditer(pattern, body)]
+real = [c for c in contents if not re.fullmatch(r"<[^>]*>", c)]
+print(max((len(c) for c in real), default=-1))
+'
+# H5-<key>: の値のうち、いちばん長いものの文字数（マーカーが無ければ -1）
+h5_marker_length() {
+  printf '%s' "$PR_BODY_EVIDENCE" | python3 -c "$H5_MARKER_PY" "$1" 2>/dev/null || echo -1
+}
 has_marker() {
-  local key="$1"
-  printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE "(^|[[:space:]])H5-${key}:[[:space:]]*\\S.{8,}"
+  [[ "$(h5_marker_length "$1")" -ge "$H5_MARKER_MIN" ]]
+}
+# 見つかったもの（失敗のメッセージ用。期待値だけでなく観測値を出す）
+h5_describe_marker() {
+  local n
+  n="$(h5_marker_length "$1")"
+  if [[ "$n" -lt 0 ]]; then printf 'H5-%s: none counted' "$1"; else printf 'H5-%s: longest %s chars' "$1" "$n"; fi
 }
 
-has_section_content() {
-  local title_re="$1"
-  H5_SECTION_BODY="$PR_BODY_EVIDENCE" python3 -c "
-import re, os, sys
+# 節の名前（第 1 引数）は Python の正規表現。中身は H5_MARKER_MIN 文字以上。
+# shellcheck disable=SC2016
+H5_SECTION_PY='
+import re, sys
 title = sys.argv[1]
-body = os.environ.get('H5_SECTION_BODY', '')
-pat = re.compile(rf'(?im)^#{{1,3}}\\s*(?:{title})\\s*\$([\\s\\S]*?)(?=^#{{1,3}}\\s|\\Z)')
-m = pat.search(body)
+minimum = int(sys.argv[2])
+body = sys.stdin.read()
+m = re.search(r"(?im)^#{1,3}\s*(?:" + title + r")\s*$([\s\S]*?)(?=^#{1,3}\s|\Z)", body)
 if not m:
     sys.exit(1)
 content = m.group(1).strip()
-if len(content) < 20:
+if len(content) < minimum or re.fullmatch(r"[-*\[\] xX\s]*", content):
     sys.exit(1)
-if re.fullmatch(r'[-*\\[\\] xX\\s]*', content):
-    sys.exit(1)
-sys.exit(0)
-" "$title_re" 2>/dev/null
+'
+has_section_content() {
+  printf '%s' "$PR_BODY_EVIDENCE" | python3 -c "$H5_SECTION_PY" "$1" "$H5_MARKER_MIN" 2>/dev/null
 }
 
 # (1) Negative test evidence (known-bad → red measured)
 neg_ok=0
 has_marker "NEGATIVE" && neg_ok=1
-has_section_content '陰性テスト|negative[[:space:]-]?test' && neg_ok=1
+# 節の名前は Python の正規表現（\s）。POSIX の [[:space:]] は Python では入れ子の集合と読まれるので、
+# 2026-10-01 まで「## Negative test」の節は一度も数えられていなかった（corsweb2024 #375 のレビュー）。
+has_section_content '陰性テスト|negative[\s-]?test' && neg_ok=1
 if [[ "$neg_ok" -eq 0 ]]; then
   if printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE '(陰性テスト|negative[[:space:]-]?test)' \
     && printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE '(red 実測|exit[[:space:]]*[12]|FAILED|known-bad|inject)'; then
@@ -754,24 +785,31 @@ if [[ "$neg_ok" -eq 0 ]]; then
 fi
 [[ "$neg_ok" -eq 0 ]] && missing+=("negative-test-evidence")
 
-# (2) H6 ledger wiring — body marker/section or changed hook sources
+# (2) H6 ledger wiring — 本文の H5-LEDGER: マーカーか台帳の節、または、変更した hooks/** か
+# scripts/h5* のファイルが本当に台帳へ書き込むこと。数えるのは、aidd_ledger_append か aidd_ledger_append_record を
+# コマンドとして動かす行（行頭か、&& || ; then do の後）と、名前に ledger を含む変数（大文字小文字を問わない。
+# hooks/lib/aidd-ledger.sh は "$ledger"）への >> 追記だけで、コメントの行は数えない。
+# これはシェルの構文を読まない目安である。if ! { else・パイプ・$(...) の中の本当の呼び出しを見落とし、
+# 文字列やヒアドキュメントの中の言及を数えることがある。確かな証拠は本文の H5-LEDGER: か台帳の節。
+#
+# 本文やコメントで guard-ledger.jsonl・aidd_ledger_append に触れているだけでは数えない。2026-10-01 まで
+# 「guard-ledger.jsonl への配線は無い」という否定の文でも通り、ファイルにその文字があるだけ（コメントでも、
+# この検査のスクリプト自身でも）で通り、h5-admission を触る PR は本文に「台帳」「ledger」と書くだけで
+# 通っていた（corsweb2024 #371・#375 のレビュー）。
+# 最後の grep は -q ではなく /dev/null に出す。pipefail の下で -q はパイプを先に閉じ、大きなファイルでは
+# 前の grep が SIGPIPE（exit 141）で落ちて、先頭の本当の呼び出しを数え損ねる。
 has_ledger_body=0
 has_marker "LEDGER" && has_ledger_body=1
 has_section_content '台帳|ledger|防御台帳' && has_ledger_body=1
-printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE 'aidd_ledger_append|guard-ledger\.jsonl' && has_ledger_body=1
 has_ledger_code=0
 while IFS= read -r f; do
   [[ -z "$f" || ! -f "$f" ]] && continue
-  if grep -qE 'aidd_ledger_append|guard-ledger\.jsonl|aidd-ledger' "$f" 2>/dev/null; then
+  if grep -vE '^[[:space:]]*#' "$f" 2>/dev/null \
+    | grep -E '(^|&&|\|\||;|[[:space:]]then|[[:space:]]do)[[:space:]]*aidd_ledger_append(_record)?[[:space:]]|>>[[:space:]]*"?\$\{?[A-Za-z_]*[Ll][Ee][Dd][Gg][Ee][Rr]' >/dev/null; then
     has_ledger_code=1
     break
   fi
 done <<<"$(printf '%s\n' "$DIFF_FILES" | grep -E '^hooks/|^scripts/h5' || true)"
-if [[ "$has_ledger_body" -eq 0 && "$has_ledger_code" -eq 0 ]]; then
-  if printf '%s\n' "$DIFF_FILES" | grep -q 'h5-admission' && printf '%s' "$PR_BODY_EVIDENCE" | grep -qiE '台帳|ledger'; then
-    has_ledger_body=1
-  fi
-fi
 if [[ "$has_ledger_body" -eq 0 && "$has_ledger_code" -eq 0 ]]; then
   missing+=("ledger-wiring")
 fi
@@ -822,6 +860,12 @@ done <<<"$(printf '%s\n' "$DIFF_FILES")"
 
 if [[ -n "${missing[*]-}" ]]; then
   fail "admission fee incomplete: ${missing[*]}"
+  # 期待値だけでなく、見つかったもの（観測値）と、数えない形を出す。数えない語は _H5_META_RE から作る
+  # （ここに書き写すと、語を足したときにメッセージだけが古くなる）。
+  fail "found: $(h5_describe_marker NEGATIVE) / $(h5_describe_marker LEDGER) / $(h5_describe_marker RETIRE) (each needs >= ${H5_MARKER_MIN} chars on the same line)"
+  fail "not counted: <...> placeholders; the words ${_H5_META_RE//|/ / } are blanked in marker lines and drop other lines"
+  fail "sections accepted (heading text exactly): 陰性テスト|negative test / 台帳|ledger|防御台帳 / 廃止条件|retirement (>= ${H5_MARKER_MIN} chars of content)"
+  fail "ledger from code: a changed hooks/** or scripts/h5* file that runs a ledger append helper (aidd_ledger_append[_record]) as a command, or appends (>>) to a variable whose name contains ledger"
   if printf '%s' "${missing[*]}" | grep -q 'subtraction'; then
     fail "Required subtraction declaration: H5-SUBTRACTION: N/A OR H5-RETIRE-PR: <merged PR number>"
   fi

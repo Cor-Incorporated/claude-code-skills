@@ -105,6 +105,17 @@ H5-RETIRE: <measurable retirement condition>
 H5-SUBTRACTION: N/A
 ```
 
+Each `H5-NEGATIVE`, `H5-LEDGER` and `H5-RETIRE` value needs at least 20
+characters on the same line, counted as characters (not bytes); a value that is
+still a `<...>` placeholder does not count. A section whose heading is exactly
+`陰性テスト` / `Negative test`, `台帳` / `Ledger` or `廃止条件` / `Retirement`, with at
+least 20 characters of content, can stand in for the marker. Mentioning
+`guard-ledger.jsonl` or `aidd_ledger_append` in prose or in a code comment is
+not ledger evidence. Without the marker or section, only a changed `hooks/**` or
+`scripts/h5*` file that runs `aidd_ledger_append` or `aidd_ledger_append_record`
+as a command, or appends (`>>`) to a variable whose name contains `ledger` (any
+case), counts.
+
 Replace the final line with `H5-RETIRE-PR: <number>` only when that retirement
 PR is already merged. `H5-guard: no` can describe a non-structural PR, but it
 does not exempt any built-in structural path. These declarations enforce form

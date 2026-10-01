@@ -589,6 +589,8 @@ else:
 # なぜ h5-admission では足りないか（2026-09-03 実測。作るか作らないかの分岐点）:
 #   scripts/h5-admission-check.sh の has_marker() は
 #   `H5-NEGATIVE:` の後ろに 9 文字以上あるかを PR 本文で見るだけである。
+#   （2026-10-01 にマーカーは 20 文字以上（Python の文字数）にした（corsweb2024 #375 の移植）。
+#   A は 20 文字以上なので今も通り、下の結論は変わらない）
 #   実測 3 本:
 #     A 新規 hook + "HOOK_DIR=/tmp/unfixed bash ... -> 6 failed" → exit 0 (PASS)
 #     B 新規 hook + テストファイルを 1 つも足さず散文だけ        → exit 0 (PASS)
