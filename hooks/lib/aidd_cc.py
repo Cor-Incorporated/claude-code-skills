@@ -243,6 +243,9 @@ def cmd_stop(args, payload):
         return 0
     text = _last_assistant(payload, meta)
     verdict = stop_check(meta, rows, text, _cwd(args, payload))
+    # Every evaluation leaves a measure row: live runs prove the gate ran at the
+    # registered entry even when nothing was blocked (DOT-INC-012/022).
+    guard_ledger(COMPONENT, "measure", verdict["decision"], "evidence.evaluated", text[:60], agent, session)
     if verdict["decision"] == "block":
         meta["stop_blocks"] = meta.get("stop_blocks", 0) + 1
         save_meta(agent, session, meta)
