@@ -8,10 +8,11 @@
 
 | Item | Value |
 |---|---|
-| Registered hooks in `settings.json` | **24** (ADR-006 base + H3 Stop evidence warn + dns-self-heal SessionStart + async-work 持ち越し 2 本 + lane 発射ゲート + 持ち越し照合) |
-| Events | 6 (SessionStart / PreToolUse / PostToolUse / PostToolUseFailure / PreCompact / Stop) |
+| Registered hooks in `settings.json` | **29** (ADR-006 base + H3 Stop evidence warn + dns-self-heal SessionStart + async-work 持ち越し 2 本 + lane 発射ゲート + 持ち越し照合 + H17 共通制御 5 本: PreToolUse / PostToolUse / UserPromptSubmit / PermissionRequest / Stop) |
+| Events | 8 (SessionStart / PreToolUse / PostToolUse / PostToolUseFailure / PreCompact / Stop / UserPromptSubmit / PermissionRequest) |
 | Hard-block PreToolUse | **4** (`git-push-guard`, `protect-branches`, `block-local-hooks-write`, plus SessionStart `validate-no-local-hooks`) |
 | Lane launch gate (PreToolUse:Bash) | **1** (`lane-launch-gate.sh` — 基点が古い / 同族修理が N=3 に達したレーンの発射を止める。tail-risk ではなく双方可逆なので既定は網ではなくコマンド位置同定。aidd-governance#91 / #88) |
+| H17 common control (5 entries) | **1 script** (`aidd-cc-claude.sh` → `hooks/lib/aidd_cc.py`). 止めるのは (a) 同一コマンドの無根拠反復 4 回目 (PreToolUse)、(b) ユーザーが同セッションで既に決めた質問の再質問 (PreToolUse:AskUserQuestion)、(c) 証拠束縛なしの完了宣言 (Stop: `Evidence:` の実行有無・`Readback:` の sha 一致・登録分母・rc 127・期限超過の未達報告・制御 source set の差替え)。PermissionRequest は **allow 方向のみ**（ユーザー決定が束縛する要求を再承認待ちにしない。deny はしない）。同じ oracle が Codex/Cursor/OpenCode の実入口にも載る。aidd-governance#174 / `tests/dot-replay/` |
 | Turn-boundary block (Stop) | **1** (`aidd-turn-boundary-stop.sh` — 未完了の非同期作業を残したままターンを終えさせない。止めるのは入力の session_id が登録したセッションと一致する持ち越しで、他セッション・登録元不明の分は登録から AIDD_ASYNC_FOREIGN_TTL_HOURS（既定 2）時間たつまでは情報として出し、たったら全セッションで止める（台帳は全セッション共有。2026-09-28 の干渉。登録したセッションが終わっていれば照合する主体がいない）。PreToolUse ではないので上の hard-block 4 には数えない。aidd-governance#96 / #95) |
 | Deploy path | `setup.sh` copies hooks/rules/skills/settings from **this repo's current branch** into `~/.claude` |
 

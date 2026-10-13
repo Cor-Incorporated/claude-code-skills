@@ -93,6 +93,16 @@ mkdir -p "$CURSOR_HOOKS_DIR"
 cp "$REPO_DIR/hooks/cursor/git-guard.sh" "$CURSOR_HOOKS_DIR/git-guard.sh"
 chmod +x "$CURSOR_HOOKS_DIR/git-guard.sh"
 echo "  Copied Cursor git-guard hook"
+# H17 common control (aidd-governance#174): one oracle, four real entries.
+cp "$REPO_DIR/hooks/codex/aidd-cc-codex.sh" "$CODEX_HOOKS_DIR/aidd-cc-codex.sh"
+chmod +x "$CODEX_HOOKS_DIR/aidd-cc-codex.sh"
+cp "$REPO_DIR/hooks/cursor/aidd-cc-cursor.sh" "$CURSOR_HOOKS_DIR/aidd-cc-cursor.sh"
+chmod +x "$CURSOR_HOOKS_DIR/aidd-cc-cursor.sh"
+mkdir -p "$(dirname "$OPENCODE_CONFIG")/plugins"
+cp "$REPO_DIR/opencode/aidd-cc.ts" "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-cc.ts"
+python3 "$REPO_DIR/scripts/register-aidd-cc-hooks.py" \
+  --codex "$HOME/.codex/hooks.json" --cursor "$HOME/.cursor/hooks.json" --opencode "$OPENCODE_CONFIG"
+echo "  Copied + registered H17 common control (codex / cursor / opencode)"
 
 # 6. Copy scripts
 echo "[6/9] Installing scripts..."

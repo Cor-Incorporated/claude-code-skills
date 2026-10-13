@@ -178,6 +178,17 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/aidd-cc-claude.sh",
+            "timeout": 10,
+            "statusMessage": "H17 common control: iteration / re-ask check..."
+          }
+        ],
+        "matcher": "Bash|Edit|Write|MultiEdit|AskUserQuestion"
       }
     ],
     "PostToolUse": [
@@ -229,6 +240,17 @@
             "statusMessage": "Running PostToolUse Quality Loop (lint + format)..."
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/aidd-cc-claude.sh",
+            "timeout": 10,
+            "statusMessage": "H17 common control: recording tool result..."
+          }
+        ],
+        "matcher": "Bash"
       }
     ],
     "PostToolUseFailure": [
@@ -281,8 +303,39 @@
             "command": "bash ~/.claude/hooks/aidd-turn-boundary-stop.sh",
             "timeout": 10,
             "statusMessage": "Checking unresolved async work before ending the turn..."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/aidd-cc-claude.sh",
+            "timeout": 12,
+            "statusMessage": "H17 evidence gate (blocks evidence-free completion)..."
           }
         ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/aidd-cc-claude.sh",
+            "timeout": 8,
+            "statusMessage": "H17 common control: registering user decisions / deadline..."
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/aidd-cc-claude.sh",
+            "timeout": 8,
+            "statusMessage": "H17 common control: inherited decision check..."
+          }
+        ],
+        "matcher": "Bash|Edit|Write|MultiEdit"
       }
     ]
   },

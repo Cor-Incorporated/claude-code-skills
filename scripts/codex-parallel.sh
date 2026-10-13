@@ -49,6 +49,14 @@ _H1_LIB="${SCRIPT_DIR}/lib/h1-runtime.sh"
 # shellcheck source=lib/h1-runtime.sh
 [ -f "$_H1_LIB" ] && . "$_H1_LIB"
 set -euo pipefail  # the library relaxes errexit; restore this script's mode
+
+# H17: hand the parent's user decisions to the Codex child so an approval given
+# here is not re-asked there (DOT-INC-014/025). Scope is never widened: only
+# decisions are inherited, and only when the parent session is known.
+if [ -n "${AIDD_CC_SESSION:-}" ] && [ -z "${AIDD_CC_INHERIT:-}" ]; then
+    _cc_meta="${AIDD_CC_STATE_DIR:-$HOME/.claude/state/aidd-cc}/sessions/claude-code__${AIDD_CC_SESSION}.json"
+    [ -f "$_cc_meta" ] && export AIDD_CC_INHERIT="$_cc_meta"
+fi
 if ! declare -F h1_init >/dev/null 2>&1; then
     # Library missing (partial install): run unguarded rather than failing.
     h1_init() { :; }
