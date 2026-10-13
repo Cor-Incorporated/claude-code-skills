@@ -12,7 +12,7 @@
 import os from "os"
 import path from "path"
 
-const CC_PY = path.join(os.homedir(), ".claude", "hooks", "lib", "aidd_cc.py")
+const CC_PY = process.env.AIDD_CC_PY ?? path.join(os.homedir(), ".claude", "hooks", "lib", "aidd_cc.py")
 const AGENT = "opencode"
 const MAX_REPROMPTS = 2
 
