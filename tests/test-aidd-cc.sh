@@ -447,5 +447,78 @@ printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg65","tool_name":"
 o65="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg65","last_assistant_message":"完了。\nEvidence: `bash tests/ok.sh` | x | 10:00"}' | bash "$HOOK")"
 if [ -z "$o65" ]; then ok "T65 backticked evidence command matched"; else bad "T65: $o65"; fi
 
+# ---- aidd-governance#186: independent acceptance review REJECT (2026-10-14). T66-T69 were written against the
+#      deployed control (control_sha 3bc3be21…) and committed red BEFORE the fix; the red output is in the PR body.
+j() { python3 -I -c 'import json,sys;print(json.dumps(sys.argv[1],ensure_ascii=False))' "$1"; }
+
+# (66) P1-1: the Evidence output field must match the recorded output of the cited command
+#      (independent-review-probe.txt: `git status` printed "ok"; the report claimed "47/47 pass" and was allowed)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg66","tool_name":"Bash","tool_input":{"command":"git status"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg66","tool_name":"Bash","tool_input":{"command":"git status"},"tool_response":{"exit_code":0,"stdout":"ok"}}' | bash "$HOOK" >/dev/null
+P66='{"hook_event_name":"Stop","session_id":"neg66","last_assistant_message":"47/47 全件 PASS, verified.\nEvidence: git status | 47/47 pass | now"}'
+o66="$(printf '%s' "$P66" | bash "$HOOK")"
+o66b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg66","last_assistant_message":"確認 verified.\nEvidence: git status | ok | now"}' | bash "$HOOK")"
+o66m="$(printf '%s' "$P66" | AIDD_CC_MUTATE=evidence.trailer bash "$HOOK")"
+if printf '%s' "$o66" | grep -q 'cited `47/47 pass`' && printf '%s' "$o66" | grep -q 'printed `ok`' && [ -z "$o66b" ] && [ -z "$o66m" ]; then ok "T66 fabricated output field rejected with both observed values; matching field passes; mutation evidence.trailer RED"; else bad "T66: [$o66] [$o66b] [$o66m]"; fi
+
+# (67) P1-2: evidence recorded before the last successful edit is stale (the result no longer describes the tree)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg67","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg67","tool_name":"Bash","tool_input":{"command":"pytest -q"},"tool_response":{"exit_code":0,"stdout":"3 passed"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg67","tool_name":"Edit","tool_input":{"file_path":"/x/a.py","old_string":"a","new_string":"b"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg67","tool_name":"Edit","tool_input":{"file_path":"/x/a.py","old_string":"a","new_string":"b"},"tool_response":{"filePath":"/x/a.py"}}' | bash "$HOOK" >/dev/null
+P67='{"hook_event_name":"Stop","session_id":"neg67","last_assistant_message":"verified.\nEvidence: pytest -q | 3 passed | 10:00"}'
+o67="$(printf '%s' "$P67" | bash "$HOOK")"
+o67m="$(printf '%s' "$P67" | AIDD_CC_MUTATE=evidence.executed bash "$HOOK")"
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg67b","tool_name":"Edit","tool_input":{"file_path":"/x/a.py","old_string":"a","new_string":"b"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg67b","tool_name":"Edit","tool_input":{"file_path":"/x/a.py","old_string":"a","new_string":"b"},"tool_response":{"filePath":"/x/a.py"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg67b","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg67b","tool_name":"Bash","tool_input":{"command":"pytest -q"},"tool_response":{"exit_code":0,"stdout":"3 passed"}}' | bash "$HOOK" >/dev/null
+o67b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg67b","last_assistant_message":"verified.\nEvidence: pytest -q | 3 passed | 10:00"}' | bash "$HOOK")"
+if printf '%s' "$o67" | grep -q 'edited later' && printf '%s' "$o67" | grep -q 'ran at 20' && printf '%s' "$o67" | grep -q '/x/a.py' && [ -z "$o67b" ] && [ -z "$o67m" ]; then ok "T67 evidence older than the last edit rejected (both times + path in the reason); re-run after the edit passes; mutation evidence.executed RED"; else bad "T67: [$o67] [$o67b] [$o67m]"; fi
+
+# (68a) P1-3a: the subject of a fix(scope) commit is found in every real commit form — heredoc `-m "$(cat <<'EOF' …)"`
+#       (Claude Code's default), `--message=`, `git -C <dir> commit`, `-am`, `bash -c "git commit …"` — so the 4th
+#       same-scope repair is still blocked (the probe landed 4 heredoc commits with streak 0)
+post68() { printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(j "$2")},\"tool_response\":{\"exit_code\":0,\"stdout\":\"ok\"}}" | bash "$HOOK" >/dev/null; }
+pre68() { printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(j "$2")}}" | bash "$HOOK"; }
+C68_HEREDOC=$'git commit -m "$(cat <<\'EOF\'\nfix(h17): r1 heredoc form\n\nbody line\nEOF\n)"'
+post68 neg68a "$C68_HEREDOC"
+post68 neg68a 'git commit --message="fix(h17): r2 long option"'
+post68 neg68a 'git -C /repo commit -q -m "fix(h17): r3 with -C"'
+o68a="$(pre68 neg68a "git commit -am 'fix(h17): r4 with -am'")"
+o68a2="$(pre68 neg68a "$C68_HEREDOC")"
+o68a3="$(pre68 neg68a $'git commit -m "$(cat <<\'EOF\'\nfeat(h17): r5 is not a repair\nEOF\n)"')"
+o68a4="$(pre68 neg68a $'bash -c "git commit -m \'fix(h17): r6 via bash -c\'"')"
+o68am="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg68a\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(j "$C68_HEREDOC")}}" | AIDD_CC_MUTATE=iter.repair-family bash "$HOOK")"
+if printf '%s' "$o68a" | grep -q 'repair-family\|re-adjudication' && printf '%s' "$o68a" | grep -q 'fix(h17): r4 with -am' && printf '%s' "$o68a2" | grep -q 'repair-family\|re-adjudication' \
+   && [ -z "$o68a3" ] && printf '%s' "$o68a4" | grep -q 'repair-family\|re-adjudication' && [ -z "$o68am" ]; then ok "T68a heredoc / --message= / -C / -am / bash -c fix commits count (subject in the reason); feat heredoc does not; mutation iter.repair-family RED"; else bad "T68a: [$o68a] [$o68a2] [$o68a3] [$o68a4] [$o68am]"; fi
+
+# (68b) P1-3b: a fix(scope) commit QUOTED inside a heredoc body or a string literal is not a repair commit
+#       (the acceptance session was denied its next Bash call after writing the probe file 3 times)
+C68_DOC1=$'cat > /tmp/h17-notes.md <<\'EOF\'\nprobe: git commit -m \'fix(h17): r1\' -> pre 4 deny\nEOF'
+C68_DOC2=$'cat >> /tmp/h17-notes.md <<\'EOF\'\ngit commit -m "fix(h17): r2"\nEOF'
+C68_LIT=$'printf \'%s\\n\' "git commit -m \'fix(h17): r3\'" >> /tmp/h17-notes.md'
+post68 neg68b "$C68_DOC1"; post68 neg68b "$C68_DOC2"; post68 neg68b "$C68_LIT"
+o68b="$(pre68 neg68b "$C68_DOC1")"
+o68b2="$(pre68 neg68b "git commit -q -m 'fix(h17): real 1'")"
+if [ -z "$o68b" ] && [ -z "$o68b2" ]; then ok "T68b quoted fix(h17) in heredoc bodies / string literals is not a repair: next write and first real fix allowed"; else bad "T68b: [$o68b] [$o68b2]"; fi
+
+# (69) P1-4 (Pi live 2026-10-14 08:35Z): a max-blocks release still evaluates the text; a block-worthy report leaves an
+#      `evidence.max-blocks.would-block` row and the verdict carries the visible note. The Claude Code stop_hook_active
+#      re-entry (P2-1) gets the same treatment. A benign report released by max-blocks leaves no would-block row.
+for i in 1 2; do printf '%s' '{"hook_event_name":"Stop","session_id":"neg69","last_assistant_message":"実装完了しました。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK" >/dev/null; done
+T69_TEXT=$'実装完了しました。\n\nEvidence: `write(path=\'test_file.txt\')` | {"write_response": {"result": "Successfully wrote to test_file.txt"}} | 2024-07-29 10:05:00'
+P69="{\"hook_event_name\":\"Stop\",\"session_id\":\"neg69\",\"last_assistant_message\":$(j "$T69_TEXT")}"
+o69h="$(printf '%s' "$P69" | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK")"
+o69="$(printf '%s' "$P69" | AIDD_CC_MAX_STOP_BLOCKS=2 python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent claude-code)"
+P69b="{\"hook_event_name\":\"Stop\",\"session_id\":\"neg69b\",\"stop_hook_active\":true,\"last_assistant_message\":$(j "$T69_TEXT")}"
+o69b="$(printf '%s' "$P69b" | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent claude-code)"
+for i in 1 2; do printf '%s' '{"hook_event_name":"Stop","session_id":"neg69c","last_assistant_message":"実装完了しました。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK" >/dev/null; done
+o69c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg69c","last_assistant_message":"途中経過です。次に tests を走らせます。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent claude-code)"
+if [ -z "$o69h" ] && printf '%s' "$o69" | grep -q '"would_block": true' && printf '%s' "$o69" | grep -q 'evidence unverified (max-blocks released)' \
+   && grep -q '"rule": "evidence.max-blocks.would-block".*"session": "neg69"' "$AIDD_LEDGER_PATH" \
+   && printf '%s' "$o69b" | grep -q '"would_block": true' && grep -q '"rule": "evidence.loop-guard.would-block"' "$AIDD_LEDGER_PATH" \
+   && printf '%s' "$o69c" | grep -q '"rule": "evidence.max-blocks"' && ! printf '%s' "$o69c" | grep -q 'would_block'; then ok "T69 max-blocks / loop-guard releases evaluate the text: would-block row + visible note on fabricated evidence, none on a benign report"; else bad "T69: [$o69h] [$o69] [$o69b] [$o69c]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
