@@ -474,6 +474,22 @@ def cmd_stop(args, payload):
         )
         return 0
     text = _last_assistant(payload, meta)
+    if not text.strip() and meta.get("pending_block_reason"):
+        reason = meta.pop("pending_block_reason")
+        meta["stop_blocks"] = meta.get("stop_blocks", 0) + 1
+        save_meta(agent, session, meta)
+        guard_ledger(
+            COMPONENT, "block", "deny", "evidence.pending", reason[:100], agent, session
+        )
+        _emit(
+            {
+                "decision": "block",
+                "rule": "evidence.pending",
+                "problems": [reason],
+                "reason": reason,
+            }
+        )
+        return 2 if args.exit_style == "claude" else 0
     verdict = stop_check(meta, rows, text, _cwd(args, payload))
     # Every evaluation leaves a measure row: live runs prove the gate ran at the
     # registered entry even when nothing was blocked (DOT-INC-012/022).
@@ -516,14 +532,51 @@ def cmd_note(args, payload):
 
 
 def cmd_record_assistant(args, payload):
-    """Cursor afterAgentResponse / OpenCode: keep the last assistant text for stop."""
+    """Cursor afterAgentResponse / OpenCode: keep the last assistant text for stop.
+
+    Cursor IDE fires `stop` BEFORE `afterAgentResponse` (observed 2026-10-14
+    04:56:20Z: stop evaluated an empty text, the text arrived 1 event later), so
+    the evidence check also runs here and a block is parked as
+    `pending_block_reason`; the next `stop` returns it as the followup."""
     agent, session = args.agent, _session(args, payload)
-    meta = load_meta(agent, session)
-    meta["last_assistant"] = str(payload.get("text") or payload.get("message") or "")[
-        :20000
-    ]
+    meta, rows = load_meta(agent, session), load_tools(agent, session)
+    text = str(
+        payload.get("text") or payload.get("message") or payload.get("response") or ""
+    )[:20000]
+    meta["last_assistant"] = text
+    verdict = (
+        stop_check(meta, rows, text, _cwd(args, payload))
+        if text.strip()
+        else {"decision": "allow"}
+    )
+    guard_ledger(
+        COMPONENT,
+        "measure",
+        verdict["decision"],
+        "evidence.evaluated",
+        text[:60],
+        agent,
+        session,
+    )
+    if verdict["decision"] == "block":
+        meta["pending_block_reason"] = verdict["reason"]
+        guard_ledger(
+            COMPONENT,
+            "block",
+            "deny",
+            verdict["rule"],
+            verdict["problems"][0],
+            agent,
+            session,
+        )
     save_meta(agent, session, meta)
-    _emit({"decision": "allow", "rule": "record-assistant"})
+    _emit(
+        {
+            "decision": verdict["decision"],
+            "rule": "record-assistant",
+            "reason": verdict.get("reason", ""),
+        }
+    )
 
 
 def _parse_when(s: str) -> float:

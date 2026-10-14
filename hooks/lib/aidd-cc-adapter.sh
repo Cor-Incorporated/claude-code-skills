@@ -58,6 +58,16 @@ try:
     d=json.load(sys.stdin); print(d.get('$2',''))
 except Exception: print('')" 2>/dev/null; }
 
+# Cursor's Claude-Code-hooks compatibility layer calls this adapter with camelCase
+# event names (preToolUse / postToolUse / stop / beforeSubmitPrompt / afterAgentResponse):
+# observed live 2026-10-14 03:31 UTC as `unknown-event:preToolUse` error rows.
+case "$event" in
+  preToolUse) event=PreToolUse ;;
+  postToolUse) event=PostToolUse ;;
+  stop) event=Stop ;;
+  userPromptSubmit|beforeSubmitPrompt) event=UserPromptSubmit ;;
+  afterAgentResponse) run_cc record-assistant >/dev/null; exit 0 ;;
+esac
 case "$event" in
   PreToolUse)
     v="$(run_cc pre)"
