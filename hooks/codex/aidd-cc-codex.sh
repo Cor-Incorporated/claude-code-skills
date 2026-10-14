@@ -6,7 +6,7 @@
 # python module are read from ~/.claude/hooks/lib/.
 set -uo pipefail
 ADAPTER=""
-for cand in "$HOME/.claude/hooks/lib/aidd-cc-adapter.sh" \
+for cand in "${AIDD_CC_ADAPTER:-}" "$HOME/.claude/hooks/lib/aidd-cc-adapter.sh" \
             "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/aidd-cc-adapter.sh"; do
   [ -n "$cand" ] && [ -f "$cand" ] && ADAPTER="$cand" && break
 done

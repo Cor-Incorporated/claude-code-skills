@@ -41,6 +41,18 @@ export function runCC(cmd: string, payload: Record<string, unknown>): Promise<Ve
   });
 }
 
+function editInput(input: any): Record<string, unknown> {
+  // Pi edit/write carry oldText/newText/content: keep them so distinct edits get
+  // distinct keys in the common control (Codex r3 P2-4).
+  return {
+    command: input?.command,
+    file_path: input?.path ?? input?.file_path,
+    old_string: input?.oldText ?? input?.old_string,
+    new_string: input?.newText ?? input?.new_string,
+    content: input?.content,
+  };
+}
+
 function textOf(message: unknown): string {
   const content = (message as { content?: unknown })?.content;
   if (typeof content === "string") return content;
@@ -69,7 +81,7 @@ export default function aiddCommonControl(pi: any) {
   pi.on("tool_call", async (event: any) => {
     const input = event?.input ?? {};
     const tool = event?.toolName === "bash" ? "Bash" : event?.toolName === "edit" ? "Edit" : event?.toolName === "write" ? "Write" : String(event?.toolName ?? "tool");
-    const v = await runCC("pre", { session_id: sessionID, tool_name: tool, tool_input: { command: input.command, file_path: input.path ?? input.file_path } });
+    const v = await runCC("pre", { session_id: sessionID, tool_name: tool, tool_input: editInput(input) });
     if (v.decision === "block") return { block: true, reason: `[H17] ${v.reason ?? v.rule}` };
     return undefined;
   });
@@ -81,7 +93,7 @@ export default function aiddCommonControl(pi: any) {
     await runCC("post", {
       session_id: sessionID,
       tool_name: tool,
-      tool_input: { command: input.command, file_path: input.path ?? input.file_path },
+      tool_input: editInput(input),
       tool_response: { exit_code: rc, stdout: textOf(event).slice(0, 4000) },
     });
     return undefined;

@@ -21,7 +21,8 @@ set -uo pipefail
 AGENT="${AIDD_CC_AGENT:-claude-code}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CC_PY=""
-for cand in "$HERE/aidd_cc.py" "$HOME/.claude/hooks/lib/aidd_cc.py"; do
+for cand in "${AIDD_CC_PY:-}" "$HERE/aidd_cc.py" "$HOME/.claude/hooks/lib/aidd_cc.py"; do
+  [ -n "$cand" ] || continue
   [ -f "$cand" ] && CC_PY="$cand" && break
 done
 

@@ -162,5 +162,37 @@ for i in 1 2 3 4; do printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_
 o25b="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg25b","tool_name":"Edit","tool_input":{"file_path":"/tmp/x.py","old_string":"a9","new_string":"b9"}}' | bash "$HOOK")"
 if printf '%s' "$o25a" | grep -q 'occurrence 4' && [ -z "$o25b" ]; then ok "T25 identical edits blocked, distinct edits allowed"; else bad "T25: [$o25a] [$o25b]"; fi
 
+# (26) approving the dry-run variant never covers the real operation (Codex r3 P1-1)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg26","prompt":"git push origin feat/x --dry-run は承認、進めて"}' | bash "$HOOK" >/dev/null
+o26="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg26","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+if [ -z "$o26" ]; then ok "T26 dry-run approval does not cover the real push"; else bad "T26: $o26"; fi
+
+# (27) `pytest -q || true` gives the segment an UNKNOWN status (Codex r3 P2-1)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg27","tool_name":"Bash","tool_input":{"command":"pytest -q || true"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg27","tool_name":"Bash","tool_input":{"command":"pytest -q || true"},"tool_response":{"exit_code":0,"stdout":"1 failed"}}' | bash "$HOOK" >/dev/null
+o27="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg27","last_assistant_message":"全テスト完了。\nEvidence: pytest -q | 20 passed | 10:00"}' | bash "$HOOK")"
+if printf '%s' "$o27" | grep -q 'unavailable'; then ok "T27 compound || rc is UNKNOWN for the segment"; else bad "T27: $o27"; fi
+
+# (28) cp SOURCE is not a written artifact (Codex r3 P2-3)
+src="$SB/original.txt"; printf 'v1\n' >"$src"; ssha="$(shasum -a 256 "$src" | cut -c1-64)"
+printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg28\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp $src $SB/backup.txt\"}}" | bash "$HOOK" >/dev/null
+printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg28\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp $src $SB/backup.txt\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"\"}}" | bash "$HOOK" >/dev/null
+o28="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg28\",\"last_assistant_message\":\"原本を保存済み。完了。\\nEvidence: cp $src $SB/backup.txt | ok | 10:00\\nReadback: $src sha256=$ssha\"}" | bash "$HOOK")"
+if printf '%s' "$o28" | grep -q 'never written'; then ok "T28 cp source is not a written artifact"; else bad "T28: $o28"; fi
+
+# (29) real AskUserQuestion shape (header/options/description) is still matched on the question text (Codex r3 P2-2)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg29","prompt":"PR作成は承認、進めて"}' | bash "$HOOK" >/dev/null
+o29="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg29","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"PR作成を進めてよいですか？","header":"Approach","options":[{"label":"Yes, create the pull request now","description":"Opens a PR against develop with the current branch"},{"label":"No, wait for more review","description":"Keep working locally"}],"multiSelect":false}]}}' | bash "$HOOK")"
+if printf '%s' "$o29" | grep -q 'already decided'; then ok "T29 real-shape question matched on its text"; else bad "T29: $o29"; fi
+
+# (30) a revocation in the parent reaches a child that already saved the inherited decision (Codex r3 P1-3)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg30p","prompt":"git push origin feat/x は承認、進めて"}' | bash "$HOOK" >/dev/null
+PMETA="$AIDD_CC_STATE_DIR/sessions/claude-code__neg30p.json"
+printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg30c","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | AIDD_CC_INHERIT="$PMETA" bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg30c","prompt":"進捗を教えて"}' | AIDD_CC_INHERIT="$PMETA" bash "$HOOK" >/dev/null   # child saves its meta (inherited decision inside)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg30p","prompt":"前の承認は取り消します。実行しないでください"}' | bash "$HOOK" >/dev/null
+o30="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg30c","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | AIDD_CC_INHERIT="$PMETA" bash "$HOOK")"
+if [ -z "$o30" ]; then ok "T30 parent revocation reaches the child"; else bad "T30: $o30"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

@@ -63,9 +63,14 @@ def load_meta(agent: str, session: str) -> dict:
         except (OSError, ValueError):
             meta = None
     if meta is not None:
-        own = {d.get("sha") for d in meta.get("decisions", [])}
+        inherited_now = inherited_decisions()
+        live = {d.get("sha") for d in inherited_now}
+        # Drop inherited decisions the parent no longer holds (revoked there): the
+        # parent's current state wins, every time the child loads (Codex r3 P1-3).
+        meta["decisions"] = [d for d in meta.get("decisions", []) if not d.get("inherited_from") or d.get("sha") in live]
+        own = {d.get("sha") for d in meta["decisions"]}
         if not meta.get("revoked_at"):
-            meta["decisions"] = meta.get("decisions", []) + [d for d in inherited_decisions() if d.get("sha") not in own]
+            meta["decisions"] += [d for d in inherited_now if d.get("sha") not in own]
         return meta
     return {
         "agent": agent,

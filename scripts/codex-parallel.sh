@@ -114,7 +114,7 @@ capture_mcp_snapshot() {
 # Returns 0 only when EVERY *.sh registered in ~/.codex/hooks.json is a known
 # AIDD hook AND (when the checkout is reachable) is byte-identical to its
 # version-controlled source. Anything unknown or drifted => 1 => no bypass.
-CODEX_VETTED_HOOKS="protect-branches-codex.sh h1-stall-runtime.sh"
+CODEX_VETTED_HOOKS="protect-branches-codex.sh h1-stall-runtime.sh aidd-cc-codex.sh"
 hooks_verified_against_repo() {
     local hooks_json="$HOME/.codex/hooks.json"
     [[ -f "$hooks_json" ]] || return 1

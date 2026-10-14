@@ -163,27 +163,41 @@ def normalize_cmd(cmd: str) -> str:
 
 def shell_segments(cmd: str) -> list[str]:
     """Split a shell line into command segments on ; | & and newlines, ignoring
-    separators inside single/double quotes (Codex r2 P2-h: `printf '%s' 'a;pytest'`
-    is one segment)."""
-    segs, cur, quote, i = [], [], None, 0
+    separators inside single/double quotes (`printf '%s' 'a;pytest'` is one
+    segment)."""
+    return [seg for seg, _sep in shell_segments_with_separators(cmd)]
+
+
+def shell_segments_with_separators(cmd: str) -> list[tuple[str, str]]:
+    """Like shell_segments but returns (segment, separator_before_it); the
+    separator is "" for the first segment, else one of && || ; | & \n."""
+    out, cur, quote, i, sep = [], [], None, 0, ""
     text = cmd or ""
     while i < len(text):
         ch = text[i]
+        two = text[i:i + 2]
         if quote:
             cur.append(ch)
             if ch == quote:
                 quote = None
+            i += 1
         elif ch in ("'", '"'):
             quote = ch
             cur.append(ch)
+            i += 1
+        elif two in ("&&", "||"):
+            out.append(("".join(cur), sep))
+            cur, sep = [], two
+            i += 2
         elif ch in (";", "|", "&", "\n"):
-            segs.append("".join(cur))
-            cur = []
+            out.append(("".join(cur), sep))
+            cur, sep = [], ch
+            i += 1
         else:
             cur.append(ch)
-        i += 1
-    segs.append("".join(cur))
-    return [re.sub(r"\s+", " ", x.strip()) for x in segs if x.strip()]
+            i += 1
+    out.append(("".join(cur), sep))
+    return [(re.sub(r"\s+", " ", seg.strip()), s) for seg, s in out if seg.strip()]
 
 
 def segment_runs(seg: str, cited: str) -> bool:
@@ -310,16 +324,19 @@ def matching_decision(question: str, decisions: list[dict], threshold: float = 0
 
 
 def command_bound(decision_text: str, request: str) -> bool:
-    """Strict binding for PermissionRequest (Codex review P1-2 / r2 P1-b): the
-    exact normalised request must appear in the decision text as a WHOLE
-    operation — bounded on both sides by whitespace / punctuation / end, so
-    `rm -rf data/archive` never covers `rm -rf data` and `feat/xyz` never covers
-    `feat/x`.  Topical similarity never grants permission."""
+    """Strict binding for PermissionRequest: the normalised request must appear
+    in the decision text as the WHOLE approved operation — bounded on the left,
+    and followed by nothing ASCII except an approval word.  So `rm -rf data/archive`
+    never covers `rm -rf data`, `feat/xyz` never covers `feat/x`, and approving
+    `git push origin feat/x --dry-run` never covers `git push origin feat/x`
+    (Codex r3 P1-1).  Topical similarity never grants permission."""
     req = re.sub(r"\s+", " ", (request or "").strip())
     dec = re.sub(r"\s+", " ", (decision_text or ""))
     if len(req) < 3:
         return False
-    return re.search(r"(?<![\w./:@~-])" + re.escape(req) + r"(?![\w./:@~-])", dec) is not None
+    pat = (r"(?<![\w./:@~-])" + re.escape(req)
+           + r"(?![\w./:@~-])(?!\s+(?!(?:ok|okay|yes|approved?|lgtm|go ahead|proceed)\b)[-A-Za-z0-9_./:@~])")
+    return re.search(pat, dec, re.IGNORECASE) is not None
 
 
 def is_confirmation_question(question: str) -> bool:

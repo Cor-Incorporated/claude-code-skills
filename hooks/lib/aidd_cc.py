@@ -106,13 +106,23 @@ def _tool_name(payload: dict, default: str) -> str:
             "askuserquestion": "AskUserQuestion"}.get(name.lower(), name)
 
 
+def _question_text(ti: dict) -> str:
+    """Only the question sentences — never headers / option labels / descriptions
+    (Codex r3 P2-2: those words dilute the overlap denominator)."""
+    qs = ti.get("questions")
+    if isinstance(qs, list):
+        parts = [str(q.get("question") or q.get("prompt") or "") if isinstance(q, dict) else str(q) for q in qs]
+        return "\n".join(p for p in parts if p)
+    return str(ti.get("question") or ti.get("prompt") or ti.get("message") or json.dumps(ti, ensure_ascii=False))
+
+
 def cmd_pre(args, payload):
     agent, session = args.agent, _session(args, payload)
     tool = _tool_name(payload, args.tool or "Bash")
     ti = _tool_input(payload)
     meta, rows = load_meta(agent, session), load_tools(agent, session)
     if tool in ("AskUserQuestion", "ask_user", "question"):
-        q = json.dumps(ti.get("questions") or ti, ensure_ascii=False)
+        q = _question_text(ti)
         verdict = question_check(meta, q)
     else:
         verdict = iteration_check(rows, meta, tool, ti)

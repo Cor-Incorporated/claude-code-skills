@@ -22,6 +22,7 @@ from aidd_cc_text import (
     command_bound,
     segment_runs,
     shell_segments,
+    shell_segments_with_separators,
     is_confirmation_question,
     is_trivial_cmd,
     denominator_mismatch,
@@ -171,23 +172,37 @@ def _executed_commands(rows: list[dict]) -> list[str]:
 
 
 def _rc_for(rows: list[dict], cited: str):
+    """Exit status attributable to the cited segment.  A compound command's
+    recorded rc belongs to the whole line: it transfers to a segment only when
+    every separator is `&&` (all segments succeeded iff rc==0) or the segment
+    is the whole line; with `||`, `;`, `|` or `&` the segment's own status is
+    UNKNOWN (Codex r3 P2-1: `pytest -q || true`)."""
     norm = re.sub(r"\s+", " ", cited.strip())
     for r in reversed(rows):
         if r.get("event") != "post":
             continue
-        for seg in shell_segments(str(r.get("cmd", ""))):
+        parts = shell_segments_with_separators(str(r.get("cmd", "")))
+        for seg, _sep in parts:
             if segment_runs(seg, norm):
-                return r.get("rc"), r.get("out_bytes", 0)
+                seps = {s for _x, s in parts if s}
+                if len(parts) == 1 or seps <= {"&&"}:
+                    return r.get("rc"), r.get("out_bytes", 0)
+                return None, r.get("out_bytes", 0)
     return None, 0
 
 
 WRITE_CMD_RE = re.compile(r"^(cp|mv|tee|install|rsync|ln|touch|dd|patch|git apply|git checkout|sed -i|curl .*-o|wget .*-O|python3? .*\.py|node .*\.m?js|bash .*\.sh)\b")
 
 
+WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
+WRITE_ALL_RE = re.compile(r"^(tee|touch|patch|git apply|git checkout|sed -i)\b")
+
+
 def _touched_paths(rows: list[dict]) -> set[str]:
-    """Absolute paths this session WROTE: Edit/Write keys, and path arguments of
-    writing commands (cp/mv/tee/install/…).  Merely mentioning a path
-    (`cat /etc/hosts`, `aidd_cc.py readback …`) does not count (reviewer-d #8)."""
+    """Absolute paths this session WROTE: Edit/Write keys, the destination of
+    cp/mv/rsync/install/ln (last argument only — the source is not written,
+    Codex r3 P2-3), the arguments of tee/touch/patch/sed -i, and `>` redirection
+    targets.  Merely mentioning a path does not count."""
     out = set()
     for r in rows:
         cwd = str(r.get("cwd") or "")
@@ -196,8 +211,12 @@ def _touched_paths(rows: list[dict]) -> set[str]:
         if key.startswith("edit:"):
             cands.append(key[5:].rsplit(":", 1)[0] if key.count(":") >= 2 else key[5:])
         for seg in shell_segments(str(r.get("cmd", ""))):
-            if WRITE_CMD_RE.match(seg):
-                cands += [t for t in re.findall(r"[\w./~-]+", seg)[1:] if "/" in t or "." in t]
+            toks = [t for t in re.findall(r"[\w./~-]+", seg) if "/" in t or "." in t]
+            if WRITE_LAST_RE.match(seg) and toks:
+                cands.append(toks[-1])
+            elif WRITE_ALL_RE.match(seg):
+                cands += toks
+            cands += re.findall(r"\d?>>?\s*([\w./~-]+)", seg)
         for c in cands:
             p = Path(c).expanduser()
             if not p.is_absolute():
