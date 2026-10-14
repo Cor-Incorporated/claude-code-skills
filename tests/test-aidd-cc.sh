@@ -239,5 +239,32 @@ printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg35b","tool_name":
 o35b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg35b","last_assistant_message":"完了。\nEvidence: pytest -q | 20 passed | 10:00"}' | bash "$HOOK")"
 if printf '%s' "$o35" | grep -q 'occurrence 4' && printf '%s' "$o35b" | grep -q 'unavailable'; then ok "T35 apply_patch repeats blocked; piped rc is UNKNOWN"; else bad "T35: [$o35] [$o35b]"; fi
 
+# (36) a verb inside the file name is not a write-kind approval (Codex r5 P1)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg36","prompt":"cat /tmp/update.json は承認、進めて"}' | bash "$HOOK" >/dev/null
+o36="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg36","tool_name":"Write","tool_input":{"file_path":"/tmp/update.json","content":"x"}}' | bash "$HOOK")"
+if [ -z "$o36" ]; then ok "T36 verb in file name is not a write approval"; else bad "T36: $o36"; fi
+
+# (37) whole-line citation of `pytest -q; true` is still UNKNOWN; incomplete trailer rejected (Codex r5 P2-a/P2-h)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg37","tool_name":"Bash","tool_input":{"command":"pytest -q; true"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg37","tool_name":"Bash","tool_input":{"command":"pytest -q; true"},"tool_response":{"exit_code":0,"stdout":"3 failed"}}' | bash "$HOOK" >/dev/null
+o37="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg37","last_assistant_message":"全テスト完了。\nEvidence: pytest -q; true | 20 passed | 10:00"}' | bash "$HOOK")"
+o37b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg37","last_assistant_message":"全テスト完了。\nEvidence: pytest -q; true"}' | bash "$HOOK")"
+if printf '%s' "$o37" | grep -q 'unavailable' && printf '%s' "$o37b" | grep -q 'incomplete Evidence'; then ok "T37 masked whole-line rc is UNKNOWN; incomplete trailer rejected"; else bad "T37: [$o37] [$o37b]"; fi
+
+# (38) `cp /missing dest || true` does not make dest a written artifact (Codex r5 P2-b)
+dst="$SB/dest.txt"; printf 'old\n' >"$dst"; dsha="$(shasum -a 256 "$dst" | cut -c1-64)"
+printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg38\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp /missing $dst || true\"}}" | bash "$HOOK" >/dev/null
+printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg38\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp /missing $dst || true\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"\"}}" | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg38","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg38","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"},"tool_response":{"exit_code":0,"stdout":"x"}}' | bash "$HOOK" >/dev/null
+o38="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg38\",\"last_assistant_message\":\"保存済み。完了。\\nEvidence: bash tests/ok.sh | x | 10:00\\nReadback: $dst sha256=$dsha\"}" | bash "$HOOK")"
+if printf '%s' "$o38" | grep -q 'never written'; then ok "T38 masked cp does not count as a write"; else bad "T38: $o38"; fi
+
+# (39) one undecided question keeps a multi-question call (Codex r5 P2-d)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg39","prompt":"PR作成は承認、進めて"}' | bash "$HOOK" >/dev/null
+o39="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg39","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"PR作成を進めてよいですか？"},{"question":"release ノート生成を進めてよいですか？"}]}}' | bash "$HOOK")"
+o39b="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg39","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"PR作成を進めてよいですか？"}]}}' | bash "$HOOK")"
+if [ -z "$o39" ] && printf '%s' "$o39b" | grep -q 'already decided'; then ok "T39 undecided question keeps the call; fully-answered call blocked"; else bad "T39: [$o39] [$o39b]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

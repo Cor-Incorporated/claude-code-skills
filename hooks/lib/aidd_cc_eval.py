@@ -111,6 +111,9 @@ def speed_compare(on: dict, off: dict, required_ratio: float = 2.0) -> dict:
                interventions: [..]}.  Returns a verdict dict, never a bare number.
     """
     problems = []
+    for field in ("model", "grader_version", "start_checkpoint"):
+        if (on.get(field) is None or off.get(field) is None) and not mutated("metrics.model-identity"):
+            return {"verdict": NOT_PROVEN, "reason": f"{field} missing on an arm: identity not established (Codex r5 P2-g)", "problems": problems}
     if on.get("model") != off.get("model") and not mutated("metrics.model-identity"):
         problems.append("model mismatch: harness effect not separable (DOT-INC-034)")
     if on.get("grader_version") != off.get("grader_version") and not mutated(

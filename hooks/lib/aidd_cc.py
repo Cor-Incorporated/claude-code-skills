@@ -111,6 +111,14 @@ def _tool_name(payload: dict, default: str) -> str:
             "askuserquestion": "AskUserQuestion"}.get(name.lower(), name)
 
 
+def _question_texts(ti: dict) -> list[str]:
+    qs = ti.get("questions")
+    if isinstance(qs, list):
+        out = [str(q.get("question") or q.get("prompt") or "") if isinstance(q, dict) else str(q) for q in qs]
+        return [q for q in out if q] or [""]
+    return [_question_text(ti)]
+
+
 def _question_text(ti: dict) -> str:
     """Only the question sentences — never headers / option labels / descriptions
     (Codex r3 P2-2: those words dilute the overlap denominator)."""
@@ -127,9 +135,13 @@ def cmd_pre(args, payload):
     ti = _tool_input(payload)
     meta, rows = load_meta(agent, session), load_tools(agent, session)
     if tool in ("AskUserQuestion", "ask_user", "question"):
-        q = _question_text(ti)
-        verdict = question_check(meta, q)
-        if verdict.get("remember"):
+        qs = _question_texts(ti)
+        verdicts = [question_check(meta, q) for q in qs]
+        blocked = [v for v in verdicts if v["decision"] == "block"]
+        # Block only when EVERY question is already answered; one undecided
+        # question keeps the whole call (Codex r5 P2-d).
+        verdict = blocked[0] if blocked and len(blocked) == len(verdicts) else {"decision": "allow", "rule": "decision"}
+        if any(v.get("remember") for v in verdicts):
             save_meta(agent, session, meta)
     else:
         verdict = iteration_check(rows, meta, tool, ti)
@@ -167,17 +179,17 @@ def _exit_status(payload: dict, resp, agent: str):
     failed = payload.get("hook_event_name") == "PostToolUseFailure" or payload.get("is_error") or payload.get("error")
     if failed:
         err = str(payload.get("error") or out)
-        return (127 if "command not found" in err else 124 if "timed out" in err.lower() else (rc if rc not in (None, 0) else 1)), out
+        return (127 if "command not found" in err else 124 if "timed out" in err.lower() else (rc if rc not in (None, 0) else 1)), out, "harness"
     if rc is None:
         tail = "\n".join(out.rstrip().splitlines()[-3:])  # status lines only, at the end (reviewer-e N4)
         m = re.search(r"^\s*(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})\s*$", tail, re.IGNORECASE | re.MULTILINE)
         if not m:
             m = re.search(r"^\s*exit=(-?\d{1,3})\s*$", tail, re.MULTILINE)
         if m:
-            rc = int(m.group(1))
+            return int(m.group(1)), out, "marker"   # the command's own trailing status line
         elif agent == "claude-code" and isinstance(resp, dict):
             rc = 0
-    return rc, out
+    return rc, out, "harness"
 
 
 def cmd_post(args, payload):
@@ -185,13 +197,13 @@ def cmd_post(args, payload):
     tool = _tool_name(payload, args.tool or "Bash")
     ti = _tool_input(payload)
     resp = payload.get("tool_response") or payload.get("output") or {}
-    rc, out = _exit_status(payload, resp, agent)
+    rc, out, rc_src = _exit_status(payload, resp, agent)
     key = _norm_key(tool, ti)
     record_tool(
         agent,
         session,
         {
-            "event": "post", "cwd": _cwd(args, payload),
+            "event": "post", "cwd": _cwd(args, payload), "rc_src": rc_src,
             "tool": tool,
             "key": key,
             "rc": rc,

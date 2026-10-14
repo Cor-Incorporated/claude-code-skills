@@ -29,6 +29,7 @@ from aidd_cc_text import (
     is_trivial_cmd,
     denominator_mismatch,
     evidence_commands,
+    incomplete_evidence_lines,
     has_completion_claim,
     has_persist_claim,
     has_push_claim,
@@ -68,8 +69,8 @@ def _norm_key(tool: str, tool_input: dict) -> str:
     if tool in ("Edit", "Write", "MultiEdit"):
         import json as _json
         body = (str(tool_input.get("old_string", "")) + "\x00" + str(tool_input.get("new_string", ""))
-                + "\x00" + str(tool_input.get("content", ""))[:4000]
-                + "\x00" + _json.dumps(tool_input.get("edits", ""), ensure_ascii=False, sort_keys=True)[:8000])
+                + "\x00" + str(tool_input.get("content", ""))
+                + "\x00" + _json.dumps(tool_input.get("edits", ""), ensure_ascii=False, sort_keys=True))
         digest = hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()[:12]
         return f"edit:{tool_input.get('file_path', '')}:{digest}"   # distinct edits differ (P2-5)
     return normalize_cmd(str(tool_input.get("command") or ""))[:4000]
@@ -167,8 +168,9 @@ def permission_check(meta: dict, request_text: str, request_cmd: str = "", reque
         if request_cmd and command_bound(dtext, request_cmd):
             return {"decision": "allow", "rule": "decision.inherited", "decision_ref": d["sha"],
                     "reason": f"user decision {d['at']} names this exact request"}
+        kind_text = dtext.replace(request_path, " ") if request_path else dtext  # verbs inside the file name do not count (Codex r5 P1)
         if request_path and not request_cmd and command_bound(dtext, request_path) \
-                and WRITE_KIND_RE.search(dtext) and not DELETE_KIND_RE.search(dtext):
+                and WRITE_KIND_RE.search(kind_text) and not DELETE_KIND_RE.search(kind_text):
             return {"decision": "allow", "rule": "decision.inherited", "decision_ref": d["sha"],
                     "reason": f"user decision {d['at']} names this path with a write-kind operation"}
     if mutated("approval.binding"):
@@ -185,25 +187,30 @@ def _executed_commands(rows: list[dict]) -> list[str]:
     ]
 
 
+def _line_rc_applies(line: str) -> bool:
+    """The recorded rc describes every segment only for a single command or a
+    pure `&&` chain; `;`, `||`, `|`, `&` can mask a failure."""
+    parts = shell_segments_with_separators(line)
+    seps = {sp for _x, sp in parts if sp}
+    return len(parts) == 1 or seps <= {"&&"}
+
+
 def _rc_for(rows: list[dict], cited: str):
-    """Exit status attributable to the cited command.  The whole line cited
-    verbatim gets the line's rc.  A compound line's rc transfers to a segment
-    only when every separator is `&&`; with `||`, `;`, `|` or `&` the segment's
-    own status is UNKNOWN (`pytest -q || true`)."""
+    """Exit status attributable to the cited command.  Whole-line citations and
+    segment matches both get the line's rc only when nothing in the line can
+    mask a failure (`pytest -q; true` cited verbatim is still UNKNOWN,
+    Codex r5 P2-a)."""
     norm = re.sub(r"\s+", " ", cited.strip())
     for r in reversed(rows):
         if r.get("event") != "post":
             continue
         line = str(r.get("cmd", ""))
-        if re.sub(r"\s+", " ", line.strip()) == norm:
-            return r.get("rc"), r.get("out_bytes", 0)
-        parts = shell_segments_with_separators(line)
-        for seg, _sep in parts:
-            if segment_runs(seg, norm):
-                seps = {s for _x, s in parts if s}
-                if len(parts) == 1 or seps <= {"&&"}:
-                    return r.get("rc"), r.get("out_bytes", 0)
-                return None, r.get("out_bytes", 0)
+        whole = re.sub(r"\s+", " ", line.strip()) == norm
+        seg_hit = any(segment_runs(seg, norm) for seg, _sp in shell_segments_with_separators(line))
+        if whole or seg_hit:
+            if r.get("rc_src") == "marker" and whole:
+                return r.get("rc"), r.get("out_bytes", 0)   # `cmd; echo exit=$?` cited verbatim: the marker IS cmd's status
+            return (r.get("rc") if _line_rc_applies(line) else None), r.get("out_bytes", 0)
     return None, 0
 
 
@@ -226,6 +233,8 @@ def _touched_paths(rows: list[dict]) -> set[str]:
         cwd = str(r.get("cwd") or "")
         key = str(r.get("key", ""))
         cands = []
+        if r.get("cmd") and not _line_rc_applies(str(r.get("cmd"))):
+            continue  # `cp … || true`: the copy's own success is unknown (Codex r5 P2-b)
         if key.startswith("edit:"):
             cands.append(key[5:].rsplit(":", 1)[0] if key.count(":") >= 2 else key[5:])
         for seg in shell_segments(str(r.get("cmd", ""))):
@@ -277,6 +286,9 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
     if not (has_completion_claim(text) or has_persist_claim(text)):
         return _verdict(problems)
     cmds = evidence_commands(text)
+    for bad in incomplete_evidence_lines(text):
+        if not mutated("evidence.trailer"):
+            problems.append(f"incomplete Evidence trailer (need <cmd> | <output> | <time>): {bad}")
     if not cmds and not mutated("evidence.trailer"):
         problems.append(
             "completion claim without `Evidence: <cmd> | <output> | <time>` trailer (DOT-INC-010)"

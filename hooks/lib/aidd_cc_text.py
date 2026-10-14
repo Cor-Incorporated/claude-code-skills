@@ -146,13 +146,24 @@ def has_unmet_report(text: str) -> bool:
 
 
 def evidence_commands(text: str) -> list[str]:
-    """Commands cited in `Evidence: <cmd> | <output> | <time>` trailers."""
+    """Commands cited in COMPLETE `Evidence: <cmd> | <output> | <time>` trailers.
+    A trailer missing the output or time field is not evidence (Codex r5 P2-h);
+    see incomplete_evidence_lines() for the diagnostic."""
     cmds = []
     for line in EVIDENCE_LINE_RE.findall(text or ""):
-        head = line.split("|", 1)[0].strip()
-        if head:
-            cmds.append(head)
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 3 and all(parts[:3]):
+            cmds.append(parts[0])
     return cmds
+
+
+def incomplete_evidence_lines(text: str) -> list[str]:
+    out = []
+    for line in EVIDENCE_LINE_RE.findall(text or ""):
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 3 or not all(parts[:3]):
+            out.append(line[:80])
+    return out
 
 
 def readback_claims(text: str) -> list[tuple[str, str]]:

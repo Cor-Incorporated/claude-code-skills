@@ -8,8 +8,9 @@
 # Session key: conversation_id.  Deployed to ~/.cursor/hooks/aidd-cc-cursor.sh.
 set -uo pipefail
 CC_PY=""
-for cand in "${AIDD_CC_PY:-}" "$HOME/.claude/hooks/lib/aidd_cc.py" \
-            "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/aidd_cc.py"; do
+for cand in "${AIDD_CC_PY:-}" \
+            "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/aidd_cc.py" \
+            "$HOME/.claude/hooks/lib/aidd_cc.py"; do
   [ -n "$cand" ] && [ -f "$cand" ] && CC_PY="$cand" && break
 done
 input="$(cat 2>/dev/null || true)"

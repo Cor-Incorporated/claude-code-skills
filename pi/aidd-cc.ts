@@ -90,12 +90,17 @@ export default function aiddCommonControl(pi: any) {
   pi.on("tool_result", async (event: any) => {
     const input = event?.input ?? {};
     const tool = event?.toolName === "bash" ? "Bash" : String(event?.toolName ?? "tool");
-    const rc = typeof event?.details?.exitCode === "number" ? event.details.exitCode : event?.isError ? 1 : 0;
+    // Pi 1.2.0 bash results carry the exit code in structuredContent.exit_code (Codex r5 P2-e).
+    const sc = event?.structuredContent ?? event?.result?.structuredContent;
+    const rc = typeof sc?.exit_code === "number" ? sc.exit_code
+      : typeof sc?.exitCode === "number" ? sc.exitCode
+      : typeof event?.details?.exitCode === "number" ? event.details.exitCode
+      : event?.isError ? 1 : undefined;
     await runCC("post", {
       session_id: sessionID,
       tool_name: tool,
       tool_input: editInput(input),
-      tool_response: { exit_code: rc, stdout: textOf(event).slice(0, 4000) },
+      tool_response: { exit_code: rc, stdout: textOf(event).slice(0, 4000), output: textOf(event).slice(0, 4000) },
     });
     return undefined;
   });
