@@ -18,8 +18,11 @@ from pathlib import Path
 
 from aidd_cc_eval import deadline_status, file_sha
 from aidd_cc_text import (
+    APPROVAL_RE,
     DELETE_KIND_RE,
+    NEGATION_RE,
     WRITE_KIND_RE,
+    canonical_approval,
     clause_of,
     cmd_in_ledger,
     command_bound,
@@ -154,6 +157,15 @@ def question_check(meta: dict, question: str) -> dict:
     return {"decision": "allow", "rule": "decision", "remember": True}
 
 
+def _clause_approves(dtext: str, needle: str, write_kind: bool = False) -> bool:
+    """The clause holding `needle` must be a canonical approval of exactly that
+    target (see aidd_cc_text.canonical_approval)."""
+    clause = clause_of(dtext, needle)
+    if not clause or NEGATION_RE.search(clause) or not APPROVAL_RE.search(clause):
+        return False
+    return canonical_approval(clause, needle, WRITE_KIND_RE.pattern if write_kind else "")
+
+
 def permission_check(meta: dict, request_text: str, request_cmd: str = "", request_path: str = "") -> dict:
     """C-DECISION for permission prompts: allow only when a user decision binds it.
 
@@ -167,13 +179,15 @@ def permission_check(meta: dict, request_text: str, request_cmd: str = "", reque
     decisions = meta.get("decisions", [])
     for d in decisions:
         dtext = d.get("text", "")
-        if request_cmd and command_bound(dtext, request_cmd):
+        # The approval word must sit in the same clause as the command (Codex r7 P1-a):
+        # "X は説明して。README の更新は承認" approves README, not X.
+        if request_cmd and command_bound(dtext, request_cmd) and _clause_approves(dtext, request_cmd):
             return {"decision": "allow", "rule": "decision.inherited", "decision_ref": d["sha"],
                     "reason": f"user decision {d['at']} names this exact request"}
         # The write verb must sit in the SAME clause as the path (Codex r6 P1-b), and verbs
         # inside the file name itself do not count (Codex r5 P1).
         kind_text = clause_of(dtext, request_path).replace(request_path, " ") if request_path else dtext
-        if request_path and not request_cmd and command_bound(dtext, request_path) \
+        if request_path and not request_cmd and command_bound(dtext, request_path) and _clause_approves(dtext, request_path, True) \
                 and WRITE_KIND_RE.search(kind_text) and not DELETE_KIND_RE.search(kind_text):
             return {"decision": "allow", "rule": "decision.inherited", "decision_ref": d["sha"],
                     "reason": f"user decision {d['at']} names this path with a write-kind operation"}
@@ -213,7 +227,7 @@ def _rc_for(rows: list[dict], cited: str):
         seg_hit = any(segment_runs(seg, norm) for seg, _sp in shell_segments_with_separators(line))
         if whole or seg_hit:
             parts = shell_segments_with_separators(line)
-            if (r.get("rc_src") == "marker" and len(parts) == 2
+            if (r.get("rc_src") == "marker" and len(parts) == 2 and parts[1][1] in (";", "\n")
                     and re.fullmatch(r"echo exit=\$\?", parts[1][0]) and (whole or segment_runs(parts[0][0], norm))):
                 return r.get("rc"), r.get("out_bytes", 0)   # `X; echo exit=$?`: the marker IS X's status (Codex r6 P2-a)
             return (r.get("rc") if _line_rc_applies(line) else None), r.get("out_bytes", 0)
@@ -244,13 +258,15 @@ def _touched_paths(rows: list[dict]) -> set[str]:
         if key.startswith("edit:"):
             cands.append(key[5:].rsplit(":", 1)[0] if key.count(":") >= 2 else key[5:])
         for seg in shell_segments(str(r.get("cmd", ""))):
-            toks = [t for t in re.findall(r"[\w./~-]+", seg) if "/" in t or "." in t]
-            if WRITE_LAST_RE.match(seg) and toks:
-                cands.append(toks[-1])
+            args = [t for t in re.findall(r"[\w./~-]+", seg)[1:] if not t.startswith("-")]
+            if WRITE_LAST_RE.match(seg) and args:
+                cands.append(args[-1])          # the destination, whatever it is called (Codex r7 P2-c)
             elif WRITE_ALL_RE.match(seg):
-                cands += toks
+                cands += [t for t in args if "/" in t or "." in t]
             cands += re.findall(r"\d?>>?\s*([\w./~-]+)", seg)
         for c in cands:
+            if c.startswith("/dev/"):
+                continue  # /dev/null is not an artifact (reviewer-g)
             p = Path(c).expanduser()
             if not p.is_absolute():
                 p = Path(cwd) / p if cwd else p

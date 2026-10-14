@@ -223,6 +223,8 @@ def collect(cmd: list[str], timeout: float = 60.0) -> dict:
         }
     except FileNotFoundError:
         rc, out, err = 127, "", "command not found"
+    except (PermissionError, OSError) as exc:   # not executable etc. (Codex r7 P2-e)
+        rc, out, err = 126, "", f"{type(exc).__name__}: {exc}"
     rec = {
         "rc": rc,
         "stdout_sha": _sha(out),

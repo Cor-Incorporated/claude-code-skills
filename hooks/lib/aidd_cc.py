@@ -70,7 +70,9 @@ def _session(args, payload) -> str:
 
 
 def _cwd(args, payload) -> str:
-    return args.cwd or payload.get("cwd") or os.getcwd()
+    ti = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    # A tool's own workdir wins over the session cwd (Codex r7 P2-b).
+    return str((ti or {}).get("workdir") or (ti or {}).get("cwd") or args.cwd or payload.get("cwd") or os.getcwd())
 
 
 def _emit(obj: dict) -> None:
@@ -220,7 +222,7 @@ def cmd_prompt(args, payload):
         payload.get("prompt") or payload.get("text") or payload.get("message") or ""
     )
     meta = load_meta(agent, session)
-    if text.lstrip().startswith("[H17"):
+    if text.lstrip().startswith("[H17 evidence gate]"):
         _emit({"decision": "allow", "rule": "prompt.gate-reprompt", "registered": []})
         return  # the gate's own re-prompt is not a user turn: budgets stay (Codex r4 P1-c)
     meta["stop_blocks"] = 0  # the loop guard is per stop attempt, not per session (P2-4)
@@ -233,6 +235,8 @@ def cmd_prompt(args, payload):
         meta["decisions"] = []
         meta["revoked_at"] = time.time()
     decision_text = text
+    if not is_short_affirmative(text):
+        meta["questions"] = []  # a new instruction supersedes the pending question (reviewer-g D4)
     if is_short_affirmative(text) and meta.get("questions"):
         # `OK` alone answers the last question the agent asked (reviewer-e #8)
         asked = re.sub(r"[?？]|よいですか|いいですか|よろしいですか|してもいい|ますか|ですか|should i|can i|may i|shall i", "", meta["questions"][-1]["text"], flags=re.IGNORECASE)

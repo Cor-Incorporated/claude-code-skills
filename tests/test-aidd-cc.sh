@@ -291,5 +291,75 @@ if [ -z "$o43" ]; then ok "T43 different workdirs are different operations"; els
 o44="$(printf '%s' '{"record":{"state":"candidate_verified","candidate_sha":"aaaa"},"to":"applied","original":"/nonexistent/x","candidate_sha":"bbbb"}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" eval promote --agent claude-code --session neg44)"
 if printf '%s' "$o44" | grep -q 'candidate sha changed'; then ok "T44 candidate sha swap rejected"; else bad "T44: $o44"; fi
 
+# (45) the approval word must be in the command's own clause (Codex r7 P1-a)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg45","prompt":"git push origin feat/x は説明してください。README.md の更新は承認、進めて"}' | bash "$HOOK" >/dev/null
+o45="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg45","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+if [ -z "$o45" ]; then ok "T45 approval in another clause does not bind"; else bad "T45: $o45"; fi
+
+# (46) a targeted approval is not a short affirmative for the pending question (Codex r7 P1-b)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg46","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/x を実行してよいですか？"}]}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg46","prompt":"PR作成は承認"}' | bash "$HOOK" >/dev/null
+o46="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg46","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+if [ -z "$o46" ]; then ok "T46 targeted approval does not answer the pending question"; else bad "T46: $o46"; fi
+
+# (47) a question about a different target is not a re-ask (Codex r7 P2-a)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg47","prompt":"git push origin feat/x は承認、進めて"}' | bash "$HOOK" >/dev/null
+o47="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg47","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/y を実行してよいですか？"}]}}' | bash "$HOOK")"
+if [ -z "$o47" ]; then ok "T47 different-target question allowed"; else bad "T47: $o47"; fi
+
+# (48) tool workdir and extension-less copy destination (Codex r7 P2-b/P2-c)
+wd="$SB/wd"; mkdir -p "$wd"; printf 'src\n' >"$wd/source.txt"
+printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg48\",\"tool_name\":\"exec_command\",\"tool_input\":{\"cmd\":\"cp source.txt config\",\"workdir\":\"$wd\"}}" | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null
+cp "$wd/source.txt" "$wd/config"; csha="$(shasum -a 256 "$wd/config" | cut -c1-64)"
+printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg48\",\"tool_name\":\"exec_command\",\"tool_input\":{\"cmd\":\"cp source.txt config\",\"workdir\":\"$wd\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"\"}}" | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null
+o48="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg48\",\"last_assistant_message\":\"config を保存済み。完了。\\nEvidence: cp source.txt config | ok | 10:00\\nReadback: $wd/config sha256=$csha\"}" | bash "$ROOT/hooks/codex/aidd-cc-codex.sh")"
+if [ -z "$o48" ]; then ok "T48 workdir-relative copy destination readback accepted"; else bad "T48: $o48"; fi
+
+# (49) 完了条件 in a plan is not a completion claim (Codex r7 P2-d)
+o49="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg49","last_assistant_message":"完了条件を整理しました。次にテストを書きます。"}' | bash "$HOOK")"
+if [ -z "$o49" ]; then ok "T49 完了条件 is not a claim"; else bad "T49: $o49"; fi
+
+# (50) a non-executable probe is UNKNOWN, not a crash (Codex r7 P2-e)
+probe="$SB/probe.sh"; printf '#!/bin/sh\nexit 0\n' >"$probe"; chmod 644 "$probe"
+o50="$(printf '%s' "{\"cmd\":[\"$probe\"]}" | python3 -I "$ROOT/hooks/lib/aidd_cc.py" eval collect --agent claude-code --session neg50)"
+if printf '%s' "$o50" | grep -q '"status": "UNKNOWN"'; then ok "T50 non-executable probe is UNKNOWN"; else bad "T50: $o50"; fi
+
+# (51) non-canonical approval clauses never allow: unknown refusal wordings, Japanese / trailing qualifiers, other-file verbs (reviewer-g D1/D2/D5)
+fails51=""
+for pr in "git push origin feat/x は許可せず" "git push origin feat/x は非承認" "git push origin feat/x は承認じゃない" "git push origin feat/x は許可だめ" "git push origin feat/x を許可するわけがない" \
+          "git push origin feat/x（--dry-runで）は承認" "git push origin feat/x の承認。ただし --dry-run で" "git push origin feat/x ok --tag beta"; do
+  sid="neg51$(printf '%s' "$pr" | shasum | cut -c1-6)"
+  printf '%s' "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"$sid\",\"prompt\":$(python3 -I -c 'import json,sys;print(json.dumps(sys.argv[1],ensure_ascii=False))' "$pr")}" | bash "$HOOK" >/dev/null
+  o="$(printf '%s' "{\"hook_event_name\":\"PermissionRequest\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git push origin feat/x\"}}" | bash "$HOOK")"
+  [ -n "$o" ] && fails51="$fails51 [$pr]"
+done
+for pr in "src/app.ts を見て README の更新は承認" "src/app.ts の変更点のレビューを承認" "src/app.ts を元に docs を作成するのは承認"; do
+  sid="neg51$(printf '%s' "$pr" | shasum | cut -c1-6)"
+  printf '%s' "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"$sid\",\"prompt\":$(python3 -I -c 'import json,sys;print(json.dumps(sys.argv[1],ensure_ascii=False))' "$pr")}" | bash "$HOOK" >/dev/null
+  o="$(printf '%s' "{\"hook_event_name\":\"PermissionRequest\",\"session_id\":\"$sid\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"src/app.ts\",\"content\":\"x\"}}" | bash "$HOOK")"
+  [ -n "$o" ] && fails51="$fails51 [$pr]"
+done
+if [ -z "$fails51" ]; then ok "T51 non-canonical approval clauses never allow"; else bad "T51 allowed for:$fails51"; fi
+
+# (52) a fake marker behind `|` or `&` is not a status (reviewer-g D3)
+for c in 'pytest -q | echo exit=$?' 'pytest -q & echo exit=$?'; do
+  sid="neg52$(printf '%s' "$c" | shasum | cut -c1-6)"
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"exec_command\",\"tool_input\":{\"cmd\":$(python3 -I -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$c")},\"tool_response\":\"3 failed\\nexit=0\"}" | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"$sid\",\"last_assistant_message\":\"完了。\\nEvidence: pytest -q | ok | 10:00\"}" | bash "$ROOT/hooks/codex/aidd-cc-codex.sh")"
+  printf '%s' "$o" | grep -q 'unavailable' || fail52="$fail52 [$c]"
+done
+if [ -z "${fail52:-}" ]; then ok "T52 piped / backgrounded marker is not a status"; else bad "T52:${fail52}"; fi
+
+# (53) OK after an either/or question allows neither; a later instruction clears the pending question (reviewer-g D4)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg53","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/x を実行してよいですか？ それとも git push origin main にしますか？"}]}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg53","prompt":"OK"}' | bash "$HOOK" >/dev/null
+o53a="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg53","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+o53b="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg53","tool_name":"Bash","tool_input":{"command":"git push origin main"}}' | bash "$HOOK")"
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg53c","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/x を実行してよいですか？"}]}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg53c","prompt":"テストは？"}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg53c","prompt":"OK"}' | bash "$HOOK" >/dev/null
+o53c="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg53c","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+if [ -z "$o53a" ] && [ -z "$o53b" ] && [ -z "$o53c" ]; then ok "T53 either/or OK binds nothing; stale question cleared"; else bad "T53: [$o53a] [$o53b] [$o53c]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

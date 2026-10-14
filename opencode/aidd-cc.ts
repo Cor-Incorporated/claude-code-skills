@@ -52,7 +52,7 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
     ) => {
       const text = textOf(output.parts)
       if (!text) return
-      if (text.trimStart().startsWith("[H17")) return // our own re-prompt is not a user turn (Codex r4 P1-c)
+      if (text.trimStart().startsWith("[H17 evidence gate]")) return // our own re-prompt is not a user turn (Codex r4 P1-c)
       reprompts.delete(input.sessionID ?? "unset") // new user request: fresh re-prompt budget (Codex r2 P2-m)
       await cc("prompt", { sessionID: input.sessionID ?? "unset", prompt: text })
     },

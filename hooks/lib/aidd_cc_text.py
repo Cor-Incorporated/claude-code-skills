@@ -48,11 +48,13 @@ NEGATION_RE = re.compile(
     re.IGNORECASE,
 )
 # A question or a conditional is not a decision (reviewer-e N2).
-UNDECIDED_RE = re.compile(r"(\?|？|べき|すべき|かどうか|ですか|ますか|もし|なら|ならば|の場合|\bif\b|\bunless\b|\bwhether\b|\bshould i\b|\bshould we\b|\bmaybe\b)", re.IGNORECASE)
+UNDECIDED_RE = re.compile(r"(\?|？|べき|すべき|かどうか|ですか|ますか|もし|なら|ならば|の場合|ただし|但し|条件|限り|限って|\bif\b|\bunless\b|\bwhether\b|\bshould i\b|\bshould we\b|\bmaybe\b|\bbut\b|\bhowever\b|\bexcept\b|\bprovided\b|\bonly if\b)", re.IGNORECASE)
 WRITE_KIND_RE = re.compile(r"(修正|編集|書き換え|書き込み|書込|作成|更新|追記|変更|edit|write|modify|update|create|patch|append)", re.IGNORECASE)
 DELETE_KIND_RE = re.compile(r"(削除|消去|消して|delete|remove|rm\b|drop|truncate)", re.IGNORECASE)
 NEGATED_COMPLETION_RE = re.compile(
     r"(未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
+    r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は.{0,12}予定|"
+    r"no changes were (?:saved|made|pushed)|haven't (?:verified|saved|pushed|merged)|"
     r"(?:完了|検証|push|マージ|配備)(?:には|は|に)?(?:至って|達して|届いて)(?:いない|いません|おらず)|nothing (?:is|has been|was) (?:done|verified|pushed|merged|deployed|saved)|"
     r"(?:完了|マージ|配備|保存|反映|push|deploy)(?:は|を)?(?:まだ)?(?:してい(?:ない|ません)|していない|できていない|ではない|していません)|"
     r"not (?:yet )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed)|"
@@ -66,7 +68,7 @@ APPROVAL_RE = re.compile(
 )
 CONFIRM_Q_RE = re.compile(r"(よいですか|いいですか|よろしいですか|してもいい|進めてよ|承認|許可|may i|should i|can i|shall i|ok to|proceed\?)", re.IGNORECASE)
 DESTRUCTIVE_Q_RE = re.compile(r"(削除|消して|drop|rm -rf|force|-f\b|本番|production|prod\b|決済|課金|payment|送金|秘密|secret|権限|permission|公開|publish)", re.IGNORECASE)
-CHOICE_Q_RE = re.compile(r"(どちら|どれ|いずれ|\bwhich\b|\bor\b|選択|選んで|\bA/B\b|\?\s*\(?[a-c]\))", re.IGNORECASE)
+CHOICE_Q_RE = re.compile(r"(どちら|どれ|いずれ|それとも|もしくは|または|\bwhich\b|\bor\b|選択|選んで|\bA/B\b|\?\s*\(?[a-c]\))", re.IGNORECASE)
 DENOMINATOR_RE = re.compile(r"(?:分母|denominator)\s*[:：=]?\s*(\d{1,4})|全\s*(\d{1,4})\s*(?:ケース|件|cases?)")
 TRIVIAL_CMD_RE = re.compile(r"^\s*(ls|echo|printf|cat|pwd|true|false|tail|head|wc|date|sleep|cd|which|type|env|export)\b")
 
@@ -338,6 +340,14 @@ def parse_deadline_hours(text: str) -> float | None:
     return None
 
 
+TARGET_TOKEN_RE = re.compile(r"[A-Za-z0-9_]*[/.\-:@][A-Za-z0-9_/.\-:@]*|[A-Za-z]+\d+")
+
+
+def target_tokens(text: str) -> set[str]:
+    """ASCII tokens that name a concrete target (paths, branches, flags, ids)."""
+    return {t for t in TARGET_TOKEN_RE.findall(text or "") if len(t) >= 2}
+
+
 def matching_decision(question: str, decisions: list[dict], threshold: float = 0.6) -> dict | None:
     """DOT-INC-003/008/013/025: a confirmation question already answered by the user.
 
@@ -347,7 +357,10 @@ def matching_decision(question: str, decisions: list[dict], threshold: float = 0
     if mutated("decision.match"):
         return None
     best, best_score = None, 0.0
+    q_targets = target_tokens(question)
     for d in decisions:
+        if q_targets and not q_targets <= target_tokens(d.get("text", "")) and not mutated("approval.binding"):
+            continue  # a question about feat/y is not answered by a decision about feat/x (Codex r7 P2-a)
         score = overlap(question, d.get("text", ""))
         if score >= threshold and score > best_score:
             best, best_score = dict(d, score=round(score, 3)), score
@@ -375,6 +388,30 @@ def command_bound(decision_text: str, request: str) -> bool:
     return False
 
 
+CANON_FILLER_RE = re.compile(
+    r"(は|を|の|が|に|で|も|へ|と|ね|よ|です|ます|する|します|して|してください|ください|実行|実施|run|execute|"
+    r"ok|okay|yes|approved?|lgtm|go ahead|proceed|承認|許可|進めて|進めろ|進めてください|お願いします|お願い|いいです|"
+    r"問題ない|構わない|どうぞ|[\s、,。.!！:：「」()（）'\"`]+)",
+    re.IGNORECASE,
+)
+
+
+def canonical_approval(clause: str, target: str, extra_allowed: str = "") -> bool:
+    """The clause approves `target` only if, after removing the target, an
+    optional write-kind verb (for paths) and approval / particle filler, NOTHING
+    is left.  Any qualifier (`（--dry-runで）`, `ただし`, `だめ`, another file,
+    another command) makes the clause non-canonical and the harness's own
+    prompt stays (reviewer-g D1/D2/D5: conservative by construction instead of
+    chasing refusal wordings)."""
+    if not clause or target not in clause:
+        return False
+    rest = clause.replace(target, " ", 1)
+    if extra_allowed:
+        rest = re.sub(extra_allowed, " ", rest, count=1)
+    rest = CANON_FILLER_RE.sub("", rest)
+    return rest.strip() == ""
+
+
 def clause_of(text: str, needle: str) -> str:
     """The clause (split on 、。,;:：\n and `and`) that contains `needle`."""
     for clause in re.split(r"[、。,;\n:：]|\band\b", text or ""):
@@ -383,10 +420,16 @@ def clause_of(text: str, needle: str) -> str:
     return ""
 
 
+AFFIRMATIVE_TOKEN_RE = re.compile(r"^(ok|okay|yes|y|yep|sure|lgtm|go ahead|proceed|approved?|はい|うん|ええ|承認|許可|進めて|進めろ|お願いします|お願い|どうぞ|いいよ|いいです|問題ない)$", re.IGNORECASE)
+
+
 def is_short_affirmative(text: str) -> bool:
-    """`OK` / `yes` / `はい、進めて` alone: binds to the last pending question."""
-    t = (text or "").strip()
-    return len(t) <= 16 and bool(APPROVAL_RE.search(t)) and not NEGATION_RE.search(t) and not UNDECIDED_RE.search(t)
+    """A reply made ONLY of approval tokens (`OK`, `はい、進めて`) binds to the last
+    pending question.  Anything that names a target (`PR作成は承認`) is a
+    decision about that target, never about the pending question (Codex r7 P1-b)."""
+    t = re.sub(r"[。.!！,、]+", " ", (text or "")).strip()
+    toks = [x for x in re.split(r"\s+", t) if x]
+    return bool(toks) and len(t) <= 24 and all(AFFIRMATIVE_TOKEN_RE.match(x) for x in toks)
 
 
 def is_confirmation_question(question: str) -> bool:
