@@ -2,7 +2,7 @@
 """The three controls of the AIDD common control (H17).
 
   C-ITER     DOT-INC-001/002/009/012/013/019/037  unproductive iteration
-  C-DECISION DOT-INC-003/005/007/008/014/025      unnecessary approval waits
+  C-DECISION DOT-INC-003/008                      re-asking an answered confirmation (auto-allow retired 2026-10-14)
   C-EVIDENCE DOT-INC-006/010/017/020/026/033/043  evidence-free completion
 
 Each returns {"decision": "allow"|"block"|"warn", "rule": ..., "reason": ...}.
@@ -18,11 +18,6 @@ from pathlib import Path
 
 from aidd_cc_eval import deadline_status, file_sha
 from aidd_cc_text import (
-    APPROVAL_RE,
-    NEGATION_RE,
-    WRITE_KIND_RE,
-    canonical_approval,
-    clause_of,
     STRATEGY_NOTE_RE,
     cmd_in_ledger,
     fix_scope,
@@ -242,31 +237,6 @@ def question_check(meta: dict, question: str) -> dict:
         }
     meta.setdefault("questions", []).append({"ts": time.time(), "text": question[:600]})
     return {"decision": "allow", "rule": "decision", "remember": True}
-
-
-def _clause_approves(dtext: str, needle: str, write_kind: bool = False) -> bool:
-    """The clause holding `needle` must be a canonical approval of exactly that
-    target (see aidd_cc_text.canonical_approval)."""
-    clause = clause_of(dtext, needle)
-    if not clause or NEGATION_RE.search(clause) or not APPROVAL_RE.search(clause):
-        return False
-    return canonical_approval(
-        clause, needle, WRITE_KIND_RE.pattern if write_kind else ""
-    )
-
-
-def permission_check(
-    meta: dict, request_text: str, request_cmd: str = "", request_path: str = ""
-) -> dict:
-    """RETIRED 2026-10-14 (再裁定, aidd-governance#174 / #88 rule): converting a
-    natural-language approval into a tool permission is a C15 problem — eight
-    review rounds each found a new wording that would have granted an
-    unapproved action.  H17 therefore NEVER auto-allows.  The user's decisions
-    are still recorded, but only to suppress re-asking an already answered
-    confirmation question (question_check), which can at worst re-ask once.
-    DOT-INC-005/014/025 (approval inheritance) are UNRESOLVED by design.
-    """
-    return {"decision": "none", "rule": "decision.auto-allow-retired"}
 
 
 def _executed_commands(rows: list[dict]) -> list[str]:

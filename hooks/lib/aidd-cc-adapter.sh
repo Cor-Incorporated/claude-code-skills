@@ -6,7 +6,7 @@
 # Dispatches on hook_event_name and converts the aidd_cc.py verdict into the
 # harness wire format.  Both harnesses accept the same JSON shapes:
 #   PreToolUse        {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":..}}
-#   PermissionRequest {"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
+#   (PermissionRequest: retired 2026-10-14 — H17 never auto-allows)
 #   Stop              {"decision":"block","reason":..}
 # Always exit 0: a non-zero exit from a hook is treated differently by each
 # harness (Codex silently disables, Claude fails closed) and we want neither.
@@ -72,14 +72,6 @@ print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","permission
     ;;
   UserPromptSubmit)
     run_cc prompt >/dev/null
-    ;;
-  PermissionRequest)
-    v="$(run_cc permission)"
-    if [ "$(field "$v" decision)" = "allow" ]; then
-      printf '%s' "$v" | python3 -I -c 'import json,sys
-v=json.load(sys.stdin)
-print(json.dumps({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}},"systemMessage":"[H17] "+v["reason"]},ensure_ascii=False))'
-    fi
     ;;
   Stop)
     v="$(run_cc stop)"

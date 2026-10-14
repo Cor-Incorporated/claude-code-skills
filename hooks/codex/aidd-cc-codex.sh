@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Codex entry for the H17 common control.  Registered in ~/.codex/hooks.json for
-# PreToolUse, PostToolUse, UserPromptSubmit, PermissionRequest and Stop (Codex
-# 0.162 supports all five; verified against the binary's hook schema).
+# PreToolUse, PostToolUse, UserPromptSubmit and Stop (PermissionRequest auto-allow
+# retired 2026-10-14; Codex 0.162 supports these events per its hook schema).
 # Deployed to ~/.codex/hooks/aidd-cc-codex.sh by setup.sh; the shared adapter and
 # python module are read from ~/.claude/hooks/lib/.
 set -uo pipefail

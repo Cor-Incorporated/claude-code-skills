@@ -8,7 +8,7 @@ Commands (all print one JSON object; exit 0 unless noted):
   pre         PreToolUse: C-ITER + C-DECISION(question) -> decision allow/block
   post        PostToolUse: record rc/output for evidence binding
   prompt      UserPromptSubmit: register user decisions / deadlines
-  permission  PermissionRequest: allow only if a user decision binds it
+  (permission: retired 2026-10-14 — H17 never auto-allows)
   stop        Stop: C-EVIDENCE; --exit-style claude exits 2 on block
   note        --hypothesis --change : progress delta for C-ITER
   deadline    set <iso|+Nh> [--supersede reason] | show
@@ -34,7 +34,6 @@ from aidd_cc_controls import (  # noqa: E402
     _norm_key,
     control_sha,
     iteration_check,
-    permission_check,
     question_check,
     register_note,
     stop_check,
@@ -404,28 +403,6 @@ def cmd_prompt(args, payload):
     _emit({"decision": "allow", "rule": "prompt", "registered": registered})
 
 
-def cmd_permission(args, payload):
-    agent, session = args.agent, _session(args, payload)
-    ti = _tool_input(payload)
-    text = json.dumps(ti, ensure_ascii=False) + " " + str(payload.get("message", ""))
-    request_cmd = str(ti.get("command") or "")
-    request_path = str(ti.get("file_path") or "")
-    verdict = permission_check(
-        load_meta(agent, session), text, request_cmd, request_path
-    )
-    if verdict["decision"] == "allow":
-        guard_ledger(
-            COMPONENT,
-            "measure",
-            "allow",
-            verdict["rule"],
-            request_cmd[:100],
-            agent,
-            session,
-        )
-    _emit(verdict)
-
-
 def _last_assistant(payload: dict, meta: dict) -> str:
     text = (
         payload.get("last_assistant_message")
@@ -644,7 +621,6 @@ def main(argv=None) -> int:
             "pre",
             "post",
             "prompt",
-            "permission",
             "stop",
             "note",
             "record-assistant",
@@ -702,7 +678,6 @@ def main(argv=None) -> int:
         "pre": cmd_pre,
         "post": cmd_post,
         "prompt": cmd_prompt,
-        "permission": cmd_permission,
         "stop": cmd_stop,
         "note": cmd_note,
         "record-assistant": cmd_record_assistant,

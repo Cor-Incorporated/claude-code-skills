@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code entry for the H17 common control.  Registered in settings.json for
-# PreToolUse (Bash|Edit|Write|AskUserQuestion), PostToolUse (Bash), UserPromptSubmit,
-# PermissionRequest and Stop.  The logic lives in hooks/lib/aidd_cc.py; this file
+# PreToolUse (Bash|Edit|Write|AskUserQuestion), PostToolUse, PostToolUseFailure,
+# UserPromptSubmit and Stop (PermissionRequest auto-allow retired 2026-10-14).  The logic lives in hooks/lib/aidd_cc.py; this file
 # only fixes the agent name and resolves the shared adapter.
 #
 # Cases: DOT-INC-003/008 (re-asking), 004/045 (deadline), 010/017/026 (evidence),

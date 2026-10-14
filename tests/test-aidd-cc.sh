@@ -410,5 +410,24 @@ if [ -z "$o58m" ]; then ok "T58m mutation iter.repair-family goes RED (allows th
 o59="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg59","last_assistant_message":"まだ完了できていません。完了しませんでした。This has not been verified. The fix has not been merged yet. 未達。"}' | bash "$HOOK")"
 if [ -z "$o59" ]; then ok "T59 honest not-done reports pass"; else bad "T59: $o59"; fi
 
+# (60) retirement is structural: no PermissionRequest anywhere, Cursor never says allow (final review D1/D2)
+if ! grep -q 'PermissionRequest' "$ROOT/scripts/register-aidd-cc-hooks.py" && ! grep -q '^  PermissionRequest)' "$ROOT/hooks/lib/aidd-cc-adapter.sh" \
+   && ! grep -q 'cmd_permission\|permission_check\|command_bound' "$ROOT/hooks/lib/aidd_cc.py" "$ROOT/hooks/lib/aidd_cc_controls.py" "$ROOT/hooks/lib/aidd_cc_text.py" \
+   && ! grep -q '"permission":"allow"' "$ROOT/hooks/cursor/aidd-cc-cursor.sh" \
+   && ! python3 -I -c "import json,sys;sys.exit(0 if 'PermissionRequest' in json.load(open('$ROOT/settings.json'))['hooks'] else 1)"; then ok "T60 no auto-allow path exists in code, registration or settings"; else bad "T60 auto-allow residue"; fi
+o60="$(printf '%s' '{"hook_event_name":"beforeShellExecution","conversation_id":"cu60","command":"chmod 777 /etc/hosts"}' | bash "$ROOT/hooks/cursor/aidd-cc-cursor.sh")"
+o60b="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg60","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+if [ "$o60" = "{}" ] && [ -z "$o60b" ]; then ok "T60b Cursor non-block is {} (no opinion); PermissionRequest prints nothing"; else bad "T60b: [$o60] [$o60b]"; fi
+
+# (61) a question without a concrete target is never suppressed (final review D3)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg61","prompt":"週次レポートの集計を進めて"}' | bash "$HOOK" >/dev/null
+o61="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg61","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"週次レポートを顧客へ送信してよいですか?"}]}}' | bash "$HOOK")"
+if [ -z "$o61" ]; then ok "T61 no-target question not suppressed"; else bad "T61: $o61"; fi
+
+# (62) repair-family counts only commits whose subject starts with fix(scope) (final review D4)
+for i in 1 2 3; do printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg62\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): r$i'\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"ok\"}}" | bash "$HOOK" >/dev/null; done
+o62="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg62","tool_name":"Bash","tool_input":{"command":"git commit -m '"'"'feat(x): y'"'"' -m '"'"'follow-up to fix(h17): z'"'"'"}}' | bash "$HOOK")"
+if [ -z "$o62" ]; then ok "T62 feat commit mentioning fix(h17) in the body is not a repair"; else bad "T62: $o62"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

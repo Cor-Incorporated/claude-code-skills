@@ -134,7 +134,9 @@ STOPWORDS = {
 }
 
 
-FIX_COMMIT_RE = re.compile(r"git commit\b.*?\b(fix|hotfix)\(([^)]+)\)", re.S)
+FIX_COMMIT_RE = re.compile(
+    r"git commit\b[^|&;]*?\s-m\s*[\"']?\s*(fix|hotfix)\(([^)]+)\)"
+)
 STRATEGY_NOTE_RE = re.compile(
     r"STRATEGY\s*[:：]\s*(HOLD|PIVOT|RETIRE|STRATEGY_HOLD|STRATEGY_PIVOT)\b",
     re.IGNORECASE,
@@ -396,6 +398,11 @@ def matching_decision(
         return None
     best, best_score = None, 0.0
     q_targets = target_tokens(question)
+    # A question with no concrete target (path / branch / flag) is "already answered"
+    # only when EVERY content token of the question is in the decision (final review
+    # D3: 週次レポートの集計 does not answer 週次レポートを顧客へ送信).
+    if not q_targets and not mutated("decision.match"):
+        threshold = 1.0
     for d in decisions:
         if (
             q_targets
@@ -407,62 +414,6 @@ def matching_decision(
         if score >= threshold and score > best_score:
             best, best_score = dict(d, score=round(score, 3)), score
     return best
-
-
-def command_bound(decision_text: str, request: str) -> bool:
-    """Strict binding for PermissionRequest: the normalised request must appear
-    in the decision text as the WHOLE approved operation at a COMMAND position:
-    case-sensitive, not inside quotes, not as the argument of another ASCII
-    word (`echo git push …` approves echo, not push — Codex r6 P1-a), and
-    followed by nothing ASCII except an approval word (approving `… --dry-run`
-    never covers the real command).  Topical similarity never grants permission."""
-    req = re.sub(r"\s+", " ", (request or "").strip())
-    dec = re.sub(r"\s+", " ", (decision_text or ""))
-    if len(req) < 3:
-        return False
-    pat = (
-        r"(?<![\w./:@~\"'`-])"
-        + re.escape(req)
-        + r"(?![\w./:@~\"'`-])(?!\s+(?!(?i:ok|okay|yes|approved?|lgtm|go ahead|proceed)\b)[-A-Za-z0-9_./:@~])"
-    )
-    for m in re.finditer(pat, dec):
-        before = dec[: m.start()].rstrip()
-        # command position: start of text, or preceded by a non-ASCII char / punctuation
-        if not before or not re.search(r"[A-Za-z0-9_./:@~-]$", before):
-            return True
-    return False
-
-
-CANON_FILLER_RE = re.compile(
-    r"(は|を|の|が|に|で|も|へ|と|ね|よ|です|ます|する|します|して|してください|ください|実行|実施|run|execute|"
-    r"ok|okay|yes|y|yep|sure|approved?|lgtm|go ahead|proceed|はい|うん|ええ|承認|許可|進めて|進めろ|進めてください|お願いします|お願い|いいです|"
-    r"問題ない|構わない|どうぞ|[\s、,。.!！:：「」()（）'\"`]+)",
-    re.IGNORECASE,
-)
-
-
-def canonical_approval(clause: str, target: str, extra_allowed: str = "") -> bool:
-    """The clause approves `target` only if, after removing the target, an
-    optional write-kind verb (for paths) and approval / particle filler, NOTHING
-    is left.  Any qualifier (`（--dry-runで）`, `ただし`, `だめ`, another file,
-    another command) makes the clause non-canonical and the harness's own
-    prompt stays (reviewer-g D1/D2/D5: conservative by construction instead of
-    chasing refusal wordings)."""
-    if not clause or target not in clause:
-        return False
-    rest = clause.replace(target, " ", 1)
-    if extra_allowed:
-        rest = re.sub(extra_allowed, " ", rest, count=1)
-    rest = CANON_FILLER_RE.sub("", rest)
-    return rest.strip() == ""
-
-
-def clause_of(text: str, needle: str) -> str:
-    """The clause (split on 、。,;:：\n and `and`) that contains `needle`."""
-    for clause in re.split(r"[、。,;\n:：]|\band\b", text or ""):
-        if needle and needle in clause:
-            return clause
-    return ""
 
 
 AFFIRMATIVE_TOKEN_RE = re.compile(

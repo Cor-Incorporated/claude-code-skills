@@ -25,13 +25,7 @@ from pathlib import Path
 CODEX_SCRIPT = "~/.codex/hooks/aidd-cc-codex.sh"
 CURSOR_SCRIPT = "~/.cursor/hooks/aidd-cc-cursor.sh"
 OPENCODE_PLUGIN = "./plugins/aidd-cc.ts"
-CODEX_EVENTS = (
-    "PreToolUse",
-    "PostToolUse",
-    "UserPromptSubmit",
-    "PermissionRequest",
-    "Stop",
-)
+CODEX_EVENTS = ("PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop")
 CURSOR_EVENTS = (
     "beforeShellExecution",
     "afterShellExecution",

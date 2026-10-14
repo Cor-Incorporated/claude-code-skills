@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cursor entry for the H17 common control (hooks.json version 1).
-#   beforeShellExecution -> pre            {"permission":"deny","agent_message"} | {"permission":"allow"}
+#   beforeShellExecution -> pre            {"permission":"deny","agent_message"} | {} (no opinion)
 #   afterShellExecution  -> post           (record exit/output for evidence binding)
 #   beforeSubmitPrompt   -> prompt         {"continue":true}
 #   afterAgentResponse   -> record-assistant (last text, for the stop check)
@@ -14,12 +14,12 @@ for cand in "${AIDD_CC_PY:-}" \
   [ -n "$cand" ] && [ -f "$cand" ] && CC_PY="$cand" && break
 done
 input="$(cat 2>/dev/null || true)"
-[ "${AIDD_CC_DISABLE:-0}" = "1" ] && { printf '{"permission":"allow"}'; exit 0; }
+[ "${AIDD_CC_DISABLE:-0}" = "1" ] && { printf '{}'; exit 0; }
 if [ -z "$CC_PY" ]; then
   ledger="${AIDD_LEDGER_PATH:-$HOME/.claude/hooks/ledger/guard-ledger.jsonl}"; mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
   printf '{"ts":"%s","component":"H17","hook":"aidd-cc","event":"error","decision":"unavailable","rule":"module-missing","cmd_head":"","source":"%s","session":"unset","agent":"cursor"}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${AIDD_LEDGER_SOURCE:-real}" >>"$ledger" 2>/dev/null || true
-  printf '{"permission":"allow"}'; exit 0
+  printf '{}'; exit 0
 fi
 
 py() {
@@ -45,7 +45,7 @@ case "$event" in
 v=json.load(sys.stdin); m="[H17] "+v["reason"]
 print(json.dumps({"permission":"deny","user_message":m,"agent_message":m},ensure_ascii=False))'
     else
-      printf '{"permission":"allow"}'
+      printf '{}'   # no opinion: Cursor's own approval flow stays (never "allow")
     fi
     ;;
   afterShellExecution) py post --tool Bash >/dev/null; printf '{}' ;;
