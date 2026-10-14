@@ -1,0 +1,31 @@
+# DeepSeek Harness (dsh) profile patch for the H17 common control.
+#
+# dsh has no native hook API; it ships `@deepseek-ai/dsh-hooks-claude-code`, a bridge
+# that runs a Claude Code hooks config (SessionStart / UserPromptSubmit / PreToolUse /
+# PostToolUse / Stop) inside agent runs.  Mounting it with `configPath` pointed at the
+# deployed Claude Code settings puts the SAME oracle (hooks/lib/aidd_cc.py, via
+# ~/.claude/hooks/aidd-cc-claude.sh) on the dsh entry.  Stop -> "force another step
+# with a reason" is the dsh equivalent of the Claude Stop block.
+#
+# Install (experiment profile, never the default one):
+#   DSH_HOME=~/.dsh-aidd  dsh plugin --profile aidd  ...   # or copy into
+#   $DSH_HOME/profiles/aidd/cordis.patch.yml after `--from-default-profile headless`
+#
+# Session-log upload and product telemetry are DISABLED here: dot's handover
+# (minimal-harness-replan-20261012.md) flagged the default-on session log upload;
+# business code must not be sent to DeepSeek as training/session logs.
+
+- insert:
+    - id: aidd-cc-hooks
+      name: '@deepseek-ai/dsh-hooks-claude-code'
+      config:
+        configPath: !!js process.env.AIDD_CC_HOOKS_CONFIG ?? `${process.env.HOME}/.claude/settings.json`
+        projectDir: !!js process.cwd()
+        defaultTimeoutMs: 15000
+
+- id: session-log-deepseek
+  disabled: true
+
+- id: session-telemetry-otel
+  disabled: true
+

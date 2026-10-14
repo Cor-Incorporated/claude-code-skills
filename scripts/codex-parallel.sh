@@ -49,6 +49,15 @@ _H1_LIB="${SCRIPT_DIR}/lib/h1-runtime.sh"
 # shellcheck source=lib/h1-runtime.sh
 [ -f "$_H1_LIB" ] && . "$_H1_LIB"
 set -euo pipefail  # the library relaxes errexit; restore this script's mode
+
+# H17: hand the parent's user decisions to the Codex child so an approval given
+# here is not re-asked there (DOT-INC-014/025). Scope is never widened: only
+# decisions are inherited, and only when the parent session is known.
+_cc_parent="${AIDD_CC_SESSION:-${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}}"
+if [ -n "$_cc_parent" ] && [ -z "${AIDD_CC_INHERIT:-}" ]; then
+    _cc_meta="${AIDD_CC_STATE_DIR:-$HOME/.claude/state/aidd-cc}/sessions/claude-code__${_cc_parent}.json"
+    [ -f "$_cc_meta" ] && export AIDD_CC_INHERIT="$_cc_meta"
+fi
 if ! declare -F h1_init >/dev/null 2>&1; then
     # Library missing (partial install): run unguarded rather than failing.
     h1_init() { :; }
@@ -106,7 +115,7 @@ capture_mcp_snapshot() {
 # Returns 0 only when EVERY *.sh registered in ~/.codex/hooks.json is a known
 # AIDD hook AND (when the checkout is reachable) is byte-identical to its
 # version-controlled source. Anything unknown or drifted => 1 => no bypass.
-CODEX_VETTED_HOOKS="protect-branches-codex.sh h1-stall-runtime.sh"
+CODEX_VETTED_HOOKS="protect-branches-codex.sh h1-stall-runtime.sh aidd-cc-codex.sh"
 hooks_verified_against_repo() {
     local hooks_json="$HOME/.codex/hooks.json"
     [[ -f "$hooks_json" ]] || return 1
