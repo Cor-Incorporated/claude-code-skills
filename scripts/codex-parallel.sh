@@ -53,8 +53,9 @@ set -euo pipefail  # the library relaxes errexit; restore this script's mode
 # H17: hand the parent's user decisions to the Codex child so an approval given
 # here is not re-asked there (DOT-INC-014/025). Scope is never widened: only
 # decisions are inherited, and only when the parent session is known.
-if [ -n "${AIDD_CC_SESSION:-}" ] && [ -z "${AIDD_CC_INHERIT:-}" ]; then
-    _cc_meta="${AIDD_CC_STATE_DIR:-$HOME/.claude/state/aidd-cc}/sessions/claude-code__${AIDD_CC_SESSION}.json"
+_cc_parent="${AIDD_CC_SESSION:-${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}}"
+if [ -n "$_cc_parent" ] && [ -z "${AIDD_CC_INHERIT:-}" ]; then
+    _cc_meta="${AIDD_CC_STATE_DIR:-$HOME/.claude/state/aidd-cc}/sessions/claude-code__${_cc_parent}.json"
     [ -f "$_cc_meta" ] && export AIDD_CC_INHERIT="$_cc_meta"
 fi
 if ! declare -F h1_init >/dev/null 2>&1; then

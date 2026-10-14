@@ -356,18 +356,31 @@ def matching_decision(question: str, decisions: list[dict], threshold: float = 0
 
 def command_bound(decision_text: str, request: str) -> bool:
     """Strict binding for PermissionRequest: the normalised request must appear
-    in the decision text as the WHOLE approved operation — case-sensitive
-    (branch names), not inside quotes (an approved `echo "rm -rf data"` is not an
-    approval of `rm -rf data`), bounded on the left, and followed by nothing
-    ASCII except an approval word (approving `… --dry-run` never covers the
-    real command).  Topical similarity never grants permission."""
+    in the decision text as the WHOLE approved operation at a COMMAND position:
+    case-sensitive, not inside quotes, not as the argument of another ASCII
+    word (`echo git push …` approves echo, not push — Codex r6 P1-a), and
+    followed by nothing ASCII except an approval word (approving `… --dry-run`
+    never covers the real command).  Topical similarity never grants permission."""
     req = re.sub(r"\s+", " ", (request or "").strip())
     dec = re.sub(r"\s+", " ", (decision_text or ""))
     if len(req) < 3:
         return False
     pat = (r"(?<![\w./:@~\"'`-])" + re.escape(req)
            + r"(?![\w./:@~\"'`-])(?!\s+(?!(?i:ok|okay|yes|approved?|lgtm|go ahead|proceed)\b)[-A-Za-z0-9_./:@~])")
-    return re.search(pat, dec) is not None
+    for m in re.finditer(pat, dec):
+        before = dec[: m.start()].rstrip()
+        # command position: start of text, or preceded by a non-ASCII char / punctuation
+        if not before or not re.search(r"[A-Za-z0-9_./:@~-]$", before):
+            return True
+    return False
+
+
+def clause_of(text: str, needle: str) -> str:
+    """The clause (split on 、。,;:：\n and `and`) that contains `needle`."""
+    for clause in re.split(r"[、。,;\n:：]|\band\b", text or ""):
+        if needle and needle in clause:
+            return clause
+    return ""
 
 
 def is_short_affirmative(text: str) -> bool:

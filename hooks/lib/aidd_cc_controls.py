@@ -20,6 +20,7 @@ from aidd_cc_eval import deadline_status, file_sha
 from aidd_cc_text import (
     DELETE_KIND_RE,
     WRITE_KIND_RE,
+    clause_of,
     cmd_in_ledger,
     command_bound,
     segment_runs,
@@ -73,7 +74,8 @@ def _norm_key(tool: str, tool_input: dict) -> str:
                 + "\x00" + _json.dumps(tool_input.get("edits", ""), ensure_ascii=False, sort_keys=True))
         digest = hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()[:12]
         return f"edit:{tool_input.get('file_path', '')}:{digest}"   # distinct edits differ (P2-5)
-    return normalize_cmd(str(tool_input.get("command") or ""))[:4000]
+    wd = str(tool_input.get("workdir") or tool_input.get("cwd") or "")
+    return normalize_cmd(str(tool_input.get("command") or ""))[:4000] + (f" @{wd}" if wd else "")
 
 
 def iteration_check(rows: list[dict], meta: dict, tool: str, tool_input: dict) -> dict:
@@ -168,7 +170,9 @@ def permission_check(meta: dict, request_text: str, request_cmd: str = "", reque
         if request_cmd and command_bound(dtext, request_cmd):
             return {"decision": "allow", "rule": "decision.inherited", "decision_ref": d["sha"],
                     "reason": f"user decision {d['at']} names this exact request"}
-        kind_text = dtext.replace(request_path, " ") if request_path else dtext  # verbs inside the file name do not count (Codex r5 P1)
+        # The write verb must sit in the SAME clause as the path (Codex r6 P1-b), and verbs
+        # inside the file name itself do not count (Codex r5 P1).
+        kind_text = clause_of(dtext, request_path).replace(request_path, " ") if request_path else dtext
         if request_path and not request_cmd and command_bound(dtext, request_path) \
                 and WRITE_KIND_RE.search(kind_text) and not DELETE_KIND_RE.search(kind_text):
             return {"decision": "allow", "rule": "decision.inherited", "decision_ref": d["sha"],
@@ -208,8 +212,10 @@ def _rc_for(rows: list[dict], cited: str):
         whole = re.sub(r"\s+", " ", line.strip()) == norm
         seg_hit = any(segment_runs(seg, norm) for seg, _sp in shell_segments_with_separators(line))
         if whole or seg_hit:
-            if r.get("rc_src") == "marker" and whole:
-                return r.get("rc"), r.get("out_bytes", 0)   # `cmd; echo exit=$?` cited verbatim: the marker IS cmd's status
+            parts = shell_segments_with_separators(line)
+            if (r.get("rc_src") == "marker" and len(parts) == 2
+                    and re.fullmatch(r"echo exit=\$\?", parts[1][0]) and (whole or segment_runs(parts[0][0], norm))):
+                return r.get("rc"), r.get("out_bytes", 0)   # `X; echo exit=$?`: the marker IS X's status (Codex r6 P2-a)
             return (r.get("rc") if _line_rc_applies(line) else None), r.get("out_bytes", 0)
     return None, 0
 

@@ -286,6 +286,10 @@ def promote(
         return {"ok": False, "reason": f"cannot jump from {current} to {to_state}"}
     if current is None and order != 0 and not mutated("state.candidate-as-original"):
         return {"ok": False, "reason": "must start at candidate_verified"}
+    if current is not None and record.get("candidate_sha") not in (None, candidate_sha) \
+            and not mutated("state.candidate-as-original"):
+        return {"ok": False, "reason": "candidate sha changed since candidate_verified: re-verify the new candidate (Codex r6 P2-d)",
+                "verified_sha": record.get("candidate_sha"), "given_sha": candidate_sha}
     if to_state == "applied":
         actual = _sha(original_path.read_bytes()) if original_path.exists() else None
         if actual != candidate_sha and not mutated("state.candidate-as-original"):

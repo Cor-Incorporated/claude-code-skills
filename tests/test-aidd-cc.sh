@@ -266,5 +266,30 @@ o39="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg39","tool_n
 o39b="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg39","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"PR作成を進めてよいですか？"}]}}' | bash "$HOOK")"
 if [ -z "$o39" ] && printf '%s' "$o39b" | grep -q 'already decided'; then ok "T39 undecided question keeps the call; fully-answered call blocked"; else bad "T39: [$o39] [$o39b]"; fi
 
+# (40) an approved command that is only the argument of another command is not approved (Codex r6 P1-a)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg40","prompt":"echo git push origin feat/x は承認、進めて"}' | bash "$HOOK" >/dev/null
+o40="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg40","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+if [ -z "$o40" ]; then ok "T40 argument position is not approval"; else bad "T40: $o40"; fi
+
+# (41) the write verb must be in the path's clause (Codex r6 P1-b)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg41","prompt":"cat config/prod.yml は承認、README.md を更新して進めて"}' | bash "$HOOK" >/dev/null
+o41="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg41","tool_name":"Write","tool_input":{"file_path":"config/prod.yml","content":"x"}}' | bash "$HOOK")"
+o41b="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg41","tool_name":"Write","tool_input":{"file_path":"README.md","content":"x"}}' | bash "$HOOK")"
+if [ -z "$o41" ] && printf '%s' "$o41b" | grep -q '"behavior": "allow"'; then ok "T41 write verb bound to its own clause"; else bad "T41: [$o41] [$o41b]"; fi
+
+# (42) `failing; true; echo exit=$?` cannot launder a failure through the marker (Codex r6 P2-a)
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg42","tool_name":"exec_command","tool_input":{"cmd":"bash tests/failing.sh; true; echo exit=$?"},"tool_response":"FAIL\nexit=0"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null
+o42="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg42","last_assistant_message":"完了。\nEvidence: bash tests/failing.sh; true; echo exit=$? | FAIL exit=0 | 10:00"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh")"
+if printf '%s' "$o42" | grep -q 'unavailable'; then ok "T42 laundered marker stays UNKNOWN"; else bad "T42: $o42"; fi
+
+# (43) the same command in four different workdirs is not a repeat (Codex r6 P2-b)
+for d in a b c d; do printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg43\",\"tool_name\":\"exec_command\",\"tool_input\":{\"cmd\":\"npm test\",\"workdir\":\"/pkg/$d\"}}" | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null; done
+o43="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg43","tool_name":"exec_command","tool_input":{"cmd":"npm test","workdir":"/pkg/e"}}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh")"
+if [ -z "$o43" ]; then ok "T43 different workdirs are different operations"; else bad "T43: $o43"; fi
+
+# (44) a verified candidate's sha cannot be swapped on a later transition (Codex r6 P2-d)
+o44="$(printf '%s' '{"record":{"state":"candidate_verified","candidate_sha":"aaaa"},"to":"applied","original":"/nonexistent/x","candidate_sha":"bbbb"}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" eval promote --agent claude-code --session neg44)"
+if printf '%s' "$o44" | grep -q 'candidate sha changed'; then ok "T44 candidate sha swap rejected"; else bad "T44: $o44"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
