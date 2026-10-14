@@ -75,6 +75,18 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
         tool_response: { exit_code: rc, stdout: String(out.output ?? "").slice(0, 4000) },
       })
     },
+    // Headless `opencode run` exits on session.idle before an async re-prompt can land,
+    // so the evidence gate also runs when the assistant text part completes: a blocked
+    // claim gets the gate verdict appended to the visible text and an H6 block row.
+    "experimental.text.complete": async (
+      input: { sessionID: string; messageID: string; partID: string },
+      output: { text: string },
+    ) => {
+      const text = String(output.text ?? "")
+      if (!text.trim()) return
+      const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: text }, ["--max-blocks", "99", "--no-count"])
+      if (v.decision === "block") output.text = `${text}\n\n[H17 evidence gate] ${v.reason ?? ""}`
+    },
     event: async ({ event }: { event: { type?: string; properties?: Record<string, unknown> } }) => {
       if (event.type !== "session.idle") return
       const sessionID = String(event.properties?.sessionID ?? "")
