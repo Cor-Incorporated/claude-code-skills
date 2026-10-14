@@ -33,6 +33,22 @@ out.evidence_free_continue = !!(t1 && t1.continue);
 out.gate_message = t1?.entries?.[0]?.content?.slice(0, 40) ?? null;
 const t2 = await call("turn_end", { message: { content: [{ type: "text", text: "途中経過です。次に tests を走らせます。" }] }, toolResults: [] });
 out.benign_continue = !!(t2 && t2.continue);
+// aidd-governance#186 P1-4: once the extension's own continuation budget is spent, a block-worthy
+// final answer must still get a visible note (no silent pass-through).
+await call("turn_end", { message: { content: [{ type: "text", text: "実装完了しました。" }] }, toolResults: [] });
+const t4 = await call("turn_end", { message: { content: [{ type: "text", text: "実装完了しました。" }] }, toolResults: [] });
+out.exhausted_continue = !!(t4 && t4.continue);
+out.exhausted_note = t4?.entries?.[0]?.content ?? null;
+// The Pi live incident (2026-10-14 08:35Z): the python side released by evidence.max-blocks (blocks=2) and the
+// fabricated third turn (never-executed tool calls, 2024 timestamps) reached the final output unmarked.
+process.env.AIDD_CC_MAX_STOP_BLOCKS = "2";
+await call("session_start", {}, { sessionManager: { getSessionId: () => "pi-test-2" } });
+await call("before_agent_start", { messageType: "user", prompt: "実装して" });
+for (let i = 0; i < 2; i++) await call("turn_end", { message: { content: [{ type: "text", text: "実装完了しました。" }] }, toolResults: [] });
+const fab = "実装完了しました。\n\nEvidence: `write(path='test_file.txt')` | {\"write_response\": \"ok\"} | 2024-07-29 10:05:00";
+const t7 = await call("turn_end", { message: { content: [{ type: "text", text: fab }] }, toolResults: [] });
+out.released_continue = !!(t7 && t7.continue);
+out.released_note = t7?.entries?.[0]?.content ?? null;
 console.log(JSON.stringify(out));
 JS
 res="$("$NODE" --experimental-strip-types --no-warnings "$SB/drive.mts" 2>"$SB/err.log")" || { echo "FAIL: node run"; cat "$SB/err.log"; exit 1; }
@@ -46,4 +62,13 @@ assert r["evidence_free_continue"] is True, r
 assert r["benign_continue"] is False, r
 print("PASS: iter block at 4th identical call / evidence-free turn_end forced continuation / benign turn ends")
 PY
+# aidd-governance#186 P1-4 (T69-pi): both release paths leave a visible note instead of a silent pass-through
+python3 -I - "$res" <<'PY' && pass=$((pass + 1)) || fail=$((fail + 1))
+import json, sys
+r = json.loads(sys.argv[1])
+assert r["exhausted_continue"] is False and r["exhausted_note"] and "evidence unverified" in r["exhausted_note"], r
+assert r["released_continue"] is False and r["released_note"] and "max-blocks released" in r["released_note"], r
+print("PASS: T69-pi continuation budget exhausted / python max-blocks release -> visible [H17] evidence unverified note")
+PY
+if grep -q '"rule": "evidence.max-blocks.would-block"' "$SB/ledger.jsonl"; then pass=$((pass + 1)); echo "PASS: T69-pi would-block row in the H6 ledger"; else fail=$((fail + 1)); echo "FAIL: T69-pi no would-block row"; fi
 [ "$fail" -eq 0 ] && grep -q '"component": "H17"' "$SB/ledger.jsonl" && echo "PASS: H6 ledger rows written by the pi entry" || { echo "FAIL"; exit 1; }

@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-type Verdict = { decision?: string; reason?: string; rule?: string };
+type Verdict = { decision?: string; reason?: string; rule?: string; would_block?: boolean; note?: string };
 
 const CC_PY = process.env.AIDD_CC_PY ?? join(homedir(), ".claude", "hooks", "lib", "aidd_cc.py");
 const AGENT = "pi";
@@ -109,18 +109,29 @@ export default function aiddCommonControl(pi: any) {
     const last = textOf(event?.message);
     if (!last || (event?.toolResults?.length ?? 0) > 0) return undefined; // not a final answer yet
     const v = await runCC("stop", { session_id: sessionID, last_assistant_message: last });
-    if (v.decision !== "block" || continuations >= MAX_CONTINUATIONS) return undefined;
-    continuations += 1;
+    if (v.decision === "block" && continuations < MAX_CONTINUATIONS) {
+      continuations += 1;
+      return {
+        continue: true,
+        entries: [
+          {
+            type: "custom_message",
+            customType: "aidd-cc",
+            display: true,
+            content: `[H17 evidence gate] ${v.reason ?? ""} — fix the report before claiming completion.`,
+          },
+        ],
+      };
+    }
+    // aidd-governance#186 P1-4 (Pi live 2026-10-14 08:35Z): a release is never silent. Whether the
+    // python side released by max-blocks (would_block) or this extension's continuation budget is
+    // spent, the unverified claim gets a visible note in the session instead of passing unmarked.
+    const note = v.decision === "block"
+      ? "[H17] evidence unverified (continuation budget exhausted)"
+      : v.would_block ? (v.note ?? "[H17] evidence unverified (max-blocks released)") : null;
+    if (!note) return undefined;
     return {
-      continue: true,
-      entries: [
-        {
-          type: "custom_message",
-          customType: "aidd-cc",
-          display: true,
-          content: `[H17 evidence gate] ${v.reason ?? ""} — fix the report before claiming completion.`,
-        },
-      ],
+      entries: [{ type: "custom_message", customType: "aidd-cc", display: true, content: `${note} — ${v.reason ?? ""}` }],
     };
   });
 }
