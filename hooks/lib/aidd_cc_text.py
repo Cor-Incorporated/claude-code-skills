@@ -194,7 +194,7 @@ def evidence_commands(text: str) -> list[str]:
     for line in EVIDENCE_LINE_RE.findall(text or ""):
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 3 and all(parts[:3]):
-            cmds.append(parts[0])
+            cmds.append(parts[0].strip("`'\" "))  # agents quote the command in backticks (Cursor IDE live 2026-10-14 05:12Z)
     return cmds
 
 
