@@ -39,11 +39,26 @@ READBACK_LINE_RE = re.compile(
 RATIO_RE = re.compile(r"(?<![\d./])(\d{1,4})\s*/\s*(\d{1,4})(?![\d./])")
 WHOLE_WORDS = ("全体", "全ケース", "全件", "all cases", "overall", "原要求")
 
-APPROVAL_RE = re.compile(
-    r"(承認|許可|進めて|進めろ|やって|お願い|OK|ＯＫ|了解|approved?|go ahead|proceed|yes|"
-    r"いいよ|いいです|構わない|問題ない)",
+NEGATION_RE = re.compile(
+    r"(しません|しないで|しないでください|してはいけ|不可|禁止|ダメ|駄目|やめて|拒否|NG|却下|"
+    r"承認待ち|未承認|保留|\bnot\b|\bdon'?t\b|\bdo not\b|\bnever\b|\bno\b|\breject)",
     re.IGNORECASE,
 )
+NEGATED_COMPLETION_RE = re.compile(
+    r"(未完了|完了してい(?:ない|ません)|完了ではない|完了していない|未検証|未実装|未対応|未解決|"
+    r"not (?:yet )?(?:done|verified|fixed|complete[d]?)|isn'?t (?:done|verified)|incomplete)",
+    re.IGNORECASE,
+)
+APPROVAL_RE = re.compile(
+    r"(承認|許可|進めて|進めろ|進めてください|問題ない|構わない|いいです|ＯＫ|"
+    r"\b(?:ok|okay|approved?|go ahead|proceed|yes|lgtm)\b)",
+    re.IGNORECASE,
+)
+CONFIRM_Q_RE = re.compile(r"(よいですか|いいですか|よろしいですか|してもいい|進めてよ|承認|許可|may i|should i|can i|shall i|ok to|proceed\?)", re.IGNORECASE)
+CHOICE_Q_RE = re.compile(r"(どちら|どれ|いずれ|\bwhich\b|\bor\b|選択|選んで|\bA/B\b|\?\s*\(?[a-c]\))", re.IGNORECASE)
+DENOMINATOR_RE = re.compile(r"(?:分母|denominator)\s*[:：=]?\s*(\d{1,4})|全\s*(\d{1,4})\s*(?:ケース|件|cases?)")
+TRIVIAL_CMD_RE = re.compile(r"^\s*(ls|echo|printf|cat|pwd|true|false|tail|head|wc|date|sleep|cd|which|type|env|export)\b")
+
 DEADLINE_RE = re.compile(
     r"(?:(\d{1,3})\s*(?:h|時間)\s*以内|within\s+(\d{1,3})\s*h(?:ours?)?|"
     r"(\d{1,3})\s*(?:分|min(?:utes?)?)\s*以内)",
@@ -96,8 +111,13 @@ def mutated(control_id: str) -> bool:
 
 
 def has_completion_claim(text: str) -> bool:
-    """DOT-INC-010/017/026: a completion/verification claim is present."""
-    return bool(COMPLETION_CLAIM_RE.search(text or ""))
+    """DOT-INC-010/017/026: a completion/verification claim is present.
+
+    Negated completions (未完了 / 完了していません / not done) are removed first so an
+    honest unmet report is never treated as a claim (Codex review P2-7).
+    """
+    cleaned = NEGATED_COMPLETION_RE.sub(" ", text or "")
+    return bool(COMPLETION_CLAIM_RE.search(cleaned))
 
 
 def has_persist_claim(text: str) -> bool:
@@ -138,16 +158,22 @@ def normalize_cmd(cmd: str) -> str:
 
 
 def cmd_in_ledger(cited: str, executed: Iterable[str]) -> bool:
-    """A cited command counts as executed only if a ledger row contains it.
-
-    Substring on the normalised form: `bash tests/x.sh` matches a ledger row
-    `cd repo && bash tests/x.sh 2>&1 | tail`.  A cited command that was never
-    run is DOT-INC-010/017 (typed evidence).
+    """A cited command counts as executed only if a ledger row ran it at a
+    command position: the row, or one of its `&&` / `||` / `;` / `|` / newline
+    segments, starts with the cited text (whitespace-normalised, quotes kept).
+    A command that merely appears inside an argument (`printf '%s' 'bash x.sh'`)
+    is not execution (Codex review P2-9).  A cited command that was never run
+    is DOT-INC-010/017 (typed evidence).
     """
-    norm = normalize_cmd(cited)
+    norm = re.sub(r"\s+", " ", (cited or "").strip())
     if len(norm) < 4:
         return False
-    return any(norm in normalize_cmd(row) for row in executed)
+    for row in executed:
+        for seg in re.split(r"&&|\|\||;|\||\n|\$\(|^\(|\)", str(row)):
+            seg = re.sub(r"\s+", " ", seg.strip())
+            if seg.startswith(norm):
+                return True
+    return False
 
 
 def ratio_claims(text: str) -> list[tuple[int, int]]:
@@ -206,7 +232,11 @@ def overlap(a: str, b: str) -> float:
 
 
 def is_approval_text(text: str) -> bool:
-    return bool(APPROVAL_RE.search(text or ""))
+    """A user decision is registered only when approval words appear WITHOUT a
+    negation / hold marker in the same text (Codex review P1-1: `許可しません` must
+    never become an allow)."""
+    t = text or ""
+    return bool(APPROVAL_RE.search(t)) and not NEGATION_RE.search(t)
 
 
 def parse_deadline_hours(text: str) -> float | None:
@@ -240,3 +270,31 @@ def matching_decision(
         if score >= threshold and score > best_score:
             best, best_score = dict(d, score=round(score, 3)), score
     return best
+
+
+def command_bound(decision_text: str, request: str) -> bool:
+    """Strict binding for PermissionRequest (Codex review P1-2): the exact
+    normalised request (operation + target + options) must appear verbatim in
+    the user's decision text.  Topical similarity never grants permission."""
+    req = re.sub(r"\s+", " ", (request or "").strip())
+    dec = re.sub(r"\s+", " ", (decision_text or ""))
+    return len(req) >= 3 and req in dec
+
+
+def is_confirmation_question(question: str) -> bool:
+    """Re-ask suppression applies only to yes/no confirmations of something the
+    user already said, never to genuine choice questions (reviewer HIGH: a task
+    request must not silence 'JWT or sessions?')."""
+    q = question or ""
+    return bool(CONFIRM_Q_RE.search(q)) and not CHOICE_Q_RE.search(q)
+
+
+def parse_denominator(text: str) -> int | None:
+    m = DENOMINATOR_RE.search(text or "")
+    if not m:
+        return None
+    return int(m.group(1) or m.group(2))
+
+
+def is_trivial_cmd(cmd: str) -> bool:
+    return bool(TRIVIAL_CMD_RE.match(cmd or ""))

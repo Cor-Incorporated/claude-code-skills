@@ -87,8 +87,8 @@ CASES: dict[str, dict] = {
         "status": "LOCAL",
     },
     "DOT-INC-010": {
-        "oracle": O.o_evidence_trailer,
-        "mutate": "evidence.trailer",
+        "oracle": O.o_evidence_executed,
+        "mutate": "evidence.executed",
         "agents": ALL,
         "status": "LOCAL",
         "note": "報告の実送信確認はメッセージ基盤の外側。Stop時の証拠束縛のみ",

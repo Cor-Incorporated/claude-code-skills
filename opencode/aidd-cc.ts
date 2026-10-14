@@ -94,7 +94,7 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
     ) => {
       const text = String(output.text ?? "")
       if (!text.trim()) return
-      const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: text }, ["--max-blocks", "99"])
+      const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: text }, ["--max-blocks", "99", "--no-count"])
       if (v.decision === "block") output.text = `${text}\n\n[H17 evidence gate] ${v.reason ?? ""}`
     },
     event: async ({ event }: { event: { type?: string; properties?: Record<string, unknown> } }) => {

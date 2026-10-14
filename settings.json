@@ -250,7 +250,7 @@
             "statusMessage": "H17 common control: recording tool result..."
           }
         ],
-        "matcher": "Bash"
+        "matcher": "Bash|Edit|Write|MultiEdit"
       }
     ],
     "PostToolUseFailure": [
@@ -273,6 +273,17 @@
             "command": "bash ~/.claude/hooks/tool-failure-recovery.sh",
             "timeout": 5,
             "statusMessage": "Analyzing tool failure..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/aidd-cc-claude.sh",
+            "timeout": 8,
+            "statusMessage": "H17 common control: recording failed tool result..."
           }
         ]
       }

@@ -38,7 +38,7 @@ from aidd_cc_controls import (  # noqa: E402
     stop_check,
 )
 from aidd_cc_session import guard_ledger, load_meta, load_tools, record_tool, save_meta  # noqa: E402
-from aidd_cc_text import is_approval_text, normalize_cmd, parse_deadline_hours  # noqa: E402
+from aidd_cc_text import is_approval_text, normalize_cmd, parse_deadline_hours, parse_denominator  # noqa: E402
 
 COMPONENT = "H17"
 
@@ -76,15 +76,36 @@ def _emit(obj: dict) -> None:
 
 
 def _tool_input(payload: dict) -> dict:
+    """Normalise harness-specific shapes to {command, file_path, ...}.
+    Codex `exec_command` passes `cmd` (P1-3); OpenCode passes `filePath`."""
     ti = payload.get("tool_input") or payload.get("args") or payload.get("input") or {}
+    if not isinstance(ti, dict):
+        return {}
+    ti = dict(ti)
+    for alt in ("cmd", "shell_command", "script"):
+        if "command" not in ti and ti.get(alt):
+            ti["command"] = ti[alt]
+    if isinstance(ti.get("command"), list):
+        ti["command"] = " ".join(str(x) for x in ti["command"])
     if "command" not in ti and payload.get("command"):
-        ti = dict(ti, command=payload["command"])
-    return ti if isinstance(ti, dict) else {}
+        ti["command"] = payload["command"]
+    for alt in ("filePath", "path", "file"):
+        if "file_path" not in ti and ti.get(alt):
+            ti["file_path"] = ti[alt]
+    if "old_string" not in ti and ti.get("oldString"):
+        ti["old_string"], ti["new_string"] = ti.get("oldString"), ti.get("newString")
+    return ti
+
+
+def _tool_name(payload: dict, default: str) -> str:
+    name = str(payload.get("tool_name") or payload.get("tool") or default)
+    return {"edit": "Edit", "write": "Write", "bash": "Bash", "shell": "Bash", "exec_command": "Bash",
+            "multiedit": "MultiEdit"}.get(name.lower(), name)
 
 
 def cmd_pre(args, payload):
     agent, session = args.agent, _session(args, payload)
-    tool = payload.get("tool_name") or payload.get("tool") or args.tool or "Bash"
+    tool = _tool_name(payload, args.tool or "Bash")
     ti = _tool_input(payload)
     meta, rows = load_meta(agent, session), load_tools(agent, session)
     if tool in ("AskUserQuestion", "ask_user", "question"):
@@ -115,7 +136,7 @@ def cmd_pre(args, payload):
 
 def cmd_post(args, payload):
     agent, session = args.agent, _session(args, payload)
-    tool = payload.get("tool_name") or payload.get("tool") or args.tool or "Bash"
+    tool = _tool_name(payload, args.tool or "Bash")
     ti = _tool_input(payload)
     resp = payload.get("tool_response") or payload.get("output") or {}
     rc = None
@@ -126,8 +147,11 @@ def cmd_post(args, payload):
         out = str(resp)
     if rc is None and payload.get("exit_code") is not None:
         rc = payload.get("exit_code")
+    if payload.get("hook_event_name") == "PostToolUseFailure" or payload.get("is_error") or payload.get("error"):
+        err = str(payload.get("error") or resp)
+        rc = 127 if "command not found" in err else 124 if "timed out" in err.lower() else (rc if rc not in (None, 0) else 1)
     if rc is None:
-        rc = 0 if not payload.get("error") and not payload.get("is_error") else 1
+        rc = 0
     key = (
         ("edit:" + str(ti.get("file_path", "")))
         if tool in ("Edit", "Write", "MultiEdit")
@@ -154,6 +178,7 @@ def cmd_prompt(args, payload):
         payload.get("prompt") or payload.get("text") or payload.get("message") or ""
     )
     meta = load_meta(agent, session)
+    meta["stop_blocks"] = 0  # the loop guard is per stop attempt, not per session (P2-4)
     registered = []
     if is_approval_text(text) and len(text.strip()) >= 4:
         import hashlib
@@ -167,6 +192,10 @@ def cmd_prompt(args, payload):
             }
         )
         registered.append("decision")
+    den = parse_denominator(text)
+    if den:
+        meta["denominator"] = den
+        registered.append(f"denominator={den}")
     hours = parse_deadline_hours(text)
     if hours is not None:
         res = ev.deadline_set(meta, time.time() + hours * 3600, None)
@@ -183,11 +212,10 @@ def cmd_permission(args, payload):
     agent, session = args.agent, _session(args, payload)
     ti = _tool_input(payload)
     text = json.dumps(ti, ensure_ascii=False) + " " + str(payload.get("message", ""))
-    verdict = permission_check(load_meta(agent, session), text)
+    request_cmd = str(ti.get("command") or ti.get("file_path") or "")
+    verdict = permission_check(load_meta(agent, session), text, request_cmd)
     if verdict["decision"] == "allow":
-        guard_ledger(
-            COMPONENT, "measure", "allow", verdict["rule"], text[:100], agent, session
-        )
+        guard_ledger(COMPONENT, "measure", "allow", verdict["rule"], request_cmd[:100], agent, session)
     _emit(verdict)
 
 
@@ -230,16 +258,14 @@ def cmd_stop(args, payload):
     agent, session = args.agent, _session(args, payload)
     meta, rows = load_meta(agent, session), load_tools(agent, session)
     if payload.get("stop_hook_active") and not args.ignore_active:
+        # Claude Code re-enters Stop with this flag after a block; passing is required to
+        # avoid an infinite loop, and the pass is visible in the ledger (not a silent off).
+        guard_ledger(COMPONENT, "measure", "allow", "evidence.loop-guard", "stop_hook_active", agent, session)
         _emit({"decision": "allow", "rule": "evidence.loop-guard"})
         return 0
     if meta.get("stop_blocks", 0) >= args.max_blocks:
-        _emit(
-            {
-                "decision": "allow",
-                "rule": "evidence.max-blocks",
-                "blocks": meta["stop_blocks"],
-            }
-        )
+        guard_ledger(COMPONENT, "measure", "allow", "evidence.max-blocks", f"blocks={meta['stop_blocks']}", agent, session)
+        _emit({"decision": "allow", "rule": "evidence.max-blocks", "blocks": meta["stop_blocks"]})
         return 0
     text = _last_assistant(payload, meta)
     verdict = stop_check(meta, rows, text, _cwd(args, payload))
@@ -247,17 +273,10 @@ def cmd_stop(args, payload):
     # registered entry even when nothing was blocked (DOT-INC-012/022).
     guard_ledger(COMPONENT, "measure", verdict["decision"], "evidence.evaluated", text[:60], agent, session)
     if verdict["decision"] == "block":
-        meta["stop_blocks"] = meta.get("stop_blocks", 0) + 1
-        save_meta(agent, session, meta)
-        guard_ledger(
-            COMPONENT,
-            "block",
-            "deny",
-            verdict["rule"],
-            verdict["problems"][0],
-            agent,
-            session,
-        )
+        if not args.no_count:
+            meta["stop_blocks"] = meta.get("stop_blocks", 0) + 1
+            save_meta(agent, session, meta)
+        guard_ledger(COMPONENT, "block", "deny", verdict["rule"], verdict["problems"][0], agent, session)
     _emit(verdict)
     if verdict["decision"] == "block" and args.exit_style == "claude":
         sys.stderr.write(verdict["reason"] + "\n")
@@ -401,6 +420,7 @@ def main(argv=None) -> int:
         default=int(os.environ.get("AIDD_CC_MAX_STOP_BLOCKS", "2")),
     )
     ap.add_argument("--ignore-active", action="store_true")
+    ap.add_argument("--no-count", action="store_true", help="evaluate without consuming a stop-block slot")
     ap.add_argument("--hypothesis")
     ap.add_argument("--change")
     ap.add_argument("--supersede")
@@ -413,6 +433,10 @@ def main(argv=None) -> int:
         args.path = args.action
     if args.cmd == "eval" and not args.kind:
         args.kind = args.action
+    if args.cmd in ("note", "denominator", "deadline") and not (args.session or os.environ.get("AIDD_CC_SESSION")):
+        _emit({"decision": "error", "rule": "session-required",
+               "reason": f"{args.cmd} needs --session <id> (the hook payload session_id); refusing to write to 'unset'"})
+        return 1
     payload = (
         _read_payload()
         if args.cmd not in ("readback", "deadline", "denominator", "note")
@@ -435,5 +459,18 @@ def main(argv=None) -> int:
     return int(rc or 0)
 
 
+def _main_guarded() -> int:
+    """A crash must not become a silent pass (harness-spec 0-4): record it."""
+    try:
+        return main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        guard_ledger(COMPONENT, "error", "crash", type(exc).__name__, str(exc)[:100],
+                     os.environ.get("AIDD_CC_AGENT", "?"), os.environ.get("AIDD_CC_SESSION", "unset"))
+        _emit({"decision": "allow", "rule": "error", "reason": f"{type(exc).__name__}: {str(exc)[:200]}"})
+        return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_main_guarded())

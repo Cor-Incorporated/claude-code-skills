@@ -60,7 +60,7 @@ v=json.load(sys.stdin)
 print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[H17] "+v["reason"]}},ensure_ascii=False))'
     fi
     ;;
-  PostToolUse)
+  PostToolUse|PostToolUseFailure)
     run_cc post >/dev/null
     ;;
   UserPromptSubmit)

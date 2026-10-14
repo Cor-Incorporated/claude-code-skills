@@ -44,40 +44,29 @@ def attempt_new(parent: str | None, ancestors: list[str], attempt_id: str) -> di
 
 
 def chain_check(records: list[dict]) -> dict:
-    """DOT-INC-030: every record must link back to the origin; gaps are rejected.
-
-    records: [{attempt_id, parent_attempt_id, started_at, ended_at}] in any order.
-    The origin is the record whose parent is None.  Total elapsed is computed
-    from the origin start to the latest end, including gaps and failures.
+    """DOT-INC-030: every record must link back to the single origin; gaps and
+    cycles are rejected (Codex review P2-10).  Total elapsed runs from the origin
+    start to the latest end, including gaps and failures.
     """
     by_id = {r["attempt_id"]: r for r in records}
     origins = [r for r in records if not r.get("parent_attempt_id")]
     if len(origins) != 1:
-        return {
-            "ok": False,
-            "reason": f"expected exactly one origin, found {len(origins)}",
-        }
-    missing = [
-        r["attempt_id"]
-        for r in records
-        if r.get("parent_attempt_id") and r["parent_attempt_id"] not in by_id
-    ]
-    if missing and not mutated("attempt.chain"):
-        return {
-            "ok": False,
-            "reason": "chain gap: parents missing",
-            "attempts": missing,
-        }
+        return {"ok": False, "reason": f"expected exactly one origin, found {len(origins)}"}
+    origin = origins[0]["attempt_id"]
+    bad = []
+    for r in records:
+        seen, cur = set(), r["attempt_id"]
+        while cur and cur != origin:
+            if cur in seen or cur not in by_id:
+                bad.append(r["attempt_id"])
+                break
+            seen.add(cur)
+            cur = by_id[cur].get("parent_attempt_id")
+    if bad and not mutated("attempt.chain"):
+        return {"ok": False, "reason": "chain gap or cycle: not every attempt reaches the origin", "attempts": bad}
     start = min(r["started_at"] for r in records)
     end = max(r["ended_at"] for r in records)
-    return {
-        "ok": True,
-        "origin": origins[0]["attempt_id"],
-        "total_elapsed_sec": round(end - start, 3),
-    }
-
-
-# --- deadlines: DOT-INC-004 / 028 / 045 ---------------------------------------
+    return {"ok": True, "origin": origin, "total_elapsed_sec": round(end - start, 3)}
 
 
 def deadline_status(deadline_epoch: float | None, now: float | None = None) -> dict:
@@ -145,7 +134,8 @@ def speed_compare(on: dict, off: dict, required_ratio: float = 2.0) -> dict:
         }
     ratio = off["elapsed_sec"] / on["elapsed_sec"]
     shown = round(ratio, 5) if not mutated("metrics.rounding") else round(ratio)
-    meets = shown >= required_ratio
+    # Pass/fail uses the RAW ratio (Codex review P2-11); rounding is display only.
+    meets = (ratio if not mutated("metrics.rounding") else shown) >= required_ratio
     verdict = "CONFOUNDED" if problems else ("MET" if meets else "UNMET")
     return {
         "verdict": verdict,

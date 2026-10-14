@@ -19,6 +19,9 @@ from pathlib import Path
 from aidd_cc_eval import deadline_status, file_sha
 from aidd_cc_text import (
     cmd_in_ledger,
+    command_bound,
+    is_confirmation_question,
+    is_trivial_cmd,
     denominator_mismatch,
     evidence_commands,
     has_completion_claim,
@@ -31,7 +34,8 @@ from aidd_cc_text import (
     readback_claims,
 )
 
-ITER_THRESHOLD = 4
+ITER_THRESHOLD = 4  # the 4th occurrence with no progress is blocked
+ITER_WINDOW = 20
 TEST_RE = re.compile(
     r"(pytest|jest|vitest|npm test|pnpm test|bun test|go test|cargo test|bash tests?/|python3? -m unittest|make test)"
 )
@@ -57,51 +61,45 @@ def family(tool: str, tool_input: dict) -> str:
 
 def _norm_key(tool: str, tool_input: dict) -> str:
     if tool in ("Edit", "Write", "MultiEdit"):
-        return "edit:" + str(tool_input.get("file_path", ""))
+        body = str(tool_input.get("old_string", "")) + "\x00" + str(tool_input.get("new_string", "")) \
+            + "\x00" + str(tool_input.get("content", ""))[:4000]
+        digest = hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()[:12]
+        return f"edit:{tool_input.get('file_path', '')}:{digest}"   # distinct edits differ (P2-5)
     return normalize_cmd(str(tool_input.get("command") or ""))[:400]
 
 
 def iteration_check(rows: list[dict], meta: dict, tool: str, tool_input: dict) -> dict:
-    """C-ITER: the same command repeated with no progress delta in between.
+    """C-ITER: the same command recurs with no progress delta.
 
-    Progress delta = (a) a different command family since the last repeat,
-    (b) the previous identical command changed its exit code, or
-    (c) a new hypothesis note.  Mutation `iter.progress-delta` ignores (b)/(c);
-    `iter.threshold` disables the block entirely.
+    Counts occurrences of this exact key among the last ITER_WINDOW pre rows
+    (interleaved edits / `true` calls do NOT reset the count: edit-test-edit-test
+    with the same failing test is the dot loop).  A progress delta resets it:
+    (a) the key's recorded rc changed between occurrences, or (b) a hypothesis
+    note was recorded after the first occurrence.  The 4th occurrence without
+    a delta is blocked.  Mutation `iter.progress-delta` ignores (a)/(b);
+    `iter.threshold` disables the block.
     """
     key = _norm_key(tool, tool_input)
     fam = family(tool, tool_input)
-    if fam in ("other",) and not key.startswith("edit:"):
+    if fam == "other" and not key.startswith("edit:"):
         return {"decision": "allow", "rule": "iter", "streak": 0}
-    streak, last_rc = 0, None
     note_ts = max([n["ts"] for n in meta.get("notes", [])] or [0])
-    for row in reversed(rows):
-        if row.get("event") != "pre":
-            if row.get("event") == "post" and row.get("key") == key:
-                if (
-                    last_rc is not None
-                    and row.get("rc") != last_rc
-                    and not mutated("iter.progress-delta")
-                ):
-                    break
-                last_rc = row.get("rc")
-            continue
-        if row.get("key") != key:
-            break
-        if row.get("ts", 0) < note_ts and not mutated("iter.progress-delta"):
-            break
-        streak += 1
-    if streak >= ITER_THRESHOLD and not mutated("iter.threshold"):
-        return {
-            "decision": "block",
-            "rule": "iter.repeat-without-delta",
-            "streak": streak,
-            "reason": (
-                f"same {fam} command repeated {streak}x with no progress delta. "
-                "Record a new hypothesis and the minimal change first: "
-                "aidd-cc note --hypothesis '...' --change '...'"
-            ),
-        }
+    pres = [r for r in rows if r.get("event") == "pre"][-ITER_WINDOW:]
+    same = [r for r in pres if r.get("key") == key]
+    if same and note_ts > same[0].get("ts", 0) and not mutated("iter.progress-delta"):
+        same = [r for r in same if r.get("ts", 0) > note_ts]
+    rcs = [r.get("rc") for r in rows if r.get("event") == "post" and r.get("key") == key]
+    if len(set(rcs)) > 1 and not mutated("iter.progress-delta"):
+        last_change = max(i for i in range(1, len(rcs)) if rcs[i] != rcs[i - 1])
+        same = same[-(len(rcs) - last_change):] if len(rcs) - last_change < len(same) else same[-1:]
+    streak = len(same)
+    if streak >= ITER_THRESHOLD - 1 and not mutated("iter.threshold"):
+        sid = meta.get("session", "<session>")
+        return {"decision": "block", "rule": "iter.repeat-without-delta", "streak": streak + 1,
+                "reason": (f"this would be occurrence {streak + 1} of the same {fam} command with no progress "
+                           "delta (rc unchanged, no new hypothesis). Record the hypothesis and the minimal "
+                           f"change first: python3 ~/.claude/hooks/lib/aidd_cc.py note --session {sid} "
+                           "--hypothesis '...' --change '...'")}
     return {"decision": "allow", "rule": "iter", "streak": streak}
 
 
@@ -127,41 +125,40 @@ def register_note(meta: dict, hypothesis: str, change: str) -> dict:
 
 
 def question_check(meta: dict, question: str) -> dict:
-    """C-DECISION: refuse to re-ask something the user already decided this session."""
+    """C-DECISION: refuse to re-ask a yes/no confirmation the user already gave.
+
+    Only confirmation-shaped questions are candidates (choice questions pass),
+    and only decisions that carried an approval word count."""
+    if not is_confirmation_question(question):
+        return {"decision": "allow", "rule": "decision.not-a-confirmation"}
     hit = matching_decision(question, meta.get("decisions", []))
     if hit:
-        return {
-            "decision": "block",
-            "rule": "decision.already-answered",
-            "reason": (
-                f"already decided by the user at {hit['at']} (overlap {hit['score']}): "
-                f'"{hit["text"][:160]}" — proceed on that decision instead of re-asking'
-            ),
-            "decision_ref": hit["sha"],
-        }
+        return {"decision": "block", "rule": "decision.already-answered",
+                "reason": (f"already decided by the user at {hit['at']} (overlap {hit['score']}): "
+                           f"\"{hit['text'][:160]}\" — proceed on that decision instead of re-asking"),
+                "decision_ref": hit["sha"]}
     return {"decision": "allow", "rule": "decision"}
 
 
-def permission_check(meta: dict, request_text: str) -> dict:
+def permission_check(meta: dict, request_text: str, request_cmd: str = "") -> dict:
     """C-DECISION for permission prompts: allow only when a user decision binds it.
 
-    Never denies; absence of a matching decision means "no opinion" so the
-    harness's own prompt still appears (required approvals are never removed).
+    Binding is strict (Codex review P1-2): the exact request command / path must
+    appear verbatim in the decision text.  Never denies; absence of a binding
+    decision means "no opinion" so the harness's own prompt still appears.
+    Mutation `approval.binding` falls back to topical overlap (the defect).
     """
-    hit = matching_decision(request_text, meta.get("decisions", []), threshold=0.5)
-    if hit and not mutated("approval.binding"):
-        return {
-            "decision": "allow",
-            "rule": "decision.inherited",
-            "decision_ref": hit["sha"],
-            "reason": f"user decision {hit['at']} covers this request",
-        }
-    if mutated("approval.binding") and meta.get("decisions"):
-        return {
-            "decision": "allow",
-            "rule": "decision.unbound",
-            "reason": "mutated: any decision",
-        }
+    decisions = meta.get("decisions", [])
+    target = request_cmd or request_text
+    for d in decisions:
+        if command_bound(d.get("text", ""), target):
+            return {"decision": "allow", "rule": "decision.inherited", "decision_ref": d["sha"],
+                    "reason": f"user decision {d['at']} names this exact request"}
+    if mutated("approval.binding"):
+        hit = matching_decision(request_text, decisions, threshold=0.5)
+        if hit:
+            return {"decision": "allow", "rule": "decision.unbound", "decision_ref": hit["sha"],
+                    "reason": "mutated: topical overlap only"}
     return {"decision": "none", "rule": "decision"}
 
 
@@ -172,11 +169,36 @@ def _executed_commands(rows: list[dict]) -> list[str]:
 
 
 def _rc_for(rows: list[dict], cited: str):
-    norm = normalize_cmd(cited)
+    norm = re.sub(r"\s+", " ", cited.strip())
     for r in reversed(rows):
-        if r.get("event") == "post" and norm in normalize_cmd(str(r.get("cmd", ""))):
-            return r.get("rc"), r.get("out_bytes", 0)
+        if r.get("event") != "post":
+            continue
+        for seg in re.split(r"&&|\|\||;|\||\n", str(r.get("cmd", ""))):
+            if re.sub(r"\s+", " ", seg.strip()).startswith(norm):
+                return r.get("rc"), r.get("out_bytes", 0)
     return None, 0
+
+
+def _touched_paths(rows: list[dict]) -> set[str]:
+    out = set()
+    for r in rows:
+        key = str(r.get("key", ""))
+        if key.startswith("edit:"):
+            out.add(Path(key.split(":")[1]).name)
+        for tok in re.findall(r"[\w./-]+", str(r.get("cmd", ""))):
+            if "/" in tok or "." in tok:
+                out.add(Path(tok).name)
+    return out
+
+
+def _push_executed(rows: list[dict]) -> bool:
+    for r in rows:
+        if r.get("event") != "post" or r.get("rc") not in (0, None):
+            continue
+        for seg in re.split(r"&&|\|\||;|\||\n", str(r.get("cmd", ""))):
+            if re.match(r"\s*(git push|gh pr merge|git merge)\b", seg):
+                return True
+    return False
 
 
 def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
@@ -199,31 +221,25 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
             "completion claim without `Evidence: <cmd> | <output> | <time>` trailer (DOT-INC-010)"
         )
     executed = _executed_commands(rows)
+    substantive = False
     for c in cmds:
         if not cmd_in_ledger(c, executed) and not mutated("evidence.executed"):
-            problems.append(
-                f"cited evidence command was not executed in this session: {c[:80]} (DOT-INC-017)"
-            )
+            problems.append(f"cited evidence command was not executed in this session: {c[:80]} (DOT-INC-017)")
             continue
         rc, out_bytes = _rc_for(rows, c)
         if rc in (124, 126, 127) and not mutated("evidence.rc-unknown"):
-            problems.append(
-                f"evidence command rc={rc} is UNKNOWN, not a result: {c[:80]} (DOT-INC-043)"
-            )
+            problems.append(f"evidence command rc={rc} is UNKNOWN, not a result: {c[:80]} (DOT-INC-043)")
+        elif rc not in (0, None) and not mutated("evidence.rc-unknown"):
+            problems.append(f"evidence command failed (rc={rc}) yet completion is claimed: {c[:80]} (DOT-INC-043)")
+        if not is_trivial_cmd(c):
+            substantive = True
+    if cmds and not substantive and not mutated("evidence.trailer"):
+        problems.append("every cited evidence command is trivial (ls/echo/cat/tail…); cite the command that produced the result")
     if has_persist_claim(text) and not mutated("evidence.readback"):
-        problems.extend(_readback_problems(text, cwd))
+        problems.extend(_readback_problems(text, cwd, _touched_paths(rows)))
     if has_push_claim(text) and not mutated("evidence.readback"):
-        if not any(
-            re.search(r"\b(git push|gh pr merge|git merge)\b", c) and r == 0
-            for c, r in (
-                (str(r.get("cmd", "")), r.get("rc"))
-                for r in rows
-                if r.get("event") == "post"
-            )
-        ):
-            problems.append(
-                "push/merge claimed but no successful push/merge command in the session ledger (DOT-INC-026)"
-            )
+        if not _push_executed(rows):
+            problems.append("push/merge claimed but no successful push/merge command in the session ledger (DOT-INC-026)")
     problems.extend(denominator_mismatch(text, meta.get("denominator")))
     problems.extend(source_set_problems(rows))
     return _verdict(problems)
@@ -252,12 +268,10 @@ def source_set_problems(rows: list[dict]) -> list[str]:
     return []
 
 
-def _readback_problems(text: str, cwd: str) -> list[str]:
+def _readback_problems(text: str, cwd: str, touched: set[str]) -> list[str]:
     claims = readback_claims(text)
     if not claims:
-        return [
-            "save/deploy claimed without `Readback: <path> sha256=<hex>` (DOT-INC-017/026)"
-        ]
+        return ["save/deploy claimed without `Readback: <path> sha256=<hex>` (DOT-INC-017/026)"]
     out = []
     for path, sha in claims:
         p = Path(path).expanduser()
@@ -265,9 +279,9 @@ def _readback_problems(text: str, cwd: str) -> list[str]:
             p = Path(cwd) / p
         actual = file_sha(p)
         if actual != sha:
-            out.append(
-                f"readback mismatch for {path}: claimed {sha[:12]} actual {str(actual)[:12]}"
-            )
+            out.append(f"readback mismatch for {path}: claimed {sha[:12]} actual {str(actual)[:12]}")
+        elif p.name not in touched:
+            out.append(f"readback path {path} was never written or touched by a command in this session (not the saved artifact)")
     return out
 
 

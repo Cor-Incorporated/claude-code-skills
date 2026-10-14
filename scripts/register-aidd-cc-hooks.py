@@ -70,19 +70,10 @@ def codex(path: Path, check: bool) -> list[str]:
             "timeout": 12,
             "statusMessage": f"AIDD H17 common control ({ev})",
         }
-        if groups and ev in ("PreToolUse", "PostToolUse"):
-            groups[0].setdefault("hooks", []).append(
-                entry
-            )  # append: keeps 0:0 / 0:1 trust keys
-        else:
-            groups.append(
-                {
-                    **(
-                        {"matcher": ".*"} if ev in ("PreToolUse", "PostToolUse") else {}
-                    ),
-                    "hooks": [entry],
-                }
-            )
+        # Always a NEW group with a catch-all matcher: appending keeps existing
+        # position-keyed trust entries valid, and does not inherit a narrow
+        # matcher from an earlier group (Codex review P2-8).
+        groups.append({**({"matcher": ".*"} if ev in ("PreToolUse", "PostToolUse") else {}), "hooks": [entry]})
     if missing and not check:
         _write(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     return missing

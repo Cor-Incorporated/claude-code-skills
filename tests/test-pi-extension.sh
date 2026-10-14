@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pi extension (pi/aidd-cc.ts) — drives the extension with a fake ExtensionAPI and
-# asserts it binds to the real python oracle: 4th identical bash call -> block,
+# asserts it binds to the real python oracle: 4th identical bash call -> block (3 prior),
 # evidence-free completion at turn_end -> continue:true with the gate message,
 # benign progress report -> no continuation.  Needs node >= 22 (strip-types).
 set -uo pipefail
@@ -41,9 +41,9 @@ pass=0; fail=0
 python3 -I - "$res" <<'PY' && pass=3 || fail=1
 import json, sys
 r = json.loads(sys.argv[1])
-assert r["iter_block_at"] == 5, r           # 4 recorded repeats, 5th call blocked
+assert r["iter_block_at"] == 4, r           # 3 recorded repeats, 4th call blocked
 assert r["evidence_free_continue"] is True, r
 assert r["benign_continue"] is False, r
-print("PASS: iter block at 5th identical call / evidence-free turn_end forced continuation / benign turn ends")
+print("PASS: iter block at 4th identical call / evidence-free turn_end forced continuation / benign turn ends")
 PY
 [ "$fail" -eq 0 ] && grep -q '"component": "H17"' "$SB/ledger.jsonl" && echo "PASS: H6 ledger rows written by the pi entry" || { echo "FAIL"; exit 1; }
