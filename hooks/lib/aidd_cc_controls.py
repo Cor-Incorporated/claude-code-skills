@@ -20,15 +20,18 @@ from aidd_cc_eval import deadline_status, file_sha
 from aidd_cc_text import (
     STRATEGY_NOTE_RE,
     cmd_in_ledger,
+    commit_subject,
     fix_scope,
+    fix_scope_from_output,
     segment_runs,
     shell_segments,
     shell_segments_with_separators,
     is_confirmation_question,
     is_trivial_cmd,
     denominator_mismatch,
-    evidence_commands,
+    evidence_trailers,
     incomplete_evidence_lines,
+    output_field_matches,
     has_completion_claim,
     has_persist_claim,
     has_push_claim,
@@ -114,18 +117,23 @@ def repair_family_check(rows: list[dict], meta: dict, cmd: str) -> dict | None:
         for r in rows
         if r.get("event") == "post"
         and r.get("rc") == 0
-        and fix_scope(str(r.get("cmd", ""))) == scope
+        and (
+            fix_scope(str(r.get("cmd", "")))
+            or fix_scope_from_output(str(r.get("out_sample", "")))
+        )
+        == scope
         and r.get("ts", 0) > strat_ts
     ]
     if len(prior) >= REPAIR_FAMILY_THRESHOLD:
         sid = meta.get("session", "<session>")
+        subject = (commit_subject(cmd) or "")[:80]
         return {
             "decision": "block",
             "rule": "iter.repair-family",
             "streak": len(prior) + 1,
             "reason": (
                 f"{len(prior)} fix({scope}) commits already landed in this session with no re-adjudication "
-                f"(aidd-governance#88). Decide the strategy before the next repair: python3 "
+                f"(aidd-governance#88); this commit's subject: `{subject}`. Decide the strategy before the next repair: python3 "
                 f"~/.claude/hooks/lib/aidd_cc.py note --agent {meta.get('agent', 'claude-code')} --session {sid} "
                 "--hypothesis 'STRATEGY: HOLD|PIVOT|RETIRE — why' --change '...'"
             ),
@@ -253,11 +261,9 @@ def _line_rc_applies(line: str) -> bool:
     return len(parts) == 1 or seps <= {"&&"}
 
 
-def _rc_for(rows: list[dict], cited: str):
-    """Exit status attributable to the cited command.  Whole-line citations and
-    segment matches both get the line's rc only when nothing in the line can
-    mask a failure (`pytest -q; true` cited verbatim is still UNKNOWN,
-    Codex r5 P2-a)."""
+def _evidence_row(rows: list[dict], cited: str) -> dict | None:
+    """The newest post row that ran the cited command: the whole line equals it, or a
+    quote-aware segment equals it modulo redirections (same rule as cmd_in_ledger)."""
     norm = re.sub(r"\s+", " ", cited.strip())
     for r in reversed(rows):
         if r.get("event") != "post":
@@ -268,21 +274,86 @@ def _rc_for(rows: list[dict], cited: str):
             segment_runs(seg, norm) for seg, _sp in shell_segments_with_separators(line)
         )
         if whole or seg_hit:
-            parts = shell_segments_with_separators(line)
-            if (
-                r.get("rc_src") == "marker"
-                and len(parts) == 2
-                and parts[1][1] in (";", "\n")
-                and re.fullmatch(r"echo exit=\$\?", parts[1][0])
-                and (whole or segment_runs(parts[0][0], norm))
-            ):
-                return r.get("rc"), r.get(
-                    "out_bytes", 0
-                )  # `X; echo exit=$?`: the marker IS X's status (Codex r6 P2-a)
-            return (r.get("rc") if _line_rc_applies(line) else None), r.get(
-                "out_bytes", 0
-            )
-    return None, 0
+            return r
+    return None
+
+
+def _rc_for(rows: list[dict], cited: str):
+    """Exit status attributable to the cited command.  Whole-line citations and
+    segment matches both get the line's rc only when nothing in the line can
+    mask a failure (`pytest -q; true` cited verbatim is still UNKNOWN,
+    Codex r5 P2-a)."""
+    r = _evidence_row(rows, cited)
+    if r is None:
+        return None, 0
+    norm = re.sub(r"\s+", " ", cited.strip())
+    line = str(r.get("cmd", ""))
+    whole = re.sub(r"\s+", " ", line.strip()) == norm
+    parts = shell_segments_with_separators(line)
+    if (
+        r.get("rc_src") == "marker"
+        and len(parts) == 2
+        and parts[1][1] in (";", "\n")
+        and re.fullmatch(r"echo exit=\$\?", parts[1][0])
+        and (whole or segment_runs(parts[0][0], norm))
+    ):
+        return r.get("rc"), r.get(
+            "out_bytes", 0
+        )  # `X; echo exit=$?`: the marker IS X's status (Codex r6 P2-a)
+    return (r.get("rc") if _line_rc_applies(line) else None), r.get("out_bytes", 0)
+
+
+def _iso(ts) -> str:
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(ts)))
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _output_problems(cited: str, claimed: str, row: dict) -> list[str]:
+    """aidd-governance#186 P1-1: the trailer's output field must describe what the cited
+    command printed (independent-review-probe: `git status` printed "ok", the report
+    claimed "47/47 pass").  Rows written before `out_sample` existed are not judged."""
+    recorded = row.get("out_sample")
+    if recorded is None:
+        return []
+    if output_field_matches(claimed, str(recorded)) is False:
+        head = re.sub(r"\s+", " ", str(recorded).strip())[:60]
+        return [
+            f"evidence output field does not describe the recorded output of `{cited[:60]}`: "
+            f"cited `{claimed[:60]}` but the command printed `{head}` (DOT-INC-017)"
+        ]
+    return []
+
+
+def _last_edit_row(rows: list[dict]) -> dict | None:
+    """Newest successful Edit/Write/MultiEdit post row (rc 0, or an unknown rc from a
+    harness that reports none for edits — the same rule as _touched_paths)."""
+    last = None
+    for r in rows:
+        if (
+            r.get("event") == "post"
+            and str(r.get("key", "")).startswith("edit:")
+            and r.get("rc") in (0, None)
+            and (last is None or r.get("ts", 0) >= last.get("ts", 0))
+        ):
+            last = r
+    return last
+
+
+def _stale_problems(cited: str, row: dict, rows: list[dict]) -> list[str]:
+    """aidd-governance#186 P1-2: evidence recorded before the newest successful edit no
+    longer describes the tree (`pytest -q` → Edit a.py → cite the old pytest).  Any
+    edited file counts — the conservative side."""
+    edit = _last_edit_row(rows)
+    if edit is None or row.get("ts", 0) >= edit.get("ts", 0):
+        return []
+    key = str(edit.get("key", "edit:?"))
+    path = key[5:].rsplit(":", 1)[0] if key.count(":") >= 2 else key[5:]
+    return [
+        f"evidence `{cited[:60]}` ran at {_iso(row.get('ts'))} but {path} was edited later at "
+        f"{_iso(edit.get('ts'))}; re-run it after the edit (DOT-INC-017)"
+    ]
 
 
 WRITE_CMD_RE = re.compile(
@@ -370,7 +441,8 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
         )
     if not (has_completion_claim(text) or has_persist_claim(text)):
         return _verdict(problems)
-    cmds = evidence_commands(text)
+    trailers = evidence_trailers(text)
+    cmds = [c for c, _out, _when in trailers]
     for bad in incomplete_evidence_lines(text):
         if not mutated("evidence.trailer"):
             problems.append(
@@ -382,12 +454,17 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
         )
     executed = _executed_commands(rows)
     substantive = False
-    for c in cmds:
+    for c, claimed_out, _when in trailers:
         if not cmd_in_ledger(c, executed) and not mutated("evidence.executed"):
             problems.append(
                 f"cited evidence command was not executed in this session: {c[:80]} (DOT-INC-017)"
             )
             continue
+        row = _evidence_row(rows, c)
+        if row is not None and not mutated("evidence.trailer"):
+            problems.extend(_output_problems(c, claimed_out, row))  # #186 P1-1
+        if row is not None and not mutated("evidence.executed"):
+            problems.extend(_stale_problems(c, row, rows))  # #186 P1-2
         rc, out_bytes = _rc_for(rows, c)
         if rc is None and mutated("evidence.executed"):
             rc = 0  # the old behaviour: a typed command is trusted as if it ran and passed

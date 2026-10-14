@@ -335,9 +335,25 @@ def cmd_post(args, payload):
             "rc": rc,
             "cmd": str(ti.get("command") or "")[:4000],
             "out_bytes": len(out),
+            "out_sample": _out_sample(out),
         },
     )
     _emit({"decision": "allow", "rule": "record", "rc": rc})
+
+
+OUT_SAMPLE_CHARS = 4000
+
+
+def _out_sample(out: str) -> str:
+    """Head + tail of the tool output kept on the post row so the Evidence output field can
+    be checked against what the command printed (aidd-governance#186 P1-1).  The tail is
+    kept because test summaries are last lines.  Exposure: the same text already sits in
+    the harness transcript on this disk; the state dir is per-user.  Do not point
+    AIDD_CC_STATE_DIR at a shared location."""
+    if len(out) <= OUT_SAMPLE_CHARS:
+        return out
+    half = OUT_SAMPLE_CHARS // 2
+    return out[:half] + "\n…\n" + out[-half:]
 
 
 def cmd_prompt(args, payload):
@@ -438,41 +454,73 @@ def _tail_assistant(tp: Path) -> str:
     return last
 
 
+RELEASE_NOTE = "[H17] evidence unverified ({why})"
+
+
+def _release(args, payload, meta, rows, rule: str, detail: str, why: str) -> int:
+    """A loop-guard / max-blocks release never passes silently.  The allow row stays
+    (T11), and the text is STILL evaluated: when it would have been blocked, a
+    `<rule>.would-block` row is written and the verdict carries `would_block` plus the
+    visible note for the harness to show (aidd-governance#186 P1-4 — Pi live 2026-10-14
+    08:35Z: a fabricated third turn passed through the max-blocks release unmarked; the
+    Claude Code stop_hook_active re-entry is the same path, P2-1).  The release itself
+    is kept: removing it would be an infinite block."""
+    agent, session = args.agent, _session(args, payload)
+    guard_ledger(COMPONENT, "measure", "allow", rule, detail, agent, session)
+    out: dict = {"decision": "allow", "rule": rule}
+    if rule == "evidence.max-blocks":
+        out["blocks"] = meta.get("stop_blocks", 0)
+    text = _last_assistant(payload, meta)
+    verdict = (
+        stop_check(meta, rows, text, _cwd(args, payload))
+        if text.strip()
+        else {"decision": "allow"}
+    )
+    if verdict["decision"] == "block":
+        guard_ledger(
+            COMPONENT,
+            "measure",
+            "would-block",
+            rule + ".would-block",
+            verdict["problems"][0],
+            agent,
+            session,
+        )
+        out.update(
+            would_block=True,
+            problems=verdict["problems"],
+            reason=verdict["reason"],
+            note=RELEASE_NOTE.format(why=why),
+        )
+    _emit(out)
+    return 0
+
+
 def cmd_stop(args, payload):
     agent, session = args.agent, _session(args, payload)
     meta, rows = load_meta(agent, session), load_tools(agent, session)
     if payload.get("stop_hook_active") and not args.ignore_active:
         # Claude Code re-enters Stop with this flag after a block; passing is required to
         # avoid an infinite loop, and the pass is visible in the ledger (not a silent off).
-        guard_ledger(
-            COMPONENT,
-            "measure",
-            "allow",
+        return _release(
+            args,
+            payload,
+            meta,
+            rows,
             "evidence.loop-guard",
             "stop_hook_active",
-            agent,
-            session,
+            "stop_hook_active re-entry",
         )
-        _emit({"decision": "allow", "rule": "evidence.loop-guard"})
-        return 0
     if meta.get("stop_blocks", 0) >= args.max_blocks:
-        guard_ledger(
-            COMPONENT,
-            "measure",
-            "allow",
+        return _release(
+            args,
+            payload,
+            meta,
+            rows,
             "evidence.max-blocks",
             f"blocks={meta['stop_blocks']}",
-            agent,
-            session,
+            "max-blocks released",
         )
-        _emit(
-            {
-                "decision": "allow",
-                "rule": "evidence.max-blocks",
-                "blocks": meta["stop_blocks"],
-            }
-        )
-        return 0
     text = _last_assistant(payload, meta)
     if not text.strip() and meta.get("pending_block_reason"):
         reason = meta.pop("pending_block_reason")

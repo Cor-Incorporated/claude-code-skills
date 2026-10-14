@@ -134,19 +134,101 @@ STOPWORDS = {
 }
 
 
-FIX_COMMIT_RE = re.compile(
-    r"git commit\b[^|&;]*?\s-m\s*[\"']?\s*(fix|hotfix)\(([^)]+)\)"
+# aidd-governance#186 P1-3: the repair-family breaker reads the COMMIT SUBJECT of a real
+# `git … commit` segment in every form an agent actually types — `-m` / `-am` / `-qm`,
+# `--message=`, `-m "$(cat <<'EOF' …)"` (Claude Code's default), `-F - <<'EOF'`,
+# `git -C <dir> commit`, `bash -c "git commit …"`.  Text that merely contains the words
+# (heredoc bodies, string literals, arguments of printf/echo/grep) is NOT a commit: the
+# acceptance session was denied its next Bash call after writing a probe file three times.
+# A commit whose message comes from a file or an editor (`-F msg.txt`, no -m) has no
+# visible subject here; its scope is then read from the recorded stdout `[branch sha] …`
+# of the post row (fix_scope_from_output) or not counted.  Surface form only (C15).
+FIX_SUBJECT_RE = re.compile(r"^\s*(fix|hotfix)\(([^)]+)\)")
+GIT_COMMIT_SEG_RE = re.compile(
+    r"^(?:[A-Za-z_]\w*=\S*\s+)*git\s+(?:(?:-[Cc]|--git-dir|--work-tree)[= ]\S+\s+|--[\w-]+(?:=\S+)?\s+)*commit\b(?P<rest>.*)$",
+    re.S,
 )
+MSG_FLAG_RE = re.compile(r"(?:^|\s)(?:-[a-zA-Z]*m|--message)(?:\s*=\s*|\s*)(?P<val>.*)$", re.S)
+FILE_STDIN_RE = re.compile(r"(?:^|\s)(?:-F|--file)(?:\s*=\s*|\s+)-(?:\s|$)")
+HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)(\w+)\1")
+HEREDOC_MSG_RE = re.compile(r"^\$\(\s*cat\s+<<")
+WRAPPER_SEG_RE = re.compile(r"^(?:bash|sh|zsh|eval)\s+(?:-\w+\s+)*(['\"])(?P<inner>.*)\1\s*$", re.S)
+COMMIT_STDOUT_RE = re.compile(r"^\s*\[[^\]\n]+ [0-9a-f]{7,}\]\s*(.+)$", re.M)
 STRATEGY_NOTE_RE = re.compile(
     r"STRATEGY\s*[:：]\s*(HOLD|PIVOT|RETIRE|STRATEGY_HOLD|STRATEGY_PIVOT)\b",
     re.IGNORECASE,
 )
 
 
+def _logical_lines(text: str) -> list[tuple[str, list[str]]]:
+    """(line, heredoc body lines) pairs.  A heredoc body belongs to its opener line and is
+    never scanned as commands (aidd-governance#186 P1-3b: `cat > notes.md <<'EOF' … git
+    commit -m 'fix(x): …' … EOF` writes a file, it does not commit)."""
+    out, lines, i = [], (text or "").split("\n"), 0
+    while i < len(lines):
+        line = lines[i]
+        delims = [m.group(2) for m in HEREDOC_OPEN_RE.finditer(line)]
+        body: list[str] = []
+        i += 1
+        for d in delims:
+            while i < len(lines) and lines[i].strip() != d:
+                body.append(lines[i])
+                i += 1
+            i += 1  # the delimiter line itself
+        out.append((line, body))
+    return out
+
+
+def _first_shell_arg(val: str) -> str:
+    """The first shell argument of `val`, unquoted; an unterminated quote runs to the end."""
+    val = val.lstrip()
+    if val[:1] in ("'", '"'):
+        end = val.find(val[0], 1)
+        return val[1:] if end < 0 else val[1:end]
+    return val.split(None, 1)[0] if val else ""
+
+
+def commit_subject(cmd: str) -> str | None:
+    """Subject line of the first real `git … commit` in `cmd` whose message is on the command
+    line (-m / --message / heredoc / `-F -`), else None (no commit, message file, editor)."""
+    for line, body in _logical_lines(cmd):
+        for seg in shell_segments(line):
+            wrapped = WRAPPER_SEG_RE.match(seg)
+            if wrapped:  # bash -c "git commit …": the quoted script is the command
+                inner = commit_subject(wrapped.group("inner"))
+                if inner is not None:
+                    return inner
+                continue
+            git = GIT_COMMIT_SEG_RE.match(seg)
+            if not git:
+                continue
+            rest = git.group("rest")
+            flag = MSG_FLAG_RE.search(rest)
+            first_body = next((b.strip() for b in body if b.strip()), "")
+            if not flag:
+                return first_body or None if FILE_STDIN_RE.search(rest) else None
+            arg = _first_shell_arg(flag.group("val"))
+            if HEREDOC_MSG_RE.match(arg):
+                return first_body or None
+            return arg.split("\n", 1)[0].strip() or None
+    return None
+
+
 def fix_scope(cmd: str) -> str | None:
-    """`git commit … fix(h17): …` -> "h17" (same repair family, aidd-governance#88)."""
-    m = FIX_COMMIT_RE.search(cmd or "")
+    """`git commit … -m 'fix(h17): …'` -> "h17" (same repair family, aidd-governance#88)."""
+    m = FIX_SUBJECT_RE.match(commit_subject(cmd) or "")
     return m.group(2).strip().lower() if m else None
+
+
+def fix_scope_from_output(out: str) -> str | None:
+    """Scope from git's own `[branch sha] fix(scope): …` line in the recorded stdout — covers
+    `-F msg.txt` and editor commits whose subject is not on the command line (#186 P1-3a).
+    Empty when the commit ran with `-q`."""
+    for subject in COMMIT_STDOUT_RE.findall(out or ""):
+        m = FIX_SUBJECT_RE.match(subject)
+        if m:
+            return m.group(2).strip().lower()
+    return None
 
 
 def mutated(control_id: str) -> bool:
@@ -186,16 +268,42 @@ def has_unmet_report(text: str) -> bool:
     return bool(UNMET_RE.search(text or ""))
 
 
-def evidence_commands(text: str) -> list[str]:
-    """Commands cited in COMPLETE `Evidence: <cmd> | <output> | <time>` trailers.
+def evidence_trailers(text: str) -> list[tuple[str, str, str]]:
+    """(cmd, output, time) of every COMPLETE `Evidence: <cmd> | <output> | <time>` trailer.
     A trailer missing the output or time field is not evidence (Codex r5 P2-h);
-    see incomplete_evidence_lines() for the diagnostic."""
-    cmds = []
+    see incomplete_evidence_lines() for the diagnostic.  Extra `|` inside the output
+    field stay in the output (the time is the last field)."""
+    out = []
     for line in EVIDENCE_LINE_RE.findall(text or ""):
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 3 and all(parts[:3]):
-            cmds.append(parts[0].strip("`'\" "))  # agents quote the command in backticks (Cursor IDE live 2026-10-14 05:12Z)
-    return cmds
+            cmd = parts[0].strip("`'\" ")  # agents quote the command in backticks (Cursor IDE live 2026-10-14 05:12Z)
+            out.append((cmd, " | ".join(parts[1:-1]), parts[-1]))
+    return out
+
+
+def evidence_commands(text: str) -> list[str]:
+    """Commands cited in COMPLETE Evidence trailers (see evidence_trailers)."""
+    return [cmd for cmd, _out, _when in evidence_trailers(text)]
+
+
+OUT_TOKEN_RE = re.compile(r"[A-Za-z0-9]{2,}|[゠-ヿ一-鿿]{2,}")
+
+
+def output_tokens(text: str) -> set[str]:
+    return {t.lower() for t in OUT_TOKEN_RE.findall(text or "")}
+
+
+def output_field_matches(claimed: str, recorded: str) -> bool | None:
+    """aidd-governance#186 P1-1: does the trailer's output field describe what the cited
+    command printed?  True/False on content-token overlap (ASCII words / numbers of 2+
+    chars, kanji/kana runs); None when there is nothing to compare — the recorded output
+    or the field has no content token (`cp` printed nothing, the field is `x`).  Surface
+    form only (C15): a field copied from any part of the real output is accepted."""
+    recorded_tokens, claimed_tokens = output_tokens(recorded), output_tokens(claimed)
+    if not recorded_tokens or not claimed_tokens:
+        return None
+    return bool(recorded_tokens & claimed_tokens)
 
 
 def incomplete_evidence_lines(text: str) -> list[str]:
