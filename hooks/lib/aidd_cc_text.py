@@ -40,13 +40,20 @@ RATIO_RE = re.compile(r"(?<![\d./])(\d{1,4})\s*/\s*(\d{1,4})(?![\d./])")
 WHOLE_WORDS = ("全体", "全ケース", "全件", "all cases", "overall", "原要求")
 
 NEGATION_RE = re.compile(
-    r"(しない|しません|しないで|してはいけ|していません|していない|しかね|できません|できない|出せない|不可|不許可|禁止|ダメ|駄目|"
-    r"やめて|やめろ|拒否|NG|却下|承認待ち|未承認|保留|取り消|取消|撤回|認めない|認めません|中止|停止して|考え中|検討中|考えさせ|"
-    r"\bnot\b|\bdon'?t\b|\bdo not\b|\bnever\b|\bno\b|\bwon'?t\b|\bcan'?t\b|\bcannot\b|\breject|\brevoke|\bwithdraw|\bcancel|\bhold\b)",
+    r"(しない|しません|しないで|してはいけ|していません|していない|しかね|できかね|できません|できない|出せない|つもりはない|したくない|"
+    r"見送|不可|不許可|禁止|ダメ|駄目|やめて|やめろ|拒否|NG|却下|承認待ち|未承認|保留|取り消|取消|撤回|認めない|認めません|"
+    r"中止|停止して|考え中|検討中|考えさせ|迷|待って|待った|後で|あとで|ナシで|なしで|"
+    r"\bnot\b|\bdon'?t\b|\bdo not\b|\bnever\b|\bno\b|\bwon'?t\b|\bcan'?t\b|\bcannot\b|\breject|\brefuse|\brevoke|"
+    r"\bwithdraw|\bcancel|\bhold\b|\bwait\b|\blater\b|\bscratch that|\bnot yet)",
     re.IGNORECASE,
 )
+# A question or a conditional is not a decision (reviewer-e N2).
+UNDECIDED_RE = re.compile(r"(\?|？|べき|すべき|かどうか|ですか|ますか|もし|なら|ならば|の場合|\bif\b|\bunless\b|\bwhether\b|\bshould i\b|\bshould we\b|\bmaybe\b)", re.IGNORECASE)
+WRITE_KIND_RE = re.compile(r"(修正|編集|書き換え|書き込み|書込|作成|更新|追記|変更|edit|write|modify|update|create|patch|append)", re.IGNORECASE)
+DELETE_KIND_RE = re.compile(r"(削除|消去|消して|delete|remove|rm\b|drop|truncate)", re.IGNORECASE)
 NEGATED_COMPLETION_RE = re.compile(
-    r"(未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|nothing is done|"
+    r"(未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
+    r"(?:完了|検証|push|マージ|配備)(?:には|は|に)?(?:至って|達して|届いて)(?:いない|いません|おらず)|nothing (?:is|has been|was) (?:done|verified|pushed|merged|deployed|saved)|"
     r"(?:完了|マージ|配備|保存|反映|push|deploy)(?:は|を)?(?:まだ)?(?:してい(?:ない|ません)|していない|できていない|ではない|していません)|"
     r"not (?:yet )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed)|"
     r"isn'?t (?:done|verified|merged|deployed|saved)|incomplete|un(?:merged|deployed|saved|pushed))",
@@ -170,7 +177,8 @@ def shell_segments(cmd: str) -> list[str]:
 
 def shell_segments_with_separators(cmd: str) -> list[tuple[str, str]]:
     """Like shell_segments but returns (segment, separator_before_it); the
-    separator is "" for the first segment, else one of && || ; | & \n."""
+    separator is "" for the first segment, else one of && || ; | & \n.
+    `2>&1`, `&>` and `>&` are redirections, not separators (Codex r4 P2-i)."""
     out, cur, quote, i, sep = [], [], None, 0, ""
     text = cmd or ""
     while i < len(text):
@@ -189,6 +197,9 @@ def shell_segments_with_separators(cmd: str) -> list[tuple[str, str]]:
             out.append(("".join(cur), sep))
             cur, sep = [], two
             i += 2
+        elif ch == "&" and (text[i - 1:i] == ">" or text[i + 1:i + 2] == ">"):
+            cur.append(ch)
+            i += 1
         elif ch in (";", "|", "&", "\n"):
             out.append(("".join(cur), sep))
             cur, sep = [], ch
@@ -200,26 +211,33 @@ def shell_segments_with_separators(cmd: str) -> list[tuple[str, str]]:
     return [(re.sub(r"\s+", " ", seg.strip()), s) for seg, s in out if seg.strip()]
 
 
+REDIRECT_RE = re.compile(r"(\d?>>?\s*\S+|<\s*\S+|\d?>&\d|&>\s*\S+)")
+
+
 def segment_runs(seg: str, cited: str) -> bool:
     """A segment ran the cited command when it is the whole segment, or the
-    cited text followed only by redirections (`pytest -q 2>&1`).  `pytest -q --co`
-    does NOT satisfy `pytest -q` (reviewer-d #7)."""
+    cited text followed ONLY by redirections (`pytest -q 2>&1 >out`).
+    `pytest -q --co` and `pytest -q >out --collect-only` do NOT satisfy
+    `pytest -q` (Codex r4 P2-h)."""
     if seg == cited:
         return True
     if seg.startswith(cited + " "):
-        rest = seg[len(cited):].strip()
-        return bool(re.match(r"^(\d?>>?|<|2>&1)", rest))
+        rest = REDIRECT_RE.sub(" ", seg[len(cited):]).strip()
+        return rest == ""
     return False
 
 
 def cmd_in_ledger(cited: str, executed: Iterable[str]) -> bool:
-    """A cited command counts as executed only if a ledger row ran it at a
-    command position (a quote-aware segment equals it, modulo redirections).
+    """A cited command counts as executed only if a ledger row ran it: the whole
+    line equals it, or a quote-aware segment equals it modulo redirections.
     A command that merely appears inside an argument is not execution."""
     norm = re.sub(r"\s+", " ", (cited or "").strip())
     if len(norm) < 4:
         return False
     for row in executed:
+        line = re.sub(r"\s+", " ", str(row).strip())
+        if line == norm:
+            return True
         for seg in shell_segments(str(row)):
             if segment_runs(seg, norm):
                 return True
@@ -286,11 +304,13 @@ def overlap(a: str, b: str) -> float:
 
 
 def is_approval_text(text: str) -> bool:
-    """A user decision is registered only when approval words appear WITHOUT a
-    negation / hold marker in the same text (Codex review P1-1: `許可しません` must
-    never become an allow)."""
+    """A user decision is registered only when an approval word appears WITHOUT a
+    negation / hold marker and WITHOUT a question / conditional marker in the
+    same text.  Conservative by construction: anything that looks undecided is
+    not a decision (a missed approval costs one prompt; a missed refusal would
+    cost an unapproved action)."""
     t = text or ""
-    return bool(APPROVAL_RE.search(t)) and not NEGATION_RE.search(t)
+    return bool(APPROVAL_RE.search(t)) and not NEGATION_RE.search(t) and not UNDECIDED_RE.search(t)
 
 
 def parse_deadline_hours(text: str) -> float | None:
@@ -325,18 +345,24 @@ def matching_decision(question: str, decisions: list[dict], threshold: float = 0
 
 def command_bound(decision_text: str, request: str) -> bool:
     """Strict binding for PermissionRequest: the normalised request must appear
-    in the decision text as the WHOLE approved operation — bounded on the left,
-    and followed by nothing ASCII except an approval word.  So `rm -rf data/archive`
-    never covers `rm -rf data`, `feat/xyz` never covers `feat/x`, and approving
-    `git push origin feat/x --dry-run` never covers `git push origin feat/x`
-    (Codex r3 P1-1).  Topical similarity never grants permission."""
+    in the decision text as the WHOLE approved operation — case-sensitive
+    (branch names), not inside quotes (an approved `echo "rm -rf data"` is not an
+    approval of `rm -rf data`), bounded on the left, and followed by nothing
+    ASCII except an approval word (approving `… --dry-run` never covers the
+    real command).  Topical similarity never grants permission."""
     req = re.sub(r"\s+", " ", (request or "").strip())
     dec = re.sub(r"\s+", " ", (decision_text or ""))
     if len(req) < 3:
         return False
-    pat = (r"(?<![\w./:@~-])" + re.escape(req)
-           + r"(?![\w./:@~-])(?!\s+(?!(?:ok|okay|yes|approved?|lgtm|go ahead|proceed)\b)[-A-Za-z0-9_./:@~])")
-    return re.search(pat, dec, re.IGNORECASE) is not None
+    pat = (r"(?<![\w./:@~\"'`-])" + re.escape(req)
+           + r"(?![\w./:@~\"'`-])(?!\s+(?!(?i:ok|okay|yes|approved?|lgtm|go ahead|proceed)\b)[-A-Za-z0-9_./:@~])")
+    return re.search(pat, dec) is not None
+
+
+def is_short_affirmative(text: str) -> bool:
+    """`OK` / `yes` / `はい、進めて` alone: binds to the last pending question."""
+    t = (text or "").strip()
+    return len(t) <= 16 and bool(APPROVAL_RE.search(t)) and not NEGATION_RE.search(t) and not UNDECIDED_RE.search(t)
 
 
 def is_confirmation_question(question: str) -> bool:

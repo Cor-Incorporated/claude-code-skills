@@ -18,6 +18,8 @@ from pathlib import Path
 
 from aidd_cc_eval import deadline_status, file_sha
 from aidd_cc_text import (
+    DELETE_KIND_RE,
+    WRITE_KIND_RE,
     cmd_in_ledger,
     command_bound,
     segment_runs,
@@ -64,11 +66,13 @@ def family(tool: str, tool_input: dict) -> str:
 
 def _norm_key(tool: str, tool_input: dict) -> str:
     if tool in ("Edit", "Write", "MultiEdit"):
-        body = str(tool_input.get("old_string", "")) + "\x00" + str(tool_input.get("new_string", "")) \
-            + "\x00" + str(tool_input.get("content", ""))[:4000]
+        import json as _json
+        body = (str(tool_input.get("old_string", "")) + "\x00" + str(tool_input.get("new_string", ""))
+                + "\x00" + str(tool_input.get("content", ""))[:4000]
+                + "\x00" + _json.dumps(tool_input.get("edits", ""), ensure_ascii=False, sort_keys=True)[:8000])
         digest = hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()[:12]
         return f"edit:{tool_input.get('file_path', '')}:{digest}"   # distinct edits differ (P2-5)
-    return normalize_cmd(str(tool_input.get("command") or ""))[:400]
+    return normalize_cmd(str(tool_input.get("command") or ""))[:4000]
 
 
 def iteration_check(rows: list[dict], meta: dict, tool: str, tool_input: dict) -> dict:
@@ -130,33 +134,43 @@ def register_note(meta: dict, hypothesis: str, change: str) -> dict:
 def question_check(meta: dict, question: str) -> dict:
     """C-DECISION: refuse to re-ask a yes/no confirmation the user already gave.
 
-    Only confirmation-shaped questions are candidates (choice questions pass),
-    and only decisions that carried an approval word count."""
+    Only confirmation-shaped questions are candidates (choice / destructive
+    questions pass), and only decisions that carried an approval word count.
+    A question that passes is remembered as pending so a short `OK` reply can
+    bind to it (reviewer-e #8)."""
     if not is_confirmation_question(question):
-        return {"decision": "allow", "rule": "decision.not-a-confirmation"}
+        meta.setdefault("questions", []).append({"ts": time.time(), "text": question[:600]})
+        return {"decision": "allow", "rule": "decision.not-a-confirmation", "remember": True}
     hit = matching_decision(question, meta.get("decisions", []))
     if hit:
         return {"decision": "block", "rule": "decision.already-answered",
                 "reason": (f"already decided by the user at {hit['at']} (overlap {hit['score']}): "
                            f"\"{hit['text'][:160]}\" — proceed on that decision instead of re-asking"),
                 "decision_ref": hit["sha"]}
-    return {"decision": "allow", "rule": "decision"}
+    meta.setdefault("questions", []).append({"ts": time.time(), "text": question[:600]})
+    return {"decision": "allow", "rule": "decision", "remember": True}
 
 
-def permission_check(meta: dict, request_text: str, request_cmd: str = "") -> dict:
+def permission_check(meta: dict, request_text: str, request_cmd: str = "", request_path: str = "") -> dict:
     """C-DECISION for permission prompts: allow only when a user decision binds it.
 
-    Binding is strict (Codex review P1-2): the exact request command / path must
-    appear verbatim in the decision text.  Never denies; absence of a binding
-    decision means "no opinion" so the harness's own prompt still appears.
+    Commands: the exact operation must appear whole in the decision text.
+    Edit/Write by path: the path must appear whole AND the decision must name a
+    write-kind operation (修正 / edit / update …) and no delete-kind word — an
+    approval to `cat` or `削除` a file never allows writing it (reviewer-e #2).
+    Never denies; absence of a binding decision means "no opinion".
     Mutation `approval.binding` falls back to topical overlap (the defect).
     """
     decisions = meta.get("decisions", [])
-    target = request_cmd or request_text
     for d in decisions:
-        if command_bound(d.get("text", ""), target):
+        dtext = d.get("text", "")
+        if request_cmd and command_bound(dtext, request_cmd):
             return {"decision": "allow", "rule": "decision.inherited", "decision_ref": d["sha"],
                     "reason": f"user decision {d['at']} names this exact request"}
+        if request_path and not request_cmd and command_bound(dtext, request_path) \
+                and WRITE_KIND_RE.search(dtext) and not DELETE_KIND_RE.search(dtext):
+            return {"decision": "allow", "rule": "decision.inherited", "decision_ref": d["sha"],
+                    "reason": f"user decision {d['at']} names this path with a write-kind operation"}
     if mutated("approval.binding"):
         hit = matching_decision(request_text, decisions, threshold=0.5)
         if hit:
@@ -172,16 +186,18 @@ def _executed_commands(rows: list[dict]) -> list[str]:
 
 
 def _rc_for(rows: list[dict], cited: str):
-    """Exit status attributable to the cited segment.  A compound command's
-    recorded rc belongs to the whole line: it transfers to a segment only when
-    every separator is `&&` (all segments succeeded iff rc==0) or the segment
-    is the whole line; with `||`, `;`, `|` or `&` the segment's own status is
-    UNKNOWN (Codex r3 P2-1: `pytest -q || true`)."""
+    """Exit status attributable to the cited command.  The whole line cited
+    verbatim gets the line's rc.  A compound line's rc transfers to a segment
+    only when every separator is `&&`; with `||`, `;`, `|` or `&` the segment's
+    own status is UNKNOWN (`pytest -q || true`)."""
     norm = re.sub(r"\s+", " ", cited.strip())
     for r in reversed(rows):
         if r.get("event") != "post":
             continue
-        parts = shell_segments_with_separators(str(r.get("cmd", "")))
+        line = str(r.get("cmd", ""))
+        if re.sub(r"\s+", " ", line.strip()) == norm:
+            return r.get("rc"), r.get("out_bytes", 0)
+        parts = shell_segments_with_separators(line)
         for seg, _sep in parts:
             if segment_runs(seg, norm):
                 seps = {s for _x, s in parts if s}
@@ -205,6 +221,8 @@ def _touched_paths(rows: list[dict]) -> set[str]:
     targets.  Merely mentioning a path does not count."""
     out = set()
     for r in rows:
+        if r.get("event") != "post" or r.get("rc") not in (0, None) or (r.get("rc") is None and not str(r.get("key", "")).startswith("edit:")):
+            continue  # only writes that actually succeeded (Codex r4 P2-e)
         cwd = str(r.get("cwd") or "")
         key = str(r.get("key", ""))
         cands = []
@@ -229,10 +247,16 @@ def _touched_paths(rows: list[dict]) -> set[str]:
 
 
 def _push_executed(rows: list[dict]) -> bool:
+    """A push/merge counts only from a successful post row whose line is a
+    single segment or an `&&` chain (`false && git push …; true` is not a push)."""
     for r in rows:
         if r.get("event") != "post" or r.get("rc") != 0:
             continue
-        for seg in shell_segments(str(r.get("cmd", ""))):
+        parts = shell_segments_with_separators(str(r.get("cmd", "")))
+        seps = {s for _x, s in parts if s}
+        if len(parts) > 1 and not seps <= {"&&"}:
+            continue
+        for seg, _sep in parts:
             if re.match(r"(git push|gh pr merge|git merge)\b", seg) and not re.search(r"(--dry-run|\s-n\b)", seg):
                 return True
     return False
@@ -267,7 +291,8 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
         if rc is None and mutated("evidence.executed"):
             rc = 0  # the old behaviour: a typed command is trusted as if it ran and passed
         if rc in (None, 124, 126, 127) and not mutated("evidence.rc-unknown"):
-            problems.append(f"evidence command exit status {rc if rc is not None else 'unavailable'} is UNKNOWN, not a result: {c[:80]} (DOT-INC-043)")
+            how = "" if rc is not None else " — this harness reported no exit status; run it as `<cmd>; echo exit=$?` so the status is in the output"
+            problems.append(f"evidence command exit status {rc if rc is not None else 'unavailable'} is UNKNOWN, not a result: {c[:80]}{how} (DOT-INC-043)")
         elif rc != 0 and not mutated("evidence.rc-unknown"):
             problems.append(f"evidence command failed (rc={rc}) yet completion is claimed: {c[:80]} (DOT-INC-043)")
         if not is_trivial_cmd(c):

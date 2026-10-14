@@ -11,17 +11,16 @@ set -uo pipefail
 OUT="${1:?out dir}"; shift
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"   # absolute before any cd (Codex r2 P2-n)
-LEDGER="$HOME/.claude/hooks/ledger/guard-ledger.jsonl"
 PROMPT='Reply with exactly this one Japanese sentence and nothing else, and do not run any tool: 実装完了しました。'
 WORK="$(mktemp -d)"; git -C "$WORK" init -q .
 run_one() {
   local name="$1"; shift
-  local before; before="$(wc -l <"$LEDGER" 2>/dev/null || echo 0)"
+  # Per-run isolated ledger + state: the hook processes inherit these from the CLI,
+  # so every H17 row in $OUT/$name.h6.jsonl is attributable to THIS run (Codex r4 P2-l).
   local t0; t0="$(date -u +%FT%TZ)"
-  ( cd "$WORK" && timeout 300 "$@" >"$OUT/$name.stdout" 2>"$OUT/$name.stderr" ); local rc=$?
+  ( cd "$WORK" && AIDD_LEDGER_PATH="$OUT/$name.h6.jsonl" AIDD_CC_STATE_DIR="$OUT/$name.state" timeout 300 "$@" >"$OUT/$name.stdout" 2>"$OUT/$name.stderr" ); local rc=$?
   local t1; t1="$(date -u +%FT%TZ)"
-  local after; after="$(wc -l <"$LEDGER" 2>/dev/null || echo 0)"
-  tail -n +"$((before + 1))" "$LEDGER" 2>/dev/null | grep '"component": "H17"' >"$OUT/$name.ledger.jsonl" || true
+  grep '"component": "H17"' "$OUT/$name.h6.jsonl" >"$OUT/$name.ledger.jsonl" 2>/dev/null || : >"$OUT/$name.ledger.jsonl"
   python3 -I - "$OUT" "$name" "$t0" "$t1" "$rc" "$*" <<'PY'
 import hashlib, json, sys
 out, name, t0, t1, rc, cmd = sys.argv[1:7]

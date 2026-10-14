@@ -40,7 +40,7 @@ from aidd_cc_controls import (  # noqa: E402
     stop_check,
 )
 from aidd_cc_session import guard_ledger, load_meta, load_tools, record_tool, save_meta  # noqa: E402
-from aidd_cc_text import NEGATION_RE, is_approval_text, parse_deadline_hours, parse_denominator  # noqa: E402
+from aidd_cc_text import NEGATION_RE, is_approval_text, is_short_affirmative, parse_deadline_hours, parse_denominator  # noqa: E402
 
 COMPONENT = "H17"
 
@@ -94,6 +94,11 @@ def _tool_input(payload: dict) -> dict:
     for alt in ("filePath", "path", "file"):
         if "file_path" not in ti and ti.get(alt):
             ti["file_path"] = ti[alt]
+    if "content" not in ti and ti.get("patch"):  # Codex apply_patch
+        ti["content"] = str(ti["patch"])
+        mfile = re.search(r"\*\*\* (?:Update|Add|Delete) File: (\S+)", str(ti["patch"]))
+        if mfile and "file_path" not in ti:
+            ti["file_path"] = mfile.group(1)
     if "old_string" not in ti and ti.get("oldString"):
         ti["old_string"], ti["new_string"] = ti.get("oldString"), ti.get("newString")
     return ti
@@ -102,7 +107,7 @@ def _tool_input(payload: dict) -> dict:
 def _tool_name(payload: dict, default: str) -> str:
     name = str(payload.get("tool_name") or payload.get("tool") or default)
     return {"edit": "Edit", "write": "Write", "bash": "Bash", "shell": "Bash", "exec_command": "Bash",
-            "multiedit": "MultiEdit", "request_user_input": "AskUserQuestion", "ask_user": "AskUserQuestion",
+            "multiedit": "MultiEdit", "apply_patch": "Edit", "request_user_input": "AskUserQuestion", "ask_user": "AskUserQuestion",
             "askuserquestion": "AskUserQuestion"}.get(name.lower(), name)
 
 
@@ -124,6 +129,8 @@ def cmd_pre(args, payload):
     if tool in ("AskUserQuestion", "ask_user", "question"):
         q = _question_text(ti)
         verdict = question_check(meta, q)
+        if verdict.get("remember"):
+            save_meta(agent, session, meta)
     else:
         verdict = iteration_check(rows, meta, tool, ti)
     key = _norm_key(tool, ti)
@@ -134,7 +141,7 @@ def cmd_pre(args, payload):
             "event": "pre", "cwd": _cwd(args, payload),
             "tool": tool,
             "key": key, "cc_sha": control_sha(),
-            "cmd": str(ti.get("command") or "")[:400],
+            "cmd": str(ti.get("command") or "")[:4000],
             "decision": verdict["decision"],
         },
     )
@@ -162,7 +169,10 @@ def _exit_status(payload: dict, resp, agent: str):
         err = str(payload.get("error") or out)
         return (127 if "command not found" in err else 124 if "timed out" in err.lower() else (rc if rc not in (None, 0) else 1)), out
     if rc is None:
-        m = re.search(r"(?:exit(?: code| status)?|rc|returned)[:= ]+(-?\d{1,3})\b", out, re.IGNORECASE)
+        tail = "\n".join(out.rstrip().splitlines()[-3:])  # status lines only, at the end (reviewer-e N4)
+        m = re.search(r"^\s*(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})\s*$", tail, re.IGNORECASE | re.MULTILINE)
+        if not m:
+            m = re.search(r"^\s*exit=(-?\d{1,3})\s*$", tail, re.MULTILINE)
         if m:
             rc = int(m.group(1))
         elif agent == "claude-code" and isinstance(resp, dict):
@@ -185,7 +195,7 @@ def cmd_post(args, payload):
             "tool": tool,
             "key": key,
             "rc": rc,
-            "cmd": str(ti.get("command") or "")[:400],
+            "cmd": str(ti.get("command") or "")[:4000],
             "out_bytes": len(out),
         },
     )
@@ -198,6 +208,9 @@ def cmd_prompt(args, payload):
         payload.get("prompt") or payload.get("text") or payload.get("message") or ""
     )
     meta = load_meta(agent, session)
+    if text.lstrip().startswith("[H17"):
+        _emit({"decision": "allow", "rule": "prompt.gate-reprompt", "registered": []})
+        return  # the gate's own re-prompt is not a user turn: budgets stay (Codex r4 P1-c)
     meta["stop_blocks"] = 0  # the loop guard is per stop attempt, not per session (P2-4)
     registered = []
     if NEGATION_RE.search(text):
@@ -207,16 +220,18 @@ def cmd_prompt(args, payload):
             registered.append(f"revoked={len(meta['decisions'])}")
         meta["decisions"] = []
         meta["revoked_at"] = time.time()
-    if is_approval_text(text) and len(text.strip()) >= 2:
+    decision_text = text
+    if is_short_affirmative(text) and meta.get("questions"):
+        # `OK` alone answers the last question the agent asked (reviewer-e #8)
+        asked = re.sub(r"[?？]|よいですか|いいですか|よろしいですか|してもいい|ますか|ですか|should i|can i|may i|shall i", "", meta["questions"][-1]["text"], flags=re.IGNORECASE)
+        decision_text = asked.strip() + " " + text
+        registered.append("bound-to-question")
+    if is_approval_text(decision_text) and len(decision_text.strip()) >= 2:
         import hashlib
 
-        sha = hashlib.sha256(text.encode()).hexdigest()[:16]
+        sha = hashlib.sha256(decision_text.encode()).hexdigest()[:16]
         meta["decisions"].append(
-            {
-                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "sha": sha,
-                "text": text[:600],
-            }
+            {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "sha": sha, "text": decision_text[:600]}
         )
         registered.append("decision")
     den = parse_denominator(text)
@@ -239,8 +254,9 @@ def cmd_permission(args, payload):
     agent, session = args.agent, _session(args, payload)
     ti = _tool_input(payload)
     text = json.dumps(ti, ensure_ascii=False) + " " + str(payload.get("message", ""))
-    request_cmd = str(ti.get("command") or ti.get("file_path") or "")
-    verdict = permission_check(load_meta(agent, session), text, request_cmd)
+    request_cmd = str(ti.get("command") or "")
+    request_path = str(ti.get("file_path") or "")
+    verdict = permission_check(load_meta(agent, session), text, request_cmd, request_path)
     if verdict["decision"] == "allow":
         guard_ledger(COMPONENT, "measure", "allow", verdict["rule"], request_cmd[:100], agent, session)
     _emit(verdict)

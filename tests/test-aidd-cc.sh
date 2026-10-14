@@ -194,5 +194,50 @@ printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg30p","prompt
 o30="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg30c","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | AIDD_CC_INHERIT="$PMETA" bash "$HOOK")"
 if [ -z "$o30" ]; then ok "T30 parent revocation reaches the child"; else bad "T30: $o30"; fi
 
+# (31) questions / conditionals / more refusal forms never bind; case and quotes matter (reviewer-e N1/N2, Codex r4 P1)
+fails31=""
+for pr in "git push origin feat/x を許可？" "Should I approve git push origin feat/x?" "もし CI が緑なら git push origin feat/x は許可だけど、今は待って" \
+          "git push origin feat/x の許可は見送ります" "I refuse to approve git push origin feat/x" "git push origin feat/X は承認、進めて" \
+          "echo \"git push origin feat/x\" は承認、進めて" "git push origin feat/x --dry-run は OK"; do
+  sid="neg31$(printf '%s' "$pr" | shasum | cut -c1-6)"
+  printf '%s' "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"$sid\",\"prompt\":$(python3 -I -c 'import json,sys;print(json.dumps(sys.argv[1],ensure_ascii=False))' "$pr")}" | bash "$HOOK" >/dev/null
+  o="$(printf '%s' "{\"hook_event_name\":\"PermissionRequest\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git push origin feat/x\"}}" | bash "$HOOK")"
+  [ -n "$o" ] && fails31="$fails31 [$pr]"
+done
+if [ -z "$fails31" ]; then ok "T31 undecided / refused / mismatched-case / quoted / dry-run never allow"; else bad "T31 allowed for:$fails31"; fi
+
+# (32) path approvals bind only with a write-kind operation; cat / 削除 approvals never allow a Write (reviewer-e #2)
+for pr in "cat config/prod.yml を許可、進めて" "config/prod.yml の削除は承認、進めて"; do
+  sid="neg32$(printf '%s' "$pr" | shasum | cut -c1-6)"
+  printf '%s' "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"$sid\",\"prompt\":$(python3 -I -c 'import json,sys;print(json.dumps(sys.argv[1],ensure_ascii=False))' "$pr")}" | bash "$HOOK" >/dev/null
+  o="$(printf '%s' "{\"hook_event_name\":\"PermissionRequest\",\"session_id\":\"$sid\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"config/prod.yml\",\"content\":\"x\"}}" | bash "$HOOK")"
+  [ -n "$o" ] && fail32="yes"
+done
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg32w","prompt":"config/prod.yml の修正は承認、進めて"}' | bash "$HOOK" >/dev/null
+o32="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg32w","tool_name":"Write","tool_input":{"file_path":"config/prod.yml","content":"x"}}' | bash "$HOOK")"
+if [ -z "${fail32:-}" ] && printf '%s' "$o32" | grep -q '"behavior": "allow"'; then ok "T32 path approval needs a write-kind operation"; else bad "T32: cat/delete allowed=${fail32:-no} write=[$o32]"; fi
+
+# (33) a short OK binds to the last question the agent asked (reviewer-e #8)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg33","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/x を実行してよいですか？","header":"Push","options":[{"label":"Yes","description":"push now"},{"label":"No","description":"wait"}]}]}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg33","prompt":"OK"}' | bash "$HOOK" >/dev/null
+o33="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg33","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+o33b="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg33","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/x を実行してよいですか？","header":"Push","options":[{"label":"Yes","description":"push now"}]}]}}' | bash "$HOOK")"
+if printf '%s' "$o33" | grep -q '"behavior": "allow"' && printf '%s' "$o33b" | grep -q 'already decided'; then ok "T33 OK binds to the pending question; re-ask blocked"; else bad "T33: [$o33] [$o33b]"; fi
+
+# (34) exit status is read only from a trailing status line; output text cannot fake rc 0 (reviewer-e N4)
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg34","tool_name":"exec_command","tool_input":{"cmd":"pytest -q"},"tool_response":"Tests: 3 failed. rc 0 expected\nmore output"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null
+o34="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg34","last_assistant_message":"完了。\nEvidence: pytest -q | 20 passed | 10:00"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh")"
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg34b","tool_name":"exec_command","tool_input":{"cmd":"pytest -q; echo exit=$?"},"tool_response":"20 passed\nexit=0"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null
+o34b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg34b","last_assistant_message":"完了。\nEvidence: pytest -q; echo exit=$? | 20 passed exit=0 | 10:00"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh")"
+if printf '%s' "$o34" | grep -q 'unavailable' && [ -z "$o34b" ]; then ok "T34 status only from a trailing status line; exit=\$? marker works"; else bad "T34: [$o34] [$o34b]"; fi
+
+# (35) Codex apply_patch repeats are edits; masked pipeline rc is UNKNOWN (reviewer-e N5 / N3)
+for i in 1 2 3; do printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg35","tool_name":"apply_patch","tool_input":{"patch":"*** Begin Patch\n*** Update File: a.py\n@@\n-x\n+y\n*** End Patch"}}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null; done
+o35="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg35","tool_name":"apply_patch","tool_input":{"patch":"*** Begin Patch\n*** Update File: a.py\n@@\n-x\n+y\n*** End Patch"}}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh")"
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg35b","tool_name":"Bash","tool_input":{"command":"pytest -q | tail -3"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg35b","tool_name":"Bash","tool_input":{"command":"pytest -q | tail -3"},"tool_response":{"exit_code":0,"stdout":"3 failed"}}' | bash "$HOOK" >/dev/null
+o35b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg35b","last_assistant_message":"完了。\nEvidence: pytest -q | 20 passed | 10:00"}' | bash "$HOOK")"
+if printf '%s' "$o35" | grep -q 'occurrence 4' && printf '%s' "$o35b" | grep -q 'unavailable'; then ok "T35 apply_patch repeats blocked; piped rc is UNKNOWN"; else bad "T35: [$o35] [$o35b]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
