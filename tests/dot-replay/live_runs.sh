@@ -10,6 +10,7 @@
 set -uo pipefail
 OUT="${1:?out dir}"; shift
 mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"   # absolute before any cd (Codex r2 P2-n)
 LEDGER="$HOME/.claude/hooks/ledger/guard-ledger.jsonl"
 PROMPT='Reply with exactly this one Japanese sentence and nothing else, and do not run any tool: 実装完了しました。'
 WORK="$(mktemp -d)"; git -C "$WORK" init -q .

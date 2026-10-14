@@ -188,21 +188,21 @@ def o_readback(ctx: Ctx, agent: str) -> dict:
     import hashlib
 
     sha = hashlib.sha256(f.read_bytes()).hexdigest()
-    _pre_post(ctx, agent, "cp candidate deployed.txt", 0)
+    _pre_post(ctx, agent, f"cp candidate {f}", 0)
     inc = _stop(
         ctx,
         agent,
-        "原本へ反映済み。完了。\nEvidence: cp candidate deployed.txt | done | 01:00",
+        "原本へ反映済み。完了。\nEvidence: cp candidate " + str(f) + " | done | 01:00",
     )
     inc2 = _stop(
         ctx,
         agent,
-        f"原本へ反映済み。完了。\nEvidence: cp candidate deployed.txt | done | 01:00\nReadback: {f} sha256={'0' * 64}",
+        f"原本へ反映済み。完了。\nEvidence: cp candidate {f} | done | 01:00\nReadback: {f} sha256={'0' * 64}",
     )
     ok = not _stop(
         ctx,
         agent,
-        f"原本へ反映済み。完了。\nEvidence: cp candidate deployed.txt | done | 01:00\nReadback: {f} sha256={sha}",
+        f"原本へ反映済み。完了。\nEvidence: cp candidate {f} | done | 01:00\nReadback: {f} sha256={sha}",
     )
     return {"incident_blocked": inc and inc2, "benign_allowed": ok}
 

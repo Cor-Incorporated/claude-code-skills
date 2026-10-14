@@ -15,17 +15,17 @@ import os
 import re
 from typing import Iterable
 
+PERSIST_WORDS = (
+    r"保存済み|保存した|保存しました|保存完了|deployed|配備済み|配備した|配備しました|反映済み|反映した|反映しました|"
+    r"applied|installed|インストール済み|書き込み済み|written to|\bsaved\b|persisted"
+)
 COMPLETION_CLAIM_RE = re.compile(
     r"(?<![A-Za-z])(verified|完了|根因確定|検証済み|実装済み|解決済み|対応済み|"
-    r"done|all (tests )?pass(ed)?|全件\s*PASS|merged|deployed|配備済み|反映済み|"
-    r"保存済み|saved|pushed|published)(?![A-Za-z])",
+    r"done|all (tests )?pass(ed)?|全件\s*PASS|merged|マージ済み|マージした|pushed|push済み|published|"
+    + PERSIST_WORDS + r")(?![A-Za-z])",
     re.IGNORECASE,
 )
-PERSIST_CLAIM_RE = re.compile(
-    r"(保存済み|保存した|保存しました|deployed|配備済み|配備した|反映済み|反映した|"
-    r"applied|installed|インストール済み|書き込み済み|written to)",
-    re.IGNORECASE,
-)
+PERSIST_CLAIM_RE = re.compile(r"(" + PERSIST_WORDS + r")", re.IGNORECASE)
 PUSH_CLAIM_RE = re.compile(
     r"(pushed|push済み|push した|merged|マージ済み|マージした)", re.IGNORECASE
 )
@@ -40,13 +40,16 @@ RATIO_RE = re.compile(r"(?<![\d./])(\d{1,4})\s*/\s*(\d{1,4})(?![\d./])")
 WHOLE_WORDS = ("全体", "全ケース", "全件", "all cases", "overall", "原要求")
 
 NEGATION_RE = re.compile(
-    r"(しません|しないで|しないでください|してはいけ|不可|禁止|ダメ|駄目|やめて|拒否|NG|却下|"
-    r"承認待ち|未承認|保留|\bnot\b|\bdon'?t\b|\bdo not\b|\bnever\b|\bno\b|\breject)",
+    r"(しない|しません|しないで|してはいけ|していません|していない|しかね|できません|できない|出せない|不可|不許可|禁止|ダメ|駄目|"
+    r"やめて|やめろ|拒否|NG|却下|承認待ち|未承認|保留|取り消|取消|撤回|認めない|認めません|中止|停止して|考え中|検討中|考えさせ|"
+    r"\bnot\b|\bdon'?t\b|\bdo not\b|\bnever\b|\bno\b|\bwon'?t\b|\bcan'?t\b|\bcannot\b|\breject|\brevoke|\bwithdraw|\bcancel|\bhold\b)",
     re.IGNORECASE,
 )
 NEGATED_COMPLETION_RE = re.compile(
-    r"(未完了|完了してい(?:ない|ません)|完了ではない|完了していない|未検証|未実装|未対応|未解決|"
-    r"not (?:yet )?(?:done|verified|fixed|complete[d]?)|isn'?t (?:done|verified)|incomplete)",
+    r"(未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|nothing is done|"
+    r"(?:完了|マージ|配備|保存|反映|push|deploy)(?:は|を)?(?:まだ)?(?:してい(?:ない|ません)|していない|できていない|ではない|していません)|"
+    r"not (?:yet )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed)|"
+    r"isn'?t (?:done|verified|merged|deployed|saved)|incomplete|un(?:merged|deployed|saved|pushed))",
     re.IGNORECASE,
 )
 APPROVAL_RE = re.compile(
@@ -55,6 +58,7 @@ APPROVAL_RE = re.compile(
     re.IGNORECASE,
 )
 CONFIRM_Q_RE = re.compile(r"(よいですか|いいですか|よろしいですか|してもいい|進めてよ|承認|許可|may i|should i|can i|shall i|ok to|proceed\?)", re.IGNORECASE)
+DESTRUCTIVE_Q_RE = re.compile(r"(削除|消して|drop|rm -rf|force|-f\b|本番|production|prod\b|決済|課金|payment|送金|秘密|secret|権限|permission|公開|publish)", re.IGNORECASE)
 CHOICE_Q_RE = re.compile(r"(どちら|どれ|いずれ|\bwhich\b|\bor\b|選択|選んで|\bA/B\b|\?\s*\(?[a-c]\))", re.IGNORECASE)
 DENOMINATOR_RE = re.compile(r"(?:分母|denominator)\s*[:：=]?\s*(\d{1,4})|全\s*(\d{1,4})\s*(?:ケース|件|cases?)")
 TRIVIAL_CMD_RE = re.compile(r"^\s*(ls|echo|printf|cat|pwd|true|false|tail|head|wc|date|sleep|cd|which|type|env|export)\b")
@@ -121,12 +125,12 @@ def has_completion_claim(text: str) -> bool:
 
 
 def has_persist_claim(text: str) -> bool:
-    """DOT-INC-017/020/026: claims that something was saved/deployed."""
-    return bool(PERSIST_CLAIM_RE.search(text or ""))
+    """DOT-INC-017/020/026: claims that something was saved/deployed (negations removed first)."""
+    return bool(PERSIST_CLAIM_RE.search(NEGATED_COMPLETION_RE.sub(" ", text or "")))
 
 
 def has_push_claim(text: str) -> bool:
-    return bool(PUSH_CLAIM_RE.search(text or ""))
+    return bool(PUSH_CLAIM_RE.search(NEGATED_COMPLETION_RE.sub(" ", text or "")))
 
 
 def has_unmet_report(text: str) -> bool:
@@ -157,21 +161,53 @@ def normalize_cmd(cmd: str) -> str:
     return cmd.replace('"', "").replace("'", "")
 
 
+def shell_segments(cmd: str) -> list[str]:
+    """Split a shell line into command segments on ; | & and newlines, ignoring
+    separators inside single/double quotes (Codex r2 P2-h: `printf '%s' 'a;pytest'`
+    is one segment)."""
+    segs, cur, quote, i = [], [], None, 0
+    text = cmd or ""
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            cur.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            cur.append(ch)
+        elif ch in (";", "|", "&", "\n"):
+            segs.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    segs.append("".join(cur))
+    return [re.sub(r"\s+", " ", x.strip()) for x in segs if x.strip()]
+
+
+def segment_runs(seg: str, cited: str) -> bool:
+    """A segment ran the cited command when it is the whole segment, or the
+    cited text followed only by redirections (`pytest -q 2>&1`).  `pytest -q --co`
+    does NOT satisfy `pytest -q` (reviewer-d #7)."""
+    if seg == cited:
+        return True
+    if seg.startswith(cited + " "):
+        rest = seg[len(cited):].strip()
+        return bool(re.match(r"^(\d?>>?|<|2>&1)", rest))
+    return False
+
+
 def cmd_in_ledger(cited: str, executed: Iterable[str]) -> bool:
     """A cited command counts as executed only if a ledger row ran it at a
-    command position: the row, or one of its `&&` / `||` / `;` / `|` / newline
-    segments, starts with the cited text (whitespace-normalised, quotes kept).
-    A command that merely appears inside an argument (`printf '%s' 'bash x.sh'`)
-    is not execution (Codex review P2-9).  A cited command that was never run
-    is DOT-INC-010/017 (typed evidence).
-    """
+    command position (a quote-aware segment equals it, modulo redirections).
+    A command that merely appears inside an argument is not execution."""
     norm = re.sub(r"\s+", " ", (cited or "").strip())
     if len(norm) < 4:
         return False
     for row in executed:
-        for seg in re.split(r"&&|\|\||;|\||\n|\$\(|^\(|\)", str(row)):
-            seg = re.sub(r"\s+", " ", seg.strip())
-            if seg.startswith(norm):
+        for seg in shell_segments(str(row)):
+            if segment_runs(seg, norm):
                 return True
     return False
 
@@ -224,11 +260,15 @@ def tokens(text: str) -> set[str]:
 
 
 def overlap(a: str, b: str) -> float:
-    """Containment overlap: shared tokens over the smaller set (question is short)."""
+    """How much of the QUESTION (a) is already contained in the decision (b).
+
+    Divides by the question's own tokens, so a question that introduces new
+    content (削除 / 本番DB) scores low even when the decision is a sub-topic of
+    it (reviewer-d new defect 1)."""
     ta, tb = tokens(a), tokens(b)
     if not ta or not tb:
         return 0.0
-    return len(ta & tb) / min(len(ta), len(tb))
+    return len(ta & tb) / len(ta)
 
 
 def is_approval_text(text: str) -> bool:
@@ -253,14 +293,11 @@ def parse_deadline_hours(text: str) -> float | None:
     return None
 
 
-def matching_decision(
-    question: str, decisions: list[dict], threshold: float = 0.34
-) -> dict | None:
-    """DOT-INC-003/008/013/025: a question already answered by the user.
+def matching_decision(question: str, decisions: list[dict], threshold: float = 0.6) -> dict | None:
+    """DOT-INC-003/008/013/025: a confirmation question already answered by the user.
 
-    Returns the best prior decision whose token overlap with the question
-    reaches the threshold.  Mutation `decision.match` disables matching
-    (re-asks every time).
+    Returns the best prior decision that contains >= threshold of the question's
+    tokens.  Mutation `decision.match` disables matching (re-asks every time).
     """
     if mutated("decision.match"):
         return None
@@ -273,20 +310,24 @@ def matching_decision(
 
 
 def command_bound(decision_text: str, request: str) -> bool:
-    """Strict binding for PermissionRequest (Codex review P1-2): the exact
-    normalised request (operation + target + options) must appear verbatim in
-    the user's decision text.  Topical similarity never grants permission."""
+    """Strict binding for PermissionRequest (Codex review P1-2 / r2 P1-b): the
+    exact normalised request must appear in the decision text as a WHOLE
+    operation — bounded on both sides by whitespace / punctuation / end, so
+    `rm -rf data/archive` never covers `rm -rf data` and `feat/xyz` never covers
+    `feat/x`.  Topical similarity never grants permission."""
     req = re.sub(r"\s+", " ", (request or "").strip())
     dec = re.sub(r"\s+", " ", (decision_text or ""))
-    return len(req) >= 3 and req in dec
+    if len(req) < 3:
+        return False
+    return re.search(r"(?<![\w./:@~-])" + re.escape(req) + r"(?![\w./:@~-])", dec) is not None
 
 
 def is_confirmation_question(question: str) -> bool:
     """Re-ask suppression applies only to yes/no confirmations of something the
-    user already said, never to genuine choice questions (reviewer HIGH: a task
-    request must not silence 'JWT or sessions?')."""
+    user already said: never to choice questions, and never to questions that
+    name a destructive / production / secret / permission operation."""
     q = question or ""
-    return bool(CONFIRM_Q_RE.search(q)) and not CHOICE_Q_RE.search(q)
+    return bool(CONFIRM_Q_RE.search(q)) and not CHOICE_Q_RE.search(q) and not DESTRUCTIVE_Q_RE.search(q)
 
 
 def parse_denominator(text: str) -> int | None:

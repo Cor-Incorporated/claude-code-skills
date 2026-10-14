@@ -103,5 +103,64 @@ if [ -z "$out" ]; then ok "T12 Codex cmd field binds evidence"; else bad "T12: $
 printf '%s' '{"hook_event_name":"Stop","session_id":"neg12b","last_assistant_message":"完了です。"}' | AIDD_CC_STATE_DIR=/dev/null/nope bash "$HOOK" >/dev/null
 if grep -q '"event": "error"' "$AIDD_LEDGER_PATH"; then ok "T13 crash recorded as H6 error row (no silent pass)"; else bad "T13 crash not recorded"; fi
 
+# (14) Japanese refusal without an English `not`; (15) prefix target; (16) revocation (Codex r2 P1)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg14","prompt":"rm -rf data は承認していません。"}' | bash "$HOOK" >/dev/null
+o14="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg14","tool_name":"Bash","tool_input":{"command":"rm -rf data"}}' | bash "$HOOK")"
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg15","prompt":"rm -rf data/archive は承認、進めて"}' | bash "$HOOK" >/dev/null
+o15="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg15","tool_name":"Bash","tool_input":{"command":"rm -rf data"}}' | bash "$HOOK")"
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg16","prompt":"git push origin feat/x は承認、進めて"}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg16","prompt":"前の承認は取り消します。実行しないでください"}' | bash "$HOOK" >/dev/null
+o16="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg16","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+if [ -z "$o14" ] && [ -z "$o15" ] && [ -z "$o16" ]; then ok "T14-16 Japanese refusal / prefix target / revocation never allow"; else bad "T14-16: [$o14] [$o15] [$o16]"; fi
+
+# (17) unavailable exit status is UNKNOWN, not success (Codex r2 P1-d) — string tool_response via the Codex entry
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg17","tool_name":"exec_command","tool_input":{"cmd":"pytest -q"},"tool_response":"1 failed, 3 passed"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null
+o17="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg17","last_assistant_message":"全テスト完了。\nEvidence: pytest -q | 20 passed | 10:00"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh")"
+if printf '%s' "$o17" | grep -q 'unavailable'; then ok "T17 unavailable exit status is UNKNOWN"; else bad "T17: $o17"; fi
+
+# (18) Codex request_user_input is a re-ask; (19) quoted separator is not execution; (20) `not merged` is not a claim
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg18","prompt":"PR作成は承認、進めて"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null
+o18="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg18","tool_name":"request_user_input","tool_input":{"questions":[{"question":"PR作成を進めてよいですか？"}]}}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh")"
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg19","tool_name":"Bash","tool_input":{"command":"printf %s pass;pytest -q"}}' | bash "$HOOK" >/dev/null
+printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg19\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"printf '%s' 'pass;pytest -q'\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"x\"}}" | bash "$HOOK" >/dev/null
+o19="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg19","last_assistant_message":"完了。\nEvidence: pytest -q | 20 passed | 10:00"}' | bash "$HOOK")"
+o20="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg20","last_assistant_message":"not merged, not deployed, 未保存です。未達。"}' | bash "$HOOK")"
+if printf '%s' "$o18" | grep -q 'already-answered\|already decided' && printf '%s' "$o19" | grep -q 'not executed' && [ -z "$o20" ]; then ok "T18-20 request_user_input re-ask blocked / quoted separator not execution / negated claims pass"; else bad "T18-20: [$o18] [$o19] [$o20]"; fi
+
+# (21) a destructive / production question is never suppressed (reviewer-d new 1)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg21","prompt":"認証APIの設計を進めてください"}' | bash "$HOOK" >/dev/null
+o21="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg21","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"認証APIの設計で本番DBを削除してもいいですか?"}]}}' | bash "$HOOK")"
+if [ -z "$o21" ]; then ok "T21 destructive question not suppressed"; else bad "T21: $o21"; fi
+
+# (22) prefix is not execution: `pytest -q --co` (rc 0) does not satisfy `pytest -q` (reviewer-d #7)
+for ev in '{"hook_event_name":"PreToolUse","session_id":"neg22","tool_name":"Bash","tool_input":{"command":"pytest -q --co"}}' \
+          '{"hook_event_name":"PostToolUse","session_id":"neg22","tool_name":"Bash","tool_input":{"command":"pytest -q --co"},"tool_response":{"exit_code":0,"stdout":"collected"}}'; do printf '%s' "$ev" | bash "$HOOK" >/dev/null; done
+o22="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg22","last_assistant_message":"全テスト完了。\nEvidence: pytest -q | 20 passed | 10:00"}' | bash "$HOOK")"
+if printf '%s' "$o22" | grep -q 'not executed'; then ok "T22 prefix match is not execution"; else bad "T22: $o22"; fi
+
+# (23) mentioning a path (cat) does not make it a written artifact (reviewer-d #8)
+sha="$(shasum -a 256 /etc/hosts | cut -c1-64)"
+for ev in '{"hook_event_name":"PreToolUse","session_id":"neg23","tool_name":"Bash","tool_input":{"command":"cat /etc/hosts"}}' \
+          '{"hook_event_name":"PostToolUse","session_id":"neg23","tool_name":"Bash","tool_input":{"command":"cat /etc/hosts"},"tool_response":{"exit_code":0,"stdout":"x"}}' \
+          '{"hook_event_name":"PreToolUse","session_id":"neg23","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"}}' \
+          '{"hook_event_name":"PostToolUse","session_id":"neg23","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"},"tool_response":{"exit_code":0,"stdout":"x"}}'; do printf '%s' "$ev" | bash "$HOOK" >/dev/null; done
+o23="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg23\",\"last_assistant_message\":\"config 保存済み。完了。\\nEvidence: bash tests/ok.sh | x | 10:00\\nReadback: /etc/hosts sha256=$sha\"}" | bash "$HOOK")"
+if printf '%s' "$o23" | grep -q 'never written'; then ok "T23 cat-mention does not count as writing"; else bad "T23: $o23"; fi
+
+# (24) hedges / won't never register; the short reply OK does (reviewer-d new 3)
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg24","prompt":"git push origin feat/x: OK? 考え中"}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg24","prompt":"I will not approve git push origin feat/x"}' | bash "$HOOK" >/dev/null
+o24a="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg24","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg24b","prompt":"git push origin feat/x OK"}' | bash "$HOOK" >/dev/null
+o24b="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg24b","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+if [ -z "$o24a" ] && printf '%s' "$o24b" | grep -q '"behavior": "allow"'; then ok "T24 hedge/won't never bind; explicit OK binds"; else bad "T24: [$o24a] [$o24b]"; fi
+
+# (25) 5 identical Edits are blocked at the 4th; 5 different edits are not (reviewer-d new 2 / #5)
+for i in 1 2 3; do printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg25","tool_name":"Edit","tool_input":{"file_path":"/tmp/x.py","old_string":"a","new_string":"b"}}' | bash "$HOOK" >/dev/null; done
+o25a="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg25","tool_name":"Edit","tool_input":{"file_path":"/tmp/x.py","old_string":"a","new_string":"b"}}' | bash "$HOOK")"
+for i in 1 2 3 4; do printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg25b\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/tmp/x.py\",\"old_string\":\"a$i\",\"new_string\":\"b$i\"}}" | bash "$HOOK" >/dev/null; done
+o25b="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg25b","tool_name":"Edit","tool_input":{"file_path":"/tmp/x.py","old_string":"a9","new_string":"b9"}}' | bash "$HOOK")"
+if printf '%s' "$o25a" | grep -q 'occurrence 4' && [ -z "$o25b" ]; then ok "T25 identical edits blocked, distinct edits allowed"; else bad "T25: [$o25a] [$o25b]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

@@ -21,7 +21,16 @@ if [ -z "$CC_PY" ]; then
   printf '{"permission":"allow"}'; exit 0
 fi
 
-py() { printf '%s' "$input" | AIDD_CC_AGENT=cursor python3 -I "$CC_PY" "$@" --agent cursor; }
+py() {
+  local out rc
+  out="$(printf '%s' "$input" | AIDD_CC_AGENT=cursor python3 -I "$CC_PY" "$@" --agent cursor 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ] && [ -z "$out" ]; then
+    ledger="${AIDD_LEDGER_PATH:-$HOME/.claude/hooks/ledger/guard-ledger.jsonl}"
+    printf '{"ts":"%s","component":"H17","hook":"aidd-cc","event":"error","decision":"unavailable","rule":"python-exit-%s","cmd_head":"","source":"%s","session":"unset","agent":"cursor"}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "${AIDD_LEDGER_SOURCE:-real}" >>"$ledger" 2>/dev/null || true
+  fi
+  printf '%s' "$out"
+}
 jfield() { printf '%s' "$1" | python3 -I -c "import json,sys
 try: print(json.load(sys.stdin).get('$2',''))
 except Exception: print('')"; }

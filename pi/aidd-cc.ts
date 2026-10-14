@@ -62,6 +62,7 @@ export default function aiddCommonControl(pi: any) {
 
   pi.on("before_agent_start", async (event: any) => {
     if (event?.messageType !== "user" || !event.prompt) return;
+    continuations = 0; // a new user request gets its own gate budget (Codex r2 P2-m)
     await runCC("prompt", { session_id: sessionID, prompt: String(event.prompt) });
   });
 

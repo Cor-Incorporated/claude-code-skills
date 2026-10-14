@@ -27,6 +27,7 @@ SPEED_ON = {
     "grader_version": "g2",
     "start_checkpoint": "c0",
     "elapsed_sec": 212.121,
+    "graded_ok": True,
     "interventions": [],
 }
 SPEED_OFF = dict(SPEED_ON, elapsed_sec=416.765)

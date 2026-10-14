@@ -64,7 +64,8 @@ def load_meta(agent: str, session: str) -> dict:
             meta = None
     if meta is not None:
         own = {d.get("sha") for d in meta.get("decisions", [])}
-        meta["decisions"] = meta.get("decisions", []) + [d for d in inherited_decisions() if d.get("sha") not in own]
+        if not meta.get("revoked_at"):
+            meta["decisions"] = meta.get("decisions", []) + [d for d in inherited_decisions() if d.get("sha") not in own]
         return meta
     return {
         "agent": agent,

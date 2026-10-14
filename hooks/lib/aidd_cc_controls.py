@@ -20,6 +20,8 @@ from aidd_cc_eval import deadline_status, file_sha
 from aidd_cc_text import (
     cmd_in_ledger,
     command_bound,
+    segment_runs,
+    shell_segments,
     is_confirmation_question,
     is_trivial_cmd,
     denominator_mismatch,
@@ -98,7 +100,7 @@ def iteration_check(rows: list[dict], meta: dict, tool: str, tool_input: dict) -
         return {"decision": "block", "rule": "iter.repeat-without-delta", "streak": streak + 1,
                 "reason": (f"this would be occurrence {streak + 1} of the same {fam} command with no progress "
                            "delta (rc unchanged, no new hypothesis). Record the hypothesis and the minimal "
-                           f"change first: python3 ~/.claude/hooks/lib/aidd_cc.py note --session {sid} "
+                           f"change first: python3 ~/.claude/hooks/lib/aidd_cc.py note --agent {meta.get('agent', 'claude-code')} --session {sid} "
                            "--hypothesis '...' --change '...'")}
     return {"decision": "allow", "rule": "iter", "streak": streak}
 
@@ -173,30 +175,46 @@ def _rc_for(rows: list[dict], cited: str):
     for r in reversed(rows):
         if r.get("event") != "post":
             continue
-        for seg in re.split(r"&&|\|\||;|\||\n", str(r.get("cmd", ""))):
-            if re.sub(r"\s+", " ", seg.strip()).startswith(norm):
+        for seg in shell_segments(str(r.get("cmd", ""))):
+            if segment_runs(seg, norm):
                 return r.get("rc"), r.get("out_bytes", 0)
     return None, 0
 
 
+WRITE_CMD_RE = re.compile(r"^(cp|mv|tee|install|rsync|ln|touch|dd|patch|git apply|git checkout|sed -i|curl .*-o|wget .*-O|python3? .*\.py|node .*\.m?js|bash .*\.sh)\b")
+
+
 def _touched_paths(rows: list[dict]) -> set[str]:
+    """Absolute paths this session WROTE: Edit/Write keys, and path arguments of
+    writing commands (cp/mv/tee/install/…).  Merely mentioning a path
+    (`cat /etc/hosts`, `aidd_cc.py readback …`) does not count (reviewer-d #8)."""
     out = set()
     for r in rows:
+        cwd = str(r.get("cwd") or "")
         key = str(r.get("key", ""))
+        cands = []
         if key.startswith("edit:"):
-            out.add(Path(key.split(":")[1]).name)
-        for tok in re.findall(r"[\w./-]+", str(r.get("cmd", ""))):
-            if "/" in tok or "." in tok:
-                out.add(Path(tok).name)
+            cands.append(key[5:].rsplit(":", 1)[0] if key.count(":") >= 2 else key[5:])
+        for seg in shell_segments(str(r.get("cmd", ""))):
+            if WRITE_CMD_RE.match(seg):
+                cands += [t for t in re.findall(r"[\w./~-]+", seg)[1:] if "/" in t or "." in t]
+        for c in cands:
+            p = Path(c).expanduser()
+            if not p.is_absolute():
+                p = Path(cwd) / p if cwd else p
+            try:
+                out.add(str(p.resolve()))
+            except OSError:
+                out.add(str(p))
     return out
 
 
 def _push_executed(rows: list[dict]) -> bool:
     for r in rows:
-        if r.get("event") != "post" or r.get("rc") not in (0, None):
+        if r.get("event") != "post" or r.get("rc") != 0:
             continue
-        for seg in re.split(r"&&|\|\||;|\||\n", str(r.get("cmd", ""))):
-            if re.match(r"\s*(git push|gh pr merge|git merge)\b", seg):
+        for seg in shell_segments(str(r.get("cmd", ""))):
+            if re.match(r"(git push|gh pr merge|git merge)\b", seg) and not re.search(r"(--dry-run|\s-n\b)", seg):
                 return True
     return False
 
@@ -213,7 +231,7 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
         problems.append(
             "deadline passed: report 未達 with the original deadline and real elapsed (DOT-INC-004/045)"
         )
-    if not has_completion_claim(text):
+    if not (has_completion_claim(text) or has_persist_claim(text)):
         return _verdict(problems)
     cmds = evidence_commands(text)
     if not cmds and not mutated("evidence.trailer"):
@@ -227,9 +245,11 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
             problems.append(f"cited evidence command was not executed in this session: {c[:80]} (DOT-INC-017)")
             continue
         rc, out_bytes = _rc_for(rows, c)
-        if rc in (124, 126, 127) and not mutated("evidence.rc-unknown"):
-            problems.append(f"evidence command rc={rc} is UNKNOWN, not a result: {c[:80]} (DOT-INC-043)")
-        elif rc not in (0, None) and not mutated("evidence.rc-unknown"):
+        if rc is None and mutated("evidence.executed"):
+            rc = 0  # the old behaviour: a typed command is trusted as if it ran and passed
+        if rc in (None, 124, 126, 127) and not mutated("evidence.rc-unknown"):
+            problems.append(f"evidence command exit status {rc if rc is not None else 'unavailable'} is UNKNOWN, not a result: {c[:80]} (DOT-INC-043)")
+        elif rc != 0 and not mutated("evidence.rc-unknown"):
             problems.append(f"evidence command failed (rc={rc}) yet completion is claimed: {c[:80]} (DOT-INC-043)")
         if not is_trivial_cmd(c):
             substantive = True
@@ -277,10 +297,14 @@ def _readback_problems(text: str, cwd: str, touched: set[str]) -> list[str]:
         p = Path(path).expanduser()
         if not p.is_absolute():
             p = Path(cwd) / p
+        try:
+            resolved = str(p.resolve())
+        except OSError:
+            resolved = str(p)
         actual = file_sha(p)
         if actual != sha:
             out.append(f"readback mismatch for {path}: claimed {sha[:12]} actual {str(actual)[:12]}")
-        elif p.name not in touched:
+        elif resolved not in touched:
             out.append(f"readback path {path} was never written or touched by a command in this session (not the saved artifact)")
     return out
 

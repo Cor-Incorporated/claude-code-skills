@@ -23,6 +23,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -30,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import aidd_cc_eval as ev  # noqa: E402
 from aidd_cc_controls import (  # noqa: E402
+    _norm_key,
     control_sha,
     iteration_check,
     permission_check,
@@ -38,7 +40,7 @@ from aidd_cc_controls import (  # noqa: E402
     stop_check,
 )
 from aidd_cc_session import guard_ledger, load_meta, load_tools, record_tool, save_meta  # noqa: E402
-from aidd_cc_text import is_approval_text, normalize_cmd, parse_deadline_hours, parse_denominator  # noqa: E402
+from aidd_cc_text import NEGATION_RE, is_approval_text, parse_deadline_hours, parse_denominator  # noqa: E402
 
 COMPONENT = "H17"
 
@@ -100,7 +102,8 @@ def _tool_input(payload: dict) -> dict:
 def _tool_name(payload: dict, default: str) -> str:
     name = str(payload.get("tool_name") or payload.get("tool") or default)
     return {"edit": "Edit", "write": "Write", "bash": "Bash", "shell": "Bash", "exec_command": "Bash",
-            "multiedit": "MultiEdit"}.get(name.lower(), name)
+            "multiedit": "MultiEdit", "request_user_input": "AskUserQuestion", "ask_user": "AskUserQuestion",
+            "askuserquestion": "AskUserQuestion"}.get(name.lower(), name)
 
 
 def cmd_pre(args, payload):
@@ -113,16 +116,12 @@ def cmd_pre(args, payload):
         verdict = question_check(meta, q)
     else:
         verdict = iteration_check(rows, meta, tool, ti)
-    key = (
-        ("edit:" + str(ti.get("file_path", "")))
-        if tool in ("Edit", "Write", "MultiEdit")
-        else normalize_cmd(str(ti.get("command") or ""))[:400]
-    )
+    key = _norm_key(tool, ti)
     record_tool(
         agent,
         session,
         {
-            "event": "pre",
+            "event": "pre", "cwd": _cwd(args, payload),
             "tool": tool,
             "key": key, "cc_sha": control_sha(),
             "cmd": str(ti.get("command") or "")[:400],
@@ -134,34 +133,45 @@ def cmd_pre(args, payload):
     _emit(verdict)
 
 
+def _exit_status(payload: dict, resp, agent: str):
+    """Exit status for the ledger.  Dict responses carry it; string responses are
+    parsed for `exit code N`; otherwise it is UNKNOWN (None) — never assumed 0
+    (Codex r2 P1-d).  Claude Code is the one harness whose PostToolUse fires
+    only on success (failures go to PostToolUseFailure), so its success event is
+    rc 0 by construction."""
+    rc = None
+    if isinstance(resp, dict):
+        rc = resp.get("exit_code", resp.get("exitCode", resp.get("rc")))
+        out = str(resp.get("stdout", "")) + str(resp.get("stderr", "")) + str(resp.get("output", ""))
+    else:
+        out = str(resp)
+    if rc is None and payload.get("exit_code") is not None:
+        rc = payload.get("exit_code")
+    failed = payload.get("hook_event_name") == "PostToolUseFailure" or payload.get("is_error") or payload.get("error")
+    if failed:
+        err = str(payload.get("error") or out)
+        return (127 if "command not found" in err else 124 if "timed out" in err.lower() else (rc if rc not in (None, 0) else 1)), out
+    if rc is None:
+        m = re.search(r"(?:exit(?: code| status)?|rc|returned)[:= ]+(-?\d{1,3})\b", out, re.IGNORECASE)
+        if m:
+            rc = int(m.group(1))
+        elif agent == "claude-code" and isinstance(resp, dict):
+            rc = 0
+    return rc, out
+
+
 def cmd_post(args, payload):
     agent, session = args.agent, _session(args, payload)
     tool = _tool_name(payload, args.tool or "Bash")
     ti = _tool_input(payload)
     resp = payload.get("tool_response") or payload.get("output") or {}
-    rc = None
-    if isinstance(resp, dict):
-        rc = resp.get("exit_code", resp.get("exitCode", resp.get("rc")))
-        out = str(resp.get("stdout", "")) + str(resp.get("stderr", ""))
-    else:
-        out = str(resp)
-    if rc is None and payload.get("exit_code") is not None:
-        rc = payload.get("exit_code")
-    if payload.get("hook_event_name") == "PostToolUseFailure" or payload.get("is_error") or payload.get("error"):
-        err = str(payload.get("error") or resp)
-        rc = 127 if "command not found" in err else 124 if "timed out" in err.lower() else (rc if rc not in (None, 0) else 1)
-    if rc is None:
-        rc = 0
-    key = (
-        ("edit:" + str(ti.get("file_path", "")))
-        if tool in ("Edit", "Write", "MultiEdit")
-        else normalize_cmd(str(ti.get("command") or ""))[:400]
-    )
+    rc, out = _exit_status(payload, resp, agent)
+    key = _norm_key(tool, ti)
     record_tool(
         agent,
         session,
         {
-            "event": "post",
+            "event": "post", "cwd": _cwd(args, payload),
             "tool": tool,
             "key": key,
             "rc": rc,
@@ -180,7 +190,14 @@ def cmd_prompt(args, payload):
     meta = load_meta(agent, session)
     meta["stop_blocks"] = 0  # the loop guard is per stop attempt, not per session (P2-4)
     registered = []
-    if is_approval_text(text) and len(text.strip()) >= 4:
+    if NEGATION_RE.search(text):
+        # A refusal / withdrawal is the latest instruction: every earlier decision in
+        # this session (and anything inherited) stops binding (Codex r2 P1-c).
+        if meta.get("decisions"):
+            registered.append(f"revoked={len(meta['decisions'])}")
+        meta["decisions"] = []
+        meta["revoked_at"] = time.time()
+    if is_approval_text(text) and len(text.strip()) >= 2:
         import hashlib
 
         sha = hashlib.sha256(text.encode()).hexdigest()[:16]

@@ -44,7 +44,13 @@ event="$(printf '%s' "$input" | python3 -I -c 'import json,sys
 try: print(json.load(sys.stdin).get("hook_event_name",""))
 except Exception: print("")' 2>/dev/null)"
 
-run_cc() { printf '%s' "$input" | AIDD_CC_AGENT="$AGENT" python3 -I "$CC_PY" "$@" --agent "$AGENT"; }
+run_cc() {
+  local out rc
+  out="$(printf '%s' "$input" | AIDD_CC_AGENT="$AGENT" python3 -I "$CC_PY" "$@" --agent "$AGENT" 2>/dev/null)"; rc=$?
+  # An import-time crash exits non-zero before _main_guarded can record it: record here.
+  [ "$rc" -ne 0 ] && [ -z "$out" ] && ledger_error "python-exit-$rc:$1"
+  printf '%s' "$out"
+}
 
 field() { printf '%s' "$1" | python3 -I -c "import json,sys
 try:

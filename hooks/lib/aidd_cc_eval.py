@@ -132,6 +132,8 @@ def speed_compare(on: dict, off: dict, required_ratio: float = 2.0) -> dict:
             "reason": "missing elapsed",
             "problems": problems,
         }
+    if not (on.get("graded_ok") is True and off.get("graded_ok") is True):
+        return {"verdict": NOT_PROVEN, "reason": "both arms must be graded_ok=true (Codex r2 P2-j)", "problems": problems}
     ratio = off["elapsed_sec"] / on["elapsed_sec"]
     shown = round(ratio, 5) if not mutated("metrics.rounding") else round(ratio)
     # Pass/fail uses the RAW ratio (Codex review P2-11); rounding is display only.

@@ -52,6 +52,7 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
     ) => {
       const text = textOf(output.parts)
       if (!text) return
+      reprompts.delete(input.sessionID ?? "unset") // new user request: fresh re-prompt budget (Codex r2 P2-m)
       await cc("prompt", { sessionID: input.sessionID ?? "unset", prompt: text })
     },
     "tool.execute.before": async (
