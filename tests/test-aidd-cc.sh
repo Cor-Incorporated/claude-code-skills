@@ -429,5 +429,11 @@ for i in 1 2 3; do printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_i
 o62="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg62","tool_name":"Bash","tool_input":{"command":"git commit -m '"'"'feat(x): y'"'"' -m '"'"'follow-up to fix(h17): z'"'"'"}}' | bash "$HOOK")"
 if [ -z "$o62" ]; then ok "T62 feat commit mentioning fix(h17) in the body is not a repair"; else bad "T62: $o62"; fi
 
+# (63) Cursor's Claude-hooks compat layer sends camelCase events to the Claude adapter (live 2026-10-14): map them, never an unknown-event error
+printf '%s' '{"hook_event_name":"preToolUse","session_id":"neg63","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"postToolUse","session_id":"neg63","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"},"tool_response":{"exit_code":0,"stdout":"x"}}' | bash "$HOOK" >/dev/null
+o63="$(printf '%s' '{"hook_event_name":"stop","session_id":"neg63","last_assistant_message":"完了です。"}' | bash "$HOOK")"
+if printf '%s' "$o63" | grep -q '"decision": "block"' && ! grep -q 'unknown-event:preToolUse' "$AIDD_LEDGER_PATH"; then ok "T63 camelCase compat events are mapped"; else bad "T63: [$o63]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
