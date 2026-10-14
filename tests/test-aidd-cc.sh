@@ -435,5 +435,11 @@ printf '%s' '{"hook_event_name":"postToolUse","session_id":"neg63","tool_name":"
 o63="$(printf '%s' '{"hook_event_name":"stop","session_id":"neg63","last_assistant_message":"完了です。"}' | bash "$HOOK")"
 if printf '%s' "$o63" | grep -q '"decision": "block"' && ! grep -q 'unknown-event:preToolUse' "$AIDD_LEDGER_PATH"; then ok "T63 camelCase compat events are mapped"; else bad "T63: [$o63]"; fi
 
+# (64) Cursor IDE order: stop fires before afterAgentResponse (live 2026-10-14 04:56Z) — the block is parked and returned at the next stop
+o64a="$(printf '%s' '{"hook_event_name":"stop","conversation_id":"cu64","status":"completed"}' | bash "$ROOT/hooks/cursor/aidd-cc-cursor.sh")"
+printf '%s' '{"hook_event_name":"afterAgentResponse","conversation_id":"cu64","text":"実装完了しました。"}' | bash "$ROOT/hooks/cursor/aidd-cc-cursor.sh" >/dev/null
+o64b="$(printf '%s' '{"hook_event_name":"stop","conversation_id":"cu64","status":"completed"}' | bash "$ROOT/hooks/cursor/aidd-cc-cursor.sh")"
+if [ "$o64a" = "{}" ] && printf '%s' "$o64b" | grep -q 'followup_message'; then ok "T64 parked block is delivered at the next Cursor stop"; else bad "T64: [$o64a] [$o64b]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
