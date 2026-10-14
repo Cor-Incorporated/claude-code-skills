@@ -49,6 +49,7 @@ print(json.dumps({"permission":"deny","user_message":m,"agent_message":m},ensure
     fi
     ;;
   afterShellExecution) py post --tool Bash >/dev/null; printf '{}' ;;
+  afterFileEdit) py post --tool Edit >/dev/null; printf '{}' ;;
   beforeSubmitPrompt) py prompt >/dev/null; printf '{"continue":true}' ;;
   afterAgentResponse) py record-assistant >/dev/null; printf '{}' ;;
   stop)

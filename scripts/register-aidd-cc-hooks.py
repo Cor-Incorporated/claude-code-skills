@@ -35,6 +35,7 @@ CODEX_EVENTS = (
 CURSOR_EVENTS = (
     "beforeShellExecution",
     "afterShellExecution",
+    "afterFileEdit",
     "beforeSubmitPrompt",
     "afterAgentResponse",
     "stop",

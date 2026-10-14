@@ -51,7 +51,10 @@ def chain_check(records: list[dict]) -> dict:
     by_id = {r["attempt_id"]: r for r in records}
     origins = [r for r in records if not r.get("parent_attempt_id")]
     if len(origins) != 1:
-        return {"ok": False, "reason": f"expected exactly one origin, found {len(origins)}"}
+        return {
+            "ok": False,
+            "reason": f"expected exactly one origin, found {len(origins)}",
+        }
     origin = origins[0]["attempt_id"]
     bad = []
     for r in records:
@@ -63,7 +66,11 @@ def chain_check(records: list[dict]) -> dict:
             seen.add(cur)
             cur = by_id[cur].get("parent_attempt_id")
     if bad and not mutated("attempt.chain"):
-        return {"ok": False, "reason": "chain gap or cycle: not every attempt reaches the origin", "attempts": bad}
+        return {
+            "ok": False,
+            "reason": "chain gap or cycle: not every attempt reaches the origin",
+            "attempts": bad,
+        }
     start = min(r["started_at"] for r in records)
     end = max(r["ended_at"] for r in records)
     return {"ok": True, "origin": origin, "total_elapsed_sec": round(end - start, 3)}
@@ -112,8 +119,14 @@ def speed_compare(on: dict, off: dict, required_ratio: float = 2.0) -> dict:
     """
     problems = []
     for field in ("model", "grader_version", "start_checkpoint"):
-        if (on.get(field) is None or off.get(field) is None) and not mutated("metrics.model-identity"):
-            return {"verdict": NOT_PROVEN, "reason": f"{field} missing on an arm: identity not established (Codex r5 P2-g)", "problems": problems}
+        if (on.get(field) is None or off.get(field) is None) and not mutated(
+            "metrics.model-identity"
+        ):
+            return {
+                "verdict": NOT_PROVEN,
+                "reason": f"{field} missing on an arm: identity not established (Codex r5 P2-g)",
+                "problems": problems,
+            }
     if on.get("model") != off.get("model") and not mutated("metrics.model-identity"):
         problems.append("model mismatch: harness effect not separable (DOT-INC-034)")
     if on.get("grader_version") != off.get("grader_version") and not mutated(
@@ -136,7 +149,11 @@ def speed_compare(on: dict, off: dict, required_ratio: float = 2.0) -> dict:
             "problems": problems,
         }
     if not (on.get("graded_ok") is True and off.get("graded_ok") is True):
-        return {"verdict": NOT_PROVEN, "reason": "both arms must be graded_ok=true (Codex r2 P2-j)", "problems": problems}
+        return {
+            "verdict": NOT_PROVEN,
+            "reason": "both arms must be graded_ok=true (Codex r2 P2-j)",
+            "problems": problems,
+        }
     ratio = off["elapsed_sec"] / on["elapsed_sec"]
     shown = round(ratio, 5) if not mutated("metrics.rounding") else round(ratio)
     # Pass/fail uses the RAW ratio (Codex review P2-11); rounding is display only.
@@ -223,7 +240,7 @@ def collect(cmd: list[str], timeout: float = 60.0) -> dict:
         }
     except FileNotFoundError:
         rc, out, err = 127, "", "command not found"
-    except (PermissionError, OSError) as exc:   # not executable etc. (Codex r7 P2-e)
+    except (PermissionError, OSError) as exc:  # not executable etc. (Codex r7 P2-e)
         rc, out, err = 126, "", f"{type(exc).__name__}: {exc}"
     rec = {
         "rc": rc,
@@ -288,10 +305,17 @@ def promote(
         return {"ok": False, "reason": f"cannot jump from {current} to {to_state}"}
     if current is None and order != 0 and not mutated("state.candidate-as-original"):
         return {"ok": False, "reason": "must start at candidate_verified"}
-    if current is not None and record.get("candidate_sha") not in (None, candidate_sha) \
-            and not mutated("state.candidate-as-original"):
-        return {"ok": False, "reason": "candidate sha changed since candidate_verified: re-verify the new candidate (Codex r6 P2-d)",
-                "verified_sha": record.get("candidate_sha"), "given_sha": candidate_sha}
+    if (
+        current is not None
+        and record.get("candidate_sha") not in (None, candidate_sha)
+        and not mutated("state.candidate-as-original")
+    ):
+        return {
+            "ok": False,
+            "reason": "candidate sha changed since candidate_verified: re-verify the new candidate (Codex r6 P2-d)",
+            "verified_sha": record.get("candidate_sha"),
+            "given_sha": candidate_sha,
+        }
     if to_state == "applied":
         actual = _sha(original_path.read_bytes()) if original_path.exists() else None
         if actual != candidate_sha and not mutated("state.candidate-as-original"):

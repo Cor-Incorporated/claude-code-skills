@@ -59,11 +59,9 @@ CASES: dict[str, dict] = {
         "status": "LOCAL",
     },
     "DOT-INC-005": {
-        "oracle": O.o_permission,
-        "mutate": "approval.binding",
-        "agents": ["claude", "codex"],
-        "status": "LOCAL",
-        "note": "承認要の操作だけ待ち、ユーザー決定が束縛する要求はPermissionRequestで通す。独立作業の継続自体は強制不能",
+        "oracle": None,
+        "status": "UNRESOLVED",
+        "note": "不要な承認待ちの削減は再質問抑止でのみ対応。承認の自動継承は 2026-10-14 再裁定で撤回（C15: 自然言語の承認→権限変換は安全に閉じない）",
     },
     "DOT-INC-006": {
         "oracle": None,
@@ -114,11 +112,9 @@ CASES: dict[str, dict] = {
         "note": "承認後の無根拠反復の抑止。UI排他はdot側",
     },
     "DOT-INC-014": {
-        "oracle": O.o_child_inherit,
-        "mutate": "approval.binding",
-        "agents": ["claude", "codex"],
-        "status": "LOCAL",
-        "note": "親決定の子への伝達（AIDD_CC_INHERIT）。reviewer側の拒否はBLOCKED_EXTERNAL",
+        "oracle": None,
+        "status": "UNRESOLVED",
+        "note": "親承認の子への自動適用は撤回。子は親の決定を再質問抑止にだけ使う。reviewer 側の拒否は BLOCKED_EXTERNAL",
     },
     "DOT-INC-015": {
         "oracle": None,
@@ -179,11 +175,9 @@ CASES: dict[str, dict] = {
         "note": "Library download failed: 転送基盤",
     },
     "DOT-INC-025": {
-        "oracle": O.o_child_inherit,
-        "mutate": "approval.binding",
-        "agents": ["claude", "codex"],
-        "status": "LOCAL",
-        "note": "同一承認の継続はローカルで実証。reviewer再拒否はBLOCKED_EXTERNAL",
+        "oracle": None,
+        "status": "UNRESOLVED",
+        "note": "同上。承認の継続は人間の承認プロンプトに委ね、H17 は再質問の重複だけを止める",
     },
     "DOT-INC-026": {
         "oracle": O.o_promote,

@@ -4,7 +4,7 @@
 //   chat.message          -> prompt            (register user decisions / deadlines)
 //   tool.execute.before   -> pre               (C-ITER; throws to block the call)
 //   tool.execute.after    -> post              (record rc/output for evidence binding)
-//   permission.ask        -> permission        (allow only when a user decision binds it)
+//   (permission.ask: retired 2026-10-14 — H17 never auto-allows; see hooks/lib/aidd_cc_controls.py)
 //   event session.idle    -> stop              (C-EVIDENCE; re-prompts the session once)
 //
 // The verdict logic is python (hooks/lib/aidd_cc.py) shared with Claude/Codex/Cursor,
@@ -74,30 +74,6 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
         tool_input: item.args ?? {},
         tool_response: { exit_code: rc, stdout: String(out.output ?? "").slice(0, 4000) },
       })
-    },
-    "permission.ask": async (
-      input: { sessionID?: string; type?: string; title?: string; metadata?: Record<string, unknown>; pattern?: unknown },
-      output: { status: "ask" | "deny" | "allow" },
-    ) => {
-      if (output.status !== "ask") return
-      const v = await cc("permission", {
-        sessionID: input.sessionID ?? "unset",
-        tool_input: { command: String(input.title ?? ""), pattern: input.pattern ?? null, ...(input.metadata ?? {}) },
-        message: String(input.type ?? ""),
-      })
-      if (v.decision === "allow") output.status = "allow"
-    },
-    // Headless `opencode run` exits on session.idle before an async re-prompt can land,
-    // so the evidence gate also runs when the assistant text part completes: a blocked
-    // claim gets the gate verdict appended to the visible text and an H6 block row.
-    "experimental.text.complete": async (
-      input: { sessionID: string; messageID: string; partID: string },
-      output: { text: string },
-    ) => {
-      const text = String(output.text ?? "")
-      if (!text.trim()) return
-      const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: text }, ["--max-blocks", "99", "--no-count"])
-      if (v.decision === "block") output.text = `${text}\n\n[H17 evidence gate] ${v.reason ?? ""}`
     },
     event: async ({ event }: { event: { type?: string; properties?: Record<string, unknown> } }) => {
       if (event.type !== "session.idle") return

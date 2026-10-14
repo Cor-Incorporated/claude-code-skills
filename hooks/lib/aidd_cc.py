@@ -40,7 +40,13 @@ from aidd_cc_controls import (  # noqa: E402
     stop_check,
 )
 from aidd_cc_session import guard_ledger, load_meta, load_tools, record_tool, save_meta  # noqa: E402
-from aidd_cc_text import NEGATION_RE, is_approval_text, is_short_affirmative, parse_deadline_hours, parse_denominator  # noqa: E402
+from aidd_cc_text import (
+    NEGATION_RE,
+    is_approval_text,
+    is_short_affirmative,
+    parse_deadline_hours,
+    parse_denominator,
+)  # noqa: E402
 
 COMPONENT = "H17"
 
@@ -53,8 +59,15 @@ def _read_payload() -> dict:
         return json.loads(raw)
     except ValueError:
         # Observation failure is not a pass (harness-spec 0-4): record it.
-        guard_ledger(COMPONENT, "error", "unreadable", "payload", raw[:100],
-                     os.environ.get("AIDD_CC_AGENT", "?"), "unset")
+        guard_ledger(
+            COMPONENT,
+            "error",
+            "unreadable",
+            "payload",
+            raw[:100],
+            os.environ.get("AIDD_CC_AGENT", "?"),
+            "unset",
+        )
         return {"_raw": raw, "_unreadable": True}
 
 
@@ -70,9 +83,17 @@ def _session(args, payload) -> str:
 
 
 def _cwd(args, payload) -> str:
-    ti = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    ti = (
+        payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    )
     # A tool's own workdir wins over the session cwd (Codex r7 P2-b).
-    return str((ti or {}).get("workdir") or (ti or {}).get("cwd") or args.cwd or payload.get("cwd") or os.getcwd())
+    return str(
+        (ti or {}).get("workdir")
+        or (ti or {}).get("cwd")
+        or args.cwd
+        or payload.get("cwd")
+        or os.getcwd()
+    )
 
 
 def _emit(obj: dict) -> None:
@@ -83,6 +104,10 @@ def _tool_input(payload: dict) -> dict:
     """Normalise harness-specific shapes to {command, file_path, ...}.
     Codex `exec_command` passes `cmd` (P1-3); OpenCode passes `filePath`."""
     ti = payload.get("tool_input") or payload.get("args") or payload.get("input") or {}
+    if not ti and payload.get(
+        "file_path"
+    ):  # Cursor afterFileEdit: top-level file_path + edits
+        ti = {"file_path": payload["file_path"], "edits": payload.get("edits")}
     if not isinstance(ti, dict):
         return {}
     ti = dict(ti)
@@ -108,15 +133,29 @@ def _tool_input(payload: dict) -> dict:
 
 def _tool_name(payload: dict, default: str) -> str:
     name = str(payload.get("tool_name") or payload.get("tool") or default)
-    return {"edit": "Edit", "write": "Write", "bash": "Bash", "shell": "Bash", "exec_command": "Bash",
-            "multiedit": "MultiEdit", "apply_patch": "Edit", "request_user_input": "AskUserQuestion", "ask_user": "AskUserQuestion",
-            "askuserquestion": "AskUserQuestion"}.get(name.lower(), name)
+    return {
+        "edit": "Edit",
+        "write": "Write",
+        "bash": "Bash",
+        "shell": "Bash",
+        "exec_command": "Bash",
+        "multiedit": "MultiEdit",
+        "apply_patch": "Edit",
+        "request_user_input": "AskUserQuestion",
+        "ask_user": "AskUserQuestion",
+        "askuserquestion": "AskUserQuestion",
+    }.get(name.lower(), name)
 
 
 def _question_texts(ti: dict) -> list[str]:
     qs = ti.get("questions")
     if isinstance(qs, list):
-        out = [str(q.get("question") or q.get("prompt") or "") if isinstance(q, dict) else str(q) for q in qs]
+        out = [
+            str(q.get("question") or q.get("prompt") or "")
+            if isinstance(q, dict)
+            else str(q)
+            for q in qs
+        ]
         return [q for q in out if q] or [""]
     return [_question_text(ti)]
 
@@ -126,9 +165,19 @@ def _question_text(ti: dict) -> str:
     (Codex r3 P2-2: those words dilute the overlap denominator)."""
     qs = ti.get("questions")
     if isinstance(qs, list):
-        parts = [str(q.get("question") or q.get("prompt") or "") if isinstance(q, dict) else str(q) for q in qs]
+        parts = [
+            str(q.get("question") or q.get("prompt") or "")
+            if isinstance(q, dict)
+            else str(q)
+            for q in qs
+        ]
         return "\n".join(p for p in parts if p)
-    return str(ti.get("question") or ti.get("prompt") or ti.get("message") or json.dumps(ti, ensure_ascii=False))
+    return str(
+        ti.get("question")
+        or ti.get("prompt")
+        or ti.get("message")
+        or json.dumps(ti, ensure_ascii=False)
+    )
 
 
 def cmd_pre(args, payload):
@@ -142,7 +191,11 @@ def cmd_pre(args, payload):
         blocked = [v for v in verdicts if v["decision"] == "block"]
         # Block only when EVERY question is already answered; one undecided
         # question keeps the whole call (Codex r5 P2-d).
-        verdict = blocked[0] if blocked and len(blocked) == len(verdicts) else {"decision": "allow", "rule": "decision"}
+        verdict = (
+            blocked[0]
+            if blocked and len(blocked) == len(verdicts)
+            else {"decision": "allow", "rule": "decision"}
+        )
         if any(v.get("remember") for v in verdicts):
             save_meta(agent, session, meta)
     else:
@@ -152,9 +205,11 @@ def cmd_pre(args, payload):
         agent,
         session,
         {
-            "event": "pre", "cwd": _cwd(args, payload),
+            "event": "pre",
+            "cwd": _cwd(args, payload),
             "tool": tool,
-            "key": key, "cc_sha": control_sha(),
+            "key": key,
+            "cc_sha": control_sha(),
             "cmd": str(ti.get("command") or "")[:4000],
             "decision": verdict["decision"],
         },
@@ -173,31 +228,99 @@ def _exit_status(payload: dict, resp, agent: str):
     rc = None
     if isinstance(resp, dict):
         rc = resp.get("exit_code", resp.get("exitCode", resp.get("rc")))
-        out = str(resp.get("stdout", "")) + str(resp.get("stderr", "")) + str(resp.get("output", ""))
+        out = (
+            str(resp.get("stdout", ""))
+            + str(resp.get("stderr", ""))
+            + str(resp.get("output", ""))
+        )
     else:
         out = str(resp)
     if rc is None and payload.get("exit_code") is not None:
         rc = payload.get("exit_code")
-    failed = payload.get("hook_event_name") == "PostToolUseFailure" or payload.get("is_error") or payload.get("error")
+    failed = (
+        payload.get("hook_event_name") == "PostToolUseFailure"
+        or payload.get("is_error")
+        or payload.get("error")
+    )
     if failed:
         err = str(payload.get("error") or out)
-        return (127 if "command not found" in err else 124 if "timed out" in err.lower() else (rc if rc not in (None, 0) else 1)), out, "harness"
+        return (
+            (
+                127
+                if "command not found" in err
+                else 124
+                if "timed out" in err.lower()
+                else (rc if rc not in (None, 0) else 1)
+            ),
+            out,
+            "harness",
+        )
     if rc is None:
-        tail = "\n".join(out.rstrip().splitlines()[-3:])  # status lines only, at the end (reviewer-e N4)
-        m = re.search(r"^\s*(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})\s*$", tail, re.IGNORECASE | re.MULTILINE)
+        tail = "\n".join(
+            out.rstrip().splitlines()[-3:]
+        )  # status lines only, at the end (reviewer-e N4)
+        m = re.search(
+            r"^\s*(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})\s*$",
+            tail,
+            re.IGNORECASE | re.MULTILINE,
+        )
         if not m:
             m = re.search(r"^\s*exit=(-?\d{1,3})\s*$", tail, re.MULTILINE)
         if m:
-            return int(m.group(1)), out, "marker"   # the command's own trailing status line
+            return (
+                int(m.group(1)),
+                out,
+                "marker",
+            )  # the command's own trailing status line
         elif agent == "claude-code" and isinstance(resp, dict):
             rc = 0
     return rc, out, "harness"
+
+
+def _register_answers(agent: str, session: str, ti: dict, resp) -> int:
+    """AskUserQuestion answers come back as tool_response.answers (not a new prompt).
+    An affirmative answer binds to its question like a short `OK` (Codex r8 P2-c)."""
+    answers = resp.get("answers") if isinstance(resp, dict) else None
+    if not isinstance(answers, dict) or not answers:
+        return 0
+    import hashlib
+
+    meta = load_meta(agent, session)
+    n = 0
+    for q, a in answers.items():
+        a = str(a)
+        if not is_short_affirmative(a):
+            continue
+        asked = re.sub(
+            r"[?？]|よいですか|いいですか|よろしいですか|してもいい|ますか|ですか|should i|can i|may i|shall i",
+            "",
+            str(q),
+            flags=re.IGNORECASE,
+        )
+        dtext = asked.strip() + " " + a
+        if is_approval_text(dtext):
+            sha = hashlib.sha256(dtext.encode()).hexdigest()[:16]
+            meta["decisions"].append(
+                {
+                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "sha": sha,
+                    "text": dtext[:600],
+                }
+            )
+            n += 1
+    meta["questions"] = []
+    save_meta(agent, session, meta)
+    return n
 
 
 def cmd_post(args, payload):
     agent, session = args.agent, _session(args, payload)
     tool = _tool_name(payload, args.tool or "Bash")
     ti = _tool_input(payload)
+    if tool == "AskUserQuestion":
+        n = _register_answers(agent, session, ti, payload.get("tool_response") or {})
+        _emit({"decision": "allow", "rule": "record-answers", "registered": n})
+        return
     resp = payload.get("tool_response") or payload.get("output") or {}
     rc, out, rc_src = _exit_status(payload, resp, agent)
     key = _norm_key(tool, ti)
@@ -205,7 +328,9 @@ def cmd_post(args, payload):
         agent,
         session,
         {
-            "event": "post", "cwd": _cwd(args, payload), "rc_src": rc_src,
+            "event": "post",
+            "cwd": _cwd(args, payload),
+            "rc_src": rc_src,
             "tool": tool,
             "key": key,
             "rc": rc,
@@ -225,7 +350,9 @@ def cmd_prompt(args, payload):
     if text.lstrip().startswith("[H17 evidence gate]"):
         _emit({"decision": "allow", "rule": "prompt.gate-reprompt", "registered": []})
         return  # the gate's own re-prompt is not a user turn: budgets stay (Codex r4 P1-c)
-    meta["stop_blocks"] = 0  # the loop guard is per stop attempt, not per session (P2-4)
+    meta["stop_blocks"] = (
+        0  # the loop guard is per stop attempt, not per session (P2-4)
+    )
     registered = []
     if NEGATION_RE.search(text):
         # A refusal / withdrawal is the latest instruction: every earlier decision in
@@ -236,10 +363,17 @@ def cmd_prompt(args, payload):
         meta["revoked_at"] = time.time()
     decision_text = text
     if not is_short_affirmative(text):
-        meta["questions"] = []  # a new instruction supersedes the pending question (reviewer-g D4)
+        meta[
+            "questions"
+        ] = []  # a new instruction supersedes the pending question (reviewer-g D4)
     if is_short_affirmative(text) and meta.get("questions"):
         # `OK` alone answers the last question the agent asked (reviewer-e #8)
-        asked = re.sub(r"[?？]|よいですか|いいですか|よろしいですか|してもいい|ますか|ですか|should i|can i|may i|shall i", "", meta["questions"][-1]["text"], flags=re.IGNORECASE)
+        asked = re.sub(
+            r"[?？]|よいですか|いいですか|よろしいですか|してもいい|ますか|ですか|should i|can i|may i|shall i",
+            "",
+            meta["questions"][-1]["text"],
+            flags=re.IGNORECASE,
+        )
         decision_text = asked.strip() + " " + text
         registered.append("bound-to-question")
     if is_approval_text(decision_text) and len(decision_text.strip()) >= 2:
@@ -247,7 +381,11 @@ def cmd_prompt(args, payload):
 
         sha = hashlib.sha256(decision_text.encode()).hexdigest()[:16]
         meta["decisions"].append(
-            {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "sha": sha, "text": decision_text[:600]}
+            {
+                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "sha": sha,
+                "text": decision_text[:600],
+            }
         )
         registered.append("decision")
     den = parse_denominator(text)
@@ -272,9 +410,19 @@ def cmd_permission(args, payload):
     text = json.dumps(ti, ensure_ascii=False) + " " + str(payload.get("message", ""))
     request_cmd = str(ti.get("command") or "")
     request_path = str(ti.get("file_path") or "")
-    verdict = permission_check(load_meta(agent, session), text, request_cmd, request_path)
+    verdict = permission_check(
+        load_meta(agent, session), text, request_cmd, request_path
+    )
     if verdict["decision"] == "allow":
-        guard_ledger(COMPONENT, "measure", "allow", verdict["rule"], request_cmd[:100], agent, session)
+        guard_ledger(
+            COMPONENT,
+            "measure",
+            "allow",
+            verdict["rule"],
+            request_cmd[:100],
+            agent,
+            session,
+        )
     _emit(verdict)
 
 
@@ -319,23 +467,61 @@ def cmd_stop(args, payload):
     if payload.get("stop_hook_active") and not args.ignore_active:
         # Claude Code re-enters Stop with this flag after a block; passing is required to
         # avoid an infinite loop, and the pass is visible in the ledger (not a silent off).
-        guard_ledger(COMPONENT, "measure", "allow", "evidence.loop-guard", "stop_hook_active", agent, session)
+        guard_ledger(
+            COMPONENT,
+            "measure",
+            "allow",
+            "evidence.loop-guard",
+            "stop_hook_active",
+            agent,
+            session,
+        )
         _emit({"decision": "allow", "rule": "evidence.loop-guard"})
         return 0
     if meta.get("stop_blocks", 0) >= args.max_blocks:
-        guard_ledger(COMPONENT, "measure", "allow", "evidence.max-blocks", f"blocks={meta['stop_blocks']}", agent, session)
-        _emit({"decision": "allow", "rule": "evidence.max-blocks", "blocks": meta["stop_blocks"]})
+        guard_ledger(
+            COMPONENT,
+            "measure",
+            "allow",
+            "evidence.max-blocks",
+            f"blocks={meta['stop_blocks']}",
+            agent,
+            session,
+        )
+        _emit(
+            {
+                "decision": "allow",
+                "rule": "evidence.max-blocks",
+                "blocks": meta["stop_blocks"],
+            }
+        )
         return 0
     text = _last_assistant(payload, meta)
     verdict = stop_check(meta, rows, text, _cwd(args, payload))
     # Every evaluation leaves a measure row: live runs prove the gate ran at the
     # registered entry even when nothing was blocked (DOT-INC-012/022).
-    guard_ledger(COMPONENT, "measure", verdict["decision"], "evidence.evaluated", text[:60], agent, session)
+    guard_ledger(
+        COMPONENT,
+        "measure",
+        verdict["decision"],
+        "evidence.evaluated",
+        text[:60],
+        agent,
+        session,
+    )
     if verdict["decision"] == "block":
         if not args.no_count:
             meta["stop_blocks"] = meta.get("stop_blocks", 0) + 1
             save_meta(agent, session, meta)
-        guard_ledger(COMPONENT, "block", "deny", verdict["rule"], verdict["problems"][0], agent, session)
+        guard_ledger(
+            COMPONENT,
+            "block",
+            "deny",
+            verdict["rule"],
+            verdict["problems"][0],
+            agent,
+            session,
+        )
     _emit(verdict)
     if verdict["decision"] == "block" and args.exit_style == "claude":
         sys.stderr.write(verdict["reason"] + "\n")
@@ -479,7 +665,11 @@ def main(argv=None) -> int:
         default=int(os.environ.get("AIDD_CC_MAX_STOP_BLOCKS", "2")),
     )
     ap.add_argument("--ignore-active", action="store_true")
-    ap.add_argument("--no-count", action="store_true", help="evaluate without consuming a stop-block slot")
+    ap.add_argument(
+        "--no-count",
+        action="store_true",
+        help="evaluate without consuming a stop-block slot",
+    )
     ap.add_argument("--hypothesis")
     ap.add_argument("--change")
     ap.add_argument("--supersede")
@@ -492,9 +682,16 @@ def main(argv=None) -> int:
         args.path = args.action
     if args.cmd == "eval" and not args.kind:
         args.kind = args.action
-    if args.cmd in ("note", "denominator", "deadline") and not (args.session or os.environ.get("AIDD_CC_SESSION")):
-        _emit({"decision": "error", "rule": "session-required",
-               "reason": f"{args.cmd} needs --session <id> (the hook payload session_id); refusing to write to 'unset'"})
+    if args.cmd in ("note", "denominator", "deadline") and not (
+        args.session or os.environ.get("AIDD_CC_SESSION")
+    ):
+        _emit(
+            {
+                "decision": "error",
+                "rule": "session-required",
+                "reason": f"{args.cmd} needs --session <id> (the hook payload session_id); refusing to write to 'unset'",
+            }
+        )
         return 1
     payload = (
         _read_payload()
@@ -525,9 +722,24 @@ def _main_guarded() -> int:
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001
-        guard_ledger(COMPONENT, "error", "crash", type(exc).__name__, str(exc)[:100],
-                     os.environ.get("AIDD_CC_AGENT", "?"), os.environ.get("AIDD_CC_SESSION", "unset"))
-        _emit({"decision": "allow", "rule": "error", "reason": f"{type(exc).__name__}: {str(exc)[:200]}"})
+        guard_ledger(
+            COMPONENT,
+            "error",
+            "crash",
+            type(exc).__name__,
+            str(exc)[:100],
+            os.environ.get("AIDD_CC_AGENT", "?"),
+            os.environ.get("AIDD_CC_SESSION", "unset"),
+        )
+        # "error" is neither allow nor block: adapters print nothing, so the harness's own
+        # prompt stays (a crash must never become a PermissionRequest allow — Codex r8 P1).
+        _emit(
+            {
+                "decision": "error",
+                "rule": "error",
+                "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+            }
+        )
         return 0
 
 

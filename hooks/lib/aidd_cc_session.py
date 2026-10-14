@@ -51,7 +51,10 @@ def inherited_decisions() -> list[dict]:
         parent = json.loads(Path(src).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    return [dict(d, inherited_from=parent.get("session", "?")) for d in parent.get("decisions", [])]
+    return [
+        dict(d, inherited_from=parent.get("session", "?"))
+        for d in parent.get("decisions", [])
+    ]
 
 
 def load_meta(agent: str, session: str) -> dict:
@@ -67,7 +70,11 @@ def load_meta(agent: str, session: str) -> dict:
         live = {d.get("sha") for d in inherited_now}
         # Drop inherited decisions the parent no longer holds (revoked there): the
         # parent's current state wins, every time the child loads (Codex r3 P1-3).
-        meta["decisions"] = [d for d in meta.get("decisions", []) if not d.get("inherited_from") or d.get("sha") in live]
+        meta["decisions"] = [
+            d
+            for d in meta.get("decisions", [])
+            if not d.get("inherited_from") or d.get("sha") in live
+        ]
         own = {d.get("sha") for d in meta["decisions"]}
         if not meta.get("revoked_at"):
             meta["decisions"] += [d for d in inherited_now if d.get("sha") not in own]

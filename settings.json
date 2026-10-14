@@ -250,7 +250,7 @@
             "statusMessage": "H17 common control: recording tool result..."
           }
         ],
-        "matcher": "Bash|Edit|Write|MultiEdit"
+        "matcher": "Bash|Edit|Write|MultiEdit|AskUserQuestion"
       }
     ],
     "PostToolUseFailure": [
@@ -334,19 +334,6 @@
             "statusMessage": "H17 common control: registering user decisions / deadline..."
           }
         ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/aidd-cc-claude.sh",
-            "timeout": 8,
-            "statusMessage": "H17 common control: inherited decision check..."
-          }
-        ],
-        "matcher": "Bash|Edit|Write|MultiEdit"
       }
     ]
   },

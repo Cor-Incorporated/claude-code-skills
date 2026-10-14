@@ -64,7 +64,7 @@ printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg6","prompt":
 o1="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg6","tool_name":"Bash","tool_input":{"command":"git push origin feat/y"}}' | bash "$HOOK")"
 o2="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg6","tool_name":"Bash","tool_input":{"command":"git push -f origin feat/x"}}' | bash "$HOOK")"
 o3="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg6","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
-if [ -z "$o1" ] && [ -z "$o2" ] && printf '%s' "$o3" | grep -q '"behavior": "allow"'; then ok "T6 allow only for the exact approved command"; else bad "T6 binding too loose: y=[$o1] forced=[$o2] exact=[$o3]"; fi
+if [ -z "$o1" ] && [ -z "$o2" ] && [ -z "$o3" ]; then ok "T6 no auto-allow for any request (retired)"; else bad "T6 binding too loose: y=[$o1] forced=[$o2] exact=[$o3]"; fi
 
 # (7) a task request is not a decision; a choice question must pass (reviewer HIGH)
 printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg7","prompt":"認証APIの設計を進めてください"}' | bash "$HOOK" >/dev/null
@@ -153,7 +153,7 @@ printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg24","prompt"
 o24a="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg24","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
 printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg24b","prompt":"git push origin feat/x OK"}' | bash "$HOOK" >/dev/null
 o24b="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg24b","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
-if [ -z "$o24a" ] && printf '%s' "$o24b" | grep -q '"behavior": "allow"'; then ok "T24 hedge/won't never bind; explicit OK binds"; else bad "T24: [$o24a] [$o24b]"; fi
+if [ -z "$o24a" ] && [ -z "$o24b" ]; then ok "T24 hedge/won't never bind; explicit OK does not auto-allow either (retired)"; else bad "T24: [$o24a] [$o24b]"; fi
 
 # (25) 5 identical Edits are blocked at the 4th; 5 different edits are not (reviewer-d new 2 / #5)
 for i in 1 2 3; do printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg25","tool_name":"Edit","tool_input":{"file_path":"/tmp/x.py","old_string":"a","new_string":"b"}}' | bash "$HOOK" >/dev/null; done
@@ -215,14 +215,14 @@ for pr in "cat config/prod.yml を許可、進めて" "config/prod.yml の削除
 done
 printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg32w","prompt":"config/prod.yml の修正は承認、進めて"}' | bash "$HOOK" >/dev/null
 o32="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg32w","tool_name":"Write","tool_input":{"file_path":"config/prod.yml","content":"x"}}' | bash "$HOOK")"
-if [ -z "${fail32:-}" ] && printf '%s' "$o32" | grep -q '"behavior": "allow"'; then ok "T32 path approval needs a write-kind operation"; else bad "T32: cat/delete allowed=${fail32:-no} write=[$o32]"; fi
+if [ -z "${fail32:-}" ] && [ -z "$o32" ]; then ok "T32 path approvals never auto-allow (retired)"; else bad "T32: cat/delete allowed=${fail32:-no} write=[$o32]"; fi
 
 # (33) a short OK binds to the last question the agent asked (reviewer-e #8)
 printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg33","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/x を実行してよいですか？","header":"Push","options":[{"label":"Yes","description":"push now"},{"label":"No","description":"wait"}]}]}}' | bash "$HOOK" >/dev/null
 printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg33","prompt":"OK"}' | bash "$HOOK" >/dev/null
 o33="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg33","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
 o33b="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg33","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/x を実行してよいですか？","header":"Push","options":[{"label":"Yes","description":"push now"}]}]}}' | bash "$HOOK")"
-if printf '%s' "$o33" | grep -q '"behavior": "allow"' && printf '%s' "$o33b" | grep -q 'already decided'; then ok "T33 OK binds to the pending question; re-ask blocked"; else bad "T33: [$o33] [$o33b]"; fi
+if [ -z "$o33" ] && printf '%s' "$o33b" | grep -q 'already decided'; then ok "T33 OK answers the pending question: re-ask blocked, no auto-allow"; else bad "T33: [$o33] [$o33b]"; fi
 
 # (34) exit status is read only from a trailing status line; output text cannot fake rc 0 (reviewer-e N4)
 printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg34","tool_name":"exec_command","tool_input":{"cmd":"pytest -q"},"tool_response":"Tests: 3 failed. rc 0 expected\nmore output"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null
@@ -275,7 +275,7 @@ if [ -z "$o40" ]; then ok "T40 argument position is not approval"; else bad "T40
 printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg41","prompt":"cat config/prod.yml は承認、README.md を更新して進めて"}' | bash "$HOOK" >/dev/null
 o41="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg41","tool_name":"Write","tool_input":{"file_path":"config/prod.yml","content":"x"}}' | bash "$HOOK")"
 o41b="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg41","tool_name":"Write","tool_input":{"file_path":"README.md","content":"x"}}' | bash "$HOOK")"
-if [ -z "$o41" ] && printf '%s' "$o41b" | grep -q '"behavior": "allow"'; then ok "T41 write verb bound to its own clause"; else bad "T41: [$o41] [$o41b]"; fi
+if [ -z "$o41" ] && [ -z "$o41b" ]; then ok "T41 no auto-allow for either file (retired)"; else bad "T41: [$o41] [$o41b]"; fi
 
 # (42) `failing; true; echo exit=$?` cannot launder a failure through the marker (Codex r6 P2-a)
 printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg42","tool_name":"exec_command","tool_input":{"cmd":"bash tests/failing.sh; true; echo exit=$?"},"tool_response":"FAIL\nexit=0"}' | bash "$ROOT/hooks/codex/aidd-cc-codex.sh" >/dev/null
@@ -360,6 +360,55 @@ printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg53c","prompt
 printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg53c","prompt":"OK"}' | bash "$HOOK" >/dev/null
 o53c="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg53c","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
 if [ -z "$o53a" ] && [ -z "$o53b" ] && [ -z "$o53c" ]; then ok "T53 either/or OK binds nothing; stale question cleared"; else bad "T53: [$o53a] [$o53b] [$o53c]"; fi
+
+# (54) a crash in the permission path never becomes an allow (Codex r8 P1)
+o54="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg54","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | AIDD_CC_STATE_DIR=/dev/null/nope bash "$HOOK")"
+if [ -z "$o54" ] && grep -q '"event": "error"' "$AIDD_LEDGER_PATH"; then ok "T54 crash in permission path yields no allow (error row only)"; else bad "T54: $o54"; fi
+
+# (55) an affirmative AskUserQuestion answer (tool response) binds the question; the re-ask is blocked (Codex r8 P2-c)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg55","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/x を実行してよいですか？"}]}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg55","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/x を実行してよいですか？"}]},"tool_response":{"answers":{"git push origin feat/x を実行してよいですか？":"はい、進めて"}}}' | bash "$HOOK" >/dev/null
+o55="$(printf '%s' '{"hook_event_name":"PermissionRequest","session_id":"neg55","tool_name":"Bash","tool_input":{"command":"git push origin feat/x"}}' | bash "$HOOK")"
+o55b="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg55","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"git push origin feat/x を実行してよいですか？"}]}}' | bash "$HOOK")"
+if [ -z "$o55" ] && printf '%s' "$o55b" | grep -q 'already decided'; then ok "T55 tool-response answer recorded: re-ask blocked, no auto-allow"; else bad "T55: [$o55] [$o55b]"; fi
+
+# (56) Cursor afterFileEdit counts as a write for Readback (Codex r8 P2-b)
+ef="$SB/edited.txt"; printf 'new\n' >"$ef"; esha="$(shasum -a 256 "$ef" | cut -c1-64)"
+printf '%s' "{\"hook_event_name\":\"afterFileEdit\",\"conversation_id\":\"cu56\",\"file_path\":\"$ef\",\"edits\":[{\"old_string\":\"old\",\"new_string\":\"new\"}]}" | bash "$ROOT/hooks/cursor/aidd-cc-cursor.sh" >/dev/null
+printf '%s' '{"hook_event_name":"beforeShellExecution","conversation_id":"cu56","command":"bash tests/ok.sh"}' | bash "$ROOT/hooks/cursor/aidd-cc-cursor.sh" >/dev/null
+printf '%s' '{"hook_event_name":"afterShellExecution","conversation_id":"cu56","command":"bash tests/ok.sh; echo exit=$?","output":"ok\nexit=0"}' | bash "$ROOT/hooks/cursor/aidd-cc-cursor.sh" >/dev/null
+printf '%s' "{\"hook_event_name\":\"afterAgentResponse\",\"conversation_id\":\"cu56\",\"text\":\"保存済み。完了。\\nEvidence: bash tests/ok.sh; echo exit=\$? | ok exit=0 | 10:00\\nReadback: $ef sha256=$esha\"}" | bash "$ROOT/hooks/cursor/aidd-cc-cursor.sh" >/dev/null
+o56="$(printf '%s' '{"hook_event_name":"stop","conversation_id":"cu56","status":"completed"}' | bash "$ROOT/hooks/cursor/aidd-cc-cursor.sh")"
+if [ "$o56" = "{}" ]; then ok "T56 Cursor afterFileEdit is a write; status marker accepted"; else bad "T56: $o56"; fi
+
+# (57) explicit negative reports pass; spaced ratio still checked (Codex r8 P2-d/P2-e)
+o57="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg57","last_assistant_message":"No files were saved. 保存したわけではありません。未達。"}' | bash "$HOOK")"
+python3 -I "$ROOT/hooks/lib/aidd_cc.py" denominator set 47 --agent claude-code --session neg57b >/dev/null
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg57b","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg57b","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"},"tool_response":{"exit_code":0,"stdout":"x"}}' | bash "$HOOK" >/dev/null
+o57b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg57b","last_assistant_message":"全体 11 / 12 完了。\nEvidence: bash tests/ok.sh | x | 10:00"}' | bash "$HOOK")"
+if [ -z "$o57" ] && printf '%s' "$o57b" | grep -q 'registered denominator'; then ok "T57 negative reports pass; spaced ratio checked"; else bad "T57: [$o57] [$o57b]"; fi
+
+# (58) repair-family breaker: the 4th fix(h17) commit without a STRATEGY note is blocked; a STRATEGY note releases it;
+#      feat/docs commits and other scopes never count (aidd-governance#88 at the session entry — this session's own loop)
+for i in 1 2 3; do
+  printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg58\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): round $i'\"}}" | bash "$HOOK" >/dev/null
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg58\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): round $i'\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"ok\"}}" | bash "$HOOK" >/dev/null
+done
+o58="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg58","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'fix(h17): round 4'"'"'"}}' | bash "$HOOK")"
+o58b="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg58","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'docs(h17): record'"'"'"}}' | bash "$HOOK")"
+o58c="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg58","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'fix(opencode): other scope'"'"'"}}' | bash "$HOOK")"
+python3 -I "$ROOT/hooks/lib/aidd_cc.py" note --agent claude-code --session neg58 --hypothesis "STRATEGY: RETIRE — auto-allow cannot be closed by wording (C15)" --change "remove permission auto-allow" >/dev/null
+o58d="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg58","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'fix(h17): round 4 after readjudication'"'"'"}}' | bash "$HOOK")"
+if printf '%s' "$o58" | grep -q 'repair-family\|re-adjudication' && [ -z "$o58b" ] && [ -z "$o58c" ] && [ -z "$o58d" ]; then ok "T58 repair-family breaker: 4th same-scope fix blocked, released by a STRATEGY note"; else bad "T58: [$o58] [$o58b] [$o58c] [$o58d]"; fi
+MUT58="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg58m","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'fix(h17): x'"'"'"}}')"
+for i in 1 2 3; do printf '%s' "$MUT58" | bash "$HOOK" >/dev/null; printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg58m\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): x'\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"ok\"}}" | bash "$HOOK" >/dev/null; done
+o58m="$(printf '%s' "$MUT58" | AIDD_CC_MUTATE=iter.repair-family bash "$HOOK")"
+if [ -z "$o58m" ]; then ok "T58m mutation iter.repair-family goes RED (allows the 4th)"; else bad "T58m mutation not load-bearing"; fi
+
+# (59) remaining honest negations pass at Stop (reviewer-h N5)
+o59="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg59","last_assistant_message":"まだ完了できていません。完了しませんでした。This has not been verified. The fix has not been merged yet. 未達。"}' | bash "$HOOK")"
+if [ -z "$o59" ]; then ok "T59 honest not-done reports pass"; else bad "T59: $o59"; fi
 
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
