@@ -441,5 +441,11 @@ printf '%s' '{"hook_event_name":"afterAgentResponse","conversation_id":"cu64","t
 o64b="$(printf '%s' '{"hook_event_name":"stop","conversation_id":"cu64","status":"completed"}' | bash "$ROOT/hooks/cursor/aidd-cc-cursor.sh")"
 if [ "$o64a" = "{}" ] && printf '%s' "$o64b" | grep -q 'followup_message'; then ok "T64 parked block is delivered at the next Cursor stop"; else bad "T64: [$o64a] [$o64b]"; fi
 
+# (65) a command quoted in backticks inside the Evidence trailer is matched (Cursor IDE live 2026-10-14 05:12Z cited `echo probe-h17`)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg65","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg65","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"},"tool_response":{"exit_code":0,"stdout":"x"}}' | bash "$HOOK" >/dev/null
+o65="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg65","last_assistant_message":"完了。\nEvidence: `bash tests/ok.sh` | x | 10:00"}' | bash "$HOOK")"
+if [ -z "$o65" ]; then ok "T65 backticked evidence command matched"; else bad "T65: $o65"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
