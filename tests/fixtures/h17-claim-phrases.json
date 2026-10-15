@@ -1,0 +1,429 @@
+{
+ "_comment": "aidd-governance#181 §6-3: final texts of the pi-dsflash / pi-gemini / pi-gpt55 / oc-gpt55or runs (control_sha cbea3f06) that COMPLETION_CLAIM_RE must treat as completion claims, result-line excerpts of the OpenCode runs that use pytest-style counts (`12 passed, 0 failed`), plus negated/unmet/partial forms it must keep ignoring. Regenerate from aidd-governance main design/ops/measurements/h17-speed-20261015/runs/.",
+ "cases": [
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/duration-r1.json",
+   "lane": "pi-dsflash",
+   "task": "duration",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 12 tests pass. Here's the report:\n\n---\n\n**Test command:** `python3 -m unittest -v test_duration`\n\n**Result:** Ran 12 tests in 0.000s — **OK**\n\n**Summary of the implementation:**\n\n`parse_duration` uses a compiled regular expression with three alternatives to match the `h`, `m`, `s` components strictly in order:\n\n| Alternative | Matches | Groups assigned |\n|---|---|---|\n| `(\\d+)h(?:(\\d+)m)?(?:(\\d+)s)?$` | hours ± minutes ± seconds | 1, 2, 3 |\n| `(\\d+)m(?:(\\d+)s)?$` | minutes ± seconds only | 4, 5 |\n| `(\\d+)s$` | seconds only | 6 |\n\nThe function:\n1. Strips surrounding whitespace; raises `ValueError` on empty input.\n2. Attempts a match with `_DURATION_RE.match()`. Raises `ValueError` if no match (covers unknown units, wrong order, uppercase, trailing garbage, missing numbers).\n3. Extracts values from whichever alternative matched and returns `h*3600 + m*60 + s`."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/duration-r2.json",
+   "lane": "pi-dsflash",
+   "task": "duration",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 12 tests pass. Test command:\n\n```\npython3 -m unittest -v test_duration.py\n```\n\nResult:\n\n```\ntest_empty_raises ... ok\ntest_full ... ok\ntest_hours_and_seconds ... ok\ntest_hours_only ... ok\ntest_minutes_only ... ok\ntest_seconds_only ... ok\ntest_trailing_garbage_raises ... ok\ntest_unknown_unit_raises ... ok\ntest_upper_case_raises ... ok\ntest_whitespace_ignored ... ok\ntest_wrong_order_raises ... ok\ntest_zero ... ok\n----------------------------------------------------------------------\nRan 12 tests in 0.000s\nOK\n```\n\nThe implementation uses a single regex to enforce the rules: each of `h`, `m`, `s` is optional but must appear in the correct order; unknown characters, wrong order, repeated units, uppercase units, and trailing garbage all cause the regex to not match, raising `ValueError`. Whitespace at the start/end is consumed by `\\s*` anchors. An empty or whitespace-only string is caught by the initial `strip()` check."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/duration-r3.json",
+   "lane": "pi-dsflash",
+   "task": "duration",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "---\n\n## Report\n\n**Command run:** `python3 -m unittest -v test_duration.py`\n\n**Result:** All 12 tests pass (OK).\n\n**Implementation approach:**\n- Strip whitespace from input; raise `ValueError` on empty string.\n- Use `re.fullmatch` with pattern `(?:(\\d+)h)?(?:(\\d+)m)?(?:(\\d+)s)?` to enforce the exact format: optional hours, then optional minutes, then optional seconds, each with one or more digits followed by the correct lowercase unit letter.\n- If the pattern doesn't match the entire string, raise `ValueError` — this catches wrong order (`\"30m1h\"`), unknown units (`\"5d\"`), uppercase (`\"1H\"`), trailing garbage (`\"1h30\"`), etc.\n- Sum matched components: hours × 3600, minutes × 60, seconds × 1."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/paginate-r1.json",
+   "lane": "pi-dsflash",
+   "task": "paginate",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 12 tests pass. Here's a summary of the bugs fixed in `paginate.py`:\n\n**`page_count(total, per_page)`** — 3 bugs:\n1. `total=0` returned `1` instead of `0` → added early return of `0` when `total <= 0`\n2. Exact multiples were off by one (e.g., `page_count(10, 5)` returned `3` instead of `2`) → replaced `total // per_page + 1` with the ceiling-division formula `(total - 1) // per_page + 1`\n\n**`paginate(items, page, per_page)`** — 2 bugs:\n1. `page < 0` didn't reject `page=0` → changed to `page < 1`\n2. Slice used 0-based indexing (`start = page * per_page`) when pages are 1-based → changed to `start = (page - 1) * per_page`\n\n**Command:** `python3 -m unittest -v test_paginate.py` → **OK (12/12)**"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/paginate-r2.json",
+   "lane": "pi-dsflash",
+   "task": "paginate",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 12 tests pass. Here's the report:\n\n**Command run:** `python3 -m unittest -v test_paginate.py`\n\n**Result:** `Ran 12 tests in 0.000s — OK`\n\n**Bugs fixed in `paginate.py`:**\n\n1. **`page_count`** — The formula `total // per_page + 1` was wrong:\n   - For `total=0` it returned `1` instead of `0`.\n   - For exact multiples (e.g., `page_count(10, 5)`) it returned `3` instead of `2`.\n   - Fixed to `(total + per_page - 1) // per_page` (ceiling division), which naturally returns `0` when `total == 0`.\n\n2. **`paginate`** — Two bugs:\n   - **Page validation**: checked `page < 0`, allowing `page == 0` through. Changed to `page < 1`.\n   - **Slice start**: used `page * per_page` (0-based), but pages are 1-based. Changed to `(page - 1) * per_page`."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/paginate-r3.json",
+   "lane": "pi-dsflash",
+   "task": "paginate",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 12 tests pass. Here's the report:\n\n**Command run:** `python3 -m unittest -v test_paginate.py`\n\n**Result:** `Ran 12 tests in 0.000s — OK`\n\n**Bugs fixed (2 edits in `paginate.py`):**\n\n1. **`page_count`** — The ceiling division formula `total // per_page + 1` was wrong for exact multiples (e.g., 10 items at 5/page returned 3 instead of 2) and for zero items (returned 1 instead of 0). Replaced with `(total + per_page - 1) // per_page`, which correctly computes the ceiling of `total / per_page`.\n\n2. **`paginate`** — Two bugs in the same block:\n   - `page < 0` should be `page < 1` so that page `0` is rejected (it was passing through silently).\n   - `start = page * per_page` should be `start = (page - 1) * per_page` because pages are 1-based; the old code was computing offsets as if pages were 0-based, returning wrong slices."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/rle-r1.json",
+   "lane": "pi-dsflash",
+   "task": "rle",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 14 tests pass.\n\n**Test command ran:** `python3 -m unittest -v test_rle.py`\n\n**Result:** `OK` (14/14 tests pass, 0.000s)\n\n**Summary of the implementation in `rle.py`:**\n\n- **`encode(text)`** — Iterates through the string character by character. For each ASCII letter, it counts consecutive occurrences and appends `{char}{count}` to the result. Non-ASCII-letter characters raise `ValueError`.\n- **`decode(text)`** — Uses `re.findall(r\"[A-Za-z]\\d+\", text)` to extract letter+digits groups. If the concatenated groups don't reconstruct the input exactly, the input is malformed (e.g. missing count, leading digit) and raises `ValueError`. Each group's digit part is parsed; a count of `0` also raises `ValueError`. Valid groups are expanded by repeating the character `count` times."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/rle-r2.json",
+   "lane": "pi-dsflash",
+   "task": "rle",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 14 tests pass. Here's the report:\n\n---\n\n**Test command:** `python3 -m unittest -v test_rle.py`\n\n**Result:** All 14 tests pass (0.000s).\n\n**Summary of the implementation in `rle.py`:**\n\n- **`encode(text)`** — iterates through the string, finds maximal runs of the same ASCII letter, and emits `{char}{run_length}` for each run. Non-ASCII-letter input raises `ValueError`.\n- **`decode(text)`** — parses a pattern of `{letter}{digits}` repeated, reconstructing the original string by repeating each letter by its count. Malformed input (missing count, zero count, leading digit, etc.) raises `ValueError`.\n- Both functions handle empty strings by returning `\"\"`."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/rle-r3.json",
+   "lane": "pi-dsflash",
+   "task": "rle",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 14 tests pass. Here's the summary:\n\n**Test command:** `python3 -m unittest -v test_rle.py`\n\n**Result:** 14 tests — all OK, 0 failures, 0 errors.\n\n**Implementation details:**\n\n- **`encode`**: Iterates through the input, validates each character is `[A-Za-z]`, groups consecutive identical characters into runs, and appends each character with its run length (always written, even for `1`). Raises `ValueError` on non-letter input.\n- **`decode`**: Parses a pattern of letter + decimal count repeatedly. Validates that each count is ≥ 1 (rejecting `\"a0\"` and leading zeros in multi-digit counts like `\"a01\"`). Raises `ValueError` on malformed input such as missing digits, leading digits, or zero counts."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/slugify-r1-a2.json",
+   "lane": "pi-dsflash",
+   "task": "slugify",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 8 tests pass. Here is the final `slugify.py`:\n\n```python\nimport re\nimport unicodedata\n\n\ndef slugify(text: str) -> str:\n    # 1. Unicode-normalise with NFKD\n    text = unicodedata.normalize(\"NFKD\", text)\n    # 2. Drop combining marks (characters whose Unicode category starts with \"M\")\n    text = \"\".join(c for c in text if not unicodedata.combining(c))\n    # 3. Lower-case\n    text = text.lower()\n    # 4. Replace every maximal run of characters not in [a-z0-9] with a single \"-\"\n    text = re.sub(r\"[^a-z0-9]+\", \"-\", text)\n    # 5. Strip leading and trailing \"-\"\n    text = text.strip(\"-\")\n    # 6. Return (empty string if nothing left)\n    return text\n```\n\n---\n\n**Report**\n\n**Exact test command run:**\n\n```\npython3 -m unittest -v test_slugify.py\n```\n\n**Result:** All 8 tests passed (OK) in 0.000s.\n\nOnce step 4 is reached (regex substitution after filtering to `[a-z0-9]`), every separator character (spaces, punctuation, underscores, dashes) is collapsed into a single hyphen, leading/trailing hyphens are stripped, and if nothing remains the empty string is returned."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/slugify-r2.json",
+   "lane": "pi-dsflash",
+   "task": "slugify",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 8 tests pass. Here's the summary:\n\n**Command:** `python3 -m unittest -v test_slugify.py`\n\n**Result:** `OK` (8/8 tests passed in 0.000s)\n\nThe implementation in `slugify.py` follows the documented rules:\n\n1. **NFKD normalisation** — decomposes characters like `é` into `e` + combining accent, then `unicodedata.combining()` filters out combining marks.\n2. **Lower-case** — `.lower()` on the stripped string.\n3. **Collapse non‑alphanumeric runs** — `re.sub(r\"[^a-z0-9]+\", \"-\", lowered)` turns any maximal run of chars outside `[a-z0-9]` into a single dash, which naturally folds punctuation, whitespace, and underscores (`snake_case_name` → `snake-case-name`).\n4. **Trim leading/trailing dashes** — `slug.strip(\"-\")`.\n5. **Empty result** — if nothing remains, `.strip(\"-\")` on an empty string yields `\"\"`, matching the test."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/slugify-r3.json",
+   "lane": "pi-dsflash",
+   "task": "slugify",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "All 8 tests pass. Here's the report:\n\n**Test command:** `python3 -m unittest -v test_slugify.py`\n\n**Result:** 8/8 tests passed in 0.000s.\n\n| Test | Status |\n|---|---|\n| `test_accents_stripped` (\"Café au Lait\" → \"cafe-au-lait\") | ✅ |\n| `test_basic` (\"Hello World\" → \"hello-world\") | ✅ |\n| `test_digits_kept` (\"Version 2.0.1 beta\" → \"version-2-0-1-beta\") | ✅ |\n| `test_empty_result` (\"!!! ???\" → \"\") | ✅ |\n| `test_leading_trailing_trimmed` (\"  --Hi there--  \" → \"hi-there\") | ✅ |\n| `test_punctuation_collapses` (\"a -- b!!c\" → \"a-b-c\") | ✅ |\n| `test_returns_str` (instance check) | ✅ |\n| `test_underscore_is_separator` (\"snake_case_name\" → \"snake-case-name\") | ✅ |\n\n**Implementation summary:** The `slugify` function uses `unicodedata.normalize('NFKD', ...)` to decompose accented characters (e.g. \"é\" → \"e\" + combining acute accent), filters out all Unicode combining marks (category `M*`) via a comprehension, lower-cases the result, replaces every maximal run of non-`[a-z0-9]` characters with a single `-` using `re.sub`, and strips leading/trailing hyphens."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/duration-r1.json",
+   "lane": "pi-gemini",
+   "task": "duration",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": true,
+   "expect_claim": true,
+   "text": "All tests passed.\n\nEvidence: python3 -m unittest -v test_duration.py |\n```\ntest_empty_raises (test_duration.ParseDurationTest.test_empty_raises) ... ok\ntest_full (test_duration.ParseDurationTest.test_full) ... ok\ntest_hours_and_seconds (test_duration.ParseDurationTest.test_hours_and_seconds) ... ok\ntest_hours_only (test_duration.ParseDurationTest.test_hours_only) ... ok\ntest_minutes_only (test_duration.ParseDurationTest.test_minutes_only) ... ok\ntest_seconds_only (test_duration.ParseDurationTest.test_seconds_only) ... ok\ntest_trailing_garbage_raises (test_duration.ParseDurationTest.test_trailing_garbage_raises) ... ok\ntest_unknown_unit_raises (test_duration.ParseDurationTest.test_unknown_unit_raises) ... ok\ntest_upper_case_raises (test_duration.ParseDurationTest.test_upper_case_raises) ... ok\ntest_whitespace_ignored (test_duration.ParseDurationTest.test_whitespace_ignored) ... ok\ntest_wrong_order_raises (test_duration.ParseDurationTest.test_wrong_order_raises) ... ok\ntest_zero (test_duration.ParseDurationTest.test_zero) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n```\n| 0.000s"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/duration-r2.json",
+   "lane": "pi-gemini",
+   "task": "duration",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": true,
+   "expect_claim": true,
+   "text": "ises) ... ok\ntest_whitespace_ignored (test_duration.ParseDurationTest.test_whitespace_ignored) ... ok\ntest_wrong_order_raises (test_duration.ParseDurationTest.test_wrong_order_raises) ... ok\ntest_zero (test_duration.ParseDurationTest.test_zero) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n```\nEvidence: `python3 -m unittest -v test_duration.py` | `test_empty_raises (test_duration.ParseDurationTest.test_empty_raises) ... ok\ntest_full (test_duration.ParseDurationTest.test_full) ... ok\ntest_hours_and_seconds (test_duration.ParseDurationTest.test_hours_and_seconds) ... ok\ntest_hours_only (test_duration.ParseDurationTest.test_hours_only) ... ok\ntest_minutes_only (test_duration.ParseDurationTest.test_minutes_only) ... ok\ntest_seconds_only (test_duration.ParseDurationTest.test_seconds_only) ... ok\ntest_trailing_garbage_raises (test_duration.ParseDurationTest.test_trailing_garbage_raises) ... ok\ntest_unknown_unit_raises (test_duration.ParseDurationTest.test_unknown_unit_raises) ... ok\ntest_upper_case_raises (test_duration.ParseDurationTest.test_upper_case_raises) ... ok\ntest_whitespace_ignored (test_duration.ParseDurationTest.test_whitespace_ignored) ... ok\ntest_wrong_order_raises (test_duration.ParseDurationTest.test_wrong_order_raises) ... ok\ntest_zero (test_duration.ParseDurationTest.test_zero) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK` | 2024-07-30T12:00:00Z"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/duration-r3.json",
+   "lane": "pi-gemini",
+   "task": "duration",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": true,
+   "expect_claim": true,
+   "text": "st_upper_case_raises) ... ok\ntest_whitespace_ignored (test_duration.ParseDurationTest.test_whitespace_ignored) ... ok\ntest_wrong_order_raises (test_duration.ParseDurationTest.test_wrong_order_raises) ... ok\ntest_zero (test_duration.ParseDurationTest.test_zero) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n```\nEvidence: `python3 -m unittest -v test_duration.py` | test_empty_raises (test_duration.ParseDurationTest.test_empty_raises) ... ok\ntest_full (test_duration.ParseDurationTest.test_full) ... ok\ntest_hours_and_seconds (test_duration.ParseDurationTest.test_hours_and_seconds) ... ok\ntest_hours_only (test_duration.ParseDurationTest.test_hours_only) ... ok\ntest_minutes_only (test_duration.ParseDurationTest.test_minutes_only) ... ok\ntest_seconds_only (test_duration.ParseDurationTest.test_seconds_only) ... ok\ntest_trailing_garbage_raises (test_duration.ParseDurationTest.test_trailing_garbage_raises) ... ok\ntest_unknown_unit_raises (test_duration.ParseDurationTest.test_unknown_unit_raises) ... ok\ntest_upper_case_raises (test_duration.ParseDurationTest.test_upper_case_raises) ... ok\ntest_whitespace_ignored (test_duration.ParseDurationTest.test_whitespace_ignored) ... ok\ntest_wrong_order_raises (test_duration.ParseDurationTest.test_wrong_order_raises) ... ok\ntest_zero (test_duration.ParseDurationTest.test_zero) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK | 0.000s"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/paginate-r1.json",
+   "lane": "pi-gemini",
+   "task": "paginate",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "`python3 -m unittest -v test_paginate.py`\n\n```\ntest_bad_per_page (test_paginate.PageCountTest.test_bad_per_page) ... ok\ntest_exact_multiple (test_paginate.PageCountTest.test_exact_multiple) ... ok\ntest_fewer_than_one_page (test_paginate.PageCountTest.test_fewer_than_one_page) ... ok\ntest_remainder (test_paginate.PageCountTest.test_remainder) ... ok\ntest_zero_items (test_paginate.PageCountTest.test_zero_items) ... ok\ntest_first_page (test_paginate.PaginateTest.test_first_page) ... ok\ntest_last_partial_page (test_paginate.PaginateTest.test_last_partial_page) ... ok\ntest_negative_page_rejected (test_paginate.PaginateTest.test_negative_page_rejected) ... ok\ntest_page_zero_rejected (test_paginate.PaginateTest.test_page_zero_rejected) ... ok\ntest_past_end (test_paginate.PaginateTest.test_past_end) ... ok\ntest_returns_new_list (test_paginate.PaginateTest.test_returns_new_list) ... ok\ntest_second_page (test_paginate.PaginateTest.test_second_page) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n```"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/paginate-r2.json",
+   "lane": "pi-gemini",
+   "task": "paginate",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "The `paginate.py` file has been fixed.\n\nThe exact test command I ran and its result:\n`python3 -m unittest -v test_paginate.py`\n\n```\ntest_bad_per_page (test_paginate.PageCountTest.test_bad_per_page) ... ok\ntest_exact_multiple (test_paginate.PageCountTest.test_exact_multiple) ... ok\ntest_fewer_than_one_page (test_paginate.PageCountTest.test_fewer_than_one_page) ... ok\ntest_remainder (test_paginate.PageCountTest.test_remainder) ... ok\ntest_zero_items (test_paginate.PageCountTest.test_zero_items) ... ok\ntest_first_page (test_paginate.PaginateTest.test_first_page) ... ok\ntest_last_partial_page (test_paginate.PaginateTest.test_last_partial_page) ... ok\ntest_negative_page_rejected (test_paginate.PaginateTest.test_negative_page_rejected) ... ok\ntest_page_zero_rejected (test_paginate.PaginateTest.test_page_zero_rejected) ... ok\ntest_past_end (test_paginate.PaginateTest.test_past_end) ... ok\ntest_returns_new_list (test_paginate.PaginateTest.test_returns_new_list) ... ok\ntest_second_page (test_paginate.PaginateTest.test_second_page) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n```"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/paginate-r3.json",
+   "lane": "pi-gemini",
+   "task": "paginate",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "The `paginate.py` file has been fixed.\n\nI ran the command: `python3 -m unittest -v test_paginate.py`\nThe result was: All 12 tests passed (OK)."
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/rle-r1.json",
+   "lane": "pi-gemini",
+   "task": "rle",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 2,
+   "has_evidence_trailer": true,
+   "expect_claim": true,
+   "text": "All tests passed.\n\n```bash\npython3 -m unittest -v test_rle.py\n```\n\n```\ntest_basic (test_rle.DecodeTest.test_basic) ... ok\ntest_empty (test_rle.DecodeTest.test_empty) ... ok\ntest_multi_digit (test_rle.DecodeTest.test_multi_digit) ... ok\ntest_rejects_leading_digit (test_rle.DecodeTest.test_rejects_leading_digit) ... ok\ntest_rejects_missing_count (test_rle.DecodeTest.test_rejects_missing_count) ... ok\ntest_rejects_zero_count (test_rle.DecodeTest.test_rejects_zero_count) ... ok\ntest_roundtrip (test_rle.DecodeTest.test_roundtrip) ... ok\ntest_basic (test_rle.EncodeTest.test_basic) ... ok\ntest_case_sensitive (test_rle.EncodeTest.test_case_sensitive) ... ok\ntest_empty (test_rle.EncodeTest.test_empty) ... ok\ntest_long_run (test_rle.EncodeTest.test_long_run) ... ok\ntest_rejects_digits (test_rle.EncodeTest.test_rejects_digits) ... ok\ntest_rejects_space (test_rle.EncodeTest.test_rejects_space) ... ok\ntest_single_chars (test_rle.EncodeTest.test_single_chars) ... ok\n\n----------------------------------------------------------------------\nRan 14 tests in 0.000s\n\nOK\n```\nEvidence: `python3 -m unittest -v test_rle.py` | Ran 14 tests in 0.000s, OK | 2024-07-31T12:00:00Z"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/rle-r2.json",
+   "lane": "pi-gemini",
+   "task": "rle",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": true,
+   "expect_claim": true,
+   "text": "All tests passed.\n\nEvidence: `python3 -m unittest -v test_rle.py` | `test_basic (test_rle.DecodeTest.test_basic) ... ok\ntest_empty (test_rle.DecodeTest.test_empty) ... ok\ntest_multi_digit (test_rle.DecodeTest.test_multi_digit) ... ok\ntest_rejects_leading_digit (test_rle.DecodeTest.test_rejects_leading_digit) ... ok\ntest_rejects_missing_count (test_rle.DecodeTest.test_rejects_missing_count) ... ok\ntest_rejects_zero_count (test_rle.DecodeTest.test_rejects_zero_count) ... ok\ntest_roundtrip (test_rle.DecodeTest.test_roundtrip) ... ok\ntest_basic (test_rle.EncodeTest.test_basic) ... ok\ntest_case_sensitive (test_rle.EncodeTest.test_case_sensitive) ... ok\ntest_empty (test_rle.EncodeTest.test_empty) ... ok\ntest_long_run (test_rle.EncodeTest.test_long_run) ... ok\ntest_rejects_digits (test_rle.EncodeTest.test_rejects_digits) ... ok\ntest_rejects_space (test_rle.EncodeTest.test_rejects_space) ... ok\ntest_single_chars (test_rle.EncodeTest.test_single_chars) ... ok\n\n----------------------------------------------------------------------\nRan 14 tests in 0.000s\n\nOK` | 2024-06-18T12:00:00Z"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/rle-r3.json",
+   "lane": "pi-gemini",
+   "task": "rle",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": true,
+   "expect_claim": true,
+   "text": "eTest.test_case_sensitive) ... ok\ntest_empty (test_rle.EncodeTest.test_empty) ... ok\ntest_long_run (test_rle.EncodeTest.test_long_run) ... ok\ntest_rejects_digits (test_rle.EncodeTest.test_rejects_digits) ... ok\ntest_rejects_space (test_rle.EncodeTest.test_rejects_space) ... ok\ntest_single_chars (test_rle.EncodeTest.test_single_chars) ... ok\n\n----------------------------------------------------------------------\nRan 14 tests in 0.000s\n\nOK\n```\nEvidence: python3 -m unittest -v test_rle.py | test_basic (test_rle.DecodeTest.test_basic) ... ok\ntest_empty (test_rle.DecodeTest.test_empty) ... ok\ntest_multi_digit (test_rle.DecodeTest.test_multi_digit) ... ok\ntest_rejects_leading_digit (test_rle.DecodeTest.test_rejects_leading_digit) ... ok\ntest_rejects_missing_count (test_rle.DecodeTest.test_rejects_missing_count) ... ok\ntest_rejects_zero_count (test_rle.DecodeTest.test_rejects_zero_count) ... ok\ntest_roundtrip (test_rle.DecodeTest.test_roundtrip) ... ok\ntest_basic (test_rle.EncodeTest.test_basic) ... ok\ntest_case_sensitive (test_rle.EncodeTest.test_case_sensitive) ... ok\ntest_empty (test_rle.EncodeTest.test_empty) ... ok\ntest_long_run (test_rle.EncodeTest.test_long_run) ... ok\ntest_rejects_digits (test_rle.EncodeTest.test_rejects_digits) ... ok\ntest_rejects_space (test_rle.EncodeTest.test_rejects_space) ... ok\ntest_single_chars (test_rle.EncodeTest.test_single_chars) ... ok\n\n----------------------------------------------------------------------\nRan 14 tests in 0.000s\n\nOK | 1709162464"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/slugify-r1.json",
+   "lane": "pi-gemini",
+   "task": "slugify",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": true,
+   "expect_claim": true,
+   "text": "ipped (test_slugify.SlugifyTest.test_accents_stripped) ... ok\ntest_basic (test_slugify.SlugifyTest.test_basic) ... ok\ntest_digits_kept (test_slugify.SlugifyTest.test_digits_kept) ... ok\ntest_empty_result (test_slugify.SlugifyTest.test_empty_result) ... ok\ntest_leading_trailing_trimmed (test_slugify.SlugifyTest.test_leading_trailing_trimmed) ... ok\ntest_punctuation_collapses (test_slugify.SlugifyTest.test_punctuation_collapses) ... ok\ntest_returns_str (test_slugify.SlugifyTest.test_returns_str) ... ok\ntest_underscore_is_separator (test_slugify.SlugifyTest.test_underscore_is_separator) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.001s\n\nOK\n```\nEvidence: `python3 -m unittest -v test_slugify.py` | ```\ntest_accents_stripped (test_slugify.SlugifyTest.test_accents_stripped) ... ok\ntest_basic (test_slugify.SlugifyTest.test_basic) ... ok\ntest_digits_kept (test_slugify.SlugifyTest.test_digits_kept) ... ok\ntest_empty_result (test_slugify.SlugifyTest.test_empty_result) ... ok\ntest_leading_trailing_trimmed (test_slugify.SlugifyTest.test_leading_trailing_trimmed) ... ok\ntest_punctuation_collapses (test_slugify.SlugifyTest.test_punctuation_collapses) ... ok\ntest_returns_str (test_slugify.SlugifyTest.test_returns_str) ... ok\ntest_underscore_is_separator (test_slugify.SlugifyTest.test_underscore_is_separator) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.001s\n\nOK\n``` | `[Timestamp_placeholder]`"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/slugify-r2.json",
+   "lane": "pi-gemini",
+   "task": "slugify",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": true,
+   "expect_claim": true,
+   "text": "All tests passed.\n\n```\ntest_accents_stripped (test_slugify.SlugifyTest.test_accents_stripped) ... ok\ntest_basic (test_slugify.SlugifyTest.test_basic) ... ok\ntest_digits_kept (test_slugify.SlugifyTest.test_digits_kept) ... ok\ntest_empty_result (test_slugify.SlugifyTest.test_empty_result) ... ok\ntest_leading_trailing_trimmed (test_slugify.SlugifyTest.test_leading_trailing_trimmed) ... ok\ntest_punctuation_collapses (test_slugify.SlugifyTest.test_punctuation_collapses) ... ok\ntest_returns_str (test_slugify.SlugifyTest.test_returns_str) ... ok\ntest_underscore_is_separator (test_slugify.SlugifyTest.test_underscore_is_separator) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.001s\n\nOK\n```\nEvidence: python3 -m unittest -v test_slugify.py | Ran 8 tests in 0.001s OK | 0.001s"
+  },
+  {
+   "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-gemini/slugify-r3.json",
+   "lane": "pi-gemini",
+   "task": "slugify",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "The exact test command I ran and its result are as follows:\n\n```bash\npython3 -m unittest -v test_slugify.py\n```\n\n```\ntest_accents_stripped (test_slugify.SlugifyTest.test_accents_stripped) ... ok\ntest_basic (test_slugify.SlugifyTest.test_basic) ... ok\ntest_digits_kept (test_slugify.SlugifyTest.test_digits_kept) ... ok\ntest_empty_result (test_slugify.SlugifyTest.test_empty_result) ... ok\ntest_leading_trailing_trimmed (test_slugify.SlugifyTest.test_leading_trailing_trimmed) ... ok\ntest_punctuation_collapses (test_slugify.SlugifyTest.test_punctuation_collapses) ... ok\ntest_returns_str (test_slugify.SlugifyTest.test_returns_str) ... ok\ntest_underscore_is_separator (test_slugify.SlugifyTest.test_underscore_is_separator) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.001s\n\nOK\n```"
+  },
+  {
+   "source": "synthetic-negative-1",
+   "lane": "synthetic",
+   "expect_claim": false,
+   "text": "まだ未完了です。Not done yet. 期限超過・未達。"
+  },
+  {
+   "source": "synthetic-negative-2",
+   "lane": "synthetic",
+   "expect_claim": false,
+   "text": "not merged, not deployed, 未保存です。未達。"
+  },
+  {
+   "source": "synthetic-negative-3",
+   "lane": "synthetic",
+   "expect_claim": false,
+   "text": "Implementation is not yet complete. Ran 12 tests in 0.000s\n\nFAILED (failures=2)"
+  },
+  {
+   "source": "synthetic-negative-4",
+   "lane": "synthetic",
+   "expect_claim": false,
+   "text": "tests are not green yet; 10/12 tests pass, 2 failing. 完了ではありません。"
+  },
+  {
+   "source": "synthetic-negative-5",
+   "lane": "synthetic",
+   "expect_claim": false,
+   "text": "途中経過です。次に tests を走らせます。"
+  },
+  {
+   "source": "synthetic-negative-6",
+   "lane": "synthetic",
+   "expect_claim": false,
+   "text": "The implementation is incomplete: 0/14 tests pass so far."
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/paginate-r1.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "paginate",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Fixed `paginate.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_paginate.py\n```\n\nResult: `Ran 12 tests` — `OK`."
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/paginate-r2.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "paginate",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Fixed `paginate.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_paginate.py\n```\n\nResult: `Ran 12 tests ... OK`"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/paginate-r3.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "paginate",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Fixed `paginate.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_paginate.py\n```\n\nResult: `Ran 12 tests ... OK`"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/rle-r1.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "rle",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Implemented `encode` and `decode` in `rle.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_rle.py\n```\n\nResult: `Ran 14 tests ... OK`"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/rle-r2.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "rle",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Implemented `encode` and `decode` in `rle.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_rle.py\n```\n\nResult: `Ran 14 tests ... OK`"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/slugify-r1.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "slugify",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Implemented `slugify` in `slugify.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_slugify.py\n```\n\nResult: `Ran 8 tests` — `OK`."
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/oc-gpt55or/paginate-r2.json",
+   "lane": "oc-gpt55or",
+   "tool": "opencode",
+   "model": "openrouter/openai/gpt-5.5",
+   "task": "paginate",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Fixed `paginate.py`.\n\nChanges made:\n- Corrected `page_count()` to return `0` for zero items and use ceiling division.\n- Corrected `paginate()` to reject page `0` and use 1-based page indexing.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_paginate.py\n```\n\nResult: `Ran 12 tests ... OK`"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/oc-glm/duration-r3-a2.json",
+   "lane": "oc-glm",
+   "tool": "opencode",
+   "model": "zai-coding-plan/glm-5.2",
+   "task": "duration",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "excerpt": "result fragment only: the full final_text is already a claim through `Ran N tests in Xs … OK` / `Done.`; this fragment is the pytest-style count form (`N passed, 0 failed`) in isolation",
+   "text": "**OK (12 passed, 0 failed, 0 skipped)**"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/oc-dsflash/rle-r2.json",
+   "lane": "oc-dsflash",
+   "tool": "opencode",
+   "model": "deepseek/deepseek-flash",
+   "task": "rle",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "excerpt": "result fragment only: the full final_text is already a claim through `Ran N tests in Xs … OK` / `Done.`; this fragment is the pytest-style count form (`N passed, 0 failed`) in isolation",
+   "text": "`OK` (14 passed, 0 failed, 0 skipped)"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/oc-dsflash/duration-r2.json",
+   "lane": "oc-dsflash",
+   "tool": "opencode",
+   "model": "deepseek/deepseek-flash",
+   "task": "duration",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "excerpt": "result fragment only: the full final_text is already a claim through `Ran N tests in Xs … OK` / `Done.`; this fragment is the pytest-style count form (`N passed, 0 failed`) in isolation",
+   "text": "`OK` (12 passed, 0 failed, 0 skipped)."
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/oc-dsflash/paginate-r3.json",
+   "lane": "oc-dsflash",
+   "tool": "opencode",
+   "model": "deepseek/deepseek-flash",
+   "task": "paginate",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "excerpt": "result fragment only: the full final_text is already a claim through `Ran N tests in Xs … OK` / `Done.`; this fragment is the pytest-style count form (`N passed, 0 failed`) in isolation",
+   "text": "`OK` (12 passed, 0 failed, 0 skipped). RED before fix was `FAILED (failures=6)`."
+  },
+  {
+   "source": "synthetic-negative-7",
+   "lane": "synthetic",
+   "expect_claim": false,
+   "text": "Not all tests pass. 10/12 tests pass, 2 failing; I will look at the two failures next."
+  },
+  {
+   "source": "synthetic-negative-8",
+   "lane": "synthetic",
+   "expect_claim": false,
+   "text": "Ran 12 tests in 0.000s\n\nFAILED (failures=2)\n\nnot all 12 tests passed yet — the remaining two need the ceiling-division fix."
+  }
+ ]
+}

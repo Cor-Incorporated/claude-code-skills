@@ -520,5 +520,47 @@ if [ -z "$o69h" ] && printf '%s' "$o69" | grep -q '"would_block": true' && print
    && printf '%s' "$o69b" | grep -q '"would_block": true' && grep -q '"rule": "evidence.loop-guard.would-block"' "$AIDD_LEDGER_PATH" \
    && printf '%s' "$o69c" | grep -q '"rule": "evidence.max-blocks"' && ! printf '%s' "$o69c" | grep -q 'would_block'; then ok "T69 max-blocks / loop-guard releases evaluate the text: would-block row + visible note on fabricated evidence, none on a benign report"; else bad "T69: [$o69h] [$o69] [$o69b] [$o69c]"; fi
 
+# ---- aidd-governance#181 §6-3 (2026-10-15): the pi-dsflash lane (deepseek-v4-flash) ended 12/12 runs with no Evidence
+#      trailer and 0 blocks under control_sha cbea3f06. Its reports open with "All 12 tests pass." / "Result: OK (14/14 tests
+#      pass)" / "Ran 12 tests in 0.000s — OK" — none of which COMPLETION_CLAIM_RE matched, so stop_check never asked for
+#      evidence. Fixture = the real final_text of every pi-dsflash / pi-gemini run (tests/fixtures/h17-claim-phrases.json).
+# (70) every recorded report is a completion claim; every negated / unmet / failing form is still not one
+o70="$(python3 -I - "$ROOT" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_text import has_completion_claim
+fx = json.load(open(sys.argv[1] + "/tests/fixtures/h17-claim-phrases.json", encoding="utf-8"))["cases"]
+bad = [f"{c['source']} expect_claim={c['expect_claim']} got={has_completion_claim(c['text'])} text={c['text'][:70]!r}"
+       for c in fx if has_completion_claim(c["text"]) != c["expect_claim"]]
+print(f"{len(fx) - len(bad)}/{len(fx)} fixtures classified as recorded")
+print("\n".join(bad))
+PY
+)"
+if printf '%s' "$o70" | grep -q 'expect_claim='; then bad "T70 fixture classification: $o70"; else ok "T70 #181 final texts are claims, negated forms are not ($o70)"; fi
+
+# (70b) end to end: the real pi-dsflash rle-r1 report (no trailer) is blocked at Stop; the honest unmet form is not
+T70_TEXT="$(python3 -I -c 'import json,sys; fx=json.load(open(sys.argv[1]))["cases"]; print(next(c["text"] for c in fx if c["source"].endswith("pi-dsflash/rle-r1.json")))' "$ROOT/tests/fixtures/h17-claim-phrases.json")"
+o70b="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg70\",\"last_assistant_message\":$(j "$T70_TEXT")}" | bash "$HOOK")"
+o70c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg70c","last_assistant_message":"tests are not green yet; 10/12 tests pass, 2 failing. Implementation is not yet complete."}' | bash "$HOOK")"
+if printf '%s' "$o70b" | grep -q 'completion claim without' && [ -z "$o70c" ]; then ok "T70b pi-dsflash 'Result: OK (14/14 tests pass)' report blocked without trailer; partial/negated progress report allowed"; else bad "T70b: [$o70b] [$o70c]"; fi
+
+# ---- PR #414 residuals (2026-10-15). (a) over-match: "Not all tests pass" / "not all 12 tests passed" is an honest partial
+#      report, but NEGATED_COMPLETION_RE did not remove it, so `all … pass(ed)` inside it was read as a claim and the Stop was
+#      blocked. (b) under-match, same measurement (#181 runs on aidd-governance main 4785695b): the gpt-5.5 lane (pi-gpt55 ×6,
+#      oc-gpt55or ×1) ends "Fixed `paginate.py`. … Result: `Ran 12 tests` — `OK`." (no duration) and OpenCode reports count
+#      "OK (12 passed, 0 failed, 0 skipped)"; neither form was a claim, 0 blocks, no trailer. Fixtures carry the real texts.
+# (71) honest partial report with "not all … pass(ed)" is allowed at Stop; the same words without the negation are blocked
+o71a="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg71a","last_assistant_message":"Not all tests pass. 10/12 tests pass, 2 failing; I will look at the two failures next."}' | bash "$HOOK")"
+o71b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg71b","last_assistant_message":"Ran 12 tests in 0.000s\n\nFAILED (failures=2)\n\nnot all 12 tests passed yet — the remaining two need the ceiling-division fix."}' | bash "$HOOK")"
+o71c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg71c","last_assistant_message":"All 12 tests passed."}' | bash "$HOOK")"
+if [ -z "$o71a" ] && [ -z "$o71b" ] && printf '%s' "$o71c" | grep -q 'completion claim without'; then ok "T71 'Not all tests pass' / 'not all 12 tests passed yet' partial reports allowed; 'All 12 tests passed.' still blocked"; else bad "T71: [$o71a] [$o71b] [$o71c]"; fi
+
+# (71b) end to end: the real pi-gpt55 paginate-r1 report ("Fixed `paginate.py`. … Result: `Ran 12 tests` — `OK`.", no trailer)
+#       and the real OpenCode count form are blocked at Stop
+T71_TEXT="$(python3 -I -c 'import json,sys; fx=json.load(open(sys.argv[1]))["cases"]; print(next(c["text"] for c in fx if c["source"].endswith("pi-gpt55/paginate-r1.json")))' "$ROOT/tests/fixtures/h17-claim-phrases.json")"
+o71d="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg71d\",\"last_assistant_message\":$(j "$T71_TEXT")}" | bash "$HOOK")"
+o71e="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg71e","last_assistant_message":"Result: **OK (12 passed, 0 failed, 0 skipped)**"}' | bash "$HOOK")"
+if printf '%s' "$o71d" | grep -q 'completion claim without' && printf '%s' "$o71e" | grep -q 'completion claim without'; then ok "T71b pi-gpt55 'Fixed paginate.py … Ran 12 tests — OK' and OpenCode 'OK (12 passed, 0 failed)' reports blocked without trailer"; else bad "T71b: [$o71d] [$o71e]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

@@ -19,9 +19,28 @@ PERSIST_WORDS = (
     r"保存済み|保存した|保存しました|保存完了|deployed|配備済み|配備した|配備しました|反映済み|反映した|反映しました|"
     r"applied|installed|インストール済み|書き込み済み|written to|\bsaved\b|persisted"
 )
+# aidd-governance#181 §6-3 (2026-10-15): the pi-dsflash lane ended 12/12 runs with "All 12 tests pass." /
+# "Result: OK (14/14 tests pass)" / "Ran 12 tests in 0.000s — OK" and no Evidence trailer, and was never blocked
+# (the old alternative was `all (tests )?pass(ed)?`: a count between "all" and "tests" defeated it).  The test-result
+# phrases below are the surface forms of those reports (C15: form only).  Ratios bind numerator = denominator
+# (`14/14`), so a partial "10/12 tests pass" progress report is not a completion claim.
+# PR #414 residuals (same measurement, aidd-governance main 4785695b): the gpt-5.5 lane (pi-gpt55 ×6, oc-gpt55or ×1) ends
+# "Fixed `paginate.py`. … Result: `Ran 12 tests` — `OK`." with no duration (0 blocks, no trailer), and OpenCode reports count
+# "OK (12 passed, 0 failed, 0 skipped)".  The duration is therefore optional (the gap without it is punctuation only, so
+# "Ran 12 tests, 2 not OK" stays out) and pytest-style counts are a claim only with an explicit "0 failed/failures".
+# "14 passed in 0.12s" (pytest, no count of failures) is NOT a claim: no real run has produced it yet (fixture first).
+TEST_RESULT_CLAIM = (
+    r"all (?:\d+ )?(?:tests? )?pass(?:ed)?|"
+    r"(?P<ratio>\d{1,4})\s*/\s*(?P=ratio) (?:tests? )?pass(?:ed)?|"
+    r"ran \d+ tests?(?: in [\d.]+\s*s[^\n]{0,8}|[\s`*—–\-→.…:]{0,8})\n*[\s*`]*ok\b|"
+    r"\bok\b\W{0,4}\(\s*(?P<okratio>\d{1,4})\s*/\s*(?P=okratio)\b|"
+    r"[1-9]\d{0,3} passed, 0 fail(?:ed|ures?)\b|"
+    r"tests? (?:are|is) (?:all )?green|"
+    r"implementation (?:is )?complete(?:d)?"
+)
 COMPLETION_CLAIM_RE = re.compile(
     r"(?<![A-Za-z])(verified|完了|根因確定|検証済み|実装済み|解決済み|対応済み|"
-    r"done|all (tests )?pass(ed)?|全件\s*PASS|merged|マージ済み|マージした|pushed|push済み|published|"
+    r"done|" + TEST_RESULT_CLAIM + r"|全件\s*PASS|merged|マージ済み|マージした|pushed|push済み|published|"
     + PERSIST_WORDS
     + r")(?![A-Za-z])",
     re.IGNORECASE,
@@ -69,6 +88,9 @@ NEGATED_COMPLETION_RE = re.compile(
     r"(?:完了|検証|push|マージ|配備)(?:には|は|に)?(?:至って|達して|届いて)(?:いない|いません|おらず)|nothing (?:is|has been|was) (?:done|verified|pushed|merged|deployed|saved)|"
     r"(?:完了|マージ|配備|保存|反映|push|deploy)(?:は|を)?(?:まだ)?(?:してい(?:ない|ません)|していない|できていない|ではない|していません)|"
     r"not (?:yet )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed)|"
+    # PR #414 residual: "Not all tests pass" / "not all 12 tests passed yet" is an honest partial report; without this line the
+    # `all … pass(ed)` inside it was read as a claim (over-match).
+    r"not all (?:\d+ )?(?:(?:the )?tests? )?pass(?:ed|ing)?(?: yet)?|"
     r"isn'?t (?:done|verified|merged|deployed|saved)|incomplete|un(?:merged|deployed|saved|pushed))",
     re.IGNORECASE,
 )
