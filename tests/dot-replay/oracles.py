@@ -25,6 +25,55 @@ LIB = ROOT / "hooks" / "lib"
 sys.path.insert(0, str(LIB))
 
 
+def _runtime(name: str, candidates: list[str], probe: list[str]) -> str | None:
+    """First candidate that exists and passes `probe` (exit 0)."""
+    import shutil
+
+    for c in candidates:
+        path = shutil.which(c) if "/" not in c else (c if os.path.exists(c) else None)
+        if not path:
+            continue
+        try:
+            if (
+                subprocess.run(
+                    [path, *probe], capture_output=True, timeout=20
+                ).returncode
+                == 0
+            ):
+                return path
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return None
+
+
+BUN = (
+    _runtime("bun", ["bun", str(Path.home() / ".bun/bin/bun")], ["--version"]) or "bun"
+)
+NODE = (
+    _runtime(
+        "node",
+        [
+            os.environ.get(
+                "NODE_BIN", ""
+            ),  # the same override tests/test-pi-extension.sh honours
+            str(
+                Path.home() / ".local/share/mise/installs/node/22.17.1/bin/node"
+            ),  # this machine's mise install
+            "node",
+        ],
+        ["-e", "process.exit(parseInt(process.versions.node)>=22?0:1)"],
+    )
+    or "node"
+)
+RUNTIME_OK = {
+    "opencode": _runtime("bun", [BUN], ["--version"]) is not None,
+    "pi": _runtime(
+        "node", [NODE], ["-e", "process.exit(parseInt(process.versions.node)>=22?0:1)"]
+    )
+    is not None,
+}
+
+
 class Ctx:
     def __init__(self, entry: dict, state_dir: Path, env: dict):
         self.entry = (
@@ -75,8 +124,38 @@ class Ctx:
             "claude": "session_id",
             "codex": "session_id",
             "cursor": "conversation_id",
+            "opencode": "session_id",
+            "pi": "session_id",
         }[agent]
         payload.setdefault(key, self.sid)
+        # aidd-governance#186 P2-6: the OpenCode plugin and the Pi extension are driven through the real
+        # plugin / extension file (repo or deployed) by a thin driver that maps the hook payload onto the
+        # harness's own hook API — the python oracle they spawn is this run's entry["cc"].
+        if agent == "opencode":
+            return self.run(
+                [BUN, "run", str(HERE / "opencode_driver.ts")],
+                payload,
+                {
+                    "AIDD_OC_PLUGIN": str(self.entry["opencode"]),
+                    "AIDD_CC_PY": str(self.entry["cc"]),
+                    **(extra_env or {}),
+                },
+            )
+        if agent == "pi":
+            return self.run(
+                [
+                    NODE,
+                    "--experimental-strip-types",
+                    "--no-warnings",
+                    str(HERE / "pi_driver.mts"),
+                ],
+                payload,
+                {
+                    "AIDD_PI_EXT": str(self.entry["pi"]),
+                    "AIDD_CC_PY": str(self.entry["cc"]),
+                    **(extra_env or {}),
+                },
+            )
         return self.run(["bash", str(self.entry[agent])], payload, extra_env)
 
     def cc(
@@ -103,6 +182,8 @@ class Ctx:
 
 def _blocked(rec: dict, agent: str) -> bool:
     out = rec["stdout"]
+    if agent in ("opencode", "pi"):
+        return '"decision": "block"' in out
     if agent == "cursor":
         return (
             '"permission":"deny"' in out.replace(" ", "") or "followup_message" in out
@@ -335,11 +416,13 @@ def o_iteration(ctx: Ctx, agent: str) -> dict:
 
 
 def o_reask(ctx: Ctx, agent: str) -> dict:
-    if agent == "cursor":
+    if agent in ("cursor", "opencode", "pi"):
         return {
             "incident_blocked": False,
             "benign_allowed": True,
-            "evidence": {"note": "cursor has no question-tool hook: BLOCKED_PLATFORM"},
+            "evidence": {
+                "note": f"{agent} has no question-tool hook: BLOCKED_PLATFORM"
+            },
         }
     ctx.hook(
         agent,
@@ -399,7 +482,13 @@ def o_source_set(ctx: Ctx, agent: str) -> dict:
 
 
 def _cc_agent(agent: str) -> str:
-    return {"claude": "claude-code", "codex": "codex", "cursor": "cursor"}[agent]
+    return {
+        "claude": "claude-code",
+        "codex": "codex",
+        "cursor": "cursor",
+        "opencode": "opencode",
+        "pi": "pi",
+    }[agent]
 
 
 # ---- evaluator-side (python API, no harness wire) -----------------------------

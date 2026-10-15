@@ -71,4 +71,8 @@ assert r["released_continue"] is False and r["released_note"] and "max-blocks re
 print("PASS: T69-pi continuation budget exhausted / python max-blocks release -> visible [H17] evidence unverified note")
 PY
 if grep -q '"rule": "evidence.max-blocks.would-block"' "$SB/ledger.jsonl"; then pass=$((pass + 1)); echo "PASS: T69-pi would-block row in the H6 ledger"; else fail=$((fail + 1)); echo "FAIL: T69-pi no would-block row"; fi
+# aidd-governance#186 P2-2: an oracle that cannot be spawned leaves an H6 error row (decision unavailable), never a silent allow
+: >"$SB/err-ledger.jsonl"
+AIDD_CC_PY=/nonexistent/aidd_cc.py AIDD_LEDGER_PATH="$SB/err-ledger.jsonl" "$NODE" --experimental-strip-types --no-warnings "$SB/drive.mts" >/dev/null 2>&1 || true
+if grep -q '"event":"error"' "$SB/err-ledger.jsonl" && grep -q '"decision":"unavailable"' "$SB/err-ledger.jsonl" && grep -q '"agent":"pi"' "$SB/err-ledger.jsonl"; then pass=$((pass + 1)); echo "PASS: T84-pi missing oracle -> H6 error rows (unavailable), no silent pass"; else fail=$((fail + 1)); echo "FAIL: T84-pi no error row"; fi
 [ "$fail" -eq 0 ] && grep -q '"component": "H17"' "$SB/ledger.jsonl" && echo "PASS: H6 ledger rows written by the pi entry" || { echo "FAIL"; exit 1; }

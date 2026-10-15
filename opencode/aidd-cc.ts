@@ -11,12 +11,30 @@
 // so one oracle covers all four real entries.  Session key: sessionID.
 import os from "os"
 import path from "path"
+import { appendFileSync, mkdirSync } from "fs"
 
 const CC_PY = process.env.AIDD_CC_PY ?? path.join(os.homedir(), ".claude", "hooks", "lib", "aidd_cc.py")
 const AGENT = "opencode"
 const MAX_REPROMPTS = 2
 
 type Verdict = { decision?: string; reason?: string; rule?: string; problems?: string[] }
+
+// aidd-governance#186 P2-2: a spawn / parse failure of the oracle is a visible degradation (H6 error row),
+// never a silent allow.  Same row shape as aidd-cc-adapter.sh ledger_error().
+function ledgerError(rule: string, detail: string): void {
+  const ledger = process.env.AIDD_LEDGER_PATH ?? path.join(os.homedir(), ".claude", "hooks", "ledger", "guard-ledger.jsonl")
+  const row = {
+    ts: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+    component: "H17", hook: "aidd-cc", event: "error", decision: "unavailable", rule,
+    cmd_head: detail.slice(0, 120), source: process.env.AIDD_LEDGER_SOURCE ?? "real", session: "unset", agent: AGENT,
+  }
+  try {
+    mkdirSync(path.dirname(ledger), { recursive: true })
+    appendFileSync(ledger, JSON.stringify(row) + "\n")
+  } catch {
+    /* the ledger itself is unavailable: nothing else to write to */
+  }
+}
 
 async function cc(cmd: string, payload: Record<string, unknown>, extra: string[] = []): Promise<Verdict> {
   if (process.env.AIDD_CC_DISABLE === "1") return { decision: "allow", rule: "disabled" }
@@ -30,8 +48,13 @@ async function cc(cmd: string, payload: Record<string, unknown>, extra: string[]
     const out = await new Response(proc.stdout).text()
     await proc.exited
     const line = out.trim().split("\n").pop() ?? ""
-    return line ? (JSON.parse(line) as Verdict) : { decision: "allow", rule: "empty" }
+    if (!line) {
+      ledgerError(`python-exit-${proc.exitCode}:${cmd}`, "")
+      return { decision: "allow", rule: "empty" }
+    }
+    return JSON.parse(line) as Verdict
   } catch (e) {
+    ledgerError(`spawn-or-parse-error:${cmd}`, String(e))
     return { decision: "allow", rule: "error", reason: String(e) }
   }
 }
@@ -92,7 +115,6 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
       const sessionID = String(event.properties?.sessionID ?? "")
       if (!sessionID) return
       const n = reprompts.get(sessionID) ?? 0
-      if (n >= MAX_REPROMPTS) return
       let last = ""
       try {
         const res = await client.session.messages({ path: { id: sessionID } })
@@ -102,6 +124,15 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
         return
       }
       if (!last) return
+      if (n >= MAX_REPROMPTS) {
+        // aidd-governance#186 P3 (OpenCode silent exhaustion): the re-prompt budget is spent, but the
+        // final text is still evaluated through the python release path (--max-blocks 0), which writes
+        // an `evidence.max-blocks.would-block` H6 row when it would have blocked.  The user-visible annotation
+        // for headless runs is the one experimental.text.complete already appended to the text; this idle-time
+        // pass only makes the release auditable in the ledger (review 2026-10-16: ledger-only, not a UI note).
+        await cc("stop", { sessionID, last_assistant_message: last }, ["--max-blocks", "0", "--no-count"])
+        return
+      }
       const v = await cc("stop", { sessionID, last_assistant_message: last })
       if (v.decision !== "block") return
       reprompts.set(sessionID, n + 1)

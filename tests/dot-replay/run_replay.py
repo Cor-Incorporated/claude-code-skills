@@ -32,7 +32,7 @@ ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "hooks" / "lib"))
 import cases as C  # noqa: E402
-from oracles import Ctx  # noqa: E402
+from oracles import RUNTIME_OK, Ctx  # noqa: E402
 
 
 def sha(p: Path) -> str | None:
@@ -61,7 +61,43 @@ def registered_entries() -> dict:
         if "aidd-cc-cursor.sh" in h["command"]:
             out["cursor"] = Path(os.path.expanduser(h["command"]))
     out["cc"] = home / ".claude" / "hooks" / "lib" / "aidd_cc.py"
-    return out
+    out["opencode"] = home / ".config" / "opencode" / "plugins" / "aidd-cc.ts"
+    out["pi"] = home / ".pi" / "agent" / "extensions" / "aidd-cc.ts"
+    return {**out, **_control_set(home / ".claude" / "hooks" / "lib")}
+
+
+LIB_PINNED = (
+    "aidd_cc_controls.py",
+    "aidd_cc_text.py",
+    "aidd_cc_eval.py",
+    "aidd_cc_session.py",
+    "aidd-cc-adapter.sh",
+)
+
+
+def _control_set(lib: Path) -> dict:
+    """aidd-governance#186 P2-3: pin EVERY file the verdict depends on, not only aidd_cc.py and the
+    entry scripts — the #186 repair changed aidd_cc_controls.py / aidd_cc_text.py, which the old
+    summary could not tell apart."""
+    return {name: lib / name for name in LIB_PINNED}
+
+
+def control_shas(lib: Path) -> dict:
+    """control_sha / control_set_sha as computed by the lib under test (repo or deployed)."""
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); import aidd_cc_controls as c; import json; "
+        "print(json.dumps({'control_sha': c.control_sha(), 'control_set_sha': getattr(c, 'control_set_sha', lambda: None)()}))"
+    )
+    try:
+        p = subprocess.run(
+            [sys.executable, "-I", "-c", code, str(lib)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return json.loads(p.stdout.strip() or "{}")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
 
 
 def repo_entries() -> dict:
@@ -70,6 +106,9 @@ def repo_entries() -> dict:
         "codex": ROOT / "hooks" / "codex" / "aidd-cc-codex.sh",
         "cursor": ROOT / "hooks" / "cursor" / "aidd-cc-cursor.sh",
         "cc": ROOT / "hooks" / "lib" / "aidd_cc.py",
+        "opencode": ROOT / "opencode" / "aidd-cc.ts",
+        "pi": ROOT / "pi" / "aidd-cc.ts",
+        **_control_set(ROOT / "hooks" / "lib"),
     }
 
 
@@ -104,7 +143,13 @@ def verdicts(before: dict, fixed: dict, mut: dict) -> dict:
         "fixed": "PASS"
         if (fixed["incident_blocked"] and fixed["benign_allowed"])
         else ("ERROR" if fixed["incident_blocked"] is None else "FAIL"),
-        "mutation": "ERROR" if mut["incident_blocked"] is None else ("RED" if not (mut["incident_blocked"] and mut["benign_allowed"]) else "NOT_RED"),
+        "mutation": "ERROR"
+        if mut["incident_blocked"] is None
+        else (
+            "RED"
+            if not (mut["incident_blocked"] and mut["benign_allowed"])
+            else "NOT_RED"
+        ),
         "positive_control": "PASS" if fixed["benign_allowed"] else "FAIL",
     }
     v["gate"] = all(
@@ -119,6 +164,11 @@ def main() -> int:
     ap.add_argument("--deployed", action="store_true")
     ap.add_argument("--out")
     ap.add_argument("--only")
+    ap.add_argument(
+        "--require-all-arms",
+        action="store_true",
+        help="exit 1 when an opencode / pi arm was skipped for a missing runtime (acceptance runs)",
+    )
     args = ap.parse_args()
     entry = registered_entries() if args.deployed else repo_entries()
     out_dir = Path(
@@ -133,6 +183,7 @@ def main() -> int:
     }
     only = set(args.only.split(",")) if args.only else None
     results = []
+    skipped_arms: set[str] = set()
     for cid, spec in C.CASES.items():
         if only and cid not in only:
             continue
@@ -149,6 +200,16 @@ def main() -> int:
         rec["mutation_control"] = spec["mutate"]
         gates = []
         for agent in spec["agents"]:
+            if agent in RUNTIME_OK and not RUNTIME_OK[agent]:
+                # The arm's runtime (bun / node>=22) is not installed here: recorded, never counted as a pass.
+                rec["arms"][agent] = {
+                    "verdicts": {
+                        "gate": None,
+                        "skipped": f"runtime missing for {agent}",
+                    }
+                }
+                skipped_arms.add(agent)
+                continue
             before = run_arm(
                 spec["oracle"], agent, entry, state_root, env, {"AIDD_CC_DISABLE": "1"}
             )
@@ -177,7 +238,12 @@ def main() -> int:
         results.append(rec)
         print(
             f"{cid} {'GATE-OK' if rec['gate'] else 'GATE-FAIL'} "
-            + " ".join(f"{a}:{rec['arms'][a]['verdicts']}" for a in rec["arms"]),
+            + " ".join(
+                f"{a}:{rec['arms'][a]['verdicts']}"
+                for a in rec["arms"]
+                if "gate" in rec["arms"][a]["verdicts"]
+                and rec["arms"][a]["verdicts"]["gate"] is not None
+            ),
             flush=True,
         )
     summary = {
@@ -187,6 +253,8 @@ def main() -> int:
         "host": platform.node(),
         "python": platform.python_version(),
         "control_source_sha256": {k: sha(v) for k, v in entry.items()},
+        **control_shas(entry["cc"].parent),
+        "arm_runtime_skipped": sorted(skipped_arms),
         "actual_entry_mode": "registered" if args.deployed else "repo-path",
         "git_head": subprocess.run(
             ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
@@ -223,6 +291,11 @@ def main() -> int:
         )
     )
     print(f"written: {out_dir / 'replay-results.json'}")
+    if args.require_all_arms and skipped_arms:
+        print(
+            f"arms skipped for a missing runtime: {sorted(skipped_arms)} (--require-all-arms)"
+        )
+        return 1
     return 0 if summary["local_gate_ok"] == summary["counts"]["LOCAL"] else 1
 
 

@@ -515,7 +515,7 @@ P69b="{\"hook_event_name\":\"Stop\",\"session_id\":\"neg69b\",\"stop_hook_active
 o69b="$(printf '%s' "$P69b" | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent claude-code)"
 for i in 1 2; do printf '%s' '{"hook_event_name":"Stop","session_id":"neg69c","last_assistant_message":"実装完了しました。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK" >/dev/null; done
 o69c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg69c","last_assistant_message":"途中経過です。次に tests を走らせます。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent claude-code)"
-if [ -z "$o69h" ] && printf '%s' "$o69" | grep -q '"would_block": true' && printf '%s' "$o69" | grep -q 'evidence unverified (max-blocks released)' \
+if printf '%s' "$o69h" | grep -q '"systemMessage": *"\[H17\] evidence unverified (max-blocks released)' && ! printf '%s' "$o69h" | grep -q '"decision"' && printf '%s' "$o69" | grep -q '"would_block": true' && printf '%s' "$o69" | grep -q 'evidence unverified (max-blocks released)' \
    && grep -q '"rule": "evidence.max-blocks.would-block".*"session": "neg69"' "$AIDD_LEDGER_PATH" \
    && printf '%s' "$o69b" | grep -q '"would_block": true' && grep -q '"rule": "evidence.loop-guard.would-block"' "$AIDD_LEDGER_PATH" \
    && printf '%s' "$o69c" | grep -q '"rule": "evidence.max-blocks"' && ! printf '%s' "$o69c" | grep -q 'would_block'; then ok "T69 max-blocks / loop-guard releases evaluate the text: would-block row + visible note on fabricated evidence, none on a benign report"; else bad "T69: [$o69h] [$o69] [$o69b] [$o69c]"; fi
@@ -692,6 +692,58 @@ printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg79","prompt"
 if stat -c '%a' / >/dev/null 2>&1; then m79="$(stat -c '%a' "$SD79" "$SD79/sessions" "$SD79/sessions/claude-code__neg79.jsonl" "$SD79/sessions/claude-code__neg79.json" | tr '\n' ' ' | sed 's/ $//')"; else m79="$(stat -f '%Lp' "$SD79" "$SD79/sessions" "$SD79/sessions/claude-code__neg79.jsonl" "$SD79/sessions/claude-code__neg79.json" | tr '\n' ' ' | sed 's/ $//')"; fi
 export AIDD_CC_STATE_DIR="$SB/state"
 if [ "$m79" = "700 700 600 600" ]; then ok "T79 state dir 0700, session json/jsonl 0600 (re-tightened on write)"; else bad "T79: modes [$m79] (want 700 700 600 600)"; fi
+
+
+# ---- aidd-governance#186 entry-level residuals (P2-2 fail-open visibility / adapter visible note / P3-2 INHERIT path /
+#      P2-4 control set sha). T80-T83 committed red before the repair (fix/h17-entry-visibility).
+# (80) a max-blocks release that would have blocked, and a control crash, are visible at the Claude Code entry as a
+#      top-level systemMessage (never a decision); a benign release prints nothing
+for i in 1 2; do printf '%s' '{"hook_event_name":"Stop","session_id":"neg80","last_assistant_message":"実装完了しました。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK" >/dev/null; done
+o80="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg80\",\"last_assistant_message\":$(j "$T69_TEXT")}" | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK")"
+o80b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg80b","last_assistant_message":"完了です。"}' | AIDD_CC_STATE_DIR=/dev/null/nope bash "$HOOK")"
+o80c="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg80c","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | AIDD_CC_STATE_DIR=/dev/null/nope bash "$HOOK")"
+for i in 1 2; do printf '%s' '{"hook_event_name":"Stop","session_id":"neg80d","last_assistant_message":"実装完了しました。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK" >/dev/null; done
+o80d="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg80d","last_assistant_message":"途中経過です。次に tests を走らせます。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK")"
+if printf '%s' "$o80" | grep -q '"systemMessage": *"\[H17\] evidence unverified (max-blocks released)' && ! printf '%s' "$o80" | grep -q '"decision"' \
+   && printf '%s' "$o80b" | grep -q '"systemMessage": *"\[H17\] control error on Stop' && printf '%s' "$o80b" | grep -q 'UNVERIFIED' \
+   && printf '%s' "$o80c" | grep -q '"systemMessage": *"\[H17\] control error on PreToolUse' && ! printf '%s' "$o80c" | grep -q 'permissionDecision' \
+   && [ -z "$o80d" ]; then ok "T80 would-block release and control crash are visible systemMessages at the Claude entry; benign release silent"; else bad "T80: [$o80] [$o80b] [$o80c] [$o80d]"; fi
+
+# (81) P3-2: AIDD_CC_INHERIT only honours a session meta file inside this control's state dir
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg81p","prompt":"PR作成は承認、進めて"}' | bash "$HOOK" >/dev/null
+PMETA81="$AIDD_CC_STATE_DIR/sessions/claude-code__neg81p.json"; cp "$PMETA81" "$SB/elsewhere-neg81.json"
+o81="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg81c","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"PR作成を進めてよいですか？"}]}}' | AIDD_CC_INHERIT="$SB/elsewhere-neg81.json" bash "$HOOK")"
+o81b="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg81d","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"PR作成を進めてよいですか？"}]}}' | AIDD_CC_INHERIT="$PMETA81" bash "$HOOK")"
+if [ -z "$o81" ] && printf '%s' "$o81b" | grep -q 'already decided'; then ok "T81 INHERIT from outside the state dir is ignored; the parent's own meta still binds"; else bad "T81: [$o81] [$o81b]"; fi
+
+# (82) P2-4: the control set sha (python set + adapter) is pinned per run like cc_sha
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg82","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg82","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"},"tool_response":{"exit_code":0,"stdout":"x"}}' | bash "$HOOK" >/dev/null
+python3 -I - "$AIDD_CC_STATE_DIR/sessions/claude-code__neg82.jsonl" <<'PY2'
+import json, sys
+p = sys.argv[1]; rows = [json.loads(l) for l in open(p, encoding="utf-8") if l.strip()]
+assert "cc_set_sha" in rows[0], rows[0].keys()
+rows[0]["cc_set_sha"] = "feedface" * 8
+open(p, "w", encoding="utf-8").write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+PY2
+o82="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg82","last_assistant_message":"完了。\nEvidence: bash tests/ok.sh | x | 01:00"}' | bash "$HOOK")"
+if printf '%s' "$o82" | grep -q 'control set (python + adapter) changed'; then ok "T82 control set sha (python + adapter) pinned: a changed adapter during the run refuses acceptance"; else bad "T82: $o82"; fi
+
+# (83) P2-3: the replay summary pins every control file and both arms are present or explicitly skipped
+o83="$(python3 -I - "$SB/replay/replay-results.json" <<'PY2'
+import json, sys
+s = json.load(open(sys.argv[1], encoding="utf-8"))
+pins = s["control_source_sha256"]
+need = ["aidd_cc_controls.py", "aidd_cc_text.py", "aidd_cc_eval.py", "aidd_cc_session.py", "aidd-cc-adapter.sh", "opencode", "pi"]
+missing = [n for n in need if not pins.get(n)]
+arms = set()
+for r in s["results"]:
+    arms |= set(r.get("arms", {}).keys())
+print(json.dumps({"missing_pins": missing, "control_sha": bool(s.get("control_sha")), "control_set_sha": bool(s.get("control_set_sha")),
+                  "arms": sorted(arms), "skipped": s.get("arm_runtime_skipped")}))
+PY2
+)"
+if printf '%s' "$o83" | grep -q '"missing_pins": \[\]' && printf '%s' "$o83" | grep -q '"control_sha": true' && printf '%s' "$o83" | grep -q '"control_set_sha": true' && printf '%s' "$o83" | grep -q '"opencode"' && printf '%s' "$o83" | grep -q '"pi"'; then ok "T83 replay pins the whole control set and records the opencode / pi arms ($o83)"; else bad "T83: $o83"; fi
 
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

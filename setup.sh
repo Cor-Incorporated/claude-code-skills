@@ -103,6 +103,12 @@ cp "$REPO_DIR/opencode/aidd-cc.ts" "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-c
 python3 "$REPO_DIR/scripts/register-aidd-cc-hooks.py" \
   --codex "$HOME/.codex/hooks.json" --cursor "$HOME/.cursor/hooks.json" --opencode "$OPENCODE_CONFIG"
 echo "  Copied + registered H17 common control (codex / cursor / opencode)"
+# Pi (@earendil-works/pi-coding-agent) loads extensions from ~/.pi/agent/extensions. The extension is
+# deployed only where Pi is already set up (the directory exists); Pi itself is not installed here.
+if [ -d "$HOME/.pi/agent/extensions" ]; then
+  cp "$REPO_DIR/pi/aidd-cc.ts" "$HOME/.pi/agent/extensions/aidd-cc.ts"
+  echo "  Copied H17 Pi extension (~/.pi/agent/extensions/aidd-cc.ts)"
+fi
 
 # 6. Copy scripts
 echo "[6/9] Installing scripts..."

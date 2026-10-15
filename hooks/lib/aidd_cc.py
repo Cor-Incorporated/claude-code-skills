@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import aidd_cc_eval as ev  # noqa: E402
 from aidd_cc_controls import (  # noqa: E402
     _norm_key,
+    control_set_sha,
     control_sha,
     iteration_check,
     question_check,
@@ -209,6 +210,7 @@ def cmd_pre(args, payload):
             "tool": tool,
             "key": key,
             "cc_sha": control_sha(),
+            "cc_set_sha": control_set_sha(),
             "cmd": str(ti.get("command") or "")[:4000],
             "decision": verdict["decision"],
         },

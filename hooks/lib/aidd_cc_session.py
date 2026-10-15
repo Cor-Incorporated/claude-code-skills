@@ -70,8 +70,17 @@ def inherited_decisions() -> list[dict]:
     src = os.environ.get("AIDD_CC_INHERIT", "")
     if not src or not Path(src).exists():
         return []
+    # aidd-governance#186 P3-2: only a session meta file of THIS control's state dir can be a parent
+    # (`sessions/<agent>__<session>.json`); an arbitrary readable path is not a decision source.
     try:
-        parent = json.loads(Path(src).read_text(encoding="utf-8"))
+        resolved = Path(src).resolve()
+        sessions = (state_dir() / "sessions").resolve()
+    except OSError:
+        return []
+    if resolved.parent != sessions or resolved.suffix != ".json" or "__" not in resolved.stem:
+        return []
+    try:
+        parent = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
     return [

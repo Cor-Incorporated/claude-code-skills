@@ -51,3 +51,7 @@ assert r["benign_untouched"] is True, r
 print("PASS: text.complete gate present / no permission.ask / 4th identical call throws / benign untouched")
 PY
 grep -q '"component": "H17"' "$AIDD_LEDGER_PATH" && echo "PASS: H6 ledger rows written by the opencode entry" || { echo "FAIL: no ledger rows"; exit 1; }
+# aidd-governance#186 P2-2: an oracle that cannot be spawned leaves an H6 error row (decision unavailable), never a silent allow
+: >"$SB/err-ledger.jsonl"
+(cd "$SB" && AIDD_CC_PY=/nonexistent/aidd_cc.py AIDD_LEDGER_PATH="$SB/err-ledger.jsonl" bun run drive.ts >/dev/null 2>&1) || true
+if grep -q '"event":"error"' "$SB/err-ledger.jsonl" && grep -q '"decision":"unavailable"' "$SB/err-ledger.jsonl" && grep -q '"agent":"opencode"' "$SB/err-ledger.jsonl"; then echo "PASS: T84-oc missing oracle -> H6 error rows (unavailable), no silent pass"; else echo "FAIL: T84-oc no error row"; cat "$SB/err-ledger.jsonl"; exit 1; fi

@@ -34,16 +34,25 @@ runtime can execute them.
 
 | Metric | Value |
 |---|---|
-| Events covered | 5 (`SessionStart`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PreCompact`) |
-| Active hooks | 17 |
-| Hard blocks (exit 2 possible) | 4 |
-| Advisory / infra hooks (never block) | 13 |
+| Events covered | 7 (`SessionStart`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PreCompact`, `UserPromptSubmit`, `Stop`) |
+| Registered entries | 29 (the pinned count is `docs/CANONICAL-STATE.md`, link-tested by `tests/test-pairs-link.sh` pair13) |
+| Hard blocks (exit 2 possible) | 4 (+ the H17 common control, which blocks via JSON `permissionDecision: deny` / `decision: block`) |
 | Archived in `_unused/` | 62 scripts (56 retired by ADR-006 + 6 from earlier retirements) + the whole former `gate-modes/` directory |
 
-There is no `Stop` or `TaskCompleted` hook registered — session-end and
-task-completion gating were retired (see ADR-006). Test verification and
-merge readiness are the agent's/human's responsibility, backstopped by CI
-and GitHub branch protection.
+`TaskCompleted` gating was retired (ADR-006). `Stop` is registered again since
+2026-10-14 for the **H17 common control** (aidd-governance#174): the same
+oracle `hooks/lib/aidd_cc.py` sits on the Claude Code, Codex, Cursor, OpenCode
+and Pi entries and stops (a) the 4th identical command with no progress delta,
+(b) re-asking a confirmation the user already answered, (c) a completion /
+save claim without executed, fresh, output-matched `Evidence:` /
+`Readback:` trailers. It never auto-allows anything (ADR-006). A degraded
+control (crash, missing module, max-blocks release that would have blocked)
+is announced as a `systemMessage` and an H6 ledger `error` / `would-block`
+row — never a silent pass. Entry files: `aidd-cc-claude.sh`,
+`codex/aidd-cc-codex.sh`, `cursor/aidd-cc-cursor.sh`, `../opencode/aidd-cc.ts`,
+`../pi/aidd-cc.ts`, `../dsh/aidd-cc.patch.yml` (+ `aidd-cc-native.ts`, unverified);
+replay of the 47 dot incidents: `tests/dot-replay/run_replay.py` (arms: claude /
+codex / cursor / opencode / pi).
 
 ---
 
@@ -125,6 +134,24 @@ No matcher. 1 hook.
 | Hook | Purpose |
 |---|---|
 | `pre-compact-context-save.sh` | Save critical state to `additionalContext` before compaction (#146) |
+
+### UserPromptSubmit
+
+No matcher. 1 hook.
+
+| Hook | Purpose |
+|---|---|
+| `aidd-cc-claude.sh` | H17: register user decisions (for re-ask suppression only), deadlines (`6h以内`, write-once) and the declared denominator (`全47ケース`) |
+
+### Stop
+
+No matcher. 3 hooks.
+
+| Hook | Purpose |
+|---|---|
+| `aidd-h3-evidence-stop.sh` | H3: warn when a completion claim has no `Evidence:` trailer (warn only; superseded by H17's block) |
+| `aidd-turn-boundary-stop.sh` | Carry-over ledger: stop only the session that registered async work |
+| `aidd-cc-claude.sh` | H17 evidence gate: **blocks** (`decision: block`) a completion / save / push claim whose `Evidence:` commands were not executed, failed, are stale, are trivial, or whose output field does not match the recorded output; `Readback:` sha must match a file this session wrote. Releases (`stop_hook_active`, max-blocks) are evaluated and announced (`systemMessage` + `would-block` ledger row) |
 
 ---
 
