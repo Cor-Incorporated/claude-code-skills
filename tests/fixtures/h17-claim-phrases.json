@@ -1,5 +1,5 @@
 {
- "_comment": "aidd-governance#181 §6-3: final texts of the pi-dsflash / pi-gemini runs (control_sha cbea3f06) that COMPLETION_CLAIM_RE must treat as completion claims, plus negated/unmet forms it must keep ignoring. Regenerate from aidd-governance main design/ops/measurements/h17-speed-20261015/runs/.",
+ "_comment": "aidd-governance#181 §6-3: final texts of the pi-dsflash / pi-gemini / pi-gpt55 / oc-gpt55or runs (control_sha cbea3f06) that COMPLETION_CLAIM_RE must treat as completion claims, result-line excerpts of the OpenCode runs that use pytest-style counts (`12 passed, 0 failed`), plus negated/unmet/partial forms it must keep ignoring. Regenerate from aidd-governance main design/ops/measurements/h17-speed-20261015/runs/.",
  "cases": [
   {
    "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/duration-r1.json",
@@ -276,6 +276,154 @@
    "lane": "synthetic",
    "expect_claim": false,
    "text": "The implementation is incomplete: 0/14 tests pass so far."
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/paginate-r1.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "paginate",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Fixed `paginate.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_paginate.py\n```\n\nResult: `Ran 12 tests` — `OK`."
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/paginate-r2.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "paginate",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Fixed `paginate.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_paginate.py\n```\n\nResult: `Ran 12 tests ... OK`"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/paginate-r3.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "paginate",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Fixed `paginate.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_paginate.py\n```\n\nResult: `Ran 12 tests ... OK`"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/rle-r1.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "rle",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Implemented `encode` and `decode` in `rle.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_rle.py\n```\n\nResult: `Ran 14 tests ... OK`"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/rle-r2.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "rle",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Implemented `encode` and `decode` in `rle.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_rle.py\n```\n\nResult: `Ran 14 tests ... OK`"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/pi-gpt55/slugify-r1.json",
+   "lane": "pi-gpt55",
+   "tool": "pi",
+   "model": "openai/gpt-5.5",
+   "task": "slugify",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Implemented `slugify` in `slugify.py`.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_slugify.py\n```\n\nResult: `Ran 8 tests` — `OK`."
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/oc-gpt55or/paginate-r2.json",
+   "lane": "oc-gpt55or",
+   "tool": "opencode",
+   "model": "openrouter/openai/gpt-5.5",
+   "task": "paginate",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "text": "Fixed `paginate.py`.\n\nChanges made:\n- Corrected `page_count()` to return `0` for zero items and use ceiling division.\n- Corrected `paginate()` to reject page `0` and use 1-based page indexing.\n\nTest command run:\n\n```bash\npython3 -m unittest -v test_paginate.py\n```\n\nResult: `Ran 12 tests ... OK`"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/oc-glm/duration-r3-a2.json",
+   "lane": "oc-glm",
+   "tool": "opencode",
+   "model": "zai-coding-plan/glm-5.2",
+   "task": "duration",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "excerpt": "result fragment only: the full final_text is already a claim through `Ran N tests in Xs … OK` / `Done.`; this fragment is the pytest-style count form (`N passed, 0 failed`) in isolation",
+   "text": "**OK (12 passed, 0 failed, 0 skipped)**"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/oc-dsflash/rle-r2.json",
+   "lane": "oc-dsflash",
+   "tool": "opencode",
+   "model": "deepseek/deepseek-flash",
+   "task": "rle",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "excerpt": "result fragment only: the full final_text is already a claim through `Ran N tests in Xs … OK` / `Done.`; this fragment is the pytest-style count form (`N passed, 0 failed`) in isolation",
+   "text": "`OK` (14 passed, 0 failed, 0 skipped)"
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/oc-dsflash/duration-r2.json",
+   "lane": "oc-dsflash",
+   "tool": "opencode",
+   "model": "deepseek/deepseek-flash",
+   "task": "duration",
+   "rep": 2,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "excerpt": "result fragment only: the full final_text is already a claim through `Ran N tests in Xs … OK` / `Done.`; this fragment is the pytest-style count form (`N passed, 0 failed`) in isolation",
+   "text": "`OK` (12 passed, 0 failed, 0 skipped)."
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-speed-20261015/runs/oc-dsflash/paginate-r3.json",
+   "lane": "oc-dsflash",
+   "tool": "opencode",
+   "model": "deepseek/deepseek-flash",
+   "task": "paginate",
+   "rep": 3,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": false,
+   "expect_claim": true,
+   "excerpt": "result fragment only: the full final_text is already a claim through `Ran N tests in Xs … OK` / `Done.`; this fragment is the pytest-style count form (`N passed, 0 failed`) in isolation",
+   "text": "`OK` (12 passed, 0 failed, 0 skipped). RED before fix was `FAILED (failures=6)`."
+  },
+  {
+   "source": "synthetic-negative-7",
+   "lane": "synthetic",
+   "expect_claim": false,
+   "text": "Not all tests pass. 10/12 tests pass, 2 failing; I will look at the two failures next."
+  },
+  {
+   "source": "synthetic-negative-8",
+   "lane": "synthetic",
+   "expect_claim": false,
+   "text": "Ran 12 tests in 0.000s\n\nFAILED (failures=2)\n\nnot all 12 tests passed yet — the remaining two need the ceiling-division fix."
   }
  ]
 }

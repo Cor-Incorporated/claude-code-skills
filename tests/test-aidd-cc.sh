@@ -544,5 +544,23 @@ o70b="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg70\",\"la
 o70c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg70c","last_assistant_message":"tests are not green yet; 10/12 tests pass, 2 failing. Implementation is not yet complete."}' | bash "$HOOK")"
 if printf '%s' "$o70b" | grep -q 'completion claim without' && [ -z "$o70c" ]; then ok "T70b pi-dsflash 'Result: OK (14/14 tests pass)' report blocked without trailer; partial/negated progress report allowed"; else bad "T70b: [$o70b] [$o70c]"; fi
 
+# ---- PR #414 residuals (2026-10-15). (a) over-match: "Not all tests pass" / "not all 12 tests passed" is an honest partial
+#      report, but NEGATED_COMPLETION_RE did not remove it, so `all … pass(ed)` inside it was read as a claim and the Stop was
+#      blocked. (b) under-match, same measurement (#181 runs on aidd-governance main 4785695b): the gpt-5.5 lane (pi-gpt55 ×6,
+#      oc-gpt55or ×1) ends "Fixed `paginate.py`. … Result: `Ran 12 tests` — `OK`." (no duration) and OpenCode reports count
+#      "OK (12 passed, 0 failed, 0 skipped)"; neither form was a claim, 0 blocks, no trailer. Fixtures carry the real texts.
+# (71) honest partial report with "not all … pass(ed)" is allowed at Stop; the same words without the negation are blocked
+o71a="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg71a","last_assistant_message":"Not all tests pass. 10/12 tests pass, 2 failing; I will look at the two failures next."}' | bash "$HOOK")"
+o71b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg71b","last_assistant_message":"Ran 12 tests in 0.000s\n\nFAILED (failures=2)\n\nnot all 12 tests passed yet — the remaining two need the ceiling-division fix."}' | bash "$HOOK")"
+o71c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg71c","last_assistant_message":"All 12 tests passed."}' | bash "$HOOK")"
+if [ -z "$o71a" ] && [ -z "$o71b" ] && printf '%s' "$o71c" | grep -q 'completion claim without'; then ok "T71 'Not all tests pass' / 'not all 12 tests passed yet' partial reports allowed; 'All 12 tests passed.' still blocked"; else bad "T71: [$o71a] [$o71b] [$o71c]"; fi
+
+# (71b) end to end: the real pi-gpt55 paginate-r1 report ("Fixed `paginate.py`. … Result: `Ran 12 tests` — `OK`.", no trailer)
+#       and the real OpenCode count form are blocked at Stop
+T71_TEXT="$(python3 -I -c 'import json,sys; fx=json.load(open(sys.argv[1]))["cases"]; print(next(c["text"] for c in fx if c["source"].endswith("pi-gpt55/paginate-r1.json")))' "$ROOT/tests/fixtures/h17-claim-phrases.json")"
+o71d="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg71d\",\"last_assistant_message\":$(j "$T71_TEXT")}" | bash "$HOOK")"
+o71e="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg71e","last_assistant_message":"Result: **OK (12 passed, 0 failed, 0 skipped)**"}' | bash "$HOOK")"
+if printf '%s' "$o71d" | grep -q 'completion claim without' && printf '%s' "$o71e" | grep -q 'completion claim without'; then ok "T71b pi-gpt55 'Fixed paginate.py … Ran 12 tests — OK' and OpenCode 'OK (12 passed, 0 failed)' reports blocked without trailer"; else bad "T71b: [$o71d] [$o71e]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
