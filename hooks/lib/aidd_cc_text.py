@@ -36,7 +36,13 @@ TEST_RESULT_CLAIM = (
     r"\bok\b\W{0,4}\(\s*(?P<okratio>\d{1,4})\s*/\s*(?P=okratio)\b|"
     r"[1-9]\d{0,3} passed, 0 fail(?:ed|ures?)\b|"
     r"tests? (?:are|is) (?:all )?green|"
-    r"implementation (?:is )?complete(?:d)?"
+    r"implementation (?:is )?complete(?:d)?|"
+    # aidd-governance#186 R7 (independent-review Addendum, Pi live 2026-10-14 23:49:43Z, gemini-2.5-flash): the turn-2
+    # report "I have executed the requested commands and gathered the necessary information." carried three Evidence
+    # trailers and was never evaluated because none of the words above appeared.  Fixture: pi-live/terminal-output.txt.
+    # "I have executed the tests, 2 fail" stays out: the object is a test, not the requested work (synthetic negatives).
+    r"i have (?:executed|completed|finished|implemented|performed) (?:all |the |every )?(?:requested |necessary |required )?"
+    r"(?:commands?|tasks?|steps?|work|changes?|implementation)\b"
 )
 COMPLETION_CLAIM_RE = re.compile(
     r"(?<![A-Za-z])(verified|完了|根因確定|検証済み|実装済み|解決済み|対応済み|"
@@ -79,8 +85,17 @@ WRITE_KIND_RE = re.compile(
 DELETE_KIND_RE = re.compile(
     r"(削除|消去|消して|delete|remove|rm\b|drop|truncate)", re.IGNORECASE
 )
+# aidd-governance#186 R5 (independent-review Residual 11, Claude live 2026-10-15 23:37Z re-entry): an honest retraction
+# quotes the claim it withdraws — 「『実装完了しました。』は取り消します」 — or says nothing was completed; the quoted claim
+# and the retraction sentence are removed before the claim scan.  Only the quoted span followed by a retraction verb
+# is removed: 「取り消しは完了です」 keeps its claim (a retraction and a claim in one sentence stay on the claim side).
+RETRACTION_WORDS = r"(?:取り消|取消|撤回|成立し(?:ません|ない|ていません))"
 NEGATED_COMPLETION_RE = re.compile(
-    r"(未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
+    r"([「『][^「」『』\n]{0,80}[」』](?=[^\n]{0,12}" + RETRACTION_WORDS + r")|"
+    r"完了したものは(?:何も|なにも|一つも|ひとつも)?(?:ありません|ない|無い|存在しません)|"
+    r"(?:先の|前の|上の|この|その|以前の)?(?:報告|宣言|主張|完了報告|完了宣言)は成立し(?:ません|ない|ていません)|"
+    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that)?[^\n.]{0,100}|"
+    r"未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
     r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は.{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
     r"has not been (?:verified|merged|pushed|saved|deployed)|not everything is done|none of it is verified|hasn't been pushed|"
     r"no (?:files?|changes?|data)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified)|haven't (?:verified|saved|pushed|merged)|"
@@ -166,8 +181,14 @@ STOPWORDS = {
 # visible subject here; its scope is then read from the recorded stdout `[branch sha] …`
 # of the post row (fix_scope_from_output) or not counted.  Surface form only (C15).
 FIX_SUBJECT_RE = re.compile(r"^\s*(fix|hotfix)\(([^)]+)\)")
+# aidd-governance#186 R3 (independent-review Residual 4): a real commit also looks like
+# `/usr/bin/git commit`, `command git commit`, `(git commit …)`, `env A=1 git commit`, `exec git commit`.
+# The optional leading `(` is the subshell; `env` / `command` / `exec` / `nice` / `time` are the common
+# prefixes that still run git.  `-F file` (message from a file) has no subject on the command line and
+# is counted from git's own stdout only (fix_scope_from_output, R4).
 GIT_COMMIT_SEG_RE = re.compile(
-    r"^(?:[A-Za-z_]\w*=\S*\s+)*git\s+(?:(?:-[Cc]|--git-dir|--work-tree)[= ]\S+\s+|--[\w-]+(?:=\S+)?\s+)*commit\b(?P<rest>.*)$",
+    r"^\(?\s*(?:(?:env|command|exec|nice|time|sudo)\s+(?:-\w+\s+)*)*(?:[A-Za-z_]\w*=\S*\s+)*(?:\S*/)?git\s+"
+    r"(?:(?:-[Cc]|--git-dir|--work-tree)[= ]\S+\s+|--[\w-]+(?:=\S+)?\s+)*commit\b(?P<rest>.*)$",
     re.S,
 )
 MSG_FLAG_RE = re.compile(r"(?:^|\s)(?:-[a-zA-Z]*m|--message)(?:\s*=\s*|\s*)(?P<val>.*)$", re.S)
@@ -236,6 +257,21 @@ def commit_subject(cmd: str) -> str | None:
     return None
 
 
+def has_commit_segment(cmd: str) -> bool:
+    """True when `cmd` contains a real `git … commit` segment (any form GIT_COMMIT_SEG_RE knows,
+    including inside `bash -c "…"`), whatever its message form.  aidd-governance#186 R4: the stdout
+    fallback (fix_scope_from_output) must only be consulted for rows that actually committed —
+    `cat old.log` printing a `[develop 1a2b3c1] fix(h17): …` line is a read, not a repair."""
+    for line, _body in _logical_lines(cmd):
+        for seg in shell_segments(line):
+            wrapped = WRAPPER_SEG_RE.match(seg)
+            if wrapped and has_commit_segment(wrapped.group("inner")):
+                return True
+            if GIT_COMMIT_SEG_RE.match(seg):
+                return True
+    return False
+
+
 def fix_scope(cmd: str) -> str | None:
     """`git commit … -m 'fix(h17): …'` -> "h17" (same repair family, aidd-governance#88)."""
     m = FIX_SUBJECT_RE.match(commit_subject(cmd) or "")
@@ -299,9 +335,19 @@ def evidence_trailers(text: str) -> list[tuple[str, str, str]]:
     for line in EVIDENCE_LINE_RE.findall(text or ""):
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 3 and all(parts[:3]):
-            cmd = parts[0].strip("`'\" ")  # agents quote the command in backticks (Cursor IDE live 2026-10-14 05:12Z)
+            cmd = _unquote_outer(parts[0])  # agents quote the command in backticks (Cursor IDE live 2026-10-14 05:12Z)
             out.append((cmd, " | ".join(parts[1:-1]), parts[-1]))
     return out
+
+
+def _unquote_outer(s: str) -> str:
+    """Strip only MATCHING outer quote pairs (`cmd`, 'cmd', "cmd", `'cmd'`).  aidd-governance#186
+    R6: `.strip("`'\" ")` also ate the closing quote of `date '+%Y-%m-%d %H:%M:%S'`, so an
+    executed command was reported as not executed (independent-review Addendum P3)."""
+    s = (s or "").strip()
+    while len(s) >= 2 and s[0] == s[-1] and s[0] in "`'\"":
+        s = s[1:-1].strip()
+    return s
 
 
 def evidence_commands(text: str) -> list[str]:
@@ -326,6 +372,28 @@ def output_field_matches(claimed: str, recorded: str) -> bool | None:
     if not recorded_tokens or not claimed_tokens:
         return None
     return bool(recorded_tokens & claimed_tokens)
+
+
+OUT_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9.])\d+(?:\.\d+)?")
+
+
+def output_numbers(text: str) -> list[str]:
+    """Numbers as written (`47`, `0.12`), not digits inside identifiers (`2e6bc98` -> `2` only)."""
+    return OUT_NUMBER_RE.findall(text or "")
+
+
+def output_numbers_missing(claimed: str, recorded: str) -> list[str]:
+    """aidd-governance#186 R1 (independent-review Residual 1): every number written in the trailer's
+    output field must appear in the recorded output.  `pytest -q` printed "3 passed"; a field
+    "47 passed" shares the word but not the number — that is the fabrication the token overlap
+    (output_field_matches) let through.  Surface form only (C15): a number copied verbatim from
+    any part of the recorded output passes, and a field without numbers is not judged here."""
+    recorded_numbers = set(output_numbers(recorded))
+    seen: list[str] = []
+    for n in output_numbers(claimed):
+        if n not in recorded_numbers and n not in seen:
+            seen.append(n)
+    return seen
 
 
 def incomplete_evidence_lines(text: str) -> list[str]:
