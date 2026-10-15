@@ -515,7 +515,7 @@ P69b="{\"hook_event_name\":\"Stop\",\"session_id\":\"neg69b\",\"stop_hook_active
 o69b="$(printf '%s' "$P69b" | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent claude-code)"
 for i in 1 2; do printf '%s' '{"hook_event_name":"Stop","session_id":"neg69c","last_assistant_message":"実装完了しました。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK" >/dev/null; done
 o69c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg69c","last_assistant_message":"途中経過です。次に tests を走らせます。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent claude-code)"
-if printf '%s' "$o69h" | grep -q '"systemMessage":"\[H17\] evidence unverified (max-blocks released)' && ! printf '%s' "$o69h" | grep -q '"decision"' && printf '%s' "$o69" | grep -q '"would_block": true' && printf '%s' "$o69" | grep -q 'evidence unverified (max-blocks released)' \
+if printf '%s' "$o69h" | grep -q '"systemMessage": *"\[H17\] evidence unverified (max-blocks released)' && ! printf '%s' "$o69h" | grep -q '"decision"' && printf '%s' "$o69" | grep -q '"would_block": true' && printf '%s' "$o69" | grep -q 'evidence unverified (max-blocks released)' \
    && grep -q '"rule": "evidence.max-blocks.would-block".*"session": "neg69"' "$AIDD_LEDGER_PATH" \
    && printf '%s' "$o69b" | grep -q '"would_block": true' && grep -q '"rule": "evidence.loop-guard.would-block"' "$AIDD_LEDGER_PATH" \
    && printf '%s' "$o69c" | grep -q '"rule": "evidence.max-blocks"' && ! printf '%s' "$o69c" | grep -q 'would_block'; then ok "T69 max-blocks / loop-guard releases evaluate the text: would-block row + visible note on fabricated evidence, none on a benign report"; else bad "T69: [$o69h] [$o69] [$o69b] [$o69c]"; fi
@@ -704,9 +704,9 @@ o80b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg80b","last_assis
 o80c="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg80c","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | AIDD_CC_STATE_DIR=/dev/null/nope bash "$HOOK")"
 for i in 1 2; do printf '%s' '{"hook_event_name":"Stop","session_id":"neg80d","last_assistant_message":"実装完了しました。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK" >/dev/null; done
 o80d="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg80d","last_assistant_message":"途中経過です。次に tests を走らせます。"}' | AIDD_CC_MAX_STOP_BLOCKS=2 bash "$HOOK")"
-if printf '%s' "$o80" | grep -q '"systemMessage":"\[H17\] evidence unverified (max-blocks released)' && ! printf '%s' "$o80" | grep -q '"decision"' \
-   && printf '%s' "$o80b" | grep -q '"systemMessage":"\[H17\] control error on Stop' && printf '%s' "$o80b" | grep -q 'UNVERIFIED' \
-   && printf '%s' "$o80c" | grep -q '"systemMessage":"\[H17\] control error on PreToolUse' && ! printf '%s' "$o80c" | grep -q 'permissionDecision' \
+if printf '%s' "$o80" | grep -q '"systemMessage": *"\[H17\] evidence unverified (max-blocks released)' && ! printf '%s' "$o80" | grep -q '"decision"' \
+   && printf '%s' "$o80b" | grep -q '"systemMessage": *"\[H17\] control error on Stop' && printf '%s' "$o80b" | grep -q 'UNVERIFIED' \
+   && printf '%s' "$o80c" | grep -q '"systemMessage": *"\[H17\] control error on PreToolUse' && ! printf '%s' "$o80c" | grep -q 'permissionDecision' \
    && [ -z "$o80d" ]; then ok "T80 would-block release and control crash are visible systemMessages at the Claude entry; benign release silent"; else bad "T80: [$o80] [$o80b] [$o80c] [$o80d]"; fi
 
 # (81) P3-2: AIDD_CC_INHERIT only honours a session meta file inside this control's state dir
