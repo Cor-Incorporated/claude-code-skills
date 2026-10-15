@@ -24,11 +24,17 @@ PERSIST_WORDS = (
 # (the old alternative was `all (tests )?pass(ed)?`: a count between "all" and "tests" defeated it).  The test-result
 # phrases below are the surface forms of those reports (C15: form only).  Ratios bind numerator = denominator
 # (`14/14`), so a partial "10/12 tests pass" progress report is not a completion claim.
+# PR #414 residuals (same measurement, aidd-governance main 4785695b): the gpt-5.5 lane (pi-gpt55 ×6, oc-gpt55or ×1) ends
+# "Fixed `paginate.py`. … Result: `Ran 12 tests` — `OK`." with no duration (0 blocks, no trailer), and OpenCode reports count
+# "OK (12 passed, 0 failed, 0 skipped)".  The duration is therefore optional (the gap without it is punctuation only, so
+# "Ran 12 tests, 2 not OK" stays out) and pytest-style counts are a claim only with an explicit "0 failed/failures".
+# "14 passed in 0.12s" (pytest, no count of failures) is NOT a claim: no real run has produced it yet (fixture first).
 TEST_RESULT_CLAIM = (
     r"all (?:\d+ )?(?:tests? )?pass(?:ed)?|"
-    r"(?P<ratio>\d{1,4})\s*/\s*(?P=ratio) tests? pass(?:ed)?|"
-    r"ran \d+ tests? in [\d.]+\s*s[^\n]{0,8}\n*[\s*`]*ok\b|"
+    r"(?P<ratio>\d{1,4})\s*/\s*(?P=ratio) (?:tests? )?pass(?:ed)?|"
+    r"ran \d+ tests?(?: in [\d.]+\s*s[^\n]{0,8}|[\s`*—–\-→.…:]{0,8})\n*[\s*`]*ok\b|"
     r"\bok\b\W{0,4}\(\s*(?P<okratio>\d{1,4})\s*/\s*(?P=okratio)\b|"
+    r"[1-9]\d{0,3} passed, 0 fail(?:ed|ures?)\b|"
     r"tests? (?:are|is) (?:all )?green|"
     r"implementation (?:is )?complete(?:d)?"
 )
@@ -82,6 +88,9 @@ NEGATED_COMPLETION_RE = re.compile(
     r"(?:完了|検証|push|マージ|配備)(?:には|は|に)?(?:至って|達して|届いて)(?:いない|いません|おらず)|nothing (?:is|has been|was) (?:done|verified|pushed|merged|deployed|saved)|"
     r"(?:完了|マージ|配備|保存|反映|push|deploy)(?:は|を)?(?:まだ)?(?:してい(?:ない|ません)|していない|できていない|ではない|していません)|"
     r"not (?:yet )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed)|"
+    # PR #414 residual: "Not all tests pass" / "not all 12 tests passed yet" is an honest partial report; without this line the
+    # `all … pass(ed)` inside it was read as a claim (over-match).
+    r"not all (?:\d+ )?(?:(?:the )?tests? )?pass(?:ed|ing)?(?: yet)?|"
     r"isn'?t (?:done|verified|merged|deployed|saved)|incomplete|un(?:merged|deployed|saved|pushed))",
     re.IGNORECASE,
 )
