@@ -609,8 +609,9 @@ if printf '%s' "$o74" | grep -q 'repair-family\|re-adjudication' && printf '%s' 
 for i in 1 2 3; do printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg75","tool_name":"Bash","tool_input":{"command":"cat old.log"},"tool_response":{"exit_code":0,"stdout":"[develop 1a2b3c1] fix(h17): old repair from the log\n 1 file changed"}}' | bash "$HOOK" >/dev/null; done
 o75="$(pre68 neg75 "git commit -q -m 'fix(h17): real 1'")"
 for i in 1 2 3; do printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg75b","tool_name":"Bash","tool_input":{"command":"git commit -F msg.txt"},"tool_response":{"exit_code":0,"stdout":"[develop 1a2b3c1] fix(h17): from a message file\n 1 file changed"}}' | bash "$HOOK" >/dev/null; done
-o75b="$(pre68 neg75b "git commit -F msg.txt")"
-if [ -z "$o75" ] && printf '%s' "$o75b" | grep -q 'repair-family\|re-adjudication'; then ok "T75 cat of a commit-shaped log is not a repair commit; -F file commits with the subject in stdout still count"; else bad "T75: [$o75] [$o75b]"; fi
+o75b="$(pre68 neg75b "git commit -m 'fix(h17): real 4 after three -F commits'")"
+o75c="$(pre68 neg75b "git commit -F msg.txt")"   # a 4th -F commit has no subject on the command line: not judged here (documented limit)
+if [ -z "$o75" ] && printf '%s' "$o75b" | grep -q 'repair-family\|re-adjudication' && [ -z "$o75c" ]; then ok "T75 cat of a commit-shaped log is not a repair commit; -F file commits with the subject in stdout still count as prior repairs"; else bad "T75: [$o75] [$o75b] [$o75c]"; fi
 
 # (76) R5: an honest retraction is not a completion claim (Residual 11: the live claude.json re-entry wrote a false
 #      evidence.loop-guard.would-block row for 「『実装完了しました。』は取り消します」)
@@ -663,7 +664,8 @@ printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg79","prompt"
 chmod 644 "$SD79/sessions/claude-code__neg79.jsonl" "$SD79/sessions/claude-code__neg79.json"
 printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg79","tool_name":"Bash","tool_input":{"command":"pytest -q"},"tool_response":{"exit_code":0,"stdout":"3 passed"}}' | bash "$HOOK" >/dev/null
 printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg79","prompt":"続けて"}' | bash "$HOOK" >/dev/null
-m79="$( (stat -f '%Lp' "$SD79" "$SD79/sessions" "$SD79/sessions/claude-code__neg79.jsonl" "$SD79/sessions/claude-code__neg79.json" 2>/dev/null || stat -c '%a' "$SD79" "$SD79/sessions" "$SD79/sessions/claude-code__neg79.jsonl" "$SD79/sessions/claude-code__neg79.json") | tr '\n' ' ' | sed 's/ $//')"
+# GNU stat has no -f (it means filesystem there), BSD stat has no -c: pick by probing, never by falling through
+if stat -c '%a' / >/dev/null 2>&1; then m79="$(stat -c '%a' "$SD79" "$SD79/sessions" "$SD79/sessions/claude-code__neg79.jsonl" "$SD79/sessions/claude-code__neg79.json" | tr '\n' ' ' | sed 's/ $//')"; else m79="$(stat -f '%Lp' "$SD79" "$SD79/sessions" "$SD79/sessions/claude-code__neg79.jsonl" "$SD79/sessions/claude-code__neg79.json" | tr '\n' ' ' | sed 's/ $//')"; fi
 export AIDD_CC_STATE_DIR="$SB/state"
 if [ "$m79" = "700 700 600 600" ]; then ok "T79 state dir 0700, session json/jsonl 0600 (re-tightened on write)"; else bad "T79: modes [$m79] (want 700 700 600 600)"; fi
 
