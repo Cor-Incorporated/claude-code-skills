@@ -562,5 +562,110 @@ o71d="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg71d\",\"l
 o71e="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg71e","last_assistant_message":"Result: **OK (12 passed, 0 failed, 0 skipped)**"}' | bash "$HOOK")"
 if printf '%s' "$o71d" | grep -q 'completion claim without' && printf '%s' "$o71e" | grep -q 'completion claim without'; then ok "T71b pi-gpt55 'Fixed paginate.py … Ran 12 tests — OK' and OpenCode 'OK (12 passed, 0 failed)' reports blocked without trailer"; else bad "T71b: [$o71d] [$o71e]"; fi
 
+
+# ---- aidd-governance#186 residuals (P2 x9 / P3 x4, handover design/ops/handover/2026-10-15-h17-186-residuals.md).
+#      T72-T79 were written against develop d713cf6 (control_sha 7ebb066ce6e27f0c) and committed red BEFORE the fix.
+# (72) R1: a number in the Evidence output field must appear in the recorded output of the cited command
+#      (independent-review Residual 1: `pytest -q` printed "3 passed", the report cited "47 passed" and was allowed)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg72","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg72","tool_name":"Bash","tool_input":{"command":"pytest -q"},"tool_response":{"exit_code":0,"stdout":"3 passed"}}' | bash "$HOOK" >/dev/null
+P72='{"hook_event_name":"Stop","session_id":"neg72","last_assistant_message":"verified.\nEvidence: pytest -q | 47 passed | 10:00"}'
+o72="$(printf '%s' "$P72" | bash "$HOOK")"
+o72b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg72","last_assistant_message":"verified.\nEvidence: pytest -q | 3 passed | 10:00"}' | bash "$HOOK")"
+o72m="$(printf '%s' "$P72" | AIDD_CC_MUTATE=evidence.trailer bash "$HOOK")"
+if printf '%s' "$o72" | grep -q 'cited `47 passed`' && printf '%s' "$o72" | grep -q 'printed `3 passed`' && printf '%s' "$o72" | grep -q '47' && [ -z "$o72b" ] && [ -z "$o72m" ]; then ok "T72 fabricated number in the output field rejected (both values in the reason); honest field passes; mutation evidence.trailer RED"; else bad "T72: [$o72] [$o72b] [$o72m]"; fi
+
+# (73) R2: a write made through Bash (`sed -i`) makes earlier evidence stale, like an Edit does (Residual 3)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg73","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg73","tool_name":"Bash","tool_input":{"command":"pytest -q"},"tool_response":{"exit_code":0,"stdout":"3 passed"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg73","cwd":"/x","tool_name":"Bash","tool_input":{"command":"sed -i '"'"'s/a/b/'"'"' a.py"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg73","cwd":"/x","tool_name":"Bash","tool_input":{"command":"sed -i '"'"'s/a/b/'"'"' a.py"},"tool_response":{"exit_code":0,"stdout":""}}' | bash "$HOOK" >/dev/null
+P73='{"hook_event_name":"Stop","session_id":"neg73","last_assistant_message":"verified.\nEvidence: pytest -q | 3 passed | 10:00"}'
+o73="$(printf '%s' "$P73" | bash "$HOOK")"
+o73m="$(printf '%s' "$P73" | AIDD_CC_MUTATE=evidence.executed bash "$HOOK")"
+# the same write BEFORE the test run is not stale; a masked write (`cp … || true`) has unknown success and is not a write
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg73b","cwd":"/x","tool_name":"Bash","tool_input":{"command":"sed -i '"'"'s/a/b/'"'"' a.py"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg73b","cwd":"/x","tool_name":"Bash","tool_input":{"command":"sed -i '"'"'s/a/b/'"'"' a.py"},"tool_response":{"exit_code":0,"stdout":""}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg73b","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg73b","tool_name":"Bash","tool_input":{"command":"pytest -q"},"tool_response":{"exit_code":0,"stdout":"3 passed"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg73b","cwd":"/x","tool_name":"Bash","tool_input":{"command":"cp a.py b.py || true"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg73b","cwd":"/x","tool_name":"Bash","tool_input":{"command":"cp a.py b.py || true"},"tool_response":{"exit_code":0,"stdout":""}}' | bash "$HOOK" >/dev/null
+o73b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg73b","last_assistant_message":"verified.\nEvidence: pytest -q | 3 passed | 10:00"}' | bash "$HOOK")"
+if printf '%s' "$o73" | grep -q 'written later' && printf '%s' "$o73" | grep -q 'ran at 20' && printf '%s' "$o73" | grep -q '/x/a.py' && printf '%s' "$o73" | grep -q 'sed -i' && [ -z "$o73b" ] && [ -z "$o73m" ]; then ok "T73 evidence older than a Bash write rejected (times, path and write command in the reason); write-then-test and masked cp pass; mutation evidence.executed RED"; else bad "T73: [$o73] [$o73b] [$o73m]"; fi
+
+# (74) R3: `/usr/bin/git commit`, `command git commit`, `(git commit …)`, `env A=1 git commit` are real commits for the
+#      repair-family breaker (Residual 4); `git -c x commit` stays recognised
+post68 neg74 "/usr/bin/git commit -m 'fix(h17): r1 absolute path'"
+post68 neg74 "command git commit -m 'fix(h17): r2 command builtin'"
+post68 neg74 "(git commit -m 'fix(h17): r3 subshell')"
+o74="$(pre68 neg74 "env A=1 git commit -m 'fix(h17): r4 env prefix'")"
+o74b="$(pre68 neg74 "git -c user.name=x commit -m 'fix(h17): r5 -c option'")"
+o74m="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg74\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(j "env A=1 git commit -m 'fix(h17): r4 env prefix'")}}" | AIDD_CC_MUTATE=iter.repair-family bash "$HOOK")"
+if printf '%s' "$o74" | grep -q 'repair-family\|re-adjudication' && printf '%s' "$o74" | grep -q 'fix(h17): r4 env prefix' && printf '%s' "$o74b" | grep -q 'repair-family\|re-adjudication' && [ -z "$o74m" ]; then ok "T74 absolute-path / command / subshell / env-prefixed fix commits count toward the 4th; -c form kept; mutation iter.repair-family RED"; else bad "T74: [$o74] [$o74b] [$o74m]"; fi
+
+# (75) R4: reading a log whose output has a commit stdout line (`[develop 1a2b3c1] fix(h17): …`) is not a landed commit
+#      (Residual 5: three `cat old.log` calls got the first real fix denied); `git commit -F msg.txt` with the subject in
+#      stdout still counts (T68a / -F file fallback kept)
+for i in 1 2 3; do printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg75","tool_name":"Bash","tool_input":{"command":"cat old.log"},"tool_response":{"exit_code":0,"stdout":"[develop 1a2b3c1] fix(h17): old repair from the log\n 1 file changed"}}' | bash "$HOOK" >/dev/null; done
+o75="$(pre68 neg75 "git commit -q -m 'fix(h17): real 1'")"
+for i in 1 2 3; do printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg75b","tool_name":"Bash","tool_input":{"command":"git commit -F msg.txt"},"tool_response":{"exit_code":0,"stdout":"[develop 1a2b3c1] fix(h17): from a message file\n 1 file changed"}}' | bash "$HOOK" >/dev/null; done
+o75b="$(pre68 neg75b "git commit -F msg.txt")"
+if [ -z "$o75" ] && printf '%s' "$o75b" | grep -q 'repair-family\|re-adjudication'; then ok "T75 cat of a commit-shaped log is not a repair commit; -F file commits with the subject in stdout still count"; else bad "T75: [$o75] [$o75b]"; fi
+
+# (76) R5: an honest retraction is not a completion claim (Residual 11: the live claude.json re-entry wrote a false
+#      evidence.loop-guard.would-block row for 「『実装完了しました。』は取り消します」)
+fail76=""
+for t in "「実装完了しました。」は取り消します。" "『実装完了しました。』は取り消します" "完了したものは何もありません。" "先の報告は成立しません。証跡がないためです。" "I retract the earlier claim that the implementation is complete."; do
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
+  [ -n "$o" ] && fail76="$fail76 [$t -> $o]"
+done
+printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76b\",\"stop_hook_active\":true,\"last_assistant_message\":$(j "「実装完了しました。」は取り消します。")}" | bash "$HOOK" >/dev/null
+grep -q '"rule": "evidence.loop-guard.would-block".*"session": "neg76b"' "$AIDD_LEDGER_PATH" && fail76="$fail76 [would-block row on retraction]"
+o76c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76c","last_assistant_message":"取り消しは完了です。"}' | bash "$HOOK")"
+if [ -z "$fail76" ] && printf '%s' "$o76c" | grep -q 'completion claim without'; then ok "T76 retractions are not claims (no would-block row on re-entry); 取り消しは完了です is still a claim"; else bad "T76:$fail76 [$o76c]"; fi
+
+# (77) R6: quote stripping on the trailer's command field removes only a matching outer pair (Addendum P3: the closing
+#      quote of `date '+%Y-%m-%d %H:%M:%S'` was stripped and the executed command reported as not executed)
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg77","tool_name":"Bash","tool_input":{"command":"date '"'"'+%Y-%m-%d %H:%M:%S'"'"'"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg77","tool_name":"Bash","tool_input":{"command":"date '"'"'+%Y-%m-%d %H:%M:%S'"'"'"},"tool_response":{"exit_code":0,"stdout":"2026-10-15 08:49:30"}}' | bash "$HOOK" >/dev/null
+o77="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg77","last_assistant_message":"verified.\nEvidence: date '"'"'+%Y-%m-%d %H:%M:%S'"'"' | 2026-10-15 08:49:30 | 10:00"}' | bash "$HOOK")"
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg77b","tool_name":"Bash","tool_input":{"command":"grep -c '"'"'ok'"'"' /tmp/f"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg77b","tool_name":"Bash","tool_input":{"command":"grep -c '"'"'ok'"'"' /tmp/f"},"tool_response":{"exit_code":0,"stdout":"2"}}' | bash "$HOOK" >/dev/null
+o77b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg77b","last_assistant_message":"verified.\nEvidence: `grep -c '"'"'ok'"'"' /tmp/f` | 2 | 10:00"}' | bash "$HOOK")"
+if printf '%s' "$o77" | grep -q 'trivial' && ! printf '%s' "$o77" | grep -q 'not executed' && [ -z "$o77b" ]; then ok "T77 executed date '+…' is trivial, not 'not executed'; backticked grep with inner quotes matched"; else bad "T77: [$o77] [$o77b]"; fi
+
+# (78) R7: the Pi live turn-2 report (h17-live-20261015/pi-live, gemini-2.5-flash) is a completion claim, so its trailers
+#      are checked and rejected (read row has no cmd; ls / date are trivial); "I have executed the tests, 2 fail" is not
+o78="$(python3 -I - "$ROOT" <<'PY2'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_text import has_completion_claim
+fx = json.load(open(sys.argv[1] + "/tests/fixtures/h17-claim-phrases.json", encoding="utf-8"))["cases"]
+pi = [c for c in fx if "pi-live" in c["source"] or c["source"].startswith("synthetic-negative-executed")]
+bad = [f"{c['source']} expect_claim={c['expect_claim']} got={has_completion_claim(c['text'])}" for c in pi if has_completion_claim(c["text"]) != c["expect_claim"]]
+print(f"{len(pi)} pi-live/executed fixtures"); print("\n".join(bad))
+PY2
+)"
+T78_TEXT="$(python3 -I -c 'import json,sys; fx=json.load(open(sys.argv[1]))["cases"]; print(next(c["text"] for c in fx if "pi-live" in c["source"]))' "$ROOT/tests/fixtures/h17-claim-phrases.json")"
+for ev in '{"hook_event_name":"PreToolUse","session_id":"neg78","tool_name":"Bash","tool_input":{"command":"ls -F"}}' \
+          '{"hook_event_name":"PostToolUse","session_id":"neg78","tool_name":"Bash","tool_input":{"command":"ls -F"},"tool_response":{"exit_code":0,"stdout":"Applications/\nDesktop/\ntest_file.txt\n"}}' \
+          '{"hook_event_name":"PreToolUse","session_id":"neg78","tool_name":"read","tool_input":{"path":"test_file.txt"}}' \
+          '{"hook_event_name":"PostToolUse","session_id":"neg78","tool_name":"read","tool_input":{"path":"test_file.txt"},"tool_response":{"stdout":"This is a test file created by the agent."}}' \
+          '{"hook_event_name":"PreToolUse","session_id":"neg78","tool_name":"Bash","tool_input":{"command":"date '"'"'+%Y-%m-%d %H:%M:%S'"'"'"}}' \
+          '{"hook_event_name":"PostToolUse","session_id":"neg78","tool_name":"Bash","tool_input":{"command":"date '"'"'+%Y-%m-%d %H:%M:%S'"'"'"},"tool_response":{"exit_code":0,"stdout":"2026-10-15 08:49:30"}}'; do printf '%s' "$ev" | bash "$HOOK" >/dev/null; done
+o78b="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg78\",\"last_assistant_message\":$(j "$T78_TEXT")}" | bash "$HOOK")"
+if ! printf '%s' "$o78" | grep -q 'expect_claim=' && printf '%s' "$o78" | grep -q '^[1-9]' && printf '%s' "$o78b" | grep -q 'trivial'; then ok "T78 Pi turn-2 'I have executed the requested commands…' is a claim; its ls/read/date trailers are rejected ($(printf '%s' "$o78" | head -1))"; else bad "T78: [$o78] [$o78b]"; fi
+
+# (79) R8: state dir 0700 and session files 0600 (out_sample holds tool output; owner decision 2026-10-15 Q9=A)
+SD79="$SB/state79"; export AIDD_CC_STATE_DIR="$SD79"
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg79","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg79","prompt":"進めて"}' | bash "$HOOK" >/dev/null
+chmod 644 "$SD79/sessions/claude-code__neg79.jsonl" "$SD79/sessions/claude-code__neg79.json"
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg79","tool_name":"Bash","tool_input":{"command":"pytest -q"},"tool_response":{"exit_code":0,"stdout":"3 passed"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"neg79","prompt":"続けて"}' | bash "$HOOK" >/dev/null
+m79="$( (stat -f '%Lp' "$SD79" "$SD79/sessions" "$SD79/sessions/claude-code__neg79.jsonl" "$SD79/sessions/claude-code__neg79.json" 2>/dev/null || stat -c '%a' "$SD79" "$SD79/sessions" "$SD79/sessions/claude-code__neg79.jsonl" "$SD79/sessions/claude-code__neg79.json") | tr '\n' ' ' | sed 's/ $//')"
+export AIDD_CC_STATE_DIR="$SB/state"
+if [ "$m79" = "700 700 600 600" ]; then ok "T79 state dir 0700, session json/jsonl 0600 (re-tightened on write)"; else bad "T79: modes [$m79] (want 700 700 600 600)"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
