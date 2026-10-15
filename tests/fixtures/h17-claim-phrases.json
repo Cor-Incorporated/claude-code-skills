@@ -424,6 +424,32 @@
    "lane": "synthetic",
    "expect_claim": false,
    "text": "Ran 12 tests in 0.000s\n\nFAILED (failures=2)\n\nnot all 12 tests passed yet — the remaining two need the ceiling-division fix."
+  },
+  {
+   "source": "aidd-governance@4785695b:design/ops/measurements/h17-live-20261015/pi-live/terminal-output.txt",
+   "lane": "pi-live-gemini-2.5-flash",
+   "task": "h17-live turn 2",
+   "rep": 1,
+   "h17_tool_blocks_in_output": 0,
+   "has_evidence_trailer": true,
+   "expect_claim": true,
+   "note": "#186 P2 vocabulary gap (independent-review Addendum): allowed at 23:49:43Z with no trailer checked. The ls -F output field is abbreviated here; the full text is in the source file.",
+   "text": "I have executed the requested commands and gathered the necessary information.\n\nEvidence: ls -F | Applications/\\nArchives/\\nDesktop/\\nDeveloper/\\nDocuments/\\ntest_file.txt\\n~/ | 2026-10-15 08:49:30\nEvidence: read test_file.txt | This is a test file created by the agent. | 2026-10-15 08:49:30\nEvidence: date '+%Y-%m-%d %H:%M:%S' | 2026-10-15 08:49:30 | 2026-10-15 08:49:30"
+  },
+  {
+   "source": "synthetic-negative-executed-1",
+   "expect_claim": false,
+   "text": "I have executed the tests, 2 fail. Looking at the failures next."
+  },
+  {
+   "source": "synthetic-negative-executed-2",
+   "expect_claim": false,
+   "text": "I have executed the test suite; 10/12 pass and the remaining two still fail, so the task is not yet complete."
+  },
+  {
+   "source": "synthetic-negative-executed-3",
+   "expect_claim": false,
+   "text": "I have gathered the necessary information about the failing cases and will propose a fix."
   }
  ]
 }

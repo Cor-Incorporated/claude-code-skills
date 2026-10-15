@@ -25,7 +25,30 @@ def state_dir() -> Path:
         )
     )
     (d / "sessions").mkdir(parents=True, exist_ok=True)
+    _private_dir(d)
+    _private_dir(d / "sessions")
     return d
+
+
+def _private_dir(p: Path) -> None:
+    """aidd-governance#186 R8: the state dir holds tool output (`out_sample`), so it is 0700 and
+    every session file 0600 — re-tightened on each write so files created by an older control
+    (0644) are fixed the next time they are touched.  Owner decision 2026-10-15 Q9=A."""
+    try:
+        if (p.stat().st_mode & 0o777) != 0o700:
+            os.chmod(p, 0o700)
+    except OSError:
+        pass
+
+
+def _private_file(p: Path) -> None:
+    try:
+        fd = os.open(str(p), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        os.close(fd)
+        if (p.stat().st_mode & 0o777) != 0o600:
+            os.chmod(p, 0o600)
+    except OSError:
+        pass
 
 
 def _slug(s: str) -> str:
@@ -97,13 +120,17 @@ def load_meta(agent: str, session: str) -> dict:
 def save_meta(agent: str, session: str, meta: dict) -> None:
     p = meta_path(agent, session)
     tmp = p.with_suffix(".tmp")
+    _private_file(tmp)
     tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, p)
+    _private_file(p)
 
 
 def record_tool(agent: str, session: str, row: dict) -> None:
     row = dict(row, ts=time.time())
-    append_row(tools_path(agent, session), row)
+    path = tools_path(agent, session)
+    _private_file(path)
+    append_row(path, row)
 
 
 def load_tools(agent: str, session: str) -> list[dict]:

@@ -23,8 +23,8 @@ from aidd_cc_text import (
     commit_subject,
     fix_scope,
     fix_scope_from_output,
+    has_commit_segment,
     segment_runs,
-    shell_segments,
     shell_segments_with_separators,
     is_confirmation_question,
     is_trivial_cmd,
@@ -32,6 +32,7 @@ from aidd_cc_text import (
     evidence_trailers,
     incomplete_evidence_lines,
     output_field_matches,
+    output_numbers_missing,
     has_completion_claim,
     has_persist_claim,
     has_push_claim,
@@ -119,7 +120,12 @@ def repair_family_check(rows: list[dict], meta: dict, cmd: str) -> dict | None:
         and r.get("rc") == 0
         and (
             fix_scope(str(r.get("cmd", "")))
-            or fix_scope_from_output(str(r.get("out_sample", "")))
+            or (
+                has_commit_segment(
+                    str(r.get("cmd", ""))
+                )  # #186 R4: a read of a log is not a commit
+                and fix_scope_from_output(str(r.get("out_sample", "")))
+            )
         )
         == scope
         and r.get("ts", 0) > strat_ts
@@ -317,42 +323,67 @@ def _output_problems(cited: str, claimed: str, row: dict) -> list[str]:
     recorded = row.get("out_sample")
     if recorded is None:
         return []
+    head = re.sub(r"\s+", " ", str(recorded).strip())[:60]
     if output_field_matches(claimed, str(recorded)) is False:
-        head = re.sub(r"\s+", " ", str(recorded).strip())[:60]
         return [
             f"evidence output field does not describe the recorded output of `{cited[:60]}`: "
+            f"cited `{claimed[:60]}` but the command printed `{head}` (DOT-INC-017)"
+        ]
+    missing = output_numbers_missing(claimed, str(recorded))  # #186 R1
+    if missing:
+        return [
+            f"evidence output field cites numbers {missing} that `{cited[:60]}` never printed: "
             f"cited `{claimed[:60]}` but the command printed `{head}` (DOT-INC-017)"
         ]
     return []
 
 
-def _last_edit_row(rows: list[dict]) -> dict | None:
-    """Newest successful Edit/Write/MultiEdit post row (rc 0, or an unknown rc from a
-    harness that reports none for edits — the same rule as _touched_paths)."""
-    last = None
+def _edit_key_path(key: str) -> str:
+    return key[5:].rsplit(":", 1)[0] if key.count(":") >= 2 else key[5:]
+
+
+def _last_write_row(rows: list[dict]) -> tuple[dict, str, str] | None:
+    """Newest successful write in the session: an Edit/Write/MultiEdit post row, or a Bash post
+    row that wrote a path (cp/mv destination, tee/touch/sed -i/patch arguments, `>` targets —
+    the same rule as _touched_paths).  Returns (row, path, how) with how = "edited" for the
+    edit tools and "written" for a shell write (aidd-governance#186 R2: `pytest -q` → `sed -i`
+    → citing the old pytest run was allowed because only Edit rows were considered)."""
+    last: tuple[dict, str, str] | None = None
     for r in rows:
-        if (
-            r.get("event") == "post"
-            and str(r.get("key", "")).startswith("edit:")
-            and r.get("rc") in (0, None)
-            and (last is None or r.get("ts", 0) >= last.get("ts", 0))
-        ):
-            last = r
+        if r.get("event") != "post":
+            continue
+        key = str(r.get("key", ""))
+        if key.startswith("edit:"):
+            if r.get("rc") not in (0, None):
+                continue
+            path, how = _edit_key_path(key), "edited"
+        else:
+            paths = _row_written_paths(r)
+            if not paths:
+                continue
+            path, how = paths[-1], "written"
+        if last is None or r.get("ts", 0) >= last[0].get("ts", 0):
+            last = (r, path, how)
     return last
 
 
 def _stale_problems(cited: str, row: dict, rows: list[dict]) -> list[str]:
-    """aidd-governance#186 P1-2: evidence recorded before the newest successful edit no
-    longer describes the tree (`pytest -q` → Edit a.py → cite the old pytest).  Any
-    edited file counts — the conservative side."""
-    edit = _last_edit_row(rows)
-    if edit is None or row.get("ts", 0) >= edit.get("ts", 0):
+    """aidd-governance#186 P1-2 / R2: evidence recorded before the newest successful write no
+    longer describes the tree (`pytest -q` → Edit a.py → cite the old pytest; `pytest -q` →
+    `sed -i … a.py` → same).  Any written file counts — the conservative side."""
+    last = _last_write_row(rows)
+    if last is None or row.get("ts", 0) >= last[0].get("ts", 0):
         return []
-    key = str(edit.get("key", "edit:?"))
-    path = key[5:].rsplit(":", 1)[0] if key.count(":") >= 2 else key[5:]
+    edit, path, how = last
+    by = (
+        f" by `{re.sub(r'\\s+', ' ', str(edit.get('cmd', '')).strip())[:80]}`"
+        if how == "written"
+        else ""
+    )
+    verb = "edit" if how == "edited" else "write"
     return [
-        f"evidence `{cited[:60]}` ran at {_iso(row.get('ts'))} but {path} was edited later at "
-        f"{_iso(edit.get('ts'))}; re-run it after the edit (DOT-INC-017)"
+        f"evidence `{cited[:60]}` ran at {_iso(row.get('ts'))} but {path} was {how} later at "
+        f"{_iso(edit.get('ts'))}{by}; re-run it after the {verb} (DOT-INC-017)"
     ]
 
 
@@ -365,47 +396,87 @@ WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
 WRITE_ALL_RE = re.compile(r"^(tee|touch|patch|git apply|git checkout|sed -i)\b")
 
 
+def _row_written_paths(r: dict) -> list[str]:
+    """Absolute paths one successful post row WROTE, in command order: Edit/Write keys, the
+    destination of cp/mv/rsync/install/ln (last argument only — the source is not written,
+    Codex r3 P2-3), the arguments of tee/touch/patch/sed -i, and `>` redirection targets.
+    Merely mentioning a path does not count.  Empty when the row's success is unknown
+    (`cp … || true`, Codex r5 P2-b) or it is not a write."""
+    if (
+        r.get("event") != "post"
+        or r.get("rc") not in (0, None)
+        or (r.get("rc") is None and not str(r.get("key", "")).startswith("edit:"))
+    ):
+        return []  # only writes that actually succeeded (Codex r4 P2-e)
+    cwd = str(r.get("cwd") or "")
+    key = str(r.get("key", ""))
+    cands: list[str] = []
+    if key.startswith("edit:"):
+        cands.append(_edit_key_path(key))
+    parts = shell_segments_with_separators(str(r.get("cmd", "")))
+    for i, (seg, _sep) in enumerate(parts):
+        # A write whose own result is masked (`cp a b || true`) has unknown success (Codex r5 P2-b); a write
+        # followed by `;` / `|` / `&&` with the line's rc 0 is counted (review 2026-10-16: `printf x | tee a.py`).
+        if i + 1 < len(parts) and parts[i + 1][1] == "||":
+            continue
+        bare = _unquoted(
+            seg
+        )  # `git commit -m "a > b"` / `awk '$1 > 5'`: no redirection inside quotes
+        args = [t for t in re.findall(r"[\w./~-]+", bare)[1:] if not t.startswith("-")]
+        if WRITE_LAST_RE.match(bare) and args:
+            cands.append(
+                args[-1]
+            )  # the destination, whatever it is called (Codex r7 P2-c)
+        elif bare.startswith("git checkout"):
+            if (
+                " -- " in bare
+            ):  # only the path form writes files; `git checkout -b feat/x` switches branches
+                cands += [
+                    t for t in bare.split(" -- ", 1)[1].split() if not t.startswith("-")
+                ]
+        elif WRITE_ALL_RE.match(bare):
+            cands += [t for t in args if "/" in t or "." in t]
+        cands += re.findall(r"(?<![<>&\d])\d?>>?\s*([\w./~-]+)", bare)
+    out: list[str] = []
+    for c in cands:
+        if c.startswith("/dev/"):
+            continue  # /dev/null is not an artifact (reviewer-g)
+        p = Path(c).expanduser()
+        if not p.is_absolute():
+            p = Path(cwd) / p if cwd else p
+        try:
+            resolved = str(p.resolve())
+        except OSError:
+            resolved = str(p)
+        if resolved not in out:
+            out.append(resolved)
+    return out
+
+
+def _unquoted(seg: str) -> str:
+    """The segment with the CONTENT of single/double-quoted strings blanked, so `>` inside an argument
+    (`git commit -m "a > b"`, `jq '.a > 3'`) is not read as a redirection (review 2026-10-16 P2)."""
+    out, quote = [], None
+    for ch in seg:
+        if quote:
+            if ch == quote:
+                quote = None
+                out.append(ch)
+            else:
+                out.append(" ")
+        elif ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _touched_paths(rows: list[dict]) -> set[str]:
-    """Absolute paths this session WROTE: Edit/Write keys, the destination of
-    cp/mv/rsync/install/ln (last argument only — the source is not written,
-    Codex r3 P2-3), the arguments of tee/touch/patch/sed -i, and `>` redirection
-    targets.  Merely mentioning a path does not count."""
-    out = set()
+    """Absolute paths this session WROTE (union of _row_written_paths over the ledger)."""
+    out: set[str] = set()
     for r in rows:
-        if (
-            r.get("event") != "post"
-            or r.get("rc") not in (0, None)
-            or (r.get("rc") is None and not str(r.get("key", "")).startswith("edit:"))
-        ):
-            continue  # only writes that actually succeeded (Codex r4 P2-e)
-        cwd = str(r.get("cwd") or "")
-        key = str(r.get("key", ""))
-        cands = []
-        if r.get("cmd") and not _line_rc_applies(str(r.get("cmd"))):
-            continue  # `cp … || true`: the copy's own success is unknown (Codex r5 P2-b)
-        if key.startswith("edit:"):
-            cands.append(key[5:].rsplit(":", 1)[0] if key.count(":") >= 2 else key[5:])
-        for seg in shell_segments(str(r.get("cmd", ""))):
-            args = [
-                t for t in re.findall(r"[\w./~-]+", seg)[1:] if not t.startswith("-")
-            ]
-            if WRITE_LAST_RE.match(seg) and args:
-                cands.append(
-                    args[-1]
-                )  # the destination, whatever it is called (Codex r7 P2-c)
-            elif WRITE_ALL_RE.match(seg):
-                cands += [t for t in args if "/" in t or "." in t]
-            cands += re.findall(r"\d?>>?\s*([\w./~-]+)", seg)
-        for c in cands:
-            if c.startswith("/dev/"):
-                continue  # /dev/null is not an artifact (reviewer-g)
-            p = Path(c).expanduser()
-            if not p.is_absolute():
-                p = Path(cwd) / p if cwd else p
-            try:
-                out.add(str(p.resolve()))
-            except OSError:
-                out.add(str(p))
+        out.update(_row_written_paths(r))
     return out
 
 
