@@ -25,7 +25,6 @@ from aidd_cc_text import (
     fix_scope_from_output,
     has_commit_segment,
     segment_runs,
-    shell_segments,
     shell_segments_with_separators,
     is_confirmation_question,
     is_trivial_cmd,
@@ -122,7 +121,9 @@ def repair_family_check(rows: list[dict], meta: dict, cmd: str) -> dict | None:
         and (
             fix_scope(str(r.get("cmd", "")))
             or (
-                has_commit_segment(str(r.get("cmd", "")))  # #186 R4: a read of a log is not a commit
+                has_commit_segment(
+                    str(r.get("cmd", ""))
+                )  # #186 R4: a read of a log is not a commit
                 and fix_scope_from_output(str(r.get("out_sample", "")))
             )
         )
@@ -410,17 +411,32 @@ def _row_written_paths(r: dict) -> list[str]:
     cwd = str(r.get("cwd") or "")
     key = str(r.get("key", ""))
     cands: list[str] = []
-    if r.get("cmd") and not _line_rc_applies(str(r.get("cmd"))):
-        return []
     if key.startswith("edit:"):
         cands.append(_edit_key_path(key))
-    for seg in shell_segments(str(r.get("cmd", ""))):
-        args = [t for t in re.findall(r"[\w./~-]+", seg)[1:] if not t.startswith("-")]
-        if WRITE_LAST_RE.match(seg) and args:
-            cands.append(args[-1])  # the destination, whatever it is called (Codex r7 P2-c)
-        elif WRITE_ALL_RE.match(seg):
+    parts = shell_segments_with_separators(str(r.get("cmd", "")))
+    for i, (seg, _sep) in enumerate(parts):
+        # A write whose own result is masked (`cp a b || true`) has unknown success (Codex r5 P2-b); a write
+        # followed by `;` / `|` / `&&` with the line's rc 0 is counted (review 2026-10-16: `printf x | tee a.py`).
+        if i + 1 < len(parts) and parts[i + 1][1] == "||":
+            continue
+        bare = _unquoted(
+            seg
+        )  # `git commit -m "a > b"` / `awk '$1 > 5'`: no redirection inside quotes
+        args = [t for t in re.findall(r"[\w./~-]+", bare)[1:] if not t.startswith("-")]
+        if WRITE_LAST_RE.match(bare) and args:
+            cands.append(
+                args[-1]
+            )  # the destination, whatever it is called (Codex r7 P2-c)
+        elif bare.startswith("git checkout"):
+            if (
+                " -- " in bare
+            ):  # only the path form writes files; `git checkout -b feat/x` switches branches
+                cands += [
+                    t for t in bare.split(" -- ", 1)[1].split() if not t.startswith("-")
+                ]
+        elif WRITE_ALL_RE.match(bare):
             cands += [t for t in args if "/" in t or "." in t]
-        cands += re.findall(r"\d?>>?\s*([\w./~-]+)", seg)
+        cands += re.findall(r"(?<![<>&\d])\d?>>?\s*([\w./~-]+)", bare)
     out: list[str] = []
     for c in cands:
         if c.startswith("/dev/"):
@@ -435,6 +451,25 @@ def _row_written_paths(r: dict) -> list[str]:
         if resolved not in out:
             out.append(resolved)
     return out
+
+
+def _unquoted(seg: str) -> str:
+    """The segment with the CONTENT of single/double-quoted strings blanked, so `>` inside an argument
+    (`git commit -m "a > b"`, `jq '.a > 3'`) is not read as a redirection (review 2026-10-16 P2)."""
+    out, quote = [], None
+    for ch in seg:
+        if quote:
+            if ch == quote:
+                quote = None
+                out.append(ch)
+            else:
+                out.append(" ")
+        elif ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _touched_paths(rows: list[dict]) -> set[str]:
