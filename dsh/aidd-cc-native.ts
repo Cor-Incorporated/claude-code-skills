@@ -1,0 +1,178 @@
+// DeepSeek Harness (dsh) NATIVE cordis plugin for the H17 common control (aidd-governance#179).
+//
+// Why a native plugin: the shipped bridge `@deepseek-ai/dsh-hooks-claude-code` maps `Stop` onto
+// `agent/turn-stopping` but its Stop payload has no `last_assistant_message` and an empty
+// `transcript_path` (bridge README "Known Limitations", measured live 2026-10-14 05:11Z: the Stop hook
+// fired, the oracle saw an empty text and allowed 「実装完了しました。」).  The session itself holds the
+// text: the decoded `session.v4.jsonl.zstd` of that run has `assistant/message` (seq 20) BEFORE the
+// `hook/invoked Stop` rows (seq 22-27), so a plugin on the same extension point can read it from
+// `agent.session.events` and hand it to the shared oracle (~/.claude/hooks/lib/aidd_cc.py, agent `dsh`).
+//
+// Extension points used (same as the bridge, lib/index.js of dsh-hooks-claude-code@0.0.1-rc.5):
+//   agent/pre-step        -> prompt            (user decisions / deadline)
+//   tools/pre-execute     -> pre               (C-ITER; PreToolDecision.deny)
+//   tools/post-execute    -> post              (rc / output for evidence binding; `[exit code: N]` marker)
+//   agent/turn-stopping   -> stop              (C-EVIDENCE; agent.steer() with the gate reason, max 2 per turn)
+//
+// Install (experiment profile only, never the default one):
+//   copy next to cordis.patch.yml and add to the patch layer:
+//     - insert:
+//         - id: aidd-cc-native
+//           name: ./aidd-cc-native.ts
+//           config: { oracle: !!js `${process.env.HOME}/.claude/hooks/lib/aidd_cc.py` }
+//
+// STATUS 2026-10-16: UNVERIFIED on a live dsh.  The dsh core packages are `publishConfig.access:
+// restricted` and the dependency `@deepseek-ai/dsh-bash-env@^0.0.1-rc.1` returns npm 404 on this
+// machine, so this file type-checks only against the API shapes visible in the bridge's compiled
+// lib/index.js (ctx.on / agent.session.events / agent.steer / createUserMessage / PreToolDecision).
+// It is the design + skeleton the owner's dsh checkout can run; #179 stays BLOCKED_EXTERNAL until a
+// live Stop block is measured through it.
+import { spawn } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
+
+export const name = "aidd-cc-native";
+export const inject: string[] = [];
+
+export interface Config {
+  /** Path to the shared oracle (default: ~/.claude/hooks/lib/aidd_cc.py). */
+  oracle?: string;
+  /** Max forced continuations per turn before the unverified claim is let through WITH a visible note. */
+  maxSteers?: number;
+}
+
+type Verdict = { decision?: string; reason?: string; rule?: string; would_block?: boolean; note?: string };
+const AGENT = "dsh";
+
+function ledgerError(rule: string, detail: string): void {
+  const ledger = process.env.AIDD_LEDGER_PATH ?? join(homedir(), ".claude", "hooks", "ledger", "guard-ledger.jsonl");
+  const row = {
+    ts: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+    component: "H17", hook: "aidd-cc", event: "error", decision: "unavailable", rule,
+    cmd_head: detail.slice(0, 120), source: process.env.AIDD_LEDGER_SOURCE ?? "real", session: "unset", agent: AGENT,
+  };
+  try {
+    mkdirSync(dirname(ledger), { recursive: true });
+    appendFileSync(ledger, JSON.stringify(row) + "\n");
+  } catch {
+    /* the ledger itself is unavailable */
+  }
+}
+
+export function runCC(oracle: string, cmd: string, payload: Record<string, unknown>, extra: string[] = []): Promise<Verdict> {
+  if (process.env.AIDD_CC_DISABLE === "1") return Promise.resolve({ decision: "allow", rule: "disabled" });
+  return new Promise((resolve) => {
+    const child = spawn("python3", ["-I", oracle, cmd, "--agent", AGENT, ...extra], {
+      env: { ...process.env, AIDD_CC_AGENT: AGENT },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.on("data", (d) => (out += String(d)));
+    child.on("error", (e) => {
+      ledgerError(`spawn-error:${cmd}`, String(e));
+      resolve({ decision: "allow", rule: "spawn-error" });
+    });
+    child.on("close", (code) => {
+      const line = out.trim().split("\n").pop() ?? "";
+      if (!line) {
+        ledgerError(`python-exit-${code}:${cmd}`, "");
+        resolve({ decision: "allow", rule: "empty" });
+        return;
+      }
+      try {
+        resolve(JSON.parse(line) as Verdict);
+      } catch (e) {
+        ledgerError(`parse-error:${cmd}`, String(e));
+        resolve({ decision: "allow", rule: "parse-error" });
+      }
+    });
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+
+/** Text parts of a dsh message (content blocks; reasoning blocks are not the report). */
+function blocksToText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((b) => (b && typeof b === "object" && (b as { type?: string }).type === "text" ? String((b as { text?: string }).text ?? "") : ""))
+    .join("");
+}
+
+/** The last `assistant/message` of the current turn from the session event log. */
+function lastAssistantText(agent: any): string {
+  const events: any[] = [...(agent?.session?.events ?? [])];
+  const turnStart = events.findLast((e) => e?.type === "turn/start");
+  const turn = turnStart?.data?.turn;
+  const msg = events.findLast((e) => e?.type === "assistant/message" && (turn === undefined || e?.data?.turn === turn));
+  return blocksToText(msg?.data?.message?.content);
+}
+
+/** `[exit code: N]` marker that dsh appends to every bash result (system prompt of the headless profile). */
+function exitCodeOf(text: string): number | undefined {
+  const m = /\[exit code: (-?\d{1,3})\]\s*$/.exec(text.trim());
+  return m ? Number(m[1]) : undefined;
+}
+
+export function apply(ctx: any, config: Config = {}): void {
+  const oracle = config.oracle ?? join(homedir(), ".claude", "hooks", "lib", "aidd_cc.py");
+  const maxSteers = config.maxSteers ?? 2;
+  const steers = new Map<string, number>(); // session id -> steers in the current turn
+
+  ctx.on("agent/pre-step", async ({ agent, messages }: any, next: () => Promise<any>) => {
+    const sid = String(agent?.session?.header?.id ?? "unset");
+    const user = [...(messages ?? [])].reverse().find((m: any) => m?.role === "user" && m?.source?.kind === "user");
+    const prompt = blocksToText(user?.content);
+    if (prompt && !prompt.trimStart().startsWith("[H17 evidence gate]")) {
+      steers.delete(sid); // a new user request gets a fresh gate budget
+      await runCC(oracle, "prompt", { session_id: sid, prompt, cwd: agent?.session?.header?.cwd });
+    }
+    return next();
+  });
+
+  ctx.on("tools/pre-execute", async (exec: any, next: () => Promise<any>) => {
+    const sid = String(exec?.agent?.session?.header?.id ?? "unset");
+    const v = await runCC(oracle, "pre", {
+      session_id: sid, tool_name: exec?.name, tool_input: exec?.arguments ?? {}, cwd: exec?.agent?.session?.header?.cwd,
+    });
+    if (v.decision === "block") return { kind: "deny", reason: `[H17] ${v.reason ?? v.rule}` };
+    return next();
+  });
+
+  ctx.on("tools/post-execute", async (exec: any, result: any, next: () => Promise<any>) => {
+    const sid = String(exec?.agent?.session?.header?.id ?? "unset");
+    const text = blocksToText(result?.content).slice(0, 4000);
+    await runCC(oracle, "post", {
+      session_id: sid, tool_name: exec?.name, tool_input: exec?.arguments ?? {},
+      tool_response: { exit_code: exitCodeOf(text), output: text }, cwd: exec?.agent?.session?.header?.cwd,
+    });
+    return next();
+  });
+
+  ctx.on("agent/turn-stopping", async ({ agent }: any) => {
+    const sid = String(agent?.session?.header?.id ?? "unset");
+    const text = lastAssistantText(agent);
+    if (!text.trim()) return;
+    const n = steers.get(sid) ?? 0;
+    const extra = n >= maxSteers ? ["--max-blocks", "0", "--no-count"] : [];
+    const v = await runCC(oracle, "stop", { session_id: sid, last_assistant_message: text, cwd: agent?.session?.header?.cwd }, extra);
+    const note = v.decision === "block"
+      ? `[H17 evidence gate] ${v.reason ?? ""} — fix the report before claiming completion.`
+      : v.would_block ? `${v.note ?? "[H17] evidence unverified (max-blocks released)"} — ${v.reason ?? ""}` : null;
+    if (!note) return;
+    if (v.decision === "block" && n < maxSteers) {
+      steers.set(sid, n + 1);
+      agent.steer(createUserMessage({ content: [{ type: "text", text: note }], source: { kind: "plugin", plugin: name } }));
+      return;
+    }
+    // Budget spent or python released: the claim passes WITH the visible note (never silently, #186 P1-4).
+    try {
+      agent.inject?.(createUserMessage({ content: [{ type: "text", text: note }], source: { kind: "plugin", plugin: name } }));
+    } catch {
+      /* the would-block row written by aidd_cc.py is the durable record */
+    }
+  });
+}
+
+export default apply;

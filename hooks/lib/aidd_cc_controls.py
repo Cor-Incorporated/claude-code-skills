@@ -553,17 +553,44 @@ def control_sha() -> str:
     return h.hexdigest()
 
 
+CONTROL_SET_EXTRA = ("aidd-cc-adapter.sh",)
+
+
+def control_set_sha() -> str:
+    """aidd-governance#186 P2-4: control_sha() is pinned to the five python files (its set and order are
+    an identifier other tooling depends on), so the shared adapter — the file that turns a verdict into
+    the Claude Code / Codex wire format — is covered by this second digest: control_sha() input plus
+    CONTROL_SET_EXTRA, all read from the same directory.  Recorded as `cc_set_sha` on tool rows and
+    checked by source_set_problems like cc_sha."""
+    here = Path(__file__).resolve().parent
+    h = hashlib.sha256(control_sha().encode())
+    for name in CONTROL_SET_EXTRA:
+        try:
+            h.update((here / name).read_bytes())
+        except OSError:
+            h.update(b"missing:" + name.encode())
+    return h.hexdigest()
+
+
 def source_set_problems(rows: list[dict]) -> list[str]:
-    """DOT-INC-023: every tool row of the run must carry the same control sha as now."""
+    """DOT-INC-023: every tool row of the run must carry the same control sha as now (python set), and
+    the same control-set sha (python set + adapter, #186 P2-4) where the row recorded one."""
     if mutated("source-set.pin"):
         return []
+    out = []
     now = control_sha()
     seen = {r.get("cc_sha") for r in rows if r.get("cc_sha")}
     if seen and seen != {now}:
-        return [
+        out.append(
             f"control source set changed during the run ({len(seen)} shas seen); acceptance refused (DOT-INC-023)"
-        ]
-    return []
+        )
+    now_set = control_set_sha()
+    seen_set = {r.get("cc_set_sha") for r in rows if r.get("cc_set_sha")}
+    if seen_set and seen_set != {now_set} and not out:
+        out.append(
+            f"control set (python + adapter) changed during the run ({len(seen_set)} set shas seen); acceptance refused (DOT-INC-023)"
+        )
+    return out
 
 
 def _readback_problems(text: str, cwd: str, touched: set[str]) -> list[str]:

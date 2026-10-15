@@ -68,7 +68,9 @@ allow() {
   elif [[ "${CURSOR_GIT_GUARD_TRACE:-0}" == "1" ]]; then
     ledger_row invoked
   fi
-  printf '{"permission":"allow"}'
+  # aidd-governance#186 P2-7 / ADR-006: the guard has no objection, but it does not GRANT anything.
+  # `{}` leaves Cursor's own permission flow in charge; `{"permission":"allow"}` would have skipped it.
+  printf '{}'
   exit 0
 }
 

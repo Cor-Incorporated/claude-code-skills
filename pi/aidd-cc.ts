@@ -10,14 +10,32 @@
 // Pi has no PermissionRequest / AskUserQuestion hook: C-DECISION re-ask suppression is
 // BLOCKED_PLATFORM here (documented in tests/dot-replay/cases.py).
 import { spawn } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 type Verdict = { decision?: string; reason?: string; rule?: string; would_block?: boolean; note?: string };
 
 const CC_PY = process.env.AIDD_CC_PY ?? join(homedir(), ".claude", "hooks", "lib", "aidd_cc.py");
 const AGENT = "pi";
 const MAX_CONTINUATIONS = 2;
+
+// aidd-governance#186 P2-2: a spawn / parse failure of the oracle leaves an H6 error row (same shape as
+// aidd-cc-adapter.sh ledger_error()) instead of passing silently.
+function ledgerError(rule: string, detail: string): void {
+  const ledger = process.env.AIDD_LEDGER_PATH ?? join(homedir(), ".claude", "hooks", "ledger", "guard-ledger.jsonl");
+  const row = {
+    ts: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+    component: "H17", hook: "aidd-cc", event: "error", decision: "unavailable", rule,
+    cmd_head: detail.slice(0, 120), source: process.env.AIDD_LEDGER_SOURCE ?? "real", session: "unset", agent: AGENT,
+  };
+  try {
+    mkdirSync(dirname(ledger), { recursive: true });
+    appendFileSync(ledger, JSON.stringify(row) + "\n");
+  } catch {
+    /* the ledger itself is unavailable */
+  }
+}
 
 export function runCC(cmd: string, payload: Record<string, unknown>): Promise<Verdict> {
   if (process.env.AIDD_CC_DISABLE === "1") return Promise.resolve({ decision: "allow", rule: "disabled" });
@@ -28,12 +46,21 @@ export function runCC(cmd: string, payload: Record<string, unknown>): Promise<Ve
     });
     let out = "";
     child.stdout.on("data", (d) => (out += String(d)));
-    child.on("error", () => resolve({ decision: "allow", rule: "spawn-error" }));
-    child.on("close", () => {
+    child.on("error", (e) => {
+      ledgerError(`spawn-error:${cmd}`, String(e));
+      resolve({ decision: "allow", rule: "spawn-error" });
+    });
+    child.on("close", (code) => {
       const line = out.trim().split("\n").pop() ?? "";
+      if (!line) {
+        ledgerError(`python-exit-${code}:${cmd}`, "");
+        resolve({ decision: "allow", rule: "empty" });
+        return;
+      }
       try {
-        resolve(line ? (JSON.parse(line) as Verdict) : { decision: "allow", rule: "empty" });
-      } catch {
+        resolve(JSON.parse(line) as Verdict);
+      } catch (e) {
+        ledgerError(`parse-error:${cmd}`, String(e));
         resolve({ decision: "allow", rule: "parse-error" });
       }
     });
@@ -100,7 +127,10 @@ export default function aiddCommonControl(pi: any) {
       session_id: sessionID,
       tool_name: tool,
       tool_input: editInput(input),
-      tool_response: { exit_code: rc, stdout: textOf(event).slice(0, 4000), output: textOf(event).slice(0, 4000) },
+      // One copy only: the oracle concatenates stdout + stderr + output, so sending the text twice doubled
+      // every recorded out_sample ("okok", pi-live/tools.jsonl 2026-10-15) and made honest output fields fail
+      // the #186 R1 comparison (found by the Pi replay arm, aidd-governance#186 P2-6).
+      tool_response: { exit_code: rc, output: textOf(event).slice(0, 4000) },
     });
     return undefined;
   });

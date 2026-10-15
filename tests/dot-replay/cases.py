@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import oracles as O
 
-ALL = ["claude", "codex", "cursor"]
+ALL = ["claude", "codex", "cursor", "opencode", "pi"]  # opencode / pi arms: aidd-governance#186 P2-6
 CC = [
     "claude"
 ]  # evaluator-side oracles run once through aidd_cc.py (agent-independent)

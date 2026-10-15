@@ -32,7 +32,7 @@ ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "hooks" / "lib"))
 import cases as C  # noqa: E402
-from oracles import Ctx  # noqa: E402
+from oracles import RUNTIME_OK, Ctx  # noqa: E402
 
 
 def sha(p: Path) -> str | None:
@@ -61,7 +61,38 @@ def registered_entries() -> dict:
         if "aidd-cc-cursor.sh" in h["command"]:
             out["cursor"] = Path(os.path.expanduser(h["command"]))
     out["cc"] = home / ".claude" / "hooks" / "lib" / "aidd_cc.py"
-    return out
+    out["opencode"] = home / ".config" / "opencode" / "plugins" / "aidd-cc.ts"
+    out["pi"] = home / ".pi" / "agent" / "extensions" / "aidd-cc.ts"
+    return {**out, **_control_set(home / ".claude" / "hooks" / "lib")}
+
+
+LIB_PINNED = (
+    "aidd_cc_controls.py",
+    "aidd_cc_text.py",
+    "aidd_cc_eval.py",
+    "aidd_cc_session.py",
+    "aidd-cc-adapter.sh",
+)
+
+
+def _control_set(lib: Path) -> dict:
+    """aidd-governance#186 P2-3: pin EVERY file the verdict depends on, not only aidd_cc.py and the
+    entry scripts — the #186 repair changed aidd_cc_controls.py / aidd_cc_text.py, which the old
+    summary could not tell apart."""
+    return {name: lib / name for name in LIB_PINNED}
+
+
+def control_shas(lib: Path) -> dict:
+    """control_sha / control_set_sha as computed by the lib under test (repo or deployed)."""
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); import aidd_cc_controls as c; import json; "
+        "print(json.dumps({'control_sha': c.control_sha(), 'control_set_sha': getattr(c, 'control_set_sha', lambda: None)()}))"
+    )
+    try:
+        p = subprocess.run([sys.executable, "-I", "-c", code, str(lib)], capture_output=True, text=True, timeout=30)
+        return json.loads(p.stdout.strip() or "{}")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
 
 
 def repo_entries() -> dict:
@@ -70,6 +101,9 @@ def repo_entries() -> dict:
         "codex": ROOT / "hooks" / "codex" / "aidd-cc-codex.sh",
         "cursor": ROOT / "hooks" / "cursor" / "aidd-cc-cursor.sh",
         "cc": ROOT / "hooks" / "lib" / "aidd_cc.py",
+        "opencode": ROOT / "opencode" / "aidd-cc.ts",
+        "pi": ROOT / "pi" / "aidd-cc.ts",
+        **_control_set(ROOT / "hooks" / "lib"),
     }
 
 
@@ -133,6 +167,7 @@ def main() -> int:
     }
     only = set(args.only.split(",")) if args.only else None
     results = []
+    skipped_arms: set[str] = set()
     for cid, spec in C.CASES.items():
         if only and cid not in only:
             continue
@@ -149,6 +184,11 @@ def main() -> int:
         rec["mutation_control"] = spec["mutate"]
         gates = []
         for agent in spec["agents"]:
+            if agent in RUNTIME_OK and not RUNTIME_OK[agent]:
+                # The arm's runtime (bun / node>=22) is not installed here: recorded, never counted as a pass.
+                rec["arms"][agent] = {"verdicts": {"gate": None, "skipped": f"runtime missing for {agent}"}}
+                skipped_arms.add(agent)
+                continue
             before = run_arm(
                 spec["oracle"], agent, entry, state_root, env, {"AIDD_CC_DISABLE": "1"}
             )
@@ -177,7 +217,7 @@ def main() -> int:
         results.append(rec)
         print(
             f"{cid} {'GATE-OK' if rec['gate'] else 'GATE-FAIL'} "
-            + " ".join(f"{a}:{rec['arms'][a]['verdicts']}" for a in rec["arms"]),
+            + " ".join(f"{a}:{rec['arms'][a]['verdicts']}" for a in rec["arms"] if "gate" in rec["arms"][a]["verdicts"] and rec["arms"][a]["verdicts"]["gate"] is not None),
             flush=True,
         )
     summary = {
@@ -187,6 +227,8 @@ def main() -> int:
         "host": platform.node(),
         "python": platform.python_version(),
         "control_source_sha256": {k: sha(v) for k, v in entry.items()},
+        **control_shas(entry["cc"].parent),
+        "arm_runtime_skipped": sorted(skipped_arms),
         "actual_entry_mode": "registered" if args.deployed else "repo-path",
         "git_head": subprocess.run(
             ["git", "-C", str(ROOT), "rev-parse", "HEAD"],

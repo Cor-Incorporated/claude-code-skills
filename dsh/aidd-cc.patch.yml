@@ -14,6 +14,21 @@
 # Session-log upload and product telemetry are DISABLED here: dot's handover
 # (minimal-harness-replan-20261012.md) flagged the default-on session log upload;
 # business code must not be sent to DeepSeek as training/session logs.
+#
+# aidd-governance#179 (2026-10-14 05:11Z live): the bridge's Stop payload carries no
+# last_assistant_message and an empty transcript_path, so the evidence gate cannot judge the
+# report through this bridge (PreToolUse / PostToolUse / UserPromptSubmit do work).  The native
+# plugin `aidd-cc-native.ts` (same directory) reads the assistant text from the session event log
+# at agent/turn-stopping and calls the same oracle; enable it INSTEAD of the Stop half of the
+# bridge once it has been exercised on a live dsh (unverified here: the dsh core packages are
+# npm-restricted on this machine).  Keep the bridge entry for the tool / prompt points.
+#
+# - insert:
+#     - id: aidd-cc-native
+#       name: ./aidd-cc-native.ts
+#       config:
+#         oracle: !!js `${process.env.HOME}/.claude/hooks/lib/aidd_cc.py`
+#         maxSteers: 2
 
 - insert:
     - id: aidd-cc-hooks

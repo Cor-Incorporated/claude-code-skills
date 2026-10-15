@@ -36,8 +36,15 @@ ledger_error() {
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "${AIDD_LEDGER_SOURCE:-real}" "$AGENT" >>"$ledger" 2>/dev/null || true
 }
 
+# aidd-governance#186 P2-2: a degraded control is never silent at the harness.  Claude Code and Codex
+# accept a top-level `systemMessage` on any hook event (shown to the user, no decision attached), so an
+# unavailable / crashed control and a release that WOULD have blocked are both announced there, not only
+# in the H6 ledger.  Nothing here ever turns into an allow or a deny on its own.
+note() { printf '{"systemMessage":"[H17] %s"}' "$(printf '%s' "$1" | tr -d '\n' | sed 's/\\/\\\\/g; s/"/\\"/g' | cut -c1-400)"; }
+
 if [ -z "$CC_PY" ] || ! command -v python3 >/dev/null 2>&1; then
   ledger_error "module-or-python-missing"
+  note "common control unavailable (module or python3 missing): nothing was evaluated on this event"
   exit 0
 fi
 
@@ -71,7 +78,9 @@ esac
 case "$event" in
   PreToolUse)
     v="$(run_cc pre)"
-    if [ "$(field "$v" decision)" = "block" ]; then
+    if [ "$(field "$v" decision)" = "error" ]; then
+      note "control error on PreToolUse — iteration / re-ask NOT evaluated: $(field "$v" reason)"
+    elif [ "$(field "$v" decision)" = "block" ]; then
       printf '%s' "$v" | python3 -I -c 'import json,sys
 v=json.load(sys.stdin)
 print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[H17] "+v["reason"]}},ensure_ascii=False))'
@@ -85,11 +94,23 @@ print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","permission
     ;;
   Stop)
     v="$(run_cc stop)"
-    if [ "$(field "$v" decision)" = "block" ]; then
-      printf '%s' "$v" | python3 -I -c 'import json,sys
+    case "$(field "$v" decision)" in
+      block)
+        printf '%s' "$v" | python3 -I -c 'import json,sys
 v=json.load(sys.stdin)
 print(json.dumps({"decision":"block","reason":"[H17] "+v["reason"]},ensure_ascii=False))'
-    fi
+        ;;
+      error)
+        note "control error on Stop — this report passed UNVERIFIED: $(field "$v" reason)"
+        ;;
+      allow)
+        # max-blocks / stop_hook_active release that would have blocked (#186 P1-4 / P2-1): the note the
+        # Pi / OpenCode entries already show is now visible at the Claude Code / Codex entry too.
+        if [ "$(field "$v" would_block)" = "True" ]; then
+          note "$(field "$v" note | sed 's/^\[H17\] //') — $(field "$v" reason)"
+        fi
+        ;;
+    esac
     ;;
   *)
     ledger_error "unknown-event:${event:-none}"
