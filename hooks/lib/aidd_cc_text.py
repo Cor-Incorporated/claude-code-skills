@@ -46,7 +46,9 @@ TEST_RESULT_CLAIM = (
 )
 COMPLETION_CLAIM_RE = re.compile(
     r"(?<![A-Za-z])(verified|完了|根因確定|検証済み|実装済み|解決済み|対応済み|"
-    r"done|" + TEST_RESULT_CLAIM + r"|全件\s*PASS|merged|マージ済み|マージした|pushed|push済み|published|"
+    r"done|"
+    + TEST_RESULT_CLAIM
+    + r"|全件\s*PASS|merged|マージ済み|マージした|pushed|push済み|published|"
     + PERSIST_WORDS
     + r")(?![A-Za-z])",
     re.IGNORECASE,
@@ -89,12 +91,16 @@ DELETE_KIND_RE = re.compile(
 # quotes the claim it withdraws — 「『実装完了しました。』は取り消します」 — or says nothing was completed; the quoted claim
 # and the retraction sentence are removed before the claim scan.  Only the quoted span followed by a retraction verb
 # is removed: 「取り消しは完了です」 keeps its claim (a retraction and a claim in one sentence stay on the claim side).
-RETRACTION_WORDS = r"(?:取り消|取消|撤回|成立し(?:ません|ない|ていません))"
+# Only an AFFIRMATIVE retraction verb counts (independent review 2026-10-16 P1): 「取り消します / 取り消しました /
+# 撤回します / 取り下げます / 成立しません」.  「取り消しません」「撤回の必要はありません」 keep the quoted claim.
+RETRACTION_WORDS = r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ます|ました|た)(?![かが])|成立し(?:ません|ない|ていません))"
 NEGATED_COMPLETION_RE = re.compile(
     r"([「『][^「」『』\n]{0,80}[」』](?=[^\n]{0,12}" + RETRACTION_WORDS + r")|"
     r"完了したものは(?:何も|なにも|一つも|ひとつも)?(?:ありません|ない|無い|存在しません)|"
     r"(?:先の|前の|上の|この|その|以前の)?(?:報告|宣言|主張|完了報告|完了宣言)は成立し(?:ません|ない|ていません)|"
-    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that)?[^\n.]{0,100}|"
+    # the English form removes only its own clause: "I retract my earlier claim that the tests were flaky; all tests
+    # are green and verified" keeps "verified" (review P1: the old `[^\n.]{0,100}` tail swallowed the next clause)
+    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that [^\n.;,]{0,60})?|"
     r"未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
     r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は.{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
     r"has not been (?:verified|merged|pushed|saved|deployed)|not everything is done|none of it is verified|hasn't been pushed|"
@@ -186,16 +192,27 @@ FIX_SUBJECT_RE = re.compile(r"^\s*(fix|hotfix)\(([^)]+)\)")
 # The optional leading `(` is the subshell; `env` / `command` / `exec` / `nice` / `time` are the common
 # prefixes that still run git.  `-F file` (message from a file) has no subject on the command line and
 # is counted from git's own stdout only (fix_scope_from_output, R4).
-GIT_COMMIT_SEG_RE = re.compile(
-    r"^\(?\s*(?:(?:env|command|exec|nice|time|sudo)\s+(?:-\w+\s+)*)*(?:[A-Za-z_]\w*=\S*\s+)*(?:\S*/)?git\s+"
-    r"(?:(?:-[Cc]|--git-dir|--work-tree)[= ]\S+\s+|--[\w-]+(?:=\S+)?\s+)*commit\b(?P<rest>.*)$",
-    re.S,
+_GIT_PREFIX = (
+    # `env -u X` / `nice -n 10` / `sudo -u bob` / `time -p`: a prefix flag may carry one argument
+    r"^\(?\s*(?:(?:env|command|exec|nice|time|sudo)\s+(?:(?:-n|-u|-g|-C|-S)\s+\S+\s+|-\w+\s+)*)*"
+    r"(?:[A-Za-z_]\w*=\S*\s+)*(?:\S*/)?git\s+(?:(?:-[Cc]|--git-dir|--work-tree)[= ]\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
 )
-MSG_FLAG_RE = re.compile(r"(?:^|\s)(?:-[a-zA-Z]*m|--message)(?:\s*=\s*|\s*)(?P<val>.*)$", re.S)
+GIT_COMMIT_SEG_RE = re.compile(_GIT_PREFIX + r"commit\b(?P<rest>.*)$", re.S)
+# Every git subcommand that lands a commit and prints `[branch sha] subject` on success — the rows whose
+# stdout may be read for a fix(scope) subject (R4; review 2026-10-16: cherry-pick / revert / merge / am
+# print the same line and used to count).  Pure readers (`cat old.log`) never match.
+GIT_COMMITTING_SEG_RE = re.compile(
+    _GIT_PREFIX + r"(?:commit|cherry-pick|revert|merge|am|rebase|pull)\b", re.S
+)
+MSG_FLAG_RE = re.compile(
+    r"(?:^|\s)(?:-[a-zA-Z]*m|--message)(?:\s*=\s*|\s*)(?P<val>.*)$", re.S
+)
 FILE_STDIN_RE = re.compile(r"(?:^|\s)(?:-F|--file)(?:\s*=\s*|\s+)-(?:\s|$)")
 HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)(\w+)\1")
 HEREDOC_MSG_RE = re.compile(r"^\$\(\s*cat\s+<<")
-WRAPPER_SEG_RE = re.compile(r"^(?:bash|sh|zsh|eval)\s+(?:-\w+\s+)*(['\"])(?P<inner>.*)\1\s*$", re.S)
+WRAPPER_SEG_RE = re.compile(
+    r"^(?:bash|sh|zsh|eval)\s+(?:-\w+\s+)*(['\"])(?P<inner>.*)\1\s*$", re.S
+)
 COMMIT_STDOUT_RE = re.compile(r"^\s*\[[^\]\n]+ [0-9a-f]{7,}\]\s*(.+)$", re.M)
 STRATEGY_NOTE_RE = re.compile(
     r"STRATEGY\s*[:：]\s*(HOLD|PIVOT|RETIRE|STRATEGY_HOLD|STRATEGY_PIVOT)\b",
@@ -267,7 +284,7 @@ def has_commit_segment(cmd: str) -> bool:
             wrapped = WRAPPER_SEG_RE.match(seg)
             if wrapped and has_commit_segment(wrapped.group("inner")):
                 return True
-            if GIT_COMMIT_SEG_RE.match(seg):
+            if GIT_COMMITTING_SEG_RE.match(seg):
                 return True
     return False
 
@@ -335,7 +352,9 @@ def evidence_trailers(text: str) -> list[tuple[str, str, str]]:
     for line in EVIDENCE_LINE_RE.findall(text or ""):
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 3 and all(parts[:3]):
-            cmd = _unquote_outer(parts[0])  # agents quote the command in backticks (Cursor IDE live 2026-10-14 05:12Z)
+            cmd = _unquote_outer(
+                parts[0]
+            )  # agents quote the command in backticks (Cursor IDE live 2026-10-14 05:12Z)
             out.append((cmd, " | ".join(parts[1:-1]), parts[-1]))
     return out
 
@@ -347,6 +366,9 @@ def _unquote_outer(s: str) -> str:
     s = (s or "").strip()
     while len(s) >= 2 and s[0] == s[-1] and s[0] in "`'\"":
         s = s[1:-1].strip()
+    # a lone opening quote (`` `pytest -q `` with the closing one forgotten) is still decoration
+    if len(s) >= 2 and s[0] in "`'\"" and s[0] not in s[1:]:
+        s = s[1:].strip()
     return s
 
 
@@ -374,25 +396,60 @@ def output_field_matches(claimed: str, recorded: str) -> bool | None:
     return bool(recorded_tokens & claimed_tokens)
 
 
-OUT_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9.])\d+(?:\.\d+)?")
+# A number as written: `47`, `0.12`, `1,234` (thousands separators are dropped when comparing); never the digits
+# inside an identifier (`2e6bc98`, `sha256=…`).  `%` numbers are derived (100%) and status markers (`rc=0`,
+# `exit=0`, `exit code 0`) describe the run, not the output: both are skipped (independent review 2026-10-16 P2).
+OUT_NUMBER_RE = re.compile(
+    r"(?<![A-Za-z0-9.,])(?P<num>\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?P<pct>\s*%)?(?:\s+(?P<word>[A-Za-z]{2,}))?"
+)
+STATUS_NUMBER_RE = re.compile(
+    r"\b(?:rc|exit(?: code| status)?|status|returned)\s*[:=]?\s*\d+\b", re.IGNORECASE
+)
+
+
+def _normalize_number(n: str) -> str:
+    return n.replace(",", "")
 
 
 def output_numbers(text: str) -> list[str]:
-    """Numbers as written (`47`, `0.12`), not digits inside identifiers (`2e6bc98` -> `2` only)."""
-    return OUT_NUMBER_RE.findall(text or "")
+    """Numbers as written (`47`, `0.12`, `1,234`), not digits inside identifiers (`2e6bc98` -> `2` only)."""
+    return [
+        _normalize_number(m.group("num")) for m in OUT_NUMBER_RE.finditer(text or "")
+    ]
 
 
 def output_numbers_missing(claimed: str, recorded: str) -> list[str]:
-    """aidd-governance#186 R1 (independent-review Residual 1): every number written in the trailer's
-    output field must appear in the recorded output.  `pytest -q` printed "3 passed"; a field
+    """aidd-governance#186 R1 (independent-review Residual 1): a number written in the trailer's output
+    field must be a number the cited command printed.  `pytest -q` printed "3 passed"; a field
     "47 passed" shares the word but not the number — that is the fabrication the token overlap
-    (output_field_matches) let through.  Surface form only (C15): a number copied verbatim from
-    any part of the recorded output passes, and a field without numbers is not judged here."""
-    recorded_numbers = set(output_numbers(recorded))
+    (output_field_matches) let through.  Surface form only (C15), judged per number:
+      * `N word` (e.g. `0 failed`): if the recorded output uses that word, it must say `N word` too;
+        if the word never appears there (pytest printed only "3 passed"), `0 failed` is an honest
+        summary of its absence and is not judged
+      * a bare number / ratio (`47/47`): must appear in the recorded output; `0` alone is never judged
+      * status markers (`rc=0`, `exit=0`), `%` values and thousands separators never count as missing
+    A field without numbers is not judged here."""
+    rec_text = STATUS_NUMBER_RE.sub(" ", recorded or "")
+    recorded_numbers = set(output_numbers(rec_text))
+    rec_lower = rec_text.lower()
     seen: list[str] = []
-    for n in output_numbers(claimed):
-        if n not in recorded_numbers and n not in seen:
+    for m in OUT_NUMBER_RE.finditer(STATUS_NUMBER_RE.sub(" ", claimed or "")):
+        n, word = _normalize_number(m.group("num")), (m.group("word") or "").lower()
+        if m.group("pct") or n in seen:
+            continue
+        if word:
+            if not re.search(r"\b" + re.escape(word) + r"\b", rec_lower):
+                continue  # the recorded output never speaks of `word`: `0 failed` summarises an absence
+            if re.search(
+                r"(?<![A-Za-z0-9.,])" + re.escape(n) + r"\s*" + re.escape(word) + r"\b",
+                rec_lower.replace(",", ""),
+            ):
+                continue
             seen.append(n)
+            continue
+        if n == "0" or n in recorded_numbers:
+            continue
+        seen.append(n)
     return seen
 
 
