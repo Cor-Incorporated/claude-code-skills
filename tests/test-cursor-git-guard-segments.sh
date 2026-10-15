@@ -74,8 +74,16 @@ permission() {
   # cwd を fixture にする。guard はここから current branch を読む。
   printf '%s' "$payload" \
     | (cd "$FIX" && env HOME="$SB" AIDD_LEDGER_SOURCE=test bash "$HOOK" 2>/dev/null) \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("permission", "missing"))'
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("permission") or ("allow" if d == {} else "missing"))'
 }
+# "allow" above means "the guard raised no objection": since aidd-governance#186 P2-7 the wire form is `{}`
+# (no opinion, Cursor's own approval flow stays), never `{"permission":"allow"}` (ADR-006). Fixed here:
+raw_nonprotected=$(printf '%s' '{"command":"git push origin feat/x"}' | (cd "$FIX" && env HOME="$SB" AIDD_LEDGER_SOURCE=test bash "$HOOK" 2>/dev/null))
+if [[ "$raw_nonprotected" == "{}" ]]; then
+  printf 'PASS: non-protected push returns {} (no opinion), not permission:allow\n'; pass=$((pass + 1))
+else
+  printf 'FAIL: non-protected push wire form expected {} actual %s\n' "$raw_nonprotected"; fail=$((fail + 1))
+fi
 
 check() {
   local name="$1" expected="$2" command="$3" actual
