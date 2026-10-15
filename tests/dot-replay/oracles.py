@@ -34,25 +34,43 @@ def _runtime(name: str, candidates: list[str], probe: list[str]) -> str | None:
         if not path:
             continue
         try:
-            if subprocess.run([path, *probe], capture_output=True, timeout=20).returncode == 0:
+            if (
+                subprocess.run(
+                    [path, *probe], capture_output=True, timeout=20
+                ).returncode
+                == 0
+            ):
                 return path
         except (OSError, subprocess.TimeoutExpired):
             continue
     return None
 
 
-BUN = _runtime("bun", ["bun", str(Path.home() / ".bun/bin/bun")], ["--version"]) or "bun"
+BUN = (
+    _runtime("bun", ["bun", str(Path.home() / ".bun/bin/bun")], ["--version"]) or "bun"
+)
 NODE = (
     _runtime(
         "node",
-        [str(Path.home() / ".local/share/mise/installs/node/22.17.1/bin/node"), "node"],
+        [
+            os.environ.get(
+                "NODE_BIN", ""
+            ),  # the same override tests/test-pi-extension.sh honours
+            str(
+                Path.home() / ".local/share/mise/installs/node/22.17.1/bin/node"
+            ),  # this machine's mise install
+            "node",
+        ],
         ["-e", "process.exit(parseInt(process.versions.node)>=22?0:1)"],
     )
     or "node"
 )
 RUNTIME_OK = {
     "opencode": _runtime("bun", [BUN], ["--version"]) is not None,
-    "pi": _runtime("node", [NODE], ["-e", "process.exit(parseInt(process.versions.node)>=22?0:1)"]) is not None,
+    "pi": _runtime(
+        "node", [NODE], ["-e", "process.exit(parseInt(process.versions.node)>=22?0:1)"]
+    )
+    is not None,
 }
 
 
@@ -117,13 +135,26 @@ class Ctx:
             return self.run(
                 [BUN, "run", str(HERE / "opencode_driver.ts")],
                 payload,
-                {"AIDD_OC_PLUGIN": str(self.entry["opencode"]), "AIDD_CC_PY": str(self.entry["cc"]), **(extra_env or {})},
+                {
+                    "AIDD_OC_PLUGIN": str(self.entry["opencode"]),
+                    "AIDD_CC_PY": str(self.entry["cc"]),
+                    **(extra_env or {}),
+                },
             )
         if agent == "pi":
             return self.run(
-                [NODE, "--experimental-strip-types", "--no-warnings", str(HERE / "pi_driver.mts")],
+                [
+                    NODE,
+                    "--experimental-strip-types",
+                    "--no-warnings",
+                    str(HERE / "pi_driver.mts"),
+                ],
                 payload,
-                {"AIDD_PI_EXT": str(self.entry["pi"]), "AIDD_CC_PY": str(self.entry["cc"]), **(extra_env or {})},
+                {
+                    "AIDD_PI_EXT": str(self.entry["pi"]),
+                    "AIDD_CC_PY": str(self.entry["cc"]),
+                    **(extra_env or {}),
+                },
             )
         return self.run(["bash", str(self.entry[agent])], payload, extra_env)
 
@@ -389,7 +420,9 @@ def o_reask(ctx: Ctx, agent: str) -> dict:
         return {
             "incident_blocked": False,
             "benign_allowed": True,
-            "evidence": {"note": f"{agent} has no question-tool hook: BLOCKED_PLATFORM"},
+            "evidence": {
+                "note": f"{agent} has no question-tool hook: BLOCKED_PLATFORM"
+            },
         }
     ctx.hook(
         agent,
@@ -449,7 +482,13 @@ def o_source_set(ctx: Ctx, agent: str) -> dict:
 
 
 def _cc_agent(agent: str) -> str:
-    return {"claude": "claude-code", "codex": "codex", "cursor": "cursor", "opencode": "opencode", "pi": "pi"}[agent]
+    return {
+        "claude": "claude-code",
+        "codex": "codex",
+        "cursor": "cursor",
+        "opencode": "opencode",
+        "pi": "pi",
+    }[agent]
 
 
 # ---- evaluator-side (python API, no harness wire) -----------------------------

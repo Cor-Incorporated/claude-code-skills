@@ -127,7 +127,9 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
       if (n >= MAX_REPROMPTS) {
         // aidd-governance#186 P3 (OpenCode silent exhaustion): the re-prompt budget is spent, but the
         // final text is still evaluated through the python release path (--max-blocks 0), which writes
-        // an `evidence.max-blocks.would-block` row and the visible note when it would have blocked.
+        // an `evidence.max-blocks.would-block` H6 row when it would have blocked.  The user-visible annotation
+        // for headless runs is the one experimental.text.complete already appended to the text; this idle-time
+        // pass only makes the release auditable in the ledger (review 2026-10-16: ledger-only, not a UI note).
         await cc("stop", { sessionID, last_assistant_message: last }, ["--max-blocks", "0", "--no-count"])
         return
       }

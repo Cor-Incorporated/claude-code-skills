@@ -40,7 +40,13 @@ ledger_error() {
 # accept a top-level `systemMessage` on any hook event (shown to the user, no decision attached), so an
 # unavailable / crashed control and a release that WOULD have blocked are both announced there, not only
 # in the H6 ledger.  Nothing here ever turns into an allow or a deny on its own.
-note() { printf '{"systemMessage":"[H17] %s"}' "$(printf '%s' "$1" | tr -d '\n' | sed 's/\\/\\\\/g; s/"/\\"/g' | cut -c1-400)"; }
+note() {
+  # JSON built by python (review 2026-10-16 P2: a hand-escaped + byte-cut string could end on a lone backslash,
+  # keep a tab, or split a multibyte character; macOS and GNU cut differ). Truncation happens BEFORE encoding.
+  printf '%s' "$1" | python3 -I -c 'import json,sys
+t=" ".join(sys.stdin.read().split())[:400]
+print(json.dumps({"systemMessage":"[H17] "+t},ensure_ascii=False))' 2>/dev/null
+}
 
 if [ -z "$CC_PY" ] || ! command -v python3 >/dev/null 2>&1; then
   ledger_error "module-or-python-missing"

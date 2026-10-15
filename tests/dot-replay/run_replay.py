@@ -89,7 +89,12 @@ def control_shas(lib: Path) -> dict:
         "print(json.dumps({'control_sha': c.control_sha(), 'control_set_sha': getattr(c, 'control_set_sha', lambda: None)()}))"
     )
     try:
-        p = subprocess.run([sys.executable, "-I", "-c", code, str(lib)], capture_output=True, text=True, timeout=30)
+        p = subprocess.run(
+            [sys.executable, "-I", "-c", code, str(lib)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
         return json.loads(p.stdout.strip() or "{}")
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return {}
@@ -138,7 +143,13 @@ def verdicts(before: dict, fixed: dict, mut: dict) -> dict:
         "fixed": "PASS"
         if (fixed["incident_blocked"] and fixed["benign_allowed"])
         else ("ERROR" if fixed["incident_blocked"] is None else "FAIL"),
-        "mutation": "ERROR" if mut["incident_blocked"] is None else ("RED" if not (mut["incident_blocked"] and mut["benign_allowed"]) else "NOT_RED"),
+        "mutation": "ERROR"
+        if mut["incident_blocked"] is None
+        else (
+            "RED"
+            if not (mut["incident_blocked"] and mut["benign_allowed"])
+            else "NOT_RED"
+        ),
         "positive_control": "PASS" if fixed["benign_allowed"] else "FAIL",
     }
     v["gate"] = all(
@@ -153,6 +164,11 @@ def main() -> int:
     ap.add_argument("--deployed", action="store_true")
     ap.add_argument("--out")
     ap.add_argument("--only")
+    ap.add_argument(
+        "--require-all-arms",
+        action="store_true",
+        help="exit 1 when an opencode / pi arm was skipped for a missing runtime (acceptance runs)",
+    )
     args = ap.parse_args()
     entry = registered_entries() if args.deployed else repo_entries()
     out_dir = Path(
@@ -186,7 +202,12 @@ def main() -> int:
         for agent in spec["agents"]:
             if agent in RUNTIME_OK and not RUNTIME_OK[agent]:
                 # The arm's runtime (bun / node>=22) is not installed here: recorded, never counted as a pass.
-                rec["arms"][agent] = {"verdicts": {"gate": None, "skipped": f"runtime missing for {agent}"}}
+                rec["arms"][agent] = {
+                    "verdicts": {
+                        "gate": None,
+                        "skipped": f"runtime missing for {agent}",
+                    }
+                }
                 skipped_arms.add(agent)
                 continue
             before = run_arm(
@@ -217,7 +238,12 @@ def main() -> int:
         results.append(rec)
         print(
             f"{cid} {'GATE-OK' if rec['gate'] else 'GATE-FAIL'} "
-            + " ".join(f"{a}:{rec['arms'][a]['verdicts']}" for a in rec["arms"] if "gate" in rec["arms"][a]["verdicts"] and rec["arms"][a]["verdicts"]["gate"] is not None),
+            + " ".join(
+                f"{a}:{rec['arms'][a]['verdicts']}"
+                for a in rec["arms"]
+                if "gate" in rec["arms"][a]["verdicts"]
+                and rec["arms"][a]["verdicts"]["gate"] is not None
+            ),
             flush=True,
         )
     summary = {
@@ -265,6 +291,11 @@ def main() -> int:
         )
     )
     print(f"written: {out_dir / 'replay-results.json'}")
+    if args.require_all_arms and skipped_arms:
+        print(
+            f"arms skipped for a missing runtime: {sorted(skipped_arms)} (--require-all-arms)"
+        )
+        return 1
     return 0 if summary["local_gate_ok"] == summary["counts"]["LOCAL"] else 1
 
 
