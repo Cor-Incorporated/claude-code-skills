@@ -812,7 +812,10 @@ for c in "perl -pi -e 's/a/b/' a.py" "sed -E -i 's/a/b/' a.py" "git restore a.py
   o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"$sid\",\"last_assistant_message\":\"verified.\\nEvidence: pytest -q | 3 passed | 10:00\"}" | bash "$HOOK")"
   printf '%s' "$o" | grep -q 'written later' && printf '%s' "$o" | grep -q '/x/a\.' || fail87="$fail87 [not stale: $c -> $o]"
 done
-for c in "sed 's/a/b/' a.py" "ruff check a.py" "git restore --staged a.py" "python3 -c \"print(open('/x/a.py').read())\"" "perl -ne 'print' a.py"; do
+# Codex review 2026-10-16 (route A) P2: check-only formatter modes, index-only restore in any flag order, and a Python
+# string literal that merely mentions open(…,'w') are reads, not writes
+for c in "sed 's/a/b/' a.py" "ruff check a.py" "git restore --staged a.py" "python3 -c \"print(open('/x/a.py').read())\"" "perl -ne 'print' a.py" \
+         "black --check a.py" "ruff format --check a.py" "rustfmt --check a.rs" "git restore --source=HEAD --staged a.py" "python3 -c \"print(\\\"open('/x/a.py', 'w')\\\")\"" "python3 -c 'print(\"open(/x/a.py, w)\")'"; do
   i87=$((i87 + 1)); sid="neg87-$i87"
   printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"}}" | bash "$HOOK" >/dev/null
   printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"3 passed\"}}" | bash "$HOOK" >/dev/null
@@ -820,7 +823,7 @@ for c in "sed 's/a/b/' a.py" "ruff check a.py" "git restore --staged a.py" "pyth
   o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"$sid\",\"last_assistant_message\":\"verified.\\nEvidence: pytest -q | 3 passed | 10:00\"}" | bash "$HOOK")"
   [ -z "$o" ] || fail87="$fail87 [read treated as write: $c -> $o]"
 done
-if [ -z "$fail87" ]; then ok "T87 P2-b perl -pi / sed -E -i / git restore / python3 -c open(w) / ruff format / black / prettier --write make the old run stale; sed, ruff check, restore --staged, read-only python -c, perl -n do not"; else bad "T87:$fail87"; fi
+if [ -z "$fail87" ]; then ok "T87 P2-b perl -pi / sed -E -i / git restore / python3 -c open(w) / ruff format / black / prettier --write make the old run stale; sed, ruff check, restore --staged (any order), --check modes, read-only / string-literal python -c, perl -n do not"; else bad "T87:$fail87"; fi
 
 # (88) P2-c: a quoted claim is removed only when the retraction takes it as its object (「…」は/を/という報告は 取り消します);
 #      「「実装完了、全件 PASS、検証済み」。古いブランチは取り消しました。」 retracts a branch and keeps its claim

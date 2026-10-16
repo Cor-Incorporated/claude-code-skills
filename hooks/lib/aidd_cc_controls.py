@@ -11,6 +11,7 @@ Adapters translate that into each harness's wire format.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import re
 import time
@@ -395,18 +396,80 @@ WRITE_CMD_RE = re.compile(
 WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
 # Independent review 2026-10-16 P2-b: `perl -pi`, `sed -E -i` (any flag order), `git restore`, `ruff format` and the other
 # in-place formatters left a stale pytest run fresh because only the literal `sed -i` prefix was known.  `-i` anywhere in
-# the sed / perl options, the formatter verbs, and `git restore` (worktree form: `--staged` alone writes the index only)
-# write every path argument.  `python3 -c` / `python -c` with an `open(path, "w"|"a")` or `Path(path).write_*` call is
-# read from the quoted code (surface form: the literal path in the call).
+# the sed / perl options, the formatter verbs, and `git restore` write every path argument.  Codex review 2026-10-16
+# (route A) P2: a formatter in `--check` / `--diff` mode, `eslint --fix-dry-run`, and `git restore` with `--staged` / `-S`
+# and no `--worktree` / `-W` (index only, in any flag order) are reads.  `python3 -c` / `python -c` code is parsed with
+# `ast` (surface form, never executed): `open(<str>, "w"|"a"|"x")` / `Path(<str>).write_*` CALLS write that path; the
+# same text inside a string literal (`print("open('a.py', 'w')")`) does not (Codex review P2).
+_NO_CHECK = r"(?!(?: \S+)* --(?:check|diff)\b)"
 WRITE_ALL_RE = re.compile(
     r"^(tee|touch|patch|git apply|git checkout|sed(?: -[A-Za-z]+)* -i|perl(?: -[A-Za-z]+)* -[A-Za-z]*i|"
-    r"git restore(?! --staged\b)|git restore --staged(?= .*--worktree)|ruff format|ruff check(?= .*--fix)|black|isort|"
-    r"prettier(?= .*--write)|gofmt -w|rustfmt|eslint(?= .*--fix)|dos2unix|unix2dos)\b"
+    r"git restore(?!(?=(?: \S+)* (?:--staged|-S)\b)(?!(?: \S+)* (?:--worktree|-W)\b))|"
+    r"(?:ruff format|black|isort|rustfmt|gofmt -w|dos2unix|unix2dos)" + _NO_CHECK + r"|"
+    r"ruff check(?=(?: \S+)* --fix\b)" + _NO_CHECK + r"|prettier(?=(?: \S+)* --write\b)" + _NO_CHECK + r"|"
+    r"eslint(?=(?: \S+)* --fix\b)(?!(?: \S+)* --fix-dry-run\b))\b"
 )
-PY_WRITE_RE = re.compile(
-    r"""open\(\s*['"]([^'"\n]+)['"]\s*,\s*['"][wax]|Path\(\s*['"]([^'"\n]+)['"]\s*\)\.write_(?:text|bytes)\("""
-)
-PY_CMD_RE = re.compile(r"^python[0-9.]*(?: -[A-Za-z]+)* -c\s")
+PY_CMD_RE = re.compile(r"^python[0-9.]*(?: -[A-Za-z]+)* -c\s+")
+
+
+def _py_code_arg(seg: str) -> str:
+    """The code argument of `python -c <code>` as the shell would pass it: a single-quoted string
+    verbatim, a double-quoted one with backslash escapes resolved, else the bare word."""
+    m = PY_CMD_RE.match(seg)
+    rest = seg[m.end() :] if m else ""
+    if rest[:1] == "'":
+        end = rest.find("'", 1)
+        return rest[1:] if end < 0 else rest[1:end]
+    if rest[:1] == '"':
+        out, i = [], 1
+        while i < len(rest):
+            ch = rest[i]
+            if ch == "\\" and i + 1 < len(rest):
+                out.append(rest[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                break
+            out.append(ch)
+            i += 1
+        return "".join(out)
+    return rest.split(None, 1)[0] if rest else ""
+
+
+def _str_const(node: ast.AST) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _py_written_paths(code: str) -> list[str]:
+    """Literal paths that `code` opens for writing or writes through pathlib — AST calls only."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Name) and f.id == "open" and node.args:
+            path = _str_const(node.args[0])
+            mode = _str_const(node.args[1]) if len(node.args) > 1 else None
+            for kw in node.keywords:
+                if kw.arg == "mode":
+                    mode = _str_const(kw.value)
+            if path and mode and mode[:1] in "wax":
+                out.append(path)
+        elif (
+            isinstance(f, ast.Attribute)
+            and f.attr in ("write_text", "write_bytes")
+            and isinstance(f.value, ast.Call)
+            and isinstance(f.value.func, ast.Name)
+            and f.value.func.id == "Path"
+            and f.value.args
+            and _str_const(f.value.args[0])
+        ):
+            out.append(_str_const(f.value.args[0]))
+    return out
 
 
 def _row_written_paths(r: dict) -> list[str]:
@@ -450,7 +513,7 @@ def _row_written_paths(r: dict) -> list[str]:
         elif WRITE_ALL_RE.match(bare):
             cands += [t for t in args if "/" in t or "." in t]
         elif PY_CMD_RE.match(bare):
-            cands += [a or b for a, b in PY_WRITE_RE.findall(seg)]  # the code is inside the quotes: read `seg`, not `bare`
+            cands += _py_written_paths(_py_code_arg(seg))  # the code is inside the quotes: read `seg`, not `bare`
         cands += re.findall(r"(?<![<>&\d])\d?>>?\s*([\w./~-]+)", bare)
     out: list[str] = []
     for c in cands:

@@ -64,7 +64,7 @@ PAST_TENSE_CLAIM = (
     r"(?:works|is working|are working) now\b|everything (?:is )?(?:now )?working\b|"
     r"changes are (?:now )?in place\b|"
     r"(?<!no )(?<![\d/] )(?<![\d/])(?:the |both |my |our )?tests (?:now |all )?pass(?:ed)?\b|"
-    r"(?<!failed, )[1-9]\d{0,3} passed in [\d.]+\s*s\b"
+    r"(?<!failed, )(?<![\d.,])[1-9]\d{0,3} passed in [\d.]+\s*s\b"  # `2 failed, 12 passed in`: no restart inside `12`
 )
 COMPLETION_CLAIM_RE = re.compile(
     r"(?<![A-Za-z])(verified|完了|根因確定|検証済み|実装済み|解決済み|対応済み|"
@@ -142,7 +142,9 @@ NEGATED_COMPLETION_RE = re.compile(
     r"not (?:yet |still )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed|implemented|finished|working|in place)|"
     # PR #414 residual: "Not all tests pass" / "not all 12 tests passed yet" is an honest partial report; without this line the
     # `all … pass(ed)` inside it was read as a claim (over-match).
-    r"not all (?:\d+ )?(?:(?:the )?tests? )?pass(?:ed|ing)?(?: yet)?|"
+    r"not all (?:\d+ )?(?:of )?(?:(?:the )?tests? )?pass(?:ed|ing)?(?: yet)?|"
+    # Codex review 2026-10-16 P2: a partial quantifier is a progress report, not the new `tests pass` claim
+    r"(?:none|some|most|many|few|a few|half|several|only some|only a few) (?:of )?(?:the |these |those )?tests (?:still )?pass(?:ed)?|"
     r"isn'?t (?:done|verified|merged|deployed|saved|fixed|implemented|finished|complete|working)|incomplete|un(?:merged|deployed|saved|pushed|fixed|finished))",
     re.IGNORECASE,
 )
