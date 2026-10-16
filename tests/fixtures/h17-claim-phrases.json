@@ -1899,6 +1899,27 @@
    "expect_claim": false,
    "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) regression guard",
    "text": "修正しましたが、残りは未達です。"
+  },
+  {
+   "source": "synthetic-positive-p1a-109",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 4d4561b (2026-10-16) P2: a negated retraction keeps the quoted claim",
+   "text": "「完了」は誤りですとは言っていません。"
+  },
+  {
+   "source": "synthetic-positive-p1a-110",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 4d4561b (2026-10-16) P2: a questioned retraction keeps the quoted claim",
+   "text": "「検証済み」は正しくありませんか？"
+  },
+  {
+   "source": "synthetic-positive-p1a-111",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 4d4561b (2026-10-16) P2: a questioned retraction (existing verb) keeps the quoted claim",
+   "text": "「修正しました」を取り消しますか？"
   }
  ]
 }

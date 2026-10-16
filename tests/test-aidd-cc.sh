@@ -851,7 +851,10 @@ checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.ba
           (row("python3 -c 'def f():\n    yield open(\"/x/a.py\",\"w\")\nf()'"), []), (row("python3 -c 'async def f(): open(\"/x/a.py\",\"w\")\nf()'"), []),
           (row("sed -fscript.sed a.py"), []), (row("perl -Fpipe -ane 'print' a.py"), []), (row("git restore -Ss HEAD a.py"), []), (row("patch -t a.py"), ["/x/a.py"]),
           # review #7 P0/P1-W: an unexpandable ~name falls back to the literal cwd-relative path (a write that makes evidence stale)
-          (row("echo x > ~tmp/../src/a.py"), ["/x/src/a.py"])]
+          (row("echo x > ~tmp/../src/a.py"), ["/x/src/a.py"]),
+          # Codex route-A on 4d4561b: a NUL in an AST path must not raise (P1); restore inputs are not writes; a constant-false branch does not run
+          (row("python3 -c 'open(\"\\x00\",\"w\")'"), []), (row("git restore --pathspec-from-file manifest.txt"), []), (row("python3 -c 'if False: open(\"/x/a.py\",\"w\")'"), []),
+          (row("python3 -c 'if True: open(\"/x/a.py\",\"w\")'"), ["/x/a.py"])]
 print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
 PY2
 )"
