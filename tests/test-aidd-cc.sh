@@ -879,10 +879,22 @@ t0 = time.perf_counter(); r = has_completion_claim(body); dt = time.perf_counter
 worst = 0.0
 for adversarial in ["現状は未達" + "）" * 20000 + "x。修正しました。", "I fixed the bug" + ";" * 80000, "「" * 40000 + "修正しました", "I retract my earlier claim that " + "x" * 5000]:
     t0 = time.perf_counter(); has_completion_claim(adversarial); worst = max(worst, time.perf_counter() - t0)
-print(f"body2000={dt:.3f}s claim={r} adversarial_worst={worst:.3f}s")
+# review #6 P0-T: the 43-character input that killed the hook at 12 s (silent allow at the entry) must stay under 0.1 s
+r6 = "現状は未達" + "…" * 28 + "x。バグを修正しました。テストも通っています。"
+t0 = time.perf_counter(); c6 = has_completion_claim(r6); d6 = time.perf_counter() - t0
+print(f"body2000={dt:.3f}s claim={r} adversarial_worst={worst:.3f}s r6={d6:.3f}s claim6={c6}")
 PY2
 )"
-if printf '%s' "$o89" | grep -qE 'body2000=0\.[0-4][0-9]*s' && printf '%s' "$o89" | grep -qE 'adversarial_worst=(0\.[0-9]+|1\.0+)s'; then ok "T89 has_completion_claim is linear: $o89"; else bad "T89: $o89"; fi
+if printf '%s' "$o89" | grep -qE 'body2000=0\.[0-4][0-9]*s' && printf '%s' "$o89" | grep -qE 'adversarial_worst=(0\.[0-9]+|1\.0+)s' && printf '%s' "$o89" | grep -qE 'r6=0\.0[0-9]*s claim6=True'; then ok "T89 has_completion_claim is linear: $o89"; else bad "T89: $o89"; fi
+
+# (90) review #6 P1-S: a python exit without output at the adapter is announced as a systemMessage, never silent
+STUB90="$SB/stub-cc.py"; printf '%s\n' 'import sys; sys.exit(3)' > "$STUB90"
+o90="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg90","last_assistant_message":"The task is complete."}' | AIDD_CC_PY="$STUB90" bash "$HOOK")"
+if printf '%s' "$o90" | grep -q '"systemMessage": *"\[H17\] control error (python exit 3)' && ! printf '%s' "$o90" | grep -q '"decision"' && grep -q '"rule":"python-exit-3:stop"' "$AIDD_LEDGER_PATH"; then ok "T90 python exit without output -> visible systemMessage + ledger row, no decision"; else bad "T90: [$o90]"; fi
+
+# (91) review #6 P1-R: a Readback path with an unknown ~user does not crash the control into UNVERIFIED; it is a block-side problem
+o91="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg91","last_assistant_message":"保存しました。\nReadback: ~nosuchuser-h17/app.toml sha256=0000000000000000000000000000000000000000000000000000000000000000"}' | bash "$HOOK")"
+if printf '%s' "$o91" | grep -q '"decision": "block"' && printf '%s' "$o91" | grep -qi 'unresolvable' && ! printf '%s' "$o91" | grep -q 'UNVERIFIED'; then ok "T91 unresolvable ~user readback path is a block-side problem, not a crash"; else bad "T91: [$o91]"; fi
 
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

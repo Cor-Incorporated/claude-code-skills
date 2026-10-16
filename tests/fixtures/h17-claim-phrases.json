@@ -1815,6 +1815,27 @@
    "expect_claim": false,
    "note": "parent ruling on review #5 (2026-10-16, block side) P0-2: copula + token (parent's copula list includes was/were; no past marker)",
    "text": "I fixed the first test; the second was unmet."
+  },
+  {
+   "source": "synthetic-positive-p1a-100",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #6 of PR #418 (local_7d21cb9f, head 4103493) P0-N: 'some' inside 'troublesome' is not the quantifier",
+   "text": "The troublesome tests pass now."
+  },
+  {
+   "source": "synthetic-positive-p1a-101",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #6 of PR #418 (local_7d21cb9f, head 4103493) P0-N",
+   "text": "Both wholesome tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-102",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #6 of PR #418 (local_7d21cb9f, head 4103493) P0-N: 'no' inside 'nominal' is not a negation",
+   "text": "I fixed the bug; the nominal tests pass."
   }
  ]
 }
