@@ -860,7 +860,9 @@ checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.ba
           (row("python3 -c 'open(\"\\x00\",\"w\")'"), []), (row("git restore --pathspec-from-file manifest.txt"), []), (row("python3 -c 'if False: open(\"/x/a.py\",\"w\")'"), []),
           (row("python3 -c 'if True: open(\"/x/a.py\",\"w\")'"), ["/x/a.py"]),
           # review #8 F-6: in-place writes to extension-less files are writes
-          (row("sed -i 's/a/b/' Makefile"), ["/x/Makefile"]), (row("tee Dockerfile"), ["/x/Dockerfile"])]
+          (row("sed -i 's/a/b/' Makefile"), ["/x/Makefile"]), (row("tee Dockerfile"), ["/x/Dockerfile"]),
+          # Codex route-A on a8a4f04 P2: inside double quotes the shell removes a backslash only before dollar, backtick, double quote, backslash or newline; the -t of the sync tool is a timestamp flag, not a target directory
+          (row("python3 -c \"open('a\\x2epy','w').write('x')\""), ["/x/a.py"]), (row("rsync -t source.py dest.py"), ["/x/dest.py"])]
 print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
 PY2
 )"
@@ -939,7 +941,8 @@ printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg93\",\"cwd
 o93="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg93","last_assistant_message":"verified.\nEvidence: pytest -q | 3 passed | 10:00"}' | bash "$HOOK")"
 # ruling: a Readback whose path is a symlink loop is a block-side "unresolvable" problem too
 o93b="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg93\",\"last_assistant_message\":\"保存しました。\\nReadback: $D93/l1/a.py sha256=0000000000000000000000000000000000000000000000000000000000000000\"}" | bash "$HOOK")"
-if printf '%s' "$o93" | grep -q '"decision": "block"' && ! printf '%s' "$o93" | grep -q 'UNVERIFIED' && printf '%s' "$o93b" | grep -q 'unresolvable' && ! printf '%s' "$o93b" | grep -q 'UNVERIFIED'; then ok "T93 a symlink-loop path never crashes the control: the old run is stale and the readback is unresolvable (block side)"; else bad "T93: [$o93] [$o93b]"; fi
+# Python >= 3.13 resolves a symlink loop without raising, so the readback is then a plain mismatch: either way it is a block, never UNVERIFIED (Codex a8a4f04 P2)
+if printf '%s' "$o93" | grep -q '"decision": "block"' && ! printf '%s' "$o93" | grep -q 'UNVERIFIED' && printf '%s' "$o93b" | grep -q '"decision": "block"' && printf '%s' "$o93b" | grep -qE 'unresolvable|readback mismatch' && ! printf '%s' "$o93b" | grep -q 'UNVERIFIED'; then ok "T93 a symlink-loop path never crashes the control: the old run is stale and the readback is blocked (unresolvable or mismatch)"; else bad "T93: [$o93] [$o93b]"; fi
 
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
