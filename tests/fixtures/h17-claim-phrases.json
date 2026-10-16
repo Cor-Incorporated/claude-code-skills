@@ -1757,7 +1757,7 @@
    "source": "synthetic-negative-p1a-80",
    "lane": "indrev-p1a",
    "expect_claim": false,
-   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-3: 期限超過です is the predicate of the sentence — sanctioned under the owner's positional (c) ruling",
+   "note": "review #5 P0-3: pending the owner ruling on ADR-008 (c) (2026-10-16); at 50f31e5 this is allow",
    "text": "修正しました、原因は期限超過です。"
   },
   {
@@ -1801,13 +1801,6 @@
    "expect_claim": true,
    "note": "parent ruling on review #5 (2026-10-16, block side) P0-4: ' - '",
    "text": "I retract my earlier claim that the cache was the cause - the parser bug is now fixed"
-  },
-  {
-   "source": "synthetic-negative-p1a-81",
-   "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "parent ruling on review #5 (2026-10-16, block side) P0-2: sentence-initial UNMET: marker",
-   "text": "UNMET: two tests still fail; I fixed the first one."
   },
   {
    "source": "synthetic-negative-p1a-82",
@@ -1857,6 +1850,55 @@
    "expect_claim": false,
    "note": "Codex route-A review of 50f31e5 (2026-10-16) P2: partial progressive",
    "text": "Not all tests are passing."
+  },
+  {
+   "source": "synthetic-positive-p1a-114",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-Q: a question never exempts; 'still' is not a copula",
+   "text": "I fixed everything; are any requirements still unmet?"
+  },
+  {
+   "source": "synthetic-positive-p1a-115",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-Q",
+   "text": "全件修正しました、未達？"
+  },
+  {
+   "source": "synthetic-positive-p1a-119",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-4r: the tail stops before a claim word",
+   "text": "I retract my earlier claim that the cache was the cause now that the parser bug is fixed."
+  },
+  {
+   "source": "synthetic-positive-p1a-120",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-4r",
+   "text": "I retract my earlier claim that the cache was the cause; however the parser bug is now fixed."
+  },
+  {
+   "source": "synthetic-positive-p1a-121",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-4r",
+   "text": "I retract my earlier claim that the cache was the cause as the parser bug is now fixed."
+  },
+  {
+   "source": "synthetic-negative-p1a-85",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) regression guard: copula + token at the end",
+   "text": "I fixed the first test; the second is unmet."
+  },
+  {
+   "source": "synthetic-negative-p1a-86",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) regression guard",
+   "text": "修正しましたが、残りは未達です。"
   }
  ]
 }

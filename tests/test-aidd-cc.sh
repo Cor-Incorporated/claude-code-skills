@@ -849,7 +849,9 @@ checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.ba
           (row("python3 -c 'def f(): open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("black --config pyproject.toml pyproject.toml"), ["/x/pyproject.toml"]),
           # Codex route-A on 50f31e5 P2: a called generator / async body does not run; option values with an "i" are not -i; -Ss is staged; patch -t is a flag
           (row("python3 -c 'def f():\n    yield open(\"/x/a.py\",\"w\")\nf()'"), []), (row("python3 -c 'async def f(): open(\"/x/a.py\",\"w\")\nf()'"), []),
-          (row("sed -fscript.sed a.py"), []), (row("perl -Fpipe -ane 'print' a.py"), []), (row("git restore -Ss HEAD a.py"), []), (row("patch -t a.py"), ["/x/a.py"])]
+          (row("sed -fscript.sed a.py"), []), (row("perl -Fpipe -ane 'print' a.py"), []), (row("git restore -Ss HEAD a.py"), []), (row("patch -t a.py"), ["/x/a.py"]),
+          # review #7 P0/P1-W: an unexpandable ~name falls back to the literal cwd-relative path (a write that makes evidence stale)
+          (row("echo x > ~tmp/../src/a.py"), ["/x/src/a.py"])]
 print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
 PY2
 )"
@@ -898,6 +900,22 @@ if printf '%s' "$o90" | grep -q '"systemMessage": *"\[H17\] control error (pytho
 # (91) review #6 P1-R: a Readback path with an unknown ~user does not crash the control into UNVERIFIED; it is a block-side problem
 o91="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg91","last_assistant_message":"保存しました。\nReadback: ~nosuchuser-h17/app.toml sha256=0000000000000000000000000000000000000000000000000000000000000000"}' | bash "$HOOK")"
 if printf '%s' "$o91" | grep -q '"decision": "block"' && printf '%s' "$o91" | grep -qi 'unresolvable' && ! printf '%s' "$o91" | grep -q 'UNVERIFIED'; then ok "T91 unresolvable ~user readback path is a block-side problem, not a crash"; else bad "T91: [$o91]"; fi
+
+
+# (92) review #7 P0-T2: stop_check must stay fast with many long Bash rows (4,000-character `python3 -c 1;` lines): the
+#      per-fragment re-split of the whole row was quadratic and a 40-row session killed the hook at 12 s (silent allow)
+o92="$(python3 -I - "$ROOT" <<'PY2'
+import sys, time
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_controls import stop_check
+line = "python3 -c 1;" * 307
+rows = [{"event": "post", "rc": 0, "cwd": "/x", "cmd": line, "key": "bash:" + str(i), "ts": 1000 + i, "out_sample": ""} for i in range(40)]
+rows.append({"event": "post", "rc": 0, "cwd": "/x", "cmd": "pytest -q", "key": "bash:pytest", "ts": 999, "out_sample": "3 passed"})
+t0 = time.perf_counter(); v = stop_check({}, rows, "verified.\nEvidence: pytest -q | 999 passed | 10:00", "/x"); dt = time.perf_counter() - t0
+print(f"stop40x4000={dt:.3f}s decision={v.get('decision')}")
+PY2
+)"
+if printf '%s' "$o92" | grep -qE 'stop40x4000=0\.[0-9]+s decision=block'; then ok "T92 stop_check with 40 long rows is sub-second and still blocks the fabricated number: $o92"; else bad "T92: $o92"; fi
 
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
