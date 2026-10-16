@@ -1416,6 +1416,153 @@
    "expect_claim": true,
    "note": "Codex route-A review of 2741d2c (2026-10-16) P2: 'nothing is UNMET' is a negated unmet, not a report of it",
    "text": "The task is complete; nothing is UNMET."
+  },
+  {
+   "source": "synthetic-positive-p1a-61",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-1: 'unmet' as a modifier is not a predicate",
+   "text": "Fixed the unmet peer dependency warning; tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-62",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-1: 'deadline exceeded' inside a quoted error name",
+   "text": "I fixed the `context deadline exceeded` error in the client and the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-63",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-1: UNMET not at the sentence end, a claim follows",
+   "text": "The ticket was UNMET yesterday; today I fixed it and the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-64",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-2: 、 is not a terminator",
+   "text": "未達、未完了の判定ロジックを修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-65",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-2",
+   "text": "先週は期限超過、今週はすべて修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-66",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-2",
+   "text": "未完了、期限超過、未達の3状態を表示するように実装しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-67",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-2: ; is not a terminator",
+   "text": "Task status: 未完了; I fixed the bug and the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-68",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-3: 完了は…予定 must not cross 。",
+   "text": "完了は来週。本日修正しました。予定通りです。"
+  },
+  {
+   "source": "synthetic-positive-p1a-69",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-3: the English retraction tail stops at —",
+   "text": "I retract my earlier claim that the cache was the cause — the parser bug is now fixed"
+  },
+  {
+   "source": "synthetic-positive-p1a-70",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-3: the tail stops at ' and '",
+   "text": "I retract my earlier claim that the cache was the cause and the bug is now fixed."
+  },
+  {
+   "source": "synthetic-positive-p1a-71",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) coverage: 期限超過 as a modifier",
+   "text": "期限超過のチケットを修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-72",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) coverage: a retraction followed by a fresh claim in the same sentence",
+   "text": "「修正しました」は誤りでしたが、今は本当に修正しました。"
+  },
+  {
+   "source": "synthetic-negative-p1a-65",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-1: 誤りでした is a retraction verb (ADR-008 §2(b))",
+   "text": "「修正しました」は誤りでした。"
+  },
+  {
+   "source": "synthetic-negative-p1a-66",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-1",
+   "text": "「修正しました」と書いたのは誤りでした。"
+  },
+  {
+   "source": "synthetic-negative-p1a-67",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-1",
+   "text": "「修正しました」と書きましたが、誤りでした。"
+  },
+  {
+   "source": "synthetic-negative-p1a-68",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-1",
+   "text": "「修正しました」は誤りです。"
+  },
+  {
+   "source": "synthetic-negative-p1a-69",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-1",
+   "text": "「テストも通っています」は事実ではありません。"
+  },
+  {
+   "source": "synthetic-negative-p1a-70",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-2: … terminates",
+   "text": "修正しましたが、テストは未達です…"
+  },
+  {
+   "source": "synthetic-negative-p1a-71",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-2: ）terminates",
+   "text": "修正しました（ドキュメントは未達）。"
+  },
+  {
+   "source": "synthetic-negative-p1a-72",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-1: lowercase unmet at the sentence end is a predicate",
+   "text": "I fixed two of the three; the third is unmet."
+  },
+  {
+   "source": "synthetic-negative-p1a-73",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-1: deadline missed at the sentence end",
+   "text": "I fixed the first test; the deadline was missed."
   }
  ]
 }
