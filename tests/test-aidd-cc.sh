@@ -830,7 +830,8 @@ import sys
 sys.path.insert(0, sys.argv[1] + "/hooks/lib")
 from aidd_cc_controls import _row_written_paths as w
 row = lambda c: w({"event": "post", "rc": 0, "cwd": "/x", "cmd": c})
-checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.bak 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -pi -e 's/a/b/' a.py"), ["/x/a.py"])]
+checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.bak 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -pi -e 's/a/b/' a.py"), ["/x/a.py"]),
+          (row("perl -0pi -e 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -00pi -e 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -CSDpi -e 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -Ilib -e 'print 1' a.py"), [])]  # review #3 P2
 print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
 PY2
 )"

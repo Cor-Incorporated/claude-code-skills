@@ -776,36 +776,36 @@
   {
    "source": "synthetic-negative-p1a-28",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1: affirmative partial + unmet clause",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1: affirmative partial + unmet clause | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "修正しましたが、テストはまだ通っていません。"
   },
   {
    "source": "synthetic-negative-p1a-29",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1 | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "一部修正しましたが、残り2件は未対応です。"
   },
   {
    "source": "synthetic-negative-p1a-30",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1 | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "I fixed the first test, but two others still fail."
   },
   {
    "source": "synthetic-negative-p1a-31",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1 | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "I implemented the parser; the serializer is not implemented yet."
   },
   {
    "source": "synthetic-negative-p1a-32",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1 | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "Tests pass locally but CI is red."
   },
   {
@@ -986,92 +986,92 @@
   {
    "source": "synthetic-negative-p1a-39",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(b): the next sentence is the unmet statement",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(b): the next sentence is the unmet statement | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "修正しました。テストはまだ実行していません。"
   },
   {
    "source": "synthetic-negative-p1a-40",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(b)",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(b) | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "I fixed the first test. Two others still fail."
   },
   {
    "source": "synthetic-negative-p1a-41",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(b): … joins the unmet clause",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(b): … joins the unmet clause | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "修正しました…まだ確認中です"
   },
   {
    "source": "synthetic-negative-p1a-42",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) conditional claim + unmet",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) conditional claim + unmet | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "If I fixed the right file, the tests pass; I have not run them."
   },
   {
    "source": "synthetic-negative-p1a-43",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "UNMET_CLAUSE_RE closed list, 未完了 → 未達 sentinel in the next sentence exempts",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 未完了 → 未達 sentinel in the next sentence exempts | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "修正しました。ただしタスク全体は未完了です。"
   },
   {
    "source": "synthetic-negative-p1a-44",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "UNMET_CLAUSE_RE closed list, 完了していません → 未達 sentinel",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 完了していません → 未達 sentinel | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "修正しましたが、完了していません。"
   },
   {
    "source": "synthetic-negative-p1a-45",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "UNMET_CLAUSE_RE closed list, 途中",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 途中 | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "修正しましたが、テストは途中です。"
   },
   {
    "source": "synthetic-negative-p1a-46",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "UNMET_CLAUSE_RE closed list, error",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, error | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "I fixed the parser, but the serializer still throws an error."
   },
   {
    "source": "synthetic-negative-p1a-47",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "UNMET_CLAUSE_RE closed list, remaining",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, remaining | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "I fixed the bug, but the remaining cases are untested."
   },
   {
    "source": "synthetic-negative-p1a-48",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "UNMET_CLAUSE_RE closed list, remain",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, remain | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "I fixed the parser; three cases remain."
   },
   {
    "source": "synthetic-negative-p1a-49",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "UNMET_CLAUSE_RE closed list, did not",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, did not | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "I fixed the bug, but the second run did not finish."
   },
   {
    "source": "synthetic-negative-p1a-50",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "UNMET_CLAUSE_RE closed list, didn't",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, didn't | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "I fixed the bug, but CI didn't pick it up."
   },
   {
    "source": "synthetic-negative-p1a-51",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "UNMET_CLAUSE_RE closed list, yet / error after a yet, split",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, yet / error after a yet, split | owner decision (B) 2026-10-16: an honest partial report that carries a completion verb is a claim (declared over-block limit; state the progress without the verb or add Evidence)",
    "text": "I fixed the bug and the tests pass, yet two cases still error."
   },
   {
@@ -1192,6 +1192,132 @@
    "expect_claim": true,
    "note": "UNMET_CLAUSE_RE closed list, a following clause with no unmet word keeps the claim",
    "text": "修正しました。ただし、ドキュメントは別 PR です。"
+  },
+  {
+   "source": "synthetic-positive-p1a-42",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-1: an unmet word in the next sentence is no exemption",
+   "text": "The task is complete. Let me know if anything else fails."
+  },
+  {
+   "source": "synthetic-positive-p1a-43",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-1",
+   "text": "I fixed the pagination bug and the tests pass. No errors remain."
+  },
+  {
+   "source": "synthetic-positive-p1a-44",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-1",
+   "text": "I fixed the bug and the tests pass; no failures remain."
+  },
+  {
+   "source": "synthetic-positive-p1a-45",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-1",
+   "text": "I fixed the pagination bug. The error was an off-by-one in the slice."
+  },
+  {
+   "source": "synthetic-positive-p1a-46",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-1",
+   "text": "ページネーションのバグを修正しました。原因はオフセット計算の失敗でした。"
+  },
+  {
+   "source": "synthetic-positive-p1a-47",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-1",
+   "text": "修正しました。まだ何かあれば教えてください。"
+  },
+  {
+   "source": "synthetic-positive-p1a-48",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-1",
+   "text": "I implemented the retry; the request no longer fails."
+  },
+  {
+   "source": "synthetic-positive-p1a-49",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-1",
+   "text": "I fixed the bug. The old handler was incomplete."
+  },
+  {
+   "source": "synthetic-positive-p1a-50",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-2: the question is another clause",
+   "text": "I fixed the bug and the tests pass, shall I open a PR?"
+  },
+  {
+   "source": "synthetic-positive-p1a-51",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-2",
+   "text": "修正しました、テストも通っていますがPRを作りますか？"
+  },
+  {
+   "source": "synthetic-positive-p1a-52",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-2",
+   "text": "I fixed the bug and the tests pass — is that what you wanted?"
+  },
+  {
+   "source": "synthetic-positive-p1a-53",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P0-2",
+   "text": "I fixed the bug. Anything else?"
+  },
+  {
+   "source": "synthetic-positive-p1a-54",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P3: after/before are not conditionals",
+   "text": "After I fixed the import the tests pass."
+  },
+  {
+   "source": "synthetic-negative-p1a-52",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P1: は誤りでした。+ verb",
+   "text": "「修正しました」は誤りでした。撤回します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-53",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P1",
+   "text": "「修正しました」は誤りです。取り消します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-54",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P1",
+   "text": "「実装完了しました」は誤りです。撤回します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-55",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P1: と書きましたが誤りでした。",
+   "text": "先ほど「修正しました」と書きましたが誤りでした。撤回します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-56",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P1: は事実ではありません。",
+   "text": "「テストも通っています」は事実ではありません。撤回します。"
   }
  ]
 }
