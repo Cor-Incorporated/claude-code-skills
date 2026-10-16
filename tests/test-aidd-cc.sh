@@ -824,6 +824,17 @@ for c in "sed 's/a/b/' a.py" "ruff check a.py" "git restore --staged a.py" "pyth
   o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"$sid\",\"last_assistant_message\":\"verified.\\nEvidence: pytest -q | 3 passed | 10:00\"}" | bash "$HOOK")"
   [ -z "$o" ] || fail87="$fail87 [read treated as write: $c -> $o]"
 done
+# review #2 P3: `-Mstrict` is not `-i`; `--in-place=.bak` writes the file, not `.bak`
+o87p="$(python3 -I - "$ROOT" <<'PY2'
+import sys
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_controls import _row_written_paths as w
+row = lambda c: w({"event": "post", "rc": 0, "cwd": "/x", "cmd": c})
+checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.bak 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -pi -e 's/a/b/' a.py"), ["/x/a.py"])]
+print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
+PY2
+)"
+[ -z "$o87p" ] || fail87="$fail87 [paths: $o87p]"
 if [ -z "$fail87" ]; then ok "T87 P2-b perl -pi / sed -E -i / git restore / python3 -c open(w) / ruff format / black / prettier --write make the old run stale; sed, ruff check, restore --staged (any order), --check modes, read-only / string-literal python -c, perl -n do not"; else bad "T87:$fail87"; fi
 
 # (88) P2-c: a quoted claim is removed only when the retraction takes it as its object (「…」は/を/という報告は 取り消します);

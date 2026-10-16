@@ -877,6 +877,139 @@
    "expect_claim": true,
    "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P2(d)",
    "text": "テストがパスしました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-12",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P0: an appended ordinary clause must not wash out the claim",
+   "text": "I fixed the pagination bug and the tests pass, but let me know if anything else is needed."
+  },
+  {
+   "source": "synthetic-positive-p1a-13",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P0: a negation inside a relative clause is not a partial report",
+   "text": "I fixed the bug where the parser didn't handle empty input."
+  },
+  {
+   "source": "synthetic-positive-p1a-14",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P0",
+   "text": "I fixed the bug and the tests pass locally."
+  },
+  {
+   "source": "synthetic-positive-p1a-15",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P0",
+   "text": "Successfully implemented the feature; still, feel free to review."
+  },
+  {
+   "source": "synthetic-positive-p1a-16",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P0",
+   "text": "I fixed the remaining two bugs and the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-17",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P0: が、 followed by a clause with no unmet statement",
+   "text": "修正しましたが、他に気になる点があればお知らせください。"
+  },
+  {
+   "source": "synthetic-positive-p1a-18",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P0",
+   "text": "ページネーションのバグを修正しました、テストも通っていますので、ご確認いただければ幸いです。"
+  },
+  {
+   "source": "synthetic-positive-p1a-19",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P0: たら not attached to the claim verb",
+   "text": "タイムアウトしたらリトライするように実装しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-20",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P0: the main clause claims",
+   "text": "After I fixed the bug, the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-21",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(a): the retraction object is a reservation",
+   "text": "「実装完了、全件PASS」と報告しました、古い予約は取り消しました"
+  },
+  {
+   "source": "synthetic-positive-p1a-22",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(a)",
+   "text": "「実装完了しました」と書きましたが、予約は取り消しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-23",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P3",
+   "text": "動作確認しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-24",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P3",
+   "text": "Everything works."
+  },
+  {
+   "source": "synthetic-negative-p1a-37",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P1: 記載し",
+   "text": "「検証済み」と記載しましたが、取り消します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-38",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P1: retraction across 。",
+   "text": "「完了」と書いたのは誤りでした。撤回します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-39",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(b): the next sentence is the unmet statement",
+   "text": "修正しました。テストはまだ実行していません。"
+  },
+  {
+   "source": "synthetic-negative-p1a-40",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(b)",
+   "text": "I fixed the first test. Two others still fail."
+  },
+  {
+   "source": "synthetic-negative-p1a-41",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) P2(b): … joins the unmet clause",
+   "text": "修正しました…まだ確認中です"
+  },
+  {
+   "source": "synthetic-negative-p1a-42",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) conditional claim + unmet",
+   "text": "If I fixed the right file, the tests pass; I have not run them."
   }
  ]
 }
