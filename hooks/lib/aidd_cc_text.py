@@ -44,10 +44,34 @@ TEST_RESULT_CLAIM = (
     r"i have (?:executed|completed|finished|implemented|performed) (?:all |the |every )?(?:requested |necessary |required )?"
     r"(?:commands?|tasks?|steps?|work|changes?|implementation)\b"
 )
+# Independent review 2026-10-16 P1-a (aidd-governance PR #195, control_sha 9dc6b944): the vocabulary above was closed, so
+# "The task is complete." / 「修正しました。テストも通っています。」 / "I fixed the pagination bug and the tests pass." /
+# "Successfully implemented the feature." passed the deployed entry with no tool run.  Owner decision 2026-10-16 (a): the
+# provenance of a claim word is a real run OR a recorded independent-review probe (independent-review/vocab-check.txt,
+# probe-transcript.txt PART C; fixture lane indrev-p1a).  Still surface form only (C15): the past-tense fix / implement /
+# finish verbs and "tests pass" below, each with a synthetic negative in tests/fixtures/h17-claim-phrases.json.
+#   * fixed / implemented need an object or a copula (`Fixed \`paginate.py\``, "bugs fixed in", "has been fixed",
+#     "I fixed the …"): "a fixed-width column" and "the fixture" never count
+#   * "tests pass" without a number in front: "10/12 tests pass" and "no tests pass yet" are progress reports
+#   * `N passed in 0.12s` is pytest's all-green line — a failure count always precedes "passed" ("2 failed, 10 passed in")
+#   * the negated forms (not fixed / haven't finished / 修正していません / 通っていません) stay out via NEGATED_COMPLETION_RE
+PAST_TENSE_CLAIM = (
+    r"修正しました|対応しました|実装しました|(?<!見)直しました|通りました|通っています|"  # 見直しました is a review, not a fix
+    r"(?:i |we |i've |we've |i have |we have )?(?:fixed|implemented|finished)(?: (?:the|a|an|this|that|it|all|my|our|your|every|both)\b| (?=`))|"
+    r"(?:bugs?|issues?|errors?) (?:are |were |have been |has been )?fixed\b|"
+    r"(?:is|are|was|were|has been|have been|got) (?:now |all )?(?:fixed|implemented|finished|complete|done)\b|"
+    r"successfully (?:implemented|fixed|completed|finished|applied|migrated|added)\b|"
+    r"(?:works|is working|are working) now\b|everything (?:is )?(?:now )?working\b|"
+    r"changes are (?:now )?in place\b|"
+    r"(?<!no )(?<![\d/] )(?<![\d/])(?:the |both |my |our )?tests (?:now |all )?pass(?:ed)?\b|"
+    r"(?<!failed, )[1-9]\d{0,3} passed in [\d.]+\s*s\b"
+)
 COMPLETION_CLAIM_RE = re.compile(
     r"(?<![A-Za-z])(verified|完了|根因確定|検証済み|実装済み|解決済み|対応済み|"
     r"done|"
     + TEST_RESULT_CLAIM
+    + r"|"
+    + PAST_TENSE_CLAIM
     + r"|全件\s*PASS|merged|マージ済み|マージした|pushed|push済み|published|"
     + PERSIST_WORDS
     + r")(?![A-Za-z])",
@@ -94,8 +118,15 @@ DELETE_KIND_RE = re.compile(
 # Only an AFFIRMATIVE retraction verb counts (independent review 2026-10-16 P1): 「取り消します / 取り消しました /
 # 撤回します / 取り下げます / 成立しません」.  「取り消しません」「撤回の必要はありません」 keep the quoted claim.
 RETRACTION_WORDS = r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ます|ました|た)(?![かが])|成立し(?:ません|ない|ていません))"
+# Independent review 2026-10-16 P2-c: the quoted span is removed only when it is the OBJECT of the retraction — 「…」は /
+# 「…」を / 「…」という報告は 取り消します.  「「実装完了、全件 PASS、検証済み」。古いブランチは取り消しました。」 retracts a
+# branch, not the quote, so the quote keeps its claim.
+RETRACTION_OBJECT = r"(?:\s*(?:という|との|の)?(?:先の|前の|上の|この|その)?(?:報告|宣言|主張|発言|完了報告|完了宣言|部分|文)?(?:は|を|も)\s*(?:[^\n、。]{0,6}、)?[^\n]{0,6})"
 NEGATED_COMPLETION_RE = re.compile(
-    r"([「『][^「」『』\n]{0,80}[」』](?=[^\n]{0,12}" + RETRACTION_WORDS + r")|"
+    r"([「『][^「」『』\n]{0,80}[」』](?="
+    + RETRACTION_OBJECT
+    + RETRACTION_WORDS
+    + r")|"
     r"完了したものは(?:何も|なにも|一つも|ひとつも)?(?:ありません|ない|無い|存在しません)|"
     r"(?:先の|前の|上の|この|その|以前の)?(?:報告|宣言|主張|完了報告|完了宣言)は成立し(?:ません|ない|ていません)|"
     # the English form removes only its own clause: "I retract my earlier claim that the tests were flaky; all tests
@@ -103,16 +134,16 @@ NEGATED_COMPLETION_RE = re.compile(
     r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that [^\n.;,]{0,60})?|"
     r"未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
     r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は.{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
-    r"has not been (?:verified|merged|pushed|saved|deployed)|not everything is done|none of it is verified|hasn't been pushed|"
-    r"no (?:files?|changes?|data)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified)|haven't (?:verified|saved|pushed|merged)|"
+    r"has not been (?:verified|merged|pushed|saved|deployed|fixed|implemented|finished)|not everything is done|none of it is verified|hasn't been (?:pushed|fixed|implemented|finished)|"
+    r"no (?:files?|changes?|data)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified|fixed|implemented)|haven't (?:verified|saved|pushed|merged|fixed|implemented|finished)|"
     r"(?:保存|完了|配備|反映|マージ|push)(?:した|された|済み)?わけでは(?:ない|ありません)|"
-    r"(?:完了|検証|push|マージ|配備)(?:には|は|に)?(?:至って|達して|届いて)(?:いない|いません|おらず)|nothing (?:is|has been|was) (?:done|verified|pushed|merged|deployed|saved)|"
+    r"(?:完了|検証|push|マージ|配備)(?:には|は|に)?(?:至って|達して|届いて)(?:いない|いません|おらず)|nothing (?:is|has been|was) (?:done|verified|pushed|merged|deployed|saved|fixed|implemented|finished|working)|"
     r"(?:完了|マージ|配備|保存|反映|push|deploy)(?:は|を)?(?:まだ)?(?:してい(?:ない|ません)|していない|できていない|ではない|していません)|"
-    r"not (?:yet )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed)|"
+    r"not (?:yet |still )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed|implemented|finished|working|in place)|"
     # PR #414 residual: "Not all tests pass" / "not all 12 tests passed yet" is an honest partial report; without this line the
     # `all … pass(ed)` inside it was read as a claim (over-match).
     r"not all (?:\d+ )?(?:(?:the )?tests? )?pass(?:ed|ing)?(?: yet)?|"
-    r"isn'?t (?:done|verified|merged|deployed|saved)|incomplete|un(?:merged|deployed|saved|pushed))",
+    r"isn'?t (?:done|verified|merged|deployed|saved|fixed|implemented|finished|complete|working)|incomplete|un(?:merged|deployed|saved|pushed|fixed|finished))",
     re.IGNORECASE,
 )
 APPROVAL_RE = re.compile(
@@ -402,6 +433,24 @@ def output_field_matches(claimed: str, recorded: str) -> bool | None:
 OUT_NUMBER_RE = re.compile(
     r"(?<![A-Za-z0-9.,])(?P<num>\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?P<pct>\s*%)?(?:\s+(?P<word>[A-Za-z]{2,}))?"
 )
+# Independent review 2026-10-16 P2-a: `Evidence: pytest -q | 47 tests passed | …` was allowed over a recorded "3 passed in
+# 0.12s" because the word after 47 ("tests") never appears in the output and the old rule skipped every such number.  Only
+# a `0` (any word) or one of these closed absence words may be skipped; every other `N word` is judged as a bare number.
+ABSENCE_WORDS = frozenset(
+    {
+        "failed",
+        "failure",
+        "failures",
+        "error",
+        "errors",
+        "skipped",
+        "warnings",
+        "warning",
+        "xfailed",
+        "xpassed",
+        "deselected",
+    }
+)
 STATUS_NUMBER_RE = re.compile(
     r"\b(?:rc|exit(?: code| status)?|status|returned)\s*[:=]?\s*\d+\b", re.IGNORECASE
 )
@@ -424,8 +473,9 @@ def output_numbers_missing(claimed: str, recorded: str) -> list[str]:
     "47 passed" shares the word but not the number — that is the fabrication the token overlap
     (output_field_matches) let through.  Surface form only (C15), judged per number:
       * `N word` (e.g. `0 failed`): if the recorded output uses that word, it must say `N word` too;
-        if the word never appears there (pytest printed only "3 passed"), `0 failed` is an honest
-        summary of its absence and is not judged
+        if the word never appears there, `N` is judged as a bare number — except `0` (any word) and the
+        closed ABSENCE_WORDS (`2 skipped` over an output that never says "skipped" summarises an absence);
+        `47 tests passed` over "3 passed" is therefore missing (independent review 2026-10-16 P2-a)
       * a bare number / ratio (`47/47`): must appear in the recorded output; `0` alone is never judged
       * status markers (`rc=0`, `exit=0`), `%` values and thousands separators never count as missing
     A field without numbers is not judged here."""
@@ -437,9 +487,7 @@ def output_numbers_missing(claimed: str, recorded: str) -> list[str]:
         n, word = _normalize_number(m.group("num")), (m.group("word") or "").lower()
         if m.group("pct") or n in seen:
             continue
-        if word:
-            if not re.search(r"\b" + re.escape(word) + r"\b", rec_lower):
-                continue  # the recorded output never speaks of `word`: `0 failed` summarises an absence
+        if word and re.search(r"\b" + re.escape(word) + r"\b", rec_lower):
             if re.search(
                 r"(?<![A-Za-z0-9.,])" + re.escape(n) + r"\s*" + re.escape(word) + r"\b",
                 rec_lower.replace(",", ""),
@@ -449,7 +497,11 @@ def output_numbers_missing(claimed: str, recorded: str) -> list[str]:
             continue
         if n == "0" or n in recorded_numbers:
             continue
-        seen.append(n)
+        if word in ABSENCE_WORDS:
+            continue  # the recorded output never speaks of `word`: `2 skipped` summarises an absence
+        seen.append(
+            n
+        )  # `47 tests passed` vs `3 passed in 0.12s`: a word the output never used is no excuse (P2-a)
     return seen
 
 

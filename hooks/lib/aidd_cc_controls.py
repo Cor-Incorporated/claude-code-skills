@@ -393,7 +393,20 @@ WRITE_CMD_RE = re.compile(
 
 
 WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
-WRITE_ALL_RE = re.compile(r"^(tee|touch|patch|git apply|git checkout|sed -i)\b")
+# Independent review 2026-10-16 P2-b: `perl -pi`, `sed -E -i` (any flag order), `git restore`, `ruff format` and the other
+# in-place formatters left a stale pytest run fresh because only the literal `sed -i` prefix was known.  `-i` anywhere in
+# the sed / perl options, the formatter verbs, and `git restore` (worktree form: `--staged` alone writes the index only)
+# write every path argument.  `python3 -c` / `python -c` with an `open(path, "w"|"a")` or `Path(path).write_*` call is
+# read from the quoted code (surface form: the literal path in the call).
+WRITE_ALL_RE = re.compile(
+    r"^(tee|touch|patch|git apply|git checkout|sed(?: -[A-Za-z]+)* -i|perl(?: -[A-Za-z]+)* -[A-Za-z]*i|"
+    r"git restore(?! --staged\b)|git restore --staged(?= .*--worktree)|ruff format|ruff check(?= .*--fix)|black|isort|"
+    r"prettier(?= .*--write)|gofmt -w|rustfmt|eslint(?= .*--fix)|dos2unix|unix2dos)\b"
+)
+PY_WRITE_RE = re.compile(
+    r"""open\(\s*['"]([^'"\n]+)['"]\s*,\s*['"][wax]|Path\(\s*['"]([^'"\n]+)['"]\s*\)\.write_(?:text|bytes)\("""
+)
+PY_CMD_RE = re.compile(r"^python[0-9.]*(?: -[A-Za-z]+)* -c\s")
 
 
 def _row_written_paths(r: dict) -> list[str]:
@@ -436,6 +449,8 @@ def _row_written_paths(r: dict) -> list[str]:
                 ]
         elif WRITE_ALL_RE.match(bare):
             cands += [t for t in args if "/" in t or "." in t]
+        elif PY_CMD_RE.match(bare):
+            cands += [a or b for a, b in PY_WRITE_RE.findall(seg)]  # the code is inside the quotes: read `seg`, not `bare`
         cands += re.findall(r"(?<![<>&\d])\d?>>?\s*([\w./~-]+)", bare)
     out: list[str] = []
     for c in cands:

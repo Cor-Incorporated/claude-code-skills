@@ -730,6 +730,13 @@
    "expect_claim": false,
    "note": "ratio before tests pass",
    "text": "10/12 tests pass, 2 failing."
+  },
+  {
+   "source": "synthetic-negative-p1a-22",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "見直しました is a review, not 直しました",
+   "text": "設計を見直しました。まだ直していません。"
   }
  ]
 }
