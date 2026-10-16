@@ -811,15 +811,15 @@
   {
    "source": "synthetic-negative-p1a-33",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1: question",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1: question | ADR-008 (aidd-governance#196, owner 2026-10-16): claim detection errs on the block side; only an adjacent explicit negation, a quoted retraction, or an UNMET_RE word in the same sentence exempts",
    "text": "修正しましたか？"
   },
   {
    "source": "synthetic-negative-p1a-34",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1: conditional",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1: conditional | ADR-008 (aidd-governance#196, owner 2026-10-16): claim detection errs on the block side; only an adjacent explicit negation, a quoted retraction, or an UNMET_RE word in the same sentence exempts",
    "text": "テストが通りましたら連絡します。"
   },
   {
@@ -1099,7 +1099,7 @@
    "source": "synthetic-positive-p1a-28",
    "lane": "indrev-p1a",
    "expect_claim": true,
-   "note": "UNMET_CLAUSE_RE closed list, 未完了 inside the claim clause",
+   "note": "ADR-008 (c) is predicate-only (owner 2026-10-16): 未完了 as a modifier of the object does not exempt (block side)",
    "text": "未完了だったタスクを実装しました。"
   },
   {
@@ -1318,6 +1318,90 @@
    "expect_claim": false,
    "note": "independent review #3 of PR #418 (local_7d21cb9f, head 87a77f7) P1: は事実ではありません。",
    "text": "「テストも通っています」は事実ではありません。撤回します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-57",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "ADR-008 (c): UNMET_RE word in the same sentence",
+   "text": "修正しましたが、未達です。"
+  },
+  {
+   "source": "synthetic-negative-p1a-58",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "ADR-008 (c): UNMET in the same sentence",
+   "text": "I fixed the first test, but two others still fail — UNMET."
+  },
+  {
+   "source": "synthetic-negative-p1a-59",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "ADR-008 (c) is SAME-sentence: 未完了 in a separate sentence does not exempt the claim (block side)",
+   "text": "修正しました。未完了です。"
+  },
+  {
+   "source": "synthetic-negative-p1a-60",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "ADR-008 (c)",
+   "text": "一部修正しましたが、残り 2 件は未完了です。"
+  },
+  {
+   "source": "synthetic-positive-p1a-55",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "ADR-008: a partial report without 未達/未完了 or Evidence is blocked by design",
+   "text": "修正しました。残り 2 件は明日やります。"
+  },
+  {
+   "source": "synthetic-positive-p1a-56",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "ADR-008: 'deadline' alone is not an UNMET_RE word",
+   "text": "I fixed the first test; the deadline for the rest is tomorrow."
+  },
+  {
+   "source": "synthetic-negative-p1a-61",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "ADR-008 (c) predicate: 未完了 + です + 。",
+   "text": "実装しましたが未完了です。"
+  },
+  {
+   "source": "synthetic-negative-p1a-62",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "ADR-008 (c) predicate: 未達 + 。",
+   "text": "3 件修正、残りは未達。"
+  },
+  {
+   "source": "synthetic-negative-p1a-63",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "ADR-008 (c) predicate: 未達 + のまま + です",
+   "text": "修正しましたが、残りは未達のままです。"
+  },
+  {
+   "source": "synthetic-negative-p1a-64",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "ADR-008 (c): UNMET token is a predicate",
+   "text": "I fixed two of the three; the third is UNMET."
+  },
+  {
+   "source": "synthetic-positive-p1a-57",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "ADR-008 (c) predicate-only: 未達 + だった + object is a modifier",
+   "text": "未達だった項目を修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-58",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "ADR-008 (c) predicate-only: 未完了 + の + noun is a modifier",
+   "text": "未完了のタスクを実装しました。"
   }
  ]
 }
