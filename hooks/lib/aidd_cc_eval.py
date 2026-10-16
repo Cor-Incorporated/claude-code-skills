@@ -337,7 +337,7 @@ def _sha(data) -> str:
 def file_sha(path: Path) -> str | None:
     try:
         return _sha(path.read_bytes())
-    except OSError:
+    except (OSError, ValueError):  # ValueError: a NUL in the path (Codex 4d4561b P1) — not a readable file
         return None
 
 
