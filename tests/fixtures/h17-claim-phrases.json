@@ -772,6 +772,111 @@
    "expect_claim": false,
    "note": "Codex review P2: partial quantifier",
    "text": "Most of the tests pass, 2 still fail."
+  },
+  {
+   "source": "synthetic-negative-p1a-28",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1: affirmative partial + unmet clause",
+   "text": "修正しましたが、テストはまだ通っていません。"
+  },
+  {
+   "source": "synthetic-negative-p1a-29",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1",
+   "text": "一部修正しましたが、残り2件は未対応です。"
+  },
+  {
+   "source": "synthetic-negative-p1a-30",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1",
+   "text": "I fixed the first test, but two others still fail."
+  },
+  {
+   "source": "synthetic-negative-p1a-31",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1",
+   "text": "I implemented the parser; the serializer is not implemented yet."
+  },
+  {
+   "source": "synthetic-negative-p1a-32",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1",
+   "text": "Tests pass locally but CI is red."
+  },
+  {
+   "source": "synthetic-negative-p1a-33",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1: question",
+   "text": "修正しましたか？"
+  },
+  {
+   "source": "synthetic-negative-p1a-34",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-1: conditional",
+   "text": "テストが通りましたら連絡します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-35",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-2: retraction with と書きましたが",
+   "text": "「実装完了しました」と書きましたが、撤回します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-36",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P1-2: retraction with の記述は",
+   "text": "「検証済み」の記述は取り消します。"
+  },
+  {
+   "source": "synthetic-positive-p1a-6",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P2(a): the retraction object is a reservation, the quote keeps its claim",
+   "text": "「実装完了、全件PASS」は事実。予約は取り消しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-7",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P2(d)",
+   "text": "Fixed."
+  },
+  {
+   "source": "synthetic-positive-p1a-8",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P2(d)",
+   "text": "Implemented."
+  },
+  {
+   "source": "synthetic-positive-p1a-9",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P2(d)",
+   "text": "修正済みです。"
+  },
+  {
+   "source": "synthetic-positive-p1a-10",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P2(d)",
+   "text": "Tests are passing."
+  },
+  {
+   "source": "synthetic-positive-p1a-11",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review of PR #418 (local_7d21cb9f, 2026-10-16) P2(d)",
+   "text": "テストがパスしました。"
   }
  ]
 }

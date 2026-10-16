@@ -785,7 +785,7 @@ checks = [
     (m("47 tests passed", rec), ["47"]),            # the P2-a bypass
     (m("47 items collected", rec), ["47"]),         # any unused word
     (m("3 tests passed, 0 failed", rec), []),       # honest: 3 is printed, 0 is never judged
-    (m("2 skipped, 1 xfailed", rec), []),           # absence words summarise what is not there
+    (m("2 skipped, 1 xfailed", rec), ["2", "1"]),   # PR #418 review P2: a non-zero count the output never printed is made up
     (m("3 passed, 0 failed, rc=0, 1,234 rows, 100%", rec), []),  # T72's honest field still passes
     (m("47/47 passed", "collected 47 items\n47 passed"), []),
 ]
@@ -804,7 +804,8 @@ if ! printf '%s' "$o86" | grep -q 'got=' && printf '%s' "$o86" | grep -q '^[1-9]
 #      `git restore --staged`, `python3 -c` that only reads) do not
 fail87=""
 i87=0
-for c in "perl -pi -e 's/a/b/' a.py" "sed -E -i 's/a/b/' a.py" "git restore a.py" "python3 -c \"open('/x/a.py','w').write('x')\"" "ruff format a.py" "black a.py" "prettier --write a.ts"; do
+for c in "perl -pi -e 's/a/b/' a.py" "sed -E -i 's/a/b/' a.py" "git restore a.py" "python3 -c \"open('/x/a.py','w').write('x')\"" "ruff format a.py" "black a.py" "prettier --write a.ts" \
+         "sed -Ei 's/a/b/' a.py" "sed --in-place 's/a/b/' a.py" "sed -e 's/a/b/' -i a.py" "prettier -w a.ts" "python3 -c 'import pathlib; pathlib.Path(\"/x/a.py\").write_text(\"x\")'" "python3 -c \"open('/x/a.py','r+').write('x')\""; do
   i87=$((i87 + 1)); sid="neg87-$i87"
   printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"}}" | bash "$HOOK" >/dev/null
   printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"3 passed\"}}" | bash "$HOOK" >/dev/null
