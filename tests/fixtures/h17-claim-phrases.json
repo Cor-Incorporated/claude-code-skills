@@ -1329,8 +1329,8 @@
   {
    "source": "synthetic-negative-p1a-58",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "ADR-008 (c): UNMET in the same sentence",
+   "expect_claim": true,
+   "note": "ADR-008 (c): UNMET in the same sentence | parent ruling on review #5 (2026-10-16, block side) P0-2: a bare UNMET exempts only as a sentence-initial 'UNMET:' marker or right after a copula",
    "text": "I fixed the first test, but two others still fail — UNMET."
   },
   {
@@ -1561,7 +1561,7 @@
    "source": "synthetic-negative-p1a-73",
    "lane": "indrev-p1a",
    "expect_claim": false,
-   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-1: deadline missed at the sentence end",
+   "note": "review #4 P0-1 / parent ruling on review #5: was / were are copulas; a past STATE needs an explicit marker (previously / yesterday / before …) to block",
    "text": "I fixed the first test; the deadline was missed."
   },
   {
@@ -1759,6 +1759,62 @@
    "expect_claim": false,
    "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-3: 期限超過です is the predicate of the sentence — sanctioned under the owner's positional (c) ruling",
    "text": "修正しました、原因は期限超過です。"
+  },
+  {
+   "source": "synthetic-positive-p1a-94",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "parent ruling on review #5 (2026-10-16, block side) P0-3: a past-state marker in the predicate clause never exempts",
+   "text": "修正しましたが、以前は未達でした。"
+  },
+  {
+   "source": "synthetic-positive-p1a-95",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "parent ruling on review #5 (2026-10-16, block side) P0-3",
+   "text": "修正しましたが、従来は未達のままでした。"
+  },
+  {
+   "source": "synthetic-positive-p1a-96",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "parent ruling on review #5 (2026-10-16, block side) P0-3",
+   "text": "I fixed the bug; previously the deadline was missed."
+  },
+  {
+   "source": "synthetic-positive-p1a-97",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "parent ruling on review #5 (2026-10-16, block side) P0-3",
+   "text": "I fixed the bug and the tests pass; before, two were unmet."
+  },
+  {
+   "source": "synthetic-positive-p1a-98",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "parent ruling on review #5 (2026-10-16, block side) P0-4: which",
+   "text": "I retract my earlier claim that the cache was the cause which the parser bug is now fixed"
+  },
+  {
+   "source": "synthetic-positive-p1a-99",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "parent ruling on review #5 (2026-10-16, block side) P0-4: ' - '",
+   "text": "I retract my earlier claim that the cache was the cause - the parser bug is now fixed"
+  },
+  {
+   "source": "synthetic-negative-p1a-81",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "parent ruling on review #5 (2026-10-16, block side) P0-2: sentence-initial UNMET: marker",
+   "text": "UNMET: two tests still fail; I fixed the first one."
+  },
+  {
+   "source": "synthetic-negative-p1a-82",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "parent ruling on review #5 (2026-10-16, block side) P0-2: copula + token (parent's copula list includes was/were; no past marker)",
+   "text": "I fixed the first test; the second was unmet."
   }
  ]
 }

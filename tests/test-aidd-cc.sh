@@ -866,5 +866,23 @@ for t in "「実装完了しました。」は取り消します。" "「実装�
 done
 if [ -z "$fail88" ]; then ok "T88 P2-c a retraction removes the quote only as its object; an unrelated 取り消しました keeps the quoted claim"; else bad "T88:$fail88"; fi
 
+
+# (89) parent ruling on review #5 P1-2: has_completion_claim must stay fast on a 2,000-character synthetic body that mixes
+#      claim words, unmet words, brackets and quotes (the 12 s hook timeout is the harness's fail-open; this bound is the only defence)
+o89="$(python3 -I - "$ROOT" <<'PY2'
+import sys, time
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_text import has_completion_claim
+unit = "「修正しました（ドキュメントは未達）。」と書きましたが、残りは未達です。I fixed the bug (the tests pass); the third is unmet. "
+body = (unit * (2000 // len(unit) + 1))[:2000]
+t0 = time.perf_counter(); r = has_completion_claim(body); dt = time.perf_counter() - t0
+worst = 0.0
+for adversarial in ["現状は未達" + "）" * 20000 + "x。修正しました。", "I fixed the bug" + ";" * 80000, "「" * 40000 + "修正しました", "I retract my earlier claim that " + "x" * 5000]:
+    t0 = time.perf_counter(); has_completion_claim(adversarial); worst = max(worst, time.perf_counter() - t0)
+print(f"body2000={dt:.3f}s claim={r} adversarial_worst={worst:.3f}s")
+PY2
+)"
+if printf '%s' "$o89" | grep -qE 'body2000=0\.[0-4][0-9]*s' && printf '%s' "$o89" | grep -qE 'adversarial_worst=(0\.[0-9]+|1\.0+)s'; then ok "T89 has_completion_claim is linear: $o89"; else bad "T89: $o89"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
