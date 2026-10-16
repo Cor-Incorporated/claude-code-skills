@@ -86,20 +86,18 @@ SENTENCE_SPLIT_RE = re.compile(r"(?<=[。．！？\n])\s*|(?<=[.!?])\s+")
 # sentence end with at most a short particle between — 「残りは未達。」 / 「実装しましたが未完了です。」 exempt, 「未完了だった
 # タスクを実装しました。」 (a modifier of the object) does not.  The English tokens (UNMET / deadline missed) are predicates.
 UNMET_PREDICATE_RE = re.compile(
-    r"(?:未達|未完了|期限超過|間に合(?:わ|い)ません)(?:のまま)?(?:です|でした|だ|である|となった|となりました|となる)?(?:ね|よ|ので|が|けど|ため)?\s*(?:[。．.!?！？、,;]|$)"
-    r"|\bUNMET\b|deadline (?:missed|exceeded)",
-    re.IGNORECASE,
+    r"(?:未達|未完了|期限超過|間に合(?:わ|い)ません)(?:のまま)?(?:です|でした|だ|である|となった|となりました|となる)?(?:ね|よ)?\s*"
+    r"(?:[。．.!?！？…‥)）」』]+\s*)*$"  # review #4 P0-2 / P1-2: 、,; and a following clause do not terminate; … ‥ ）」 do
+    r"|(?<!no )(?<!not )(?<!zero )(?<!without )(?<!nothing is )(?<!nothing was )(?<!is not )\b(?:UNMET|unmet)\s*[.;!?…)]*\s*$|\bdeadline (?:was |is )?(?:missed|exceeded)\s*[.;!?…)]*\s*$",  # review #4 P0-1: EN tokens at the sentence end only
 )
 
 
 def _past_tense_claim(text: str) -> bool:
-    # (a)/(b) are removed from the WHOLE text first (a retraction spans 「…」は誤りでした。撤回します。); an UNMET_RE word that
-    # NEGATED_COMPLETION_RE would also remove (未完了) is kept so (c) can see it in its sentence
-    cleaned = NEGATED_COMPLETION_RE.sub(lambda m: m.group(0) if UNMET_RE.fullmatch(m.group(0)) else " ", text)
-    for sent in SENTENCE_SPLIT_RE.split(cleaned):
-        if UNMET_PREDICATE_RE.search(sent):
+    for raw in SENTENCE_SPLIT_RE.split(text):
+        if UNMET_PREDICATE_RE.search(raw):
             continue  # ADR-008 (c): the sentence's predicate says 未達 / 未完了
-        if PAST_TENSE_CLAIM_RE.search(sent):
+        # (a)/(b) are removed within the sentence only (review #4 P0-3: a span must not cross a sentence end)
+        if PAST_TENSE_CLAIM_RE.search(NEGATED_COMPLETION_RE.sub(" ", raw)):
             return True
     return False
 
@@ -144,13 +142,16 @@ DELETE_KIND_RE = re.compile(
 # is removed: 「取り消しは完了です」 keeps its claim (a retraction and a claim in one sentence stay on the claim side).
 # Only an AFFIRMATIVE retraction verb counts (independent review 2026-10-16 P1): 「取り消します / 取り消しました /
 # 撤回します / 取り下げます / 成立しません」.  「取り消しません」「撤回の必要はありません」 keep the quoted claim.
-RETRACTION_WORDS = r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ます|ました|た)(?![かが])|成立し(?:ません|ない|ていません))"
+RETRACTION_WORDS = (
+    r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ます|ました|た)(?![かが])|成立し(?:ません|ない|ていません)|"
+    r"(?:誤り|間違い)(?:でした|です)|事実では(?:ありません|ない)|正しくありません)"  # ADR-008 §2(b) list (review #4 P1-1)
+)
 # Review 2026-10-16 P2-c: the quoted span is removed only as the OBJECT of the retraction (「…」。古いブランチは取り消しました keeps it).
 # PR #418 reviews P1-2 / P2(a): form A 「…」と書きましたが、撤回します / 「…」と書いたのは誤りでした。撤回します — the verb
 # follows directly (「…」と報告しました、古い予約は取り消しました retracts a reservation and keeps its claim);
 RETRACTION_OBJECT = (
     r"(?:\s*(?:先ほど|さっき|前に)?と(?:書き|言い|述べ|報告し|記し|記載し)ました(?:が|ので|けど|けれど)?[、,]?\s*(?:(?:誤り|間違い)(?:でした|です)[。．、,]?\s*)?|"
-    r"\s*と(?:書い|言っ|述べ|報告し|記し|記載し)たのは(?:誤り|間違い)(?:でした|です)?[。．、,]?\s*|"
+    r"\s*と(?:書い|言っ|述べ|報告し|記し|記載し)たのは|"  # … + 誤りでした / 取り消します (RETRACTION_WORDS)
     r"\s*(?:という|との|の)?(?:先の|前の|上の|この|その)?(?:記述|記載|表現|報告|宣言|主張|発言|完了報告|完了宣言|部分|文)?(?:は|を|も)\s*"
     r"(?:(?:誤り|間違い|事実ではありません|事実ではない|正しくありません|不正確)(?:でした|です)?[。．、,]?\s*|(?:[^\n、。]{0,8}[、,])?[^\n。．]{0,6}))"
 )
@@ -163,9 +164,9 @@ NEGATED_COMPLETION_RE = re.compile(
     r"(?:先の|前の|上の|この|その|以前の)?(?:報告|宣言|主張|完了報告|完了宣言)は成立し(?:ません|ない|ていません)|"
     # the English form removes only its own clause: "I retract my earlier claim that the tests were flaky; all tests
     # are green and verified" keeps "verified" (review P1: the old `[^\n.]{0,100}` tail swallowed the next clause)
-    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that [^\n.;,]{0,60})?|"
+    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that (?:(?! — | and | so |: |; )[^\n.;,]){0,60})?|"
     r"未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
-    r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は.{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
+    r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は[^。．.!?！？\n]{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
     r"has not been (?:verified|merged|pushed|saved|deployed|fixed|implemented|finished)|not everything is done|none of it is verified|hasn't been (?:pushed|fixed|implemented|finished)|"
     r"no (?:files?|changes?|data)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified|fixed|implemented)|haven't (?:verified|saved|pushed|merged|fixed|implemented|finished)|"
     r"(?:保存|完了|配備|反映|マージ|push)(?:した|された|済み)?わけでは(?:ない|ありません)|"

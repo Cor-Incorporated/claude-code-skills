@@ -151,7 +151,7 @@ No matcher. 3 hooks.
 |---|---|
 | `aidd-h3-evidence-stop.sh` | H3: warn when a completion claim has no `Evidence:` trailer (warn only; superseded by H17's block) |
 | `aidd-turn-boundary-stop.sh` | Carry-over ledger: stop only the session that registered async work |
-| `aidd-cc-claude.sh` | H17 evidence gate: **blocks** (`decision: block`) a completion / save / push claim whose `Evidence:` commands were not executed, failed, are stale, are trivial, or whose output field does not match the recorded output; `Readback:` sha must match a file this session wrote. Releases (`stop_hook_active`, max-blocks) are evaluated and announced (`systemMessage` + `would-block` ledger row). Claim detection errs on the block side (ADR-008): a partial progress report must contain 未達 / 未完了 or carry an `Evidence:` trailer on the claim; one that does neither is blocked by design |
+| `aidd-cc-claude.sh` | H17 evidence gate: **blocks** (`decision: block`) a completion / save / push claim whose `Evidence:` commands were not executed, failed, are stale, are trivial, or whose output field does not match the recorded output; `Readback:` sha must match a file this session wrote. Releases (`stop_hook_active`, max-blocks) are evaluated and announced (`systemMessage` + `would-block` ledger row). Claim detection errs on the block side (ADR-008): a partial progress report must say 未達 / 未完了 as the predicate of the claim's own sentence (「実装しましたが未完了です。」) or carry an `Evidence:` trailer on the claim; one that does neither is blocked by design |
 
 ---
 

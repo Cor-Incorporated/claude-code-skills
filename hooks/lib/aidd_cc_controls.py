@@ -410,6 +410,10 @@ WRITE_ALL_RE = re.compile(
     r"ruff check(?=(?: \S+)* --fix\b)" + _NO_CHECK + r"|prettier(?=(?: \S+)* (?:--write|-w)\b)" + _NO_CHECK + r"|"
     r"eslint(?=(?: \S+)* --fix\b)(?!(?: \S+)* --fix-dry-run\b))\b"
 )
+OPTION_VALUE_RE = re.compile(
+    r"(?:^|\s)(?:--config|-c|--settings-path|--rcfile|--ignore-path|--ignore-pattern|--stdin-filename|--parser|--line-length|-l|"
+    r"--target-version|-t|--extend-exclude|--exclude|--include|--source|--pathspec-from-file)\s+(\S+)"
+)
 PY_CMD_RE = re.compile(r"^python[0-9.]*(?: -[A-Za-z]+)* -c\s+")
 
 
@@ -448,6 +452,18 @@ def _str_const(node: ast.AST) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
+def _top_level_nodes(tree: ast.AST):
+    """ast.walk without descending into def / class / lambda bodies: a call inside an unexecuted
+    function is not a write (Codex 2741d2c P2)."""
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+
+
 def _py_written_paths(code: str) -> list[str]:
     """Literal paths that `code` opens for writing or writes through pathlib — AST calls only."""
     try:
@@ -455,7 +471,7 @@ def _py_written_paths(code: str) -> list[str]:
     except Exception:  # SyntaxError / ValueError / RecursionError / MemoryError: not a write we can read
         return []
     out: list[str] = []
-    for node in ast.walk(tree):
+    for node in _top_level_nodes(tree):
         if not isinstance(node, ast.Call):
             continue
         f = node.func
@@ -502,9 +518,9 @@ def _row_written_paths(r: dict) -> list[str]:
         # followed by `;` / `|` / `&&` with the line's rc 0 is counted (review 2026-10-16: `printf x | tee a.py`).
         if i + 1 < len(parts) and parts[i + 1][1] == "||":
             continue
-        bare = _unquoted(
-            seg
-        )  # `git commit -m "a > b"` / `awk '$1 > 5'`: no redirection inside quotes
+        bare = re.sub(
+            r" {2,}", " ", _unquoted(seg)
+        )  # `git commit -m "a > b"` / `awk '$1 > 5'`: no redirection inside quotes; blanks collapsed (Codex 2741d2c P2)
         # `--in-place=.bak` / `--source=HEAD`: the value of a long option is not a path argument (review #2 P3)
         args = [t for t in re.findall(r"[\w./~-]+", re.sub(r"--[\w-]+=\S*", " ", bare))[1:] if not t.startswith("-")]
         if WRITE_LAST_RE.match(bare) and args:
@@ -519,7 +535,8 @@ def _row_written_paths(r: dict) -> list[str]:
                     t for t in bare.split(" -- ", 1)[1].split() if not t.startswith("-")
                 ]
         elif WRITE_ALL_RE.match(bare):
-            cands += [t for t in args if "/" in t or "." in t]
+            vals = set(OPTION_VALUE_RE.findall(bare))  # `--config pyproject.toml`: an input (Codex 2741d2c P2)
+            cands += [t for t in args if ("/" in t or "." in t) and t not in vals]
         elif PY_CMD_RE.match(bare):
             cands += _py_written_paths(_py_code_arg(seg))  # the code is inside the quotes: read `seg`, not `bare`
         cands += re.findall(r"(?<![<>&\d])\d?>>?\s*([\w./~-]+)", bare)
