@@ -395,22 +395,19 @@ WRITE_CMD_RE = re.compile(
 
 
 WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
-# Independent review 2026-10-16 P2-b: `perl -pi`, `sed -E -i` (any flag order), `git restore`, `ruff format` and the other
-# in-place formatters left a stale pytest run fresh because only the literal `sed -i` prefix was known.  `-i` anywhere in
-# the sed / perl options, the formatter verbs, and `git restore` write every path argument.  Codex review 2026-10-16
-# (route A) P2: a formatter in `--check` / `--diff` mode, `eslint --fix-dry-run`, and `git restore` with `--staged` / `-S`
-# and no `--worktree` / `-W` (index only, in any flag order) are reads.  perl's in-place cluster may carry digits / C
-# flags (-0pi / -00pi / -CSDpi, review #3 P2); -M / -m (modules), -I (include) and -x never are.  `python3 -c` / `python -c` code is parsed with
-# `ast` (surface form, never executed): `open(<str>, "w"|"a"|"x")` / `Path(<str>).write_*` CALLS write that path; the
-# same text inside a string literal (`print("open('a.py', 'w')")`) does not (Codex review P2).
+# Independent review 2026-10-16 P2-b + Codex rounds: `-i` in a real sed / perl flag cluster, the formatter verbs and
+# `git restore` (worktree form) write every path argument; `--check` / `--diff` / `--emit stdout` modes, index-only
+# restore (any flag order) and option VALUES (`-fscript.sed`, `-Fpipe`) are reads.  `python -c` code is parsed with `ast`
+# (surface form, never executed): only open(<str>, w|a|x|+) / Path(<str>).write_* CALLS that run write that path.
 _NO_CHECK = r"(?!(?: \S+)* (?:--(?:check|check-only|diff|help|version|stdout|show-config|show-files)|-h|-V|-c|-d|--emit[= ](?:stdout|checkstyle|json))\b)"  # read-only modes (Codex 1397e64 P1, e00d1df P2)
 WRITE_ALL_RE = re.compile(
-    r"^(tee|touch|patch|git apply|git checkout|sed(?=(?: +\S+)* +(?:-[A-Za-z]*i\S*|--in-place\b))|perl(?=(?: +\S+)* +-(?![MmIx])[0-9A-Za-z]*i\S*)|"
-    r"git restore(?!(?=(?: \S+)* (?:--staged|-S)\b)(?!(?: \S+)* (?:--worktree|-W)\b))|"
+    r"^(tee|touch|patch|git apply|git checkout|sed(?=(?: +\S+)* +(?:-[nrEsuz]*i\S*|--in-place\b))|perl(?=(?: +\S+)* +-[plnaw0-9CSD]*i\S*)|"
+    r"git restore(?!(?=(?: \S+)* (?:--staged|-[a-zA-Z]*S[a-zA-Z]*)\b)(?!(?: \S+)* (?:--worktree|-[a-zA-Z]*W[a-zA-Z]*)\b))|"
     r"(?:ruff format|black|isort|rustfmt|gofmt -w|dos2unix|unix2dos)" + _NO_CHECK + r"|"
     r"ruff check(?=(?: \S+)* --fix\b)" + _NO_CHECK + r"|prettier(?=(?: \S+)* (?:--write|-w)\b)" + _NO_CHECK + r"|"
     r"eslint(?=(?: \S+)* --fix\b)(?!(?: \S+)* --fix-dry-run\b))\b"
 )
+FORMATTER_RE = re.compile(r"^(?:ruff|black|isort|prettier|eslint|rustfmt|gofmt)\b")
 TARGET_DIR_RE = re.compile(r"(?:^|\s)(?:--target-directory[= ]|-t\s+)([\w./~-]+)")
 OPTION_VALUE_RE = re.compile(
     r"(?:^|\s)(?:--config|-c|--settings-path|--rcfile|--ignore-path|--ignore-pattern|--stdin-filename|--parser|--line-length|-l|"
@@ -420,8 +417,7 @@ PY_CMD_RE = re.compile(r"^python[0-9.]*(?: -[A-Za-z]+)* -c\s+")
 
 
 def _py_code_arg(seg: str) -> str:
-    """The code argument of `python -c <code>` as the shell would pass it: a single-quoted string
-    verbatim, a double-quoted one with backslash escapes resolved, else the bare word."""
+    """The code argument of `python -c <code>` as the shell would pass it (quotes and escapes resolved)."""
     m = PY_CMD_RE.match(seg)
     rest = seg[m.end() :] if m else ""
     if rest[:1] == "'":
@@ -454,15 +450,21 @@ def _str_const(node: ast.AST) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
+def _body_runs_on_call(node: ast.AST) -> bool:
+    """A plain call runs a plain def's body; a generator (yield) or an async def only creates an object (Codex 50f31e5 P2)."""
+    if isinstance(node, ast.AsyncFunctionDef):
+        return False
+    return not any(isinstance(n, (ast.Yield, ast.YieldFrom, ast.Await)) for n in ast.walk(node))
+
+
 def _top_level_nodes(tree: ast.AST, called: frozenset[str] = frozenset()):
-    """ast.walk without descending into def / lambda BODIES unless the def is CALLED at top level (review #5
-    P2: `def f(): open(…,'w')\nf()` writes); defaults, decorators and class bodies run at definition."""
+    """ast.walk; a def / lambda body is walked only when the def is called at top level (review #5 P2)."""
     stack = [tree]
     while stack:
         node = stack.pop()
         yield node
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            if getattr(node, "name", None) in called:
+            if getattr(node, "name", None) in called and _body_runs_on_call(node):
                 stack.extend(ast.iter_child_nodes(node))
             else:  # kw_defaults holds None for a required kw-only arg (Codex e00d1df P1)
                 stack.extend(n for n in node.args.defaults + node.args.kw_defaults + list(getattr(node, "decorator_list", [])) if n is not None)
@@ -520,6 +522,7 @@ def _row_written_paths(r: dict) -> list[str]:
     if key.startswith("edit:"):
         cands.append(_edit_key_path(key))
     parts = shell_segments_with_separators(str(r.get("cmd", "")))
+    raw: list[str] | None = None  # the un-normalised segments, split once per row (review #7 P0-T2: per-fragment was quadratic)
     for i, (seg, _sep) in enumerate(parts):
         # A write whose own result is masked (`cp a b || true`) has unknown success (Codex r5 P2-b); a write
         # followed by `;` / `|` / `&&` with the line's rc 0 is counted (review 2026-10-16: `printf x | tee a.py`).
@@ -544,23 +547,23 @@ def _row_written_paths(r: dict) -> list[str]:
                     t for t in bare.split(" -- ", 1)[1].split() if not t.startswith("-")
                 ]
         elif WRITE_ALL_RE.match(bare):
-            vals = list(OPTION_VALUE_RE.findall(bare))  # `--config pyproject.toml`: an input (Codex 2741d2c P2), counted once each
+            # `--config pyproject.toml`: an input (Codex 2741d2c P2), counted once each — formatters only: `patch -t` is a flag (Codex 50f31e5 P2)
+            vals = list(OPTION_VALUE_RE.findall(bare)) if FORMATTER_RE.match(bare) else []
             for t in args:
                 if t in vals:
                     vals.remove(t)  # review #5 P2: `black --config pyproject.toml pyproject.toml` still formats the file
                 elif "/" in t or "." in t:
                     cands.append(t)
         elif PY_CMD_RE.match(bare):
-            raw = shell_segments_raw(str(r.get("cmd", "")))  # the code is inside the quotes, newlines included (review #5 P2)
+            if raw is None:
+                raw = shell_segments_raw(str(r.get("cmd", "")))  # the code is inside the quotes, newlines included (review #5 P2)
             cands += _py_written_paths(_py_code_arg(raw[i] if i < len(raw) else seg))
         cands += re.findall(r"(?<![<>&\d])\d?>>?\s*([\w./~-]+)", bare)
     out: list[str] = []
     for c in cands:
         if c.startswith("/dev/"):
             continue  # /dev/null is not an artifact (reviewer-g)
-        p = _expand(c)
-        if p is None:
-            continue  # `~nosuchuser/x`: not a path we can resolve, so not a write we can credit (review #6 P1-R)
+        p = _expand(c) or Path(c)  # `~tmp/../src/a.py`: the literal cwd-relative path still goes stale (review #7 P0/P1-W)
         if not p.is_absolute():
             p = Path(cwd) / p if cwd else p
         try:

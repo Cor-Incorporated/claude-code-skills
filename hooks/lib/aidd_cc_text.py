@@ -53,7 +53,7 @@ PAST_TENSE_CLAIM = (
     r"修正しました|対応しました|実装しました|(?<!見)直しました|通りました|通っています|修正済み|パスしました|パスした|"  # 見直しました is a review, not a fix
     r"動作確認しました|動作確認済み|動作しました|everything works\b|it works\b|"  # PR #418 review #2 P3
     r"(?:^|(?<=[.!?。\n] )|(?<=[.!?。\n]))(?:fixed|implemented)[.!]|tests (?:are|is) (?:now )?passing\b|"  # "Fixed." / "Tests are passing." (PR #418 review P2)
-    r"(?:i |we |i've |we've |i have |we have )?(?:fixed|implemented|finished)(?: (?:the|a|an|this|that|it|all|my|our|your|every|both)\b| (?=`))|"
+    r"(?:i |we |i've |we've |i have |we have )?(?:fixed|implemented|finished)(?: (?:the|a|an|this|that|it|all|my|our|your|every|both|what|whatever|everything|something|anything|those|these|them|one|ones|some|several|two|three|four|five|\d+)\b| (?=`))|"
     r"(?:bugs?|issues?|errors?) (?:are |were |have been |has been )?fixed\b|"
     r"(?:is|are|was|were|has been|have been|got) (?:now |all )?(?:fixed|implemented|finished|complete|done)\b|"
     r"successfully (?:implemented|fixed|completed|finished|applied|migrated|added)\b|"
@@ -81,9 +81,9 @@ SENTENCE_SPLIT_RE = re.compile(r"(?<=[。．！？\n])\s*|(?<=[.!?])\s+")
 # (c) predicate position only (owner 2026-10-16): 「残りは未達。」 / 「実装しましたが未完了です。」 exempt; 「未完了だったタスクを実装しました。」 does not.
 UNMET_PREDICATE_RE = re.compile(
     # JA: token + optional copula ends the sentence (review #5: a bracketed / quoted token is not the predicate; flat class)
-    r"(?:未達|未完了|期限超過|間に合(?:わ|い)ません)(?:のまま)?(?:です|でした|だ|である|となった|となりました|となる)?(?:ね|よ)?[。．.!?！？…‥\s]*$"
+    r"(?:未達|未完了|期限超過|間に合(?:わ|い)ません)(?:のまま)?(?:です|でした|だ|である|となった|となりました|となる)?(?:ね|よ)?[。．.!！…‥\s]*$"
     # EN: present-tense copula + token ends the sentence, or a bare UNMET status marker; "reads UNMET" / "was missed" are not
-    r"|\b(?:is|are|was|were|remains|remain|stays|still)\s+(?:UNMET|unmet)[.;!?…\s]*$|^\s*UNMET\b[:：]|\bdeadline (?:is|was|remains|has been)\s+(?:missed|exceeded)[.;!?…\s]*$",
+    r"|\b(?:is|are|was|were|remains|remain|stays|still)\s+(?:UNMET|unmet)[.;!…\s]*$|^\s*UNMET\b[:：]|\bdeadline (?:is|was|remains|has been)\s+(?:missed|exceeded)[.;!…\s]*$",
 )
 # a negation word before the token cancels (c); the token's clause must be a main clause (Codex 1397e64 P1, review #5 P0-2)
 UNMET_NEGATION_RE = re.compile(r"\b(?:no|not|nothing|none|never|zero|without|neither|nor)\b|n't\b", re.IGNORECASE)
@@ -173,7 +173,7 @@ DELETE_KIND_RE = re.compile(
 # 撤回します / 取り下げます / 成立しません」.  「取り消しません」「撤回の必要はありません」 keep the quoted claim.
 RETRACTION_WORDS = (
     r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ます|ました|た)(?![かが])|成立し(?:ません|ない|ていません)|"
-    r"(?:誤り|間違い)(?:でした|です)|事実では(?:ありません|ない)|正しくありません)"  # ADR-008 §2(b) list (review #4 P1-1)
+    r"(?:誤り|間違い)(?:でした|です)(?!ら)|事実では(?:ありません|ない)|正しくありません)"  # ADR-008 §2(b) list; 誤りですらありません is not one (Codex 50f31e5 P2)
 )
 # PR #418 reviews P1-2 / P2(a): form A 「…」と書きましたが、撤回します / 「…」と書いたのは誤りでした。撤回します — the verb
 # follows directly (「…」と報告しました、古い予約は取り消しました retracts a reservation and keeps its claim);
@@ -192,7 +192,7 @@ NEGATED_COMPLETION_RE = re.compile(
     r"(?:先の|前の|上の|この|その|以前の)?(?:報告|宣言|主張|完了報告|完了宣言)は成立し(?:ません|ない|ていません)|"
     # the English form removes only its own clause: "I retract my earlier claim that the tests were flaky; all tests
     # are green and verified" keeps "verified" (review P1: the old `[^\n.]{0,100}` tail swallowed the next clause)
-    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that (?:(?!\s(?:-|—|–|but|because|since|while|although|yet|so|and|which)\s)[^\n.;,:()—–]){0,60})?|"
+    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that (?:(?!\s(?:-|—|–|but|because|since|while|although|yet|so|and|which|as|however|now that)\s)[^\n.;,:()—–]){0,60})?|"
     r"未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
     r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は[^。．.!?！？\n]{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
     r"has not been (?:verified|merged|pushed|saved|deployed|fixed|implemented|finished)|not everything is done|none of it is verified|hasn't been (?:pushed|fixed|implemented|finished)|"
@@ -203,7 +203,7 @@ NEGATED_COMPLETION_RE = re.compile(
     r"not (?:yet |still )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed|implemented|finished|working|in place)|"
     # PR #414 residual: "Not all tests pass" / "not all 12 tests passed yet" is an honest partial report; without this line the
     # `all … pass(ed)` inside it was read as a claim (over-match).
-    r"not all (?:\d+ )?(?:of )?(?:(?:the )?tests? )?pass(?:ed|ing)?(?: yet)?|"
+    r"not all (?:\d+ )?(?:of )?(?:(?:the )?tests? )?(?:(?:are|is) )?pass(?:ed|ing)?(?: yet)?|\bno tests? (?:are|is) (?:passing|green)|"  # progressive forms too (Codex 50f31e5 P2)
     # Codex review 2026-10-16 P2: a partial quantifier is a progress report, not the new `tests pass` claim
     r"\b(?:none|some|most|many|few|a few|half|several|only some|only a few) (?:of )?(?:the |these |those )?tests (?:still )?pass(?:ed)?|"  # \b: "troublesome tests pass" (review #6 P0-N)
     r"isn'?t (?:done|verified|merged|deployed|saved|fixed|implemented|finished|complete|working)|incomplete|un(?:merged|deployed|saved|pushed|fixed|finished))",
