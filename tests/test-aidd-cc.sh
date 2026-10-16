@@ -786,7 +786,7 @@ checks = [
     (m("47 items collected", rec), ["47"]),         # any unused word
     (m("3 tests passed, 0 failed", rec), []),       # honest: 3 is printed, 0 is never judged
     (m("2 skipped, 1 xfailed", rec), ["2", "1"]),   # PR #418 review P2: a non-zero count the output never printed is made up
-    (m("3 passed, 0 failed, rc=0, 1,234 rows, 100%", rec), []),  # T72's honest field still passes
+    (m("3 passed, 0 failed, rc=0, 1,234 rows, 100%", rec), []),  # the honest field of T72 still passes
     (m("47/47 passed", "collected 47 items\n47 passed"), []),
 ]
 bad = [f"{i}: got={got} want={want}" for i, (got, want) in enumerate(checks) if got != want]
@@ -834,7 +834,10 @@ checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.ba
           (row("perl -0pi -e 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -00pi -e 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -CSDpi -e 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -Ilib -e 'print 1' a.py"), []),  # review #3 P2
           # Codex route-A on 2741d2c P2: an unexecuted def body is not a write; --config values are inputs; quoted option values must not hide --check
           (row("python3 -c 'def f(): open(\"/x/a.py\",\"w\").write(\"x\")'"), []), (row("black --config pyproject.toml a.py"), ["/x/a.py"]),
-          (row("black --config \"pyproject.toml\" --check a.py"), []), (row("git restore --source=\"HEAD\" --staged a.py"), []), (row("ruff format --config \"ruff.toml\" src/a.py"), ["/x/src/a.py"])]
+          (row("black --config \"pyproject.toml\" --check a.py"), []), (row("git restore --source=\"HEAD\" --staged a.py"), []), (row("ruff format --config \"ruff.toml\" src/a.py"), ["/x/src/a.py"]),
+          # Codex route-A on 1397e64: read-only formatter modes are reads; default arguments and class bodies run at definition
+          (row("rustfmt --emit stdout a.rs"), []), (row("rustfmt --emit=stdout a.rs"), []), (row("black --version"), []),
+          (row("python3 -c 'def f(x=open(\"/x/a.py\",\"w\")): pass'"), ["/x/a.py"]), (row("python3 -c 'class C: open(\"/x/a.py\",\"w\")'"), ["/x/a.py"])]
 print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
 PY2
 )"

@@ -1563,6 +1563,41 @@
    "expect_claim": false,
    "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-1: deadline missed at the sentence end",
    "text": "I fixed the first test; the deadline was missed."
+  },
+  {
+   "source": "synthetic-positive-p1a-73",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 1397e64 (2026-10-16) P1: a negated unmet predicate is a completion claim",
+   "text": "The task is complete; no requirements are UNMET."
+  },
+  {
+   "source": "synthetic-positive-p1a-74",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 1397e64 (2026-10-16) P1",
+   "text": "The task is complete; nothing remains unmet."
+  },
+  {
+   "source": "synthetic-positive-p1a-75",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 1397e64 (2026-10-16) P1",
+   "text": "I fixed the bug and the tests pass; none are unmet."
+  },
+  {
+   "source": "synthetic-negative-p1a-74",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "Codex route-A review of 1397e64 (2026-10-16) P2: the 。 inside the quote must not split the sentence",
+   "text": "「修正しました。」は取り消します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-75",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "Codex route-A review of 1397e64 (2026-10-16) P2",
+   "text": "「テストも通っています。」は事実ではありません。"
   }
  ]
 }
