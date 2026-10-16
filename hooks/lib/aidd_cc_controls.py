@@ -398,12 +398,13 @@ WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
 # in-place formatters left a stale pytest run fresh because only the literal `sed -i` prefix was known.  `-i` anywhere in
 # the sed / perl options, the formatter verbs, and `git restore` write every path argument.  Codex review 2026-10-16
 # (route A) P2: a formatter in `--check` / `--diff` mode, `eslint --fix-dry-run`, and `git restore` with `--staged` / `-S`
-# and no `--worktree` / `-W` (index only, in any flag order) are reads.  `python3 -c` / `python -c` code is parsed with
+# and no `--worktree` / `-W` (index only, in any flag order) are reads.  perl's in-place cluster may carry digits / C
+# flags (-0pi / -00pi / -CSDpi, review #3 P2); -M / -m (modules), -I (include) and -x never are.  `python3 -c` / `python -c` code is parsed with
 # `ast` (surface form, never executed): `open(<str>, "w"|"a"|"x")` / `Path(<str>).write_*` CALLS write that path; the
 # same text inside a string literal (`print("open('a.py', 'w')")`) does not (Codex review P2).
 _NO_CHECK = r"(?!(?: \S+)* --(?:check|diff)\b)"
 WRITE_ALL_RE = re.compile(
-    r"^(tee|touch|patch|git apply|git checkout|sed(?=(?: +\S+)* +(?:-[A-Za-z]*i\S*|--in-place\b))|perl(?=(?: +\S+)* +-[plnaw]*i\S*)|"
+    r"^(tee|touch|patch|git apply|git checkout|sed(?=(?: +\S+)* +(?:-[A-Za-z]*i\S*|--in-place\b))|perl(?=(?: +\S+)* +-(?![MmIx])[0-9A-Za-z]*i\S*)|"
     r"git restore(?!(?=(?: \S+)* (?:--staged|-S)\b)(?!(?: \S+)* (?:--worktree|-W)\b))|"
     r"(?:ruff format|black|isort|rustfmt|gofmt -w|dos2unix|unix2dos)" + _NO_CHECK + r"|"
     r"ruff check(?=(?: \S+)* --fix\b)" + _NO_CHECK + r"|prettier(?=(?: \S+)* (?:--write|-w)\b)" + _NO_CHECK + r"|"

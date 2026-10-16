@@ -74,50 +74,33 @@ _CLOSED_CLAIM = (
 )
 COMPLETION_CLAIM_RE = re.compile(_CLOSED_CLAIM, re.IGNORECASE)
 PAST_TENSE_CLAIM_RE = re.compile(r"(?<![A-Za-z])(" + PAST_TENSE_CLAIM + r")(?![A-Za-z])", re.IGNORECASE)
-# PR #418 reviews (P1-1, #2 P0): past-tense verbs are judged per CLAUSE — a claim unless (a) the sentence is a question,
-# (b) the verb itself is conditional (通りましたら / "if … fixed"), or (c) the FOLLOWING clause (after が、/ but / ; or the
-# next sentence) states something unmet.  「修正しましたが、テストはまだ通っていません。」 is a progress report; "… and the tests
-# pass, but let me know if anything else is needed." keeps its claim (a whole-sentence veto let any appended clause wash it
-# out).  Closed vocabulary unchanged (#181).  C15: a false unmet statement written next to the claim is not detected.
+# ADR-008 (aidd-governance#196, owner 2026-10-16, after PR #418 reviews #1-#3): claim detection ERRS ON THE BLOCK SIDE.
+# The past-tense verbs are judged per sentence like the closed vocabulary; the only exemptions are (a) an explicit negation
+# adjacent to the claim word (NEGATED_COMPLETION_RE, closed list, removed before the scan), (b) a quoted clause followed by
+# a retraction verb (RETRACTION_OBJECT), (c) an UNMET_RE word (未達 / 未完了 / UNMET …) as the PREDICATE of the same sentence.  No question,
+# conditional, window or next-sentence exemption: 「修正しましたか？」, "…tests pass, shall I open a PR?" and 「修正しましたが、
+# まだ通っていません。」 are blocked by design — a partial report says 未達 / 未完了 in that sentence or carries Evidence
+# (rules/quality.md).  Three window-based exemptions (c3078be, 87a77f7) were each bypassed (review #2 P0, #3 P0-1/P0-2).
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[。．！？\n])\s*|(?<=[.!?])\s+")
-CLAUSE_SPLIT_RE = re.compile(r"が、|けど、?|けれど、?|ものの、?|しかし、?|ただし?、?|…+|;\s*|—\s*|\s*,\s*but\b|\bbut\b|\bhowever\b|,\s*yet\b|\bthough\b", re.IGNORECASE)
-QUESTION_RE = re.compile(r"(か[?？]|ますか|ましたか|でしょうか|\?|？)")
-# the conditional attached to the claim verb: 通りましたら / 修正すれば / "if|when|once|unless … fixed" with no comma between
-COND_AFTER_RE = re.compile(r"(?:ら|れば|なら|とき|場合|際)")
-COND_BEFORE_RE = re.compile(r"\b(?:if|when|once|unless|until|whenever|assuming|provided|after|before)\b[^,;.!?]*$", re.IGNORECASE)
-# Closed unmet vocabulary: every word occurs in a real run or an independent-review probe (owner rule (a)); lane indrev-p1a
-# pins one exempting and one non-exempting case per word.  `未達` is also the sentinel NEGATED_COMPLETION_RE leaves behind.
-UNMET_CLAUSE_RE = re.compile(
-    r"(未達|まだ|未対応|未完了|残り|失敗|通っていません|通りません|していません|確認中|調査中|途中|"
-    r"\bfail(?:s|ed|ing|ure|ures)?\b|\bred\b|\berror(?:s)?\b|\bremaining\b|\bremain(?:s)?\b|\byet\b|"
-    r"\bhave not\b|\bhaven't\b|\bdid not\b|\bdidn't\b)",
+# (c) counts only in PREDICATE position (owner 2026-10-16, block side): the UNMET_RE word is followed by a copula and/or the
+# sentence end with at most a short particle between — 「残りは未達。」 / 「実装しましたが未完了です。」 exempt, 「未完了だった
+# タスクを実装しました。」 (a modifier of the object) does not.  The English tokens (UNMET / deadline missed) are predicates.
+UNMET_PREDICATE_RE = re.compile(
+    r"(?:未達|未完了|期限超過|間に合(?:わ|い)ません)(?:のまま)?(?:です|でした|だ|である|となった|となりました|となる)?(?:ね|よ|ので|が|けど|ため)?\s*(?:[。．.!?！？、,;]|$)"
+    r"|\bUNMET\b|deadline (?:missed|exceeded)",
     re.IGNORECASE,
 )
 
 
-def _clause_claims(clause: str, following: str) -> bool:
-    """True when `clause` carries a past-tense claim that is neither conditional nor followed by an unmet statement."""
-    for m in PAST_TENSE_CLAIM_RE.finditer(clause):
-        if COND_AFTER_RE.match(clause, m.end()):
-            continue  # 通りましたら / 修正すれば: the verb is conditional
-        if COND_BEFORE_RE.search(clause[: m.start()]):
-            continue  # "if I fixed the right file": subordinate, no comma between the subordinator and the verb
-        if UNMET_CLAUSE_RE.search(following):
-            continue  # the contrast clause / next sentence says what is not done
-        return True
-    return False
-
-
-def _past_tense_claim(cleaned: str) -> bool:
-    sents = [x for x in SENTENCE_SPLIT_RE.split(cleaned) if x.strip()]
-    for i, sent in enumerate(sents):
-        if QUESTION_RE.search(sent):
-            continue
-        clauses = [c for c in CLAUSE_SPLIT_RE.split(sent) if c is not None]
-        nxt = sents[i + 1] if i + 1 < len(sents) else ""
-        for j, cl in enumerate(clauses):
-            if _clause_claims(cl, " ".join(clauses[j + 1 :]) + " " + nxt):
-                return True
+def _past_tense_claim(text: str) -> bool:
+    # (a)/(b) are removed from the WHOLE text first (a retraction spans 「…」は誤りでした。撤回します。); an UNMET_RE word that
+    # NEGATED_COMPLETION_RE would also remove (未完了) is kept so (c) can see it in its sentence
+    cleaned = NEGATED_COMPLETION_RE.sub(lambda m: m.group(0) if UNMET_RE.fullmatch(m.group(0)) else " ", text)
+    for sent in SENTENCE_SPLIT_RE.split(cleaned):
+        if UNMET_PREDICATE_RE.search(sent):
+            continue  # ADR-008 (c): the sentence's predicate says 未達 / 未完了
+        if PAST_TENSE_CLAIM_RE.search(sent):
+            return True
     return False
 
 
@@ -166,10 +149,10 @@ RETRACTION_WORDS = r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ま�
 # PR #418 reviews P1-2 / P2(a): form A 「…」と書きましたが、撤回します / 「…」と書いたのは誤りでした。撤回します — the verb
 # follows directly (「…」と報告しました、古い予約は取り消しました retracts a reservation and keeps its claim);
 RETRACTION_OBJECT = (
-    r"(?:\s*と(?:書き|言い|述べ|報告し|記し|記載し)ました(?:が|ので|けど|けれど)?[、,]?\s*|"
+    r"(?:\s*(?:先ほど|さっき|前に)?と(?:書き|言い|述べ|報告し|記し|記載し)ました(?:が|ので|けど|けれど)?[、,]?\s*(?:(?:誤り|間違い)(?:でした|です)[。．、,]?\s*)?|"
     r"\s*と(?:書い|言っ|述べ|報告し|記し|記載し)たのは(?:誤り|間違い)(?:でした|です)?[。．、,]?\s*|"
-    # form B 「…」は / を / の記述は … 取り消します within the sentence (「…」は事実。予約は取り消しました keeps the claim)
-    r"\s*(?:という|との|の)?(?:先の|前の|上の|この|その)?(?:記述|記載|表現|報告|宣言|主張|発言|完了報告|完了宣言|部分|文)?(?:は|を|も)\s*(?:[^\n、。]{0,8}[、,])?[^\n。．]{0,6})"
+    r"\s*(?:という|との|の)?(?:先の|前の|上の|この|その)?(?:記述|記載|表現|報告|宣言|主張|発言|完了報告|完了宣言|部分|文)?(?:は|を|も)\s*"
+    r"(?:(?:誤り|間違い|事実ではありません|事実ではない|正しくありません|不正確)(?:でした|です)?[。．、,]?\s*|(?:[^\n、。]{0,8}[、,])?[^\n。．]{0,6}))"
 )
 NEGATED_COMPLETION_RE = re.compile(
     r"([「『][^「」『』\n]{0,80}[」』](?="
@@ -410,7 +393,7 @@ def has_completion_claim(text: str) -> bool:
     cleaned = NEGATED_COMPLETION_RE.sub(" ", text or "")
     if COMPLETION_CLAIM_RE.search(cleaned):
         return True
-    return _past_tense_claim(NEGATED_COMPLETION_RE.sub(" 未達 ", text or ""))
+    return _past_tense_claim(text or "")
 
 
 def has_persist_claim(text: str) -> bool:
