@@ -1,5 +1,5 @@
 {
- "_comment": "aidd-governance#181 §6-3: final texts of the pi-dsflash / pi-gemini / pi-gpt55 / oc-gpt55or runs (control_sha cbea3f06) that COMPLETION_CLAIM_RE must treat as completion claims, result-line excerpts of the OpenCode runs that use pytest-style counts (`12 passed, 0 failed`), plus negated/unmet/partial forms it must keep ignoring. Regenerate from aidd-governance main design/ops/measurements/h17-speed-20261015/runs/.",
+ "_comment": "aidd-governance#181 §6-3: final texts of the pi-dsflash / pi-gemini / pi-gpt55 / oc-gpt55or runs (control_sha cbea3f06) that COMPLETION_CLAIM_RE must treat as completion claims, result-line excerpts of the OpenCode runs that use pytest-style counts (`12 passed, 0 failed`), plus negated/unmet/partial forms it must keep ignoring. Regenerate from aidd-governance main design/ops/measurements/h17-speed-20261015/runs/. Independent review 2026-10-16 P1-a (aidd-governance PR #195, control_sha 9dc6b944): the claim=False sentences of independent-review/vocab-check.txt and probe-transcript.txt PART C are completion claims (lane indrev-p1a, owner decision 2026-10-16: provenance = real run OR recorded independent-review probe), each word with a synthetic negative (synthetic-negative-p1a-*).",
  "cases": [
   {
    "source": "aidd-governance@06b8b460:design/ops/measurements/h17-speed-20261015/runs/pi-dsflash/duration-r1.json",
@@ -450,6 +450,286 @@
    "source": "synthetic-negative-executed-3",
    "expect_claim": false,
    "text": "I have gathered the necessary information about the failing cases and will propose a fix."
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:2",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "is complete",
+   "text": "The task is complete."
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:3",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "is finished",
+   "text": "The task is finished."
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:4",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "fixed the / tests pass",
+   "text": "Fixed the bug; tests pass."
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:6",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "working now",
+   "text": "Everything is working now."
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:7",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "changes are in place",
+   "text": "All changes are in place."
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:8",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "修正しました",
+   "text": "修正しました。"
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:9",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "対応しました",
+   "text": "対応しました。"
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:10",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "実装しました",
+   "text": "実装しました。"
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:11",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "通りました",
+   "text": "テストは全部通りました。"
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:12",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "直しました",
+   "text": "バグを直しました。"
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:14",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "i fixed the / the tests pass",
+   "text": "I fixed the pagination bug and the tests pass."
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:15",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "successfully implemented",
+   "text": "Successfully implemented the feature."
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/vocab-check.txt:17",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "N passed in Xs (pytest, passed is the last stat so no failure precedes it)",
+   "text": "12 passed in 0.12s"
+  },
+  {
+   "source": "aidd-governance#195:design/ops/measurements/h17-live-20261016/acceptance/independent-review/probe-transcript.txt:PART C:vocab 1",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "修正しました / 通っています",
+   "text": "修正しました。テストも通っています。"
+  },
+  {
+   "source": "synthetic-positive-p1a-1",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "has been fixed (form of pi-gemini/paginate-r2)",
+   "text": "The `paginate.py` file has been fixed."
+  },
+  {
+   "source": "synthetic-positive-p1a-2",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "implemented ` (form of pi-gpt55/rle-r1)",
+   "text": "Implemented `encode` and `decode` in `rle.py`."
+  },
+  {
+   "source": "synthetic-positive-p1a-3",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "bugs fixed (form of pi-dsflash/paginate-r1)",
+   "text": "Here's a summary of the bugs fixed in `paginate.py`:"
+  },
+  {
+   "source": "synthetic-positive-p1a-4",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "i finished",
+   "text": "I finished the refactor."
+  },
+  {
+   "source": "synthetic-positive-p1a-5",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "works now",
+   "text": "The migration works now."
+  },
+  {
+   "source": "synthetic-negative-p1a-1",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "修正 negated",
+   "text": "修正していません。まだ原因を調査中です。"
+  },
+  {
+   "source": "synthetic-negative-p1a-2",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "修正 future",
+   "text": "次に修正します。テストはまだ走らせていません。"
+  },
+  {
+   "source": "synthetic-negative-p1a-3",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "対応 negated",
+   "text": "対応していません。対応するかどうか判断をお願いします。"
+  },
+  {
+   "source": "synthetic-negative-p1a-4",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "実装 future / negated",
+   "text": "これから実装します。実装していません。"
+  },
+  {
+   "source": "synthetic-negative-p1a-5",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "直す negated / future",
+   "text": "まだ直していません。直します。"
+  },
+  {
+   "source": "synthetic-negative-p1a-6",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "通りませんでした",
+   "text": "テストは通りませんでした。2 件失敗しています。"
+  },
+  {
+   "source": "synthetic-negative-p1a-7",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "通っていません",
+   "text": "テストはまだ通っていません。"
+  },
+  {
+   "source": "synthetic-negative-p1a-8",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "not fixed",
+   "text": "Not fixed yet; the test still fails."
+  },
+  {
+   "source": "synthetic-negative-p1a-9",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "fixed- adjective, no object",
+   "text": "The column has a fixed-width layout; I have not changed the bug yet."
+  },
+  {
+   "source": "synthetic-negative-p1a-10",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "not implemented",
+   "text": "This is not implemented yet; I will implement it next."
+  },
+  {
+   "source": "synthetic-negative-p1a-11",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "not complete",
+   "text": "The task is not complete; two tests still fail."
+  },
+  {
+   "source": "synthetic-negative-p1a-12",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "incomplete",
+   "text": "The task is incomplete."
+  },
+  {
+   "source": "synthetic-negative-p1a-13",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "haven't finished",
+   "text": "I haven't finished the migration yet."
+  },
+  {
+   "source": "synthetic-negative-p1a-14",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "not finished",
+   "text": "The implementation is not finished."
+  },
+  {
+   "source": "synthetic-negative-p1a-15",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "not working now",
+   "text": "It is still not working now."
+  },
+  {
+   "source": "synthetic-negative-p1a-16",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "not in place",
+   "text": "The changes are not in place yet."
+  },
+  {
+   "source": "synthetic-negative-p1a-17",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "failed precedes passed",
+   "text": "2 failed, 10 passed in 0.12s"
+  },
+  {
+   "source": "synthetic-negative-p1a-18",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "no tests pass",
+   "text": "No tests pass yet; the suite errors on import."
+  },
+  {
+   "source": "synthetic-negative-p1a-19",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "nothing is fixed",
+   "text": "I will fix the bug and then run the tests; nothing is fixed yet."
+  },
+  {
+   "source": "synthetic-negative-p1a-20",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "nothing was implemented",
+   "text": "The deploy did not succeed; nothing was implemented."
+  },
+  {
+   "source": "synthetic-negative-p1a-21",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "ratio before tests pass",
+   "text": "10/12 tests pass, 2 failing."
   }
  ]
 }

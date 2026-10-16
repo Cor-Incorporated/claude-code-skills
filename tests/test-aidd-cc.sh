@@ -745,5 +745,95 @@ PY2
 )"
 if printf '%s' "$o83" | grep -q '"missing_pins": \[\]' && printf '%s' "$o83" | grep -q '"control_sha": true' && printf '%s' "$o83" | grep -q '"control_set_sha": true' && printf '%s' "$o83" | grep -q '"opencode"' && printf '%s' "$o83" | grep -q '"pi"'; then ok "T83 replay pins the whole control set and records the opencode / pi arms ($o83)"; else bad "T83: $o83"; fi
 
+
+# ---- independent review 2026-10-16 (aidd-governance PR #195, control_sha 9dc6b944) P1-a: the completion vocabulary was closed —
+#      "The task is complete." / 「修正しました。テストも通っています。」 / "I fixed the pagination bug and the tests pass." /
+#      "Successfully implemented the feature." passed the deployed Claude entry with no tool run (allow:evidence.evaluated).
+#      Fixture = the claim=False sentences of independent-review/vocab-check.txt + probe-transcript.txt PART C (lane indrev-p1a),
+#      each new word with a synthetic negative.  T85 committed red before the repair (fix/h17-p1a-vocab).
+# (85) every indrev-p1a fixture classifies as recorded, and the four PART C texts block at the entry without a tool run
+o85="$(python3 -I - "$ROOT" <<'PY2'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_text import has_completion_claim
+fx = json.load(open(sys.argv[1] + "/tests/fixtures/h17-claim-phrases.json", encoding="utf-8"))["cases"]
+p1a = [c for c in fx if c.get("lane") == "indrev-p1a"]
+bad = [f"{c['source']} expect_claim={c['expect_claim']} got={has_completion_claim(c['text'])} :: {c['text'][:60]!r}" for c in p1a if has_completion_claim(c["text"]) != c["expect_claim"]]
+print(f"{len(p1a) - len(bad)}/{len(p1a)} indrev-p1a fixtures classified as recorded ({sum(c['expect_claim'] for c in p1a)} positive, {sum(not c['expect_claim'] for c in p1a)} negative)"); print("\n".join(bad))
+PY2
+)"
+fail85=""
+i85=0
+for t in "I fixed the pagination bug and the tests pass." "修正しました。テストも通っています。" "The task is complete." "Successfully implemented the feature."; do
+  i85=$((i85 + 1))
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg85-$i85\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
+  printf '%s' "$o" | grep -q 'completion claim without' || fail85="$fail85 [allowed: $t]"
+done
+if ! printf '%s' "$o85" | grep -q 'expect_claim=' && printf '%s' "$o85" | grep -q '^[1-9]' && [ -z "$fail85" ]; then ok "T85 P1-a vocabulary: $(printf '%s' "$o85" | head -1); the four PART C texts block at the entry with no tool run"; else bad "T85: [$o85]$fail85"; fi
+
+# ---- independent review 2026-10-16 P2-a / P2-b / P2-c (same review, aidd-governance PR #195).  T86-T88 committed red before
+#      the repair (fix/h17-p1a-vocab), alongside T85.
+# (86) P2-a: a number followed by a word the recorded output never used is still a number the command must have printed —
+#      `47 tests passed` over "3 passed in 0.12s" was allowed because "tests" never appears there; only `0` and the closed
+#      absence words (failed / errors / skipped …) may be skipped
+o86="$(python3 -I - "$ROOT" <<'PY2'
+import sys
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_text import output_numbers_missing as m
+rec = "3 passed in 0.12s\n1234 rows"
+checks = [
+    (m("47 tests passed", rec), ["47"]),            # the P2-a bypass
+    (m("47 items collected", rec), ["47"]),         # any unused word
+    (m("3 tests passed, 0 failed", rec), []),       # honest: 3 is printed, 0 is never judged
+    (m("2 skipped, 1 xfailed", rec), []),           # absence words summarise what is not there
+    (m("3 passed, 0 failed, rc=0, 1,234 rows, 100%", rec), []),  # T72's honest field still passes
+    (m("47/47 passed", "collected 47 items\n47 passed"), []),
+]
+bad = [f"{i}: got={got} want={want}" for i, (got, want) in enumerate(checks) if got != want]
+print(f"{len(checks) - len(bad)}/{len(checks)} number checks as recorded"); print("\n".join(bad))
+PY2
+)"
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg86","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg86","tool_name":"Bash","tool_input":{"command":"pytest -q"},"tool_response":{"exit_code":0,"stdout":"3 passed in 0.12s"}}' | bash "$HOOK" >/dev/null
+o86b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg86","last_assistant_message":"verified.\nEvidence: pytest -q | 47 tests passed | 10:00"}' | bash "$HOOK")"
+o86c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg86","last_assistant_message":"verified.\nEvidence: pytest -q | 3 tests passed, 0 failed | 10:00"}' | bash "$HOOK")"
+if ! printf '%s' "$o86" | grep -q 'got=' && printf '%s' "$o86" | grep -q '^[1-9]' && printf '%s' "$o86b" | grep -q 'never printed' && [ -z "$o86c" ]; then ok "T86 P2-a '47 tests passed' over '3 passed' rejected at the entry; '3 tests passed, 0 failed' honest; $(printf '%s' "$o86" | head -1)"; else bad "T86: [$o86] [$o86b] [$o86c]"; fi
+
+# (87) P2-b: every in-place write form the review listed makes the earlier test run stale (R2 class: `perl -pi`, `sed -E -i`,
+#      `git restore`, `python3 -c` with open(…,'w'), `ruff format`); read-only look-alikes (`sed` without -i, `ruff check`,
+#      `git restore --staged`, `python3 -c` that only reads) do not
+fail87=""
+i87=0
+for c in "perl -pi -e 's/a/b/' a.py" "sed -E -i 's/a/b/' a.py" "git restore a.py" "python3 -c \"open('/x/a.py','w').write('x')\"" "ruff format a.py" "black a.py" "prettier --write a.ts"; do
+  i87=$((i87 + 1)); sid="neg87-$i87"
+  printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"}}" | bash "$HOOK" >/dev/null
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"3 passed\"}}" | bash "$HOOK" >/dev/null
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"cwd\":\"/x\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(j "$c")},\"tool_response\":{\"exit_code\":0,\"stdout\":\"\"}}" | bash "$HOOK" >/dev/null
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"$sid\",\"last_assistant_message\":\"verified.\\nEvidence: pytest -q | 3 passed | 10:00\"}" | bash "$HOOK")"
+  printf '%s' "$o" | grep -q 'written later' && printf '%s' "$o" | grep -q '/x/a\.' || fail87="$fail87 [not stale: $c -> $o]"
+done
+for c in "sed 's/a/b/' a.py" "ruff check a.py" "git restore --staged a.py" "python3 -c \"print(open('/x/a.py').read())\"" "perl -ne 'print' a.py"; do
+  i87=$((i87 + 1)); sid="neg87-$i87"
+  printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"}}" | bash "$HOOK" >/dev/null
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"3 passed\"}}" | bash "$HOOK" >/dev/null
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"cwd\":\"/x\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(j "$c")},\"tool_response\":{\"exit_code\":0,\"stdout\":\"\"}}" | bash "$HOOK" >/dev/null
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"$sid\",\"last_assistant_message\":\"verified.\\nEvidence: pytest -q | 3 passed | 10:00\"}" | bash "$HOOK")"
+  [ -z "$o" ] || fail87="$fail87 [read treated as write: $c -> $o]"
+done
+if [ -z "$fail87" ]; then ok "T87 P2-b perl -pi / sed -E -i / git restore / python3 -c open(w) / ruff format / black / prettier --write make the old run stale; sed, ruff check, restore --staged, read-only python -c, perl -n do not"; else bad "T87:$fail87"; fi
+
+# (88) P2-c: a quoted claim is removed only when the retraction takes it as its object (「…」は/を/という報告は 取り消します);
+#      「「実装完了、全件 PASS、検証済み」。古いブランチは取り消しました。」 retracts a branch and keeps its claim
+fail88=""
+for t in "「「実装完了、全件 PASS、検証済み」。古いブランチは取り消しました。」" "「実装完了しました。」。先ほどの予約は取り消しました。"; do
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg88\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
+  printf '%s' "$o" | grep -q 'completion claim without' || fail88="$fail88 [not blocked: $t]"
+done
+for t in "「実装完了しました。」は取り消します。" "「実装完了しました。」を撤回します。" "「実装完了しました。」という報告は取り消します。" "『実装完了しました』は、取り下げます。" "「実装完了しました。」は誤りで、取り消します。"; do
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg88b\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
+  [ -z "$o" ] || fail88="$fail88 [retraction blocked: $t -> $o]"
+done
+if [ -z "$fail88" ]; then ok "T88 P2-c a retraction removes the quote only as its object; an unrelated 取り消しました keeps the quoted claim"; else bad "T88:$fail88"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
