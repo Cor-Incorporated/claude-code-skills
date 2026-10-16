@@ -635,10 +635,13 @@ if [ -z "$o75" ] && printf '%s' "$o75b" | grep -q 'repair-family\|re-adjudicatio
 # (76) R5: an honest retraction is not a completion claim (Residual 11: the live claude.json re-entry wrote a false
 #      evidence.loop-guard.would-block row for 「『実装完了しました。』は取り消します」)
 fail76=""
-for t in "「実装完了しました。」は取り消します。" "『実装完了しました。』は取り消します" "完了したものは何もありません。" "先の報告は成立しません。証跡がないためです。" "I retract the earlier claim that the implementation is complete."; do
+for t in "「実装完了しました。」は取り消します。" "『実装完了しました。』は取り消します" "完了したものは何もありません。" "先の報告は成立しません。証跡がないためです。" "I retract the earlier claim that the implementation was flawed."; do
   o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
   [ -n "$o" ] && fail76="$fail76 [$t -> $o]"
 done
+# ruling on review #8 F-1 (block side): an English that-clause that itself contains a claim word is evaluated as a claim
+o76r="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76r","last_assistant_message":"I retract the earlier claim that the implementation is complete."}' | bash "$HOOK")"
+printf '%s' "$o76r" | grep -q 'completion claim without' || fail76="$fail76 [that-clause with a claim word not evaluated: $o76r]"
 printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76b\",\"stop_hook_active\":true,\"last_assistant_message\":$(j "「実装完了しました。」は取り消します。")}" | bash "$HOOK" >/dev/null
 grep -q '"rule": "evidence.loop-guard.would-block".*"session": "neg76b"' "$AIDD_LEDGER_PATH" && fail76="$fail76 [would-block row on retraction]"
 o76c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76c","last_assistant_message":"取り消しは完了です。"}' | bash "$HOOK")"
@@ -848,13 +851,16 @@ checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.ba
           # review #5 P2: a def called at top level runs its body; an option value that is also a real argument stays
           (row("python3 -c 'def f(): open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("black --config pyproject.toml pyproject.toml"), ["/x/pyproject.toml"]),
           # Codex route-A on 50f31e5 P2: a called generator / async body does not run; option values with an "i" are not -i; -Ss is staged; patch -t is a flag
-          (row("python3 -c 'def f():\n    yield open(\"/x/a.py\",\"w\")\nf()'"), []), (row("python3 -c 'async def f(): open(\"/x/a.py\",\"w\")\nf()'"), []),
+          (row("python3 -c 'def f():\n    yield open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("python3 -c 'async def f(): open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]),  # review #8 F-3: block side — a called generator / async COUNTS
+          (row("python3 -c 'def f():\n    def g(): yield 1\n    open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("python3 -c 'def f():\n    yield open(\"/x/a.py\",\"w\")\nlist(f())'"), ["/x/a.py"]),
           (row("sed -fscript.sed a.py"), []), (row("perl -Fpipe -ane 'print' a.py"), []), (row("git restore -Ss HEAD a.py"), []), (row("patch -t a.py"), ["/x/a.py"]),
           # review #7 P0/P1-W: an unexpandable ~name falls back to the literal cwd-relative path (a write that makes evidence stale)
           (row("echo x > ~tmp/../src/a.py"), ["/x/src/a.py"]),
           # Codex route-A on 4d4561b: a NUL in an AST path must not raise (P1); restore inputs are not writes; a constant-false branch does not run
           (row("python3 -c 'open(\"\\x00\",\"w\")'"), []), (row("git restore --pathspec-from-file manifest.txt"), []), (row("python3 -c 'if False: open(\"/x/a.py\",\"w\")'"), []),
-          (row("python3 -c 'if True: open(\"/x/a.py\",\"w\")'"), ["/x/a.py"])]
+          (row("python3 -c 'if True: open(\"/x/a.py\",\"w\")'"), ["/x/a.py"]),
+          # review #8 F-6: in-place writes to extension-less files are writes
+          (row("sed -i 's/a/b/' Makefile"), ["/x/Makefile"]), (row("tee Dockerfile"), ["/x/Dockerfile"])]
 print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
 PY2
 )"
@@ -915,10 +921,25 @@ line = "python3 -c 1;" * 307
 rows = [{"event": "post", "rc": 0, "cwd": "/x", "cmd": line, "key": "bash:" + str(i), "ts": 1000 + i, "out_sample": ""} for i in range(40)]
 rows.append({"event": "post", "rc": 0, "cwd": "/x", "cmd": "pytest -q", "key": "bash:pytest", "ts": 999, "out_sample": "3 passed"})
 t0 = time.perf_counter(); v = stop_check({}, rows, "verified.\nEvidence: pytest -q | 999 passed | 10:00", "/x"); dt = time.perf_counter() - t0
-print(f"stop40x4000={dt:.3f}s decision={v.get('decision')}")
+# review #8 F-2 (ruling): 40 rows × 50 trailers under 0.5 s; trailers beyond 20 are not evaluated and are a block-side problem
+many = "verified.\n" + "\n".join(f"Evidence: pytest -q | 999 passed | 10:{i:02d}" for i in range(50))
+t1 = time.perf_counter(); v2 = stop_check({}, rows, many, "/x"); dt2 = time.perf_counter() - t1
+cap = any("too many Evidence trailers (50)" in p for p in v2.get("problems", []))
+print(f"stop40x4000={dt:.3f}s decision={v.get('decision')} stop40x50trailers={dt2:.3f}s decision2={v2.get('decision')} cap={cap}")
 PY2
 )"
-if printf '%s' "$o92" | grep -qE 'stop40x4000=0\.[0-9]+s decision=block'; then ok "T92 stop_check with 40 long rows is sub-second and still blocks the fabricated number: $o92"; else bad "T92: $o92"; fi
+if printf '%s' "$o92" | grep -qE 'stop40x4000=0\.[0-9]+s decision=block' && printf '%s' "$o92" | grep -qE 'stop40x50trailers=0\.[0-4][0-9]*s decision2=block cap=True'; then ok "T92 stop_check with 40 long rows / 50 trailers is under 0.5 s, caps at 20 and still blocks: $o92"; else bad "T92: $o92"; fi
+
+# (93) review #8 F-4: a symlink loop makes Path.resolve() raise RuntimeError (Python <= 3.12); it must not crash the control
+#      into UNVERIFIED — the write is credited by its literal path and the stale check still fires
+D93="$SB/loop93"; mkdir -p "$D93"; ln -s l1 "$D93/l1" 2>/dev/null
+printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg93\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"}}" | bash "$HOOK" >/dev/null
+printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg93\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"3 passed\"}}" | bash "$HOOK" >/dev/null
+printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg93\",\"cwd\":\"$D93\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo x > l1/a.py\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"\"}}" | bash "$HOOK" >/dev/null
+o93="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg93","last_assistant_message":"verified.\nEvidence: pytest -q | 3 passed | 10:00"}' | bash "$HOOK")"
+# ruling: a Readback whose path is a symlink loop is a block-side "unresolvable" problem too
+o93b="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg93\",\"last_assistant_message\":\"保存しました。\\nReadback: $D93/l1/a.py sha256=0000000000000000000000000000000000000000000000000000000000000000\"}" | bash "$HOOK")"
+if printf '%s' "$o93" | grep -q '"decision": "block"' && ! printf '%s' "$o93" | grep -q 'UNVERIFIED' && printf '%s' "$o93b" | grep -q 'unresolvable' && ! printf '%s' "$o93b" | grep -q 'UNVERIFIED'; then ok "T93 a symlink-loop path never crashes the control: the old run is stale and the readback is unresolvable (block side)"; else bad "T93: [$o93] [$o93b]"; fi
 
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

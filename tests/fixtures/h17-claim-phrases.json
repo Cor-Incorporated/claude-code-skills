@@ -1920,6 +1920,104 @@
    "expect_claim": true,
    "note": "Codex route-A review of 4d4561b (2026-10-16) P2: a questioned retraction (existing verb) keeps the quoted claim",
    "text": "「修正しました」を取り消しますか？"
+  },
+  {
+   "source": "synthetic-positive-p1a-112",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #8 of PR #418 (local_7d21cb9f, head 4d4561b) F-1: the retraction tail may not contain a claim word (structural, no connective list)",
+   "text": "I retract my earlier claim that the cache was the cause though the parser bug is now fixed"
+  },
+  {
+   "source": "synthetic-positive-p1a-113",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #8 of PR #418 (local_7d21cb9f, head 4d4561b) F-1",
+   "text": "I retract my earlier claim that the cache was the cause then the parser bug is now fixed"
+  },
+  {
+   "source": "synthetic-positive-p1a-114",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #8 of PR #418 (local_7d21cb9f, head 4d4561b) F-1",
+   "text": "I retract my earlier claim that the cache was the cause / the parser bug is now fixed"
+  },
+  {
+   "source": "synthetic-positive-p1a-115",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #8 of PR #418 (local_7d21cb9f, head 4d4561b) F-1: two spaces",
+   "text": "I retract my earlier claim that the cache was the cause now  that the parser bug is now fixed"
+  },
+  {
+   "source": "synthetic-positive-p1a-116",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #8 of PR #418 (local_7d21cb9f, head 4d4561b) F-1",
+   "text": "I retract my earlier claim that the cache was the cause -> the tests pass"
+  },
+  {
+   "source": "synthetic-positive-p1a-117",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #8 of PR #418 (local_7d21cb9f, head 4d4561b) F-5: a count object has provenance (#181 real runs)",
+   "text": "I fixed 3 bugs and the tests pass."
+  },
+  {
+   "source": "synthetic-negative-p1a-86",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #8 of PR #418 (local_7d21cb9f, head 4d4561b) F-5: an adjective before a hyphenated number is not a claim",
+   "text": "The fixed 30-day window applies."
+  },
+  {
+   "source": "synthetic-negative-p1a-87",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #8 of PR #418 (local_7d21cb9f, head 4d4561b) F-5 regression guard",
+   "text": "The fixed fixture is loaded; the suite is pending."
+  },
+  {
+   "source": "synthetic-positive-p1a-118",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "parent ruling on review #8 (2026-10-16, structural (b)) a that-clause containing a claim word is not removed: (b) fails and the claim is evaluated",
+   "text": "I retract my earlier claim that the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-119",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "parent ruling on review #8 (2026-10-16, structural (b)) same, 'when' is not enumerated",
+   "text": "I retract my earlier claim that the cache was the cause when the tests passed."
+  },
+  {
+   "source": "synthetic-positive-p1a-120",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "parent ruling on review #8 (2026-10-16, structural (b)) a claim word OUTSIDE the quote in the same sentence defeats (b)",
+   "text": "「実装完了しました」は取り消しますが、修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-121",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "parent ruling on review #8 (2026-10-16, structural (b)) same",
+   "text": "「完了」の記述は撤回します、テストは全部通りました。"
+  },
+  {
+   "source": "synthetic-negative-p1a-88",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "parent ruling on review #8 (2026-10-16, structural (b)) regression guard: a that-clause without a claim word is removed",
+   "text": "I retract my earlier claim that the tests were flaky."
+  },
+  {
+   "source": "synthetic-negative-p1a-89",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "parent ruling on review #8 (2026-10-16, structural (b)) regression guard: claim words INSIDE the quote are allowed",
+   "text": "「完了」と書いたのは誤りでした。"
   }
  ]
 }
