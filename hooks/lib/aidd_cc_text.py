@@ -56,7 +56,8 @@ TEST_RESULT_CLAIM = (
 #   * `N passed in 0.12s` is pytest's all-green line — a failure count always precedes "passed" ("2 failed, 10 passed in")
 #   * the negated forms (not fixed / haven't finished / 修正していません / 通っていません) stay out via NEGATED_COMPLETION_RE
 PAST_TENSE_CLAIM = (
-    r"修正しました|対応しました|実装しました|(?<!見)直しました|通りました|通っています|"  # 見直しました is a review, not a fix
+    r"修正しました|対応しました|実装しました|(?<!見)直しました|通りました|通っています|修正済み|パスしました|パスした|"  # 見直しました is a review, not a fix
+    r"(?:^|(?<=[.!?。\n] )|(?<=[.!?。\n]))(?:fixed|implemented)[.!]|tests (?:are|is) (?:now )?passing\b|"  # "Fixed." / "Tests are passing." (PR #418 review P2)
     r"(?:i |we |i've |we've |i have |we have )?(?:fixed|implemented|finished)(?: (?:the|a|an|this|that|it|all|my|our|your|every|both)\b| (?=`))|"
     r"(?:bugs?|issues?|errors?) (?:are |were |have been |has been )?fixed\b|"
     r"(?:is|are|was|were|has been|have been|got) (?:now |all )?(?:fixed|implemented|finished|complete|done)\b|"
@@ -66,15 +67,26 @@ PAST_TENSE_CLAIM = (
     r"(?<!no )(?<![\d/] )(?<![\d/])(?:the |both |my |our )?tests (?:now |all )?pass(?:ed)?\b|"
     r"(?<!failed, )(?<![\d.,])[1-9]\d{0,3} passed in [\d.]+\s*s\b"  # `2 failed, 12 passed in`: no restart inside `12`
 )
-COMPLETION_CLAIM_RE = re.compile(
+_CLOSED_CLAIM = (
     r"(?<![A-Za-z])(verified|完了|根因確定|検証済み|実装済み|解決済み|対応済み|"
     r"done|"
     + TEST_RESULT_CLAIM
-    + r"|"
-    + PAST_TENSE_CLAIM
     + r"|全件\s*PASS|merged|マージ済み|マージした|pushed|push済み|published|"
     + PERSIST_WORDS
-    + r")(?![A-Za-z])",
+    + r")(?![A-Za-z])"
+)
+COMPLETION_CLAIM_RE = re.compile(_CLOSED_CLAIM, re.IGNORECASE)
+PAST_TENSE_CLAIM_RE = re.compile(r"(?<![A-Za-z])(" + PAST_TENSE_CLAIM + r")(?![A-Za-z])", re.IGNORECASE)
+# Independent review of PR #418 (2026-10-16) P1-1: the past-tense verbs are judged PER SENTENCE and a sentence that also
+# carries a partial / unmet / question / conditional marker is a progress report, not a claim — 「修正しましたが、テストは
+# まだ通っていません。」, "I fixed the first test, but two others still fail.", "Tests pass locally but CI is red.",
+# 「修正しましたか？」, 「テストが通りましたら連絡します。」 were blocked, and with a failing pytest recorded no honest
+# trailer could release them.  The closed vocabulary above keeps its text-wide behaviour (unchanged since #181).
+# a sentence ends at 。/．/！/？/newline, or at . ! ? followed by whitespace (`0.12s` and `a.py` are not ends; a `;` is not one)
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[。．！？\n])\s*|(?<=[.!?])\s+")
+PARTIAL_MARKER_RE = re.compile(
+    r"(が、|けど|けれど|ものの|しかし|ただ|まだ|未(?:対応|実装|完了|検証|解決|修正|着手)|残り|一部|途中|しましたか|ますか|か\?|か？|\?|？|たら|れば|なら|"
+    r"\bbut\b|\bhowever\b|\byet\b|\bstill\b|\bnot\b|n't\b|\bremaining\b|\bpartial|\bsome of\b|\bif\b|\bonce\b|\bwhen\b|\blocally\b)",
     re.IGNORECASE,
 )
 PERSIST_CLAIM_RE = re.compile(r"(" + PERSIST_WORDS + r")", re.IGNORECASE)
@@ -121,7 +133,13 @@ RETRACTION_WORDS = r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ま�
 # Independent review 2026-10-16 P2-c: the quoted span is removed only when it is the OBJECT of the retraction — 「…」は /
 # 「…」を / 「…」という報告は 取り消します.  「「実装完了、全件 PASS、検証済み」。古いブランチは取り消しました。」 retracts a
 # branch, not the quote, so the quote keeps its claim.
-RETRACTION_OBJECT = r"(?:\s*(?:という|との|の)?(?:先の|前の|上の|この|その)?(?:報告|宣言|主張|発言|完了報告|完了宣言|部分|文)?(?:は|を|も)\s*(?:[^\n、。]{0,6}、)?[^\n]{0,6})"
+# PR #418 review P1-2 / P2(a): 「…」と書きましたが、撤回します / 「…」の記述は取り消します are retractions too; the span
+# between the object marker and the verb may not cross a sentence end (「…」は事実。予約は取り消しました keeps the claim).
+RETRACTION_OBJECT = (
+    r"(?:\s*(?:と(?:書き|言い|述べ|報告し|記し)ました(?:が|ので|けど|けれど)?[、,]?\s*|"
+    r"(?:という|との|の)?(?:先の|前の|上の|この|その)?(?:記述|記載|表現|報告|宣言|主張|発言|完了報告|完了宣言|部分|文)?(?:は|を|も)\s*(?:[^\n、。]{0,8}[、,])?)"
+    r"[^\n。．]{0,6})"
+)
 NEGATED_COMPLETION_RE = re.compile(
     r"([「『][^「」『』\n]{0,80}[」』](?="
     + RETRACTION_OBJECT
@@ -359,7 +377,12 @@ def has_completion_claim(text: str) -> bool:
     honest unmet report is never treated as a claim (Codex review P2-7).
     """
     cleaned = NEGATED_COMPLETION_RE.sub(" ", text or "")
-    return bool(COMPLETION_CLAIM_RE.search(cleaned))
+    if COMPLETION_CLAIM_RE.search(cleaned):
+        return True
+    return any(
+        PAST_TENSE_CLAIM_RE.search(sent) and not PARTIAL_MARKER_RE.search(sent)
+        for sent in SENTENCE_SPLIT_RE.split(cleaned)
+    )
 
 
 def has_persist_claim(text: str) -> bool:
@@ -437,22 +460,7 @@ OUT_NUMBER_RE = re.compile(
 )
 # Independent review 2026-10-16 P2-a: `Evidence: pytest -q | 47 tests passed | …` was allowed over a recorded "3 passed in
 # 0.12s" because the word after 47 ("tests") never appears in the output and the old rule skipped every such number.  Only
-# a `0` (any word) or one of these closed absence words may be skipped; every other `N word` is judged as a bare number.
-ABSENCE_WORDS = frozenset(
-    {
-        "failed",
-        "failure",
-        "failures",
-        "error",
-        "errors",
-        "skipped",
-        "warnings",
-        "warning",
-        "xfailed",
-        "xpassed",
-        "deselected",
-    }
-)
+# a `0` may be skipped (PR #418 review P2: `47 xpassed` / `2 skipped` the output never printed are made up too).
 STATUS_NUMBER_RE = re.compile(
     r"\b(?:rc|exit(?: code| status)?|status|returned)\s*[:=]?\s*\d+\b", re.IGNORECASE
 )
@@ -475,9 +483,9 @@ def output_numbers_missing(claimed: str, recorded: str) -> list[str]:
     "47 passed" shares the word but not the number — that is the fabrication the token overlap
     (output_field_matches) let through.  Surface form only (C15), judged per number:
       * `N word` (e.g. `0 failed`): if the recorded output uses that word, it must say `N word` too;
-        if the word never appears there, `N` is judged as a bare number — except `0` (any word) and the
-        closed ABSENCE_WORDS (`2 skipped` over an output that never says "skipped" summarises an absence);
-        `47 tests passed` over "3 passed" is therefore missing (independent review 2026-10-16 P2-a)
+        if the word never appears there, `N` is judged as a bare number — except `0` (`0 failed` over an
+        output that never says "failed" summarises an absence); `47 tests passed` and `2 skipped` over
+        "3 passed" are therefore missing (independent review 2026-10-16 P2-a, PR #418 review P2)
       * a bare number / ratio (`47/47`): must appear in the recorded output; `0` alone is never judged
       * status markers (`rc=0`, `exit=0`), `%` values and thousands separators never count as missing
     A field without numbers is not judged here."""
@@ -499,8 +507,6 @@ def output_numbers_missing(claimed: str, recorded: str) -> list[str]:
             continue
         if n == "0" or n in recorded_numbers:
             continue
-        if word in ABSENCE_WORDS:
-            continue  # the recorded output never speaks of `word`: `2 skipped` summarises an absence
         seen.append(
             n
         )  # `47 tests passed` vs `3 passed in 0.12s`: a word the output never used is no excuse (P2-a)

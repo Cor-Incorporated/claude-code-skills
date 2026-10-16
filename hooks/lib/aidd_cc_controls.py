@@ -403,10 +403,10 @@ WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
 # same text inside a string literal (`print("open('a.py', 'w')")`) does not (Codex review P2).
 _NO_CHECK = r"(?!(?: \S+)* --(?:check|diff)\b)"
 WRITE_ALL_RE = re.compile(
-    r"^(tee|touch|patch|git apply|git checkout|sed(?: -[A-Za-z]+)* -i|perl(?: -[A-Za-z]+)* -[A-Za-z]*i|"
+    r"^(tee|touch|patch|git apply|git checkout|sed(?=(?: +\S+)* +(?:-[A-Za-z]*i\S*|--in-place\b))|perl(?=(?: +\S+)* +-[A-Za-z]*i\S*)|"
     r"git restore(?!(?=(?: \S+)* (?:--staged|-S)\b)(?!(?: \S+)* (?:--worktree|-W)\b))|"
     r"(?:ruff format|black|isort|rustfmt|gofmt -w|dos2unix|unix2dos)" + _NO_CHECK + r"|"
-    r"ruff check(?=(?: \S+)* --fix\b)" + _NO_CHECK + r"|prettier(?=(?: \S+)* --write\b)" + _NO_CHECK + r"|"
+    r"ruff check(?=(?: \S+)* --fix\b)" + _NO_CHECK + r"|prettier(?=(?: \S+)* (?:--write|-w)\b)" + _NO_CHECK + r"|"
     r"eslint(?=(?: \S+)* --fix\b)(?!(?: \S+)* --fix-dry-run\b))\b"
 )
 PY_CMD_RE = re.compile(r"^python[0-9.]*(?: -[A-Za-z]+)* -c\s+")
@@ -436,6 +436,13 @@ def _py_code_arg(seg: str) -> str:
     return rest.split(None, 1)[0] if rest else ""
 
 
+def _is_path_ctor(func: ast.AST) -> bool:
+    """`Path(...)` or `pathlib.Path(...)`."""
+    return (isinstance(func, ast.Name) and func.id == "Path") or (
+        isinstance(func, ast.Attribute) and func.attr == "Path"
+    )
+
+
 def _str_const(node: ast.AST) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
@@ -444,7 +451,7 @@ def _py_written_paths(code: str) -> list[str]:
     """Literal paths that `code` opens for writing or writes through pathlib — AST calls only."""
     try:
         tree = ast.parse(code)
-    except (SyntaxError, ValueError):
+    except Exception:  # SyntaxError / ValueError / RecursionError / MemoryError: not a write we can read
         return []
     out: list[str] = []
     for node in ast.walk(tree):
@@ -457,14 +464,13 @@ def _py_written_paths(code: str) -> list[str]:
             for kw in node.keywords:
                 if kw.arg == "mode":
                     mode = _str_const(kw.value)
-            if path and mode and mode[:1] in "wax":
+            if path and mode and (mode[:1] in "wax" or "+" in mode):
                 out.append(path)
         elif (
             isinstance(f, ast.Attribute)
             and f.attr in ("write_text", "write_bytes")
             and isinstance(f.value, ast.Call)
-            and isinstance(f.value.func, ast.Name)
-            and f.value.func.id == "Path"
+            and _is_path_ctor(f.value.func)
             and f.value.args
             and _str_const(f.value.args[0])
         ):
