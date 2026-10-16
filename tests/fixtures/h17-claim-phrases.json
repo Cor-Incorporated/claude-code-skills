@@ -1598,6 +1598,27 @@
    "expect_claim": false,
    "note": "Codex route-A review of 1397e64 (2026-10-16) P2",
    "text": "「テストも通っています。」は事実ではありません。"
+  },
+  {
+   "source": "synthetic-positive-p1a-76",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of e00d1df (2026-10-16) P2: a correction of another clause does not retract the quoted claim",
+   "text": "「完了」は事実、他は誤りです。"
+  },
+  {
+   "source": "synthetic-positive-p1a-77",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of e00d1df (2026-10-16) P2: same",
+   "text": "「修正しました」は正しく、他の記述は誤りです。"
+  },
+  {
+   "source": "synthetic-negative-p1a-76",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "Codex route-A review of e00d1df (2026-10-16) P2: the comma option stays for 誤りで、 + verb",
+   "text": "「修正しました」は誤りで、取り消します。"
   }
  ]
 }

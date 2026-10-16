@@ -825,7 +825,7 @@ for c in "sed 's/a/b/' a.py" "ruff check a.py" "git restore --staged a.py" "pyth
   [ -z "$o" ] || fail87="$fail87 [read treated as write: $c -> $o]"
 done
 # review #2 P3: `-Mstrict` is not `-i`; `--in-place=.bak` writes the file, not `.bak`
-o87p="$(python3 -I - "$ROOT" <<'PY2'
+o87p="$(python3 -I - "$ROOT" 2>&1 <<'PY2'
 import sys
 sys.path.insert(0, sys.argv[1] + "/hooks/lib")
 from aidd_cc_controls import _row_written_paths as w
@@ -837,7 +837,10 @@ checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.ba
           (row("black --config \"pyproject.toml\" --check a.py"), []), (row("git restore --source=\"HEAD\" --staged a.py"), []), (row("ruff format --config \"ruff.toml\" src/a.py"), ["/x/src/a.py"]),
           # Codex route-A on 1397e64: read-only formatter modes are reads; default arguments and class bodies run at definition
           (row("rustfmt --emit stdout a.rs"), []), (row("rustfmt --emit=stdout a.rs"), []), (row("black --version"), []),
-          (row("python3 -c 'def f(x=open(\"/x/a.py\",\"w\")): pass'"), ["/x/a.py"]), (row("python3 -c 'class C: open(\"/x/a.py\",\"w\")'"), ["/x/a.py"])]
+          (row("python3 -c 'def f(x=open(\"/x/a.py\",\"w\")): pass'"), ["/x/a.py"]), (row("python3 -c 'class C: open(\"/x/a.py\",\"w\")'"), ["/x/a.py"]),
+          # Codex route-A on e00d1df: a required keyword-only argument must not crash the walk; cp -t / --target-directory write the destination; isort read-only modes
+          (row("python3 -c 'def f(*, required): pass'"), []), (row("cp source.py --target-directory=out"), ["/x/out/source.py"]), (row("cp a.py b.py -t out"), ["/x/out/a.py", "/x/out/b.py"]),
+          (row("isort --stdout a.py"), []), (row("isort -c a.py"), []), (row("isort --check-only a.py"), []), (row("isort a.py"), ["/x/a.py"])]
 print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
 PY2
 )"
