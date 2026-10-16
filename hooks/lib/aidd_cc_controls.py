@@ -426,7 +426,7 @@ def _py_code_arg(seg: str) -> str:
         out, i = [], 1
         while i < len(rest):
             ch = rest[i]
-            if ch == "\\" and i + 1 < len(rest):
+            if ch == "\\" and i + 1 < len(rest) and rest[i + 1] in '$`"\\\n':  # the shell drops a backslash only before these (Codex a8a4f04 P2)
                 out.append(rest[i + 1])
                 i += 2
                 continue
@@ -529,7 +529,7 @@ def _row_written_paths(r: dict) -> list[str]:
         # `--in-place=.bak` / `--source=HEAD`: the value of a long option is not a path argument (review #2 P3)
         args = [t for t in re.findall(r"[\w./~-]+", re.sub(r"--[\w-]+=\S*", " ", bare))[1:] if not t.startswith("-")]
         if WRITE_LAST_RE.match(bare) and args:
-            tdir = TARGET_DIR_RE.search(bare)
+            tdir = TARGET_DIR_RE.search(bare) if re.match(r"(?:cp|mv|install)\b", bare) else None  # the sync tool's -t keeps times (Codex a8a4f04 P2)
             if tdir:  # `cp a.py --target-directory=out` / `cp a.py b.py -t out`: out/<basename> is written (Codex e00d1df P2)
                 cands += [tdir.group(1).rstrip("/") + "/" + a.rsplit("/", 1)[-1] for a in args if a != tdir.group(1)]
             else:
