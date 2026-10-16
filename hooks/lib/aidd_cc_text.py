@@ -45,18 +45,15 @@ TEST_RESULT_CLAIM = (
     r"(?:commands?|tasks?|steps?|work|changes?|implementation)\b"
 )
 # Independent review 2026-10-16 P1-a (aidd-governance PR #195, control_sha 9dc6b944): the vocabulary above was closed, so
-# "The task is complete." / 「修正しました。テストも通っています。」 / "I fixed the pagination bug and the tests pass." /
-# "Successfully implemented the feature." passed the deployed entry with no tool run.  Owner decision 2026-10-16 (a): the
-# provenance of a claim word is a real run OR a recorded independent-review probe (independent-review/vocab-check.txt,
-# probe-transcript.txt PART C; fixture lane indrev-p1a).  Still surface form only (C15): the past-tense fix / implement /
-# finish verbs and "tests pass" below, each with a synthetic negative in tests/fixtures/h17-claim-phrases.json.
-#   * fixed / implemented need an object or a copula (`Fixed \`paginate.py\``, "bugs fixed in", "has been fixed",
-#     "I fixed the …"): "a fixed-width column" and "the fixture" never count
-#   * "tests pass" without a number in front: "10/12 tests pass" and "no tests pass yet" are progress reports
-#   * `N passed in 0.12s` is pytest's all-green line — a failure count always precedes "passed" ("2 failed, 10 passed in")
-#   * the negated forms (not fixed / haven't finished / 修正していません / 通っていません) stay out via NEGATED_COMPLETION_RE
+# "The task is complete." / 「修正しました。テストも通っています。」 / "I fixed the pagination bug and the tests pass." passed
+# the deployed entry with no tool run.  Owner decision 2026-10-16 (a): a claim word's provenance is a real run OR a recorded
+# independent-review probe (independent-review/vocab-check.txt, probe-transcript.txt PART C; fixture lane indrev-p1a).
+# Surface form only (C15); every word has a synthetic negative in tests/fixtures/h17-claim-phrases.json.  fixed / implemented
+# need an object or a copula ("a fixed-width column" never counts); "tests pass" needs no number in front ("10/12 tests pass"
+# is progress); `N passed in 0.12s` is pytest's all-green line (a failure count always precedes "passed").
 PAST_TENSE_CLAIM = (
     r"修正しました|対応しました|実装しました|(?<!見)直しました|通りました|通っています|修正済み|パスしました|パスした|"  # 見直しました is a review, not a fix
+    r"動作確認しました|動作確認済み|動作しました|everything works\b|it works\b|"  # PR #418 review #2 P3
     r"(?:^|(?<=[.!?。\n] )|(?<=[.!?。\n]))(?:fixed|implemented)[.!]|tests (?:are|is) (?:now )?passing\b|"  # "Fixed." / "Tests are passing." (PR #418 review P2)
     r"(?:i |we |i've |we've |i have |we have )?(?:fixed|implemented|finished)(?: (?:the|a|an|this|that|it|all|my|our|your|every|both)\b| (?=`))|"
     r"(?:bugs?|issues?|errors?) (?:are |were |have been |has been )?fixed\b|"
@@ -77,18 +74,53 @@ _CLOSED_CLAIM = (
 )
 COMPLETION_CLAIM_RE = re.compile(_CLOSED_CLAIM, re.IGNORECASE)
 PAST_TENSE_CLAIM_RE = re.compile(r"(?<![A-Za-z])(" + PAST_TENSE_CLAIM + r")(?![A-Za-z])", re.IGNORECASE)
-# Independent review of PR #418 (2026-10-16) P1-1: the past-tense verbs are judged PER SENTENCE and a sentence that also
-# carries a partial / unmet / question / conditional marker is a progress report, not a claim — 「修正しましたが、テストは
-# まだ通っていません。」, "I fixed the first test, but two others still fail.", "Tests pass locally but CI is red.",
-# 「修正しましたか？」, 「テストが通りましたら連絡します。」 were blocked, and with a failing pytest recorded no honest
-# trailer could release them.  The closed vocabulary above keeps its text-wide behaviour (unchanged since #181).
-# a sentence ends at 。/．/！/？/newline, or at . ! ? followed by whitespace (`0.12s` and `a.py` are not ends; a `;` is not one)
+# PR #418 reviews (P1-1, #2 P0): past-tense verbs are judged per CLAUSE — a claim unless (a) the sentence is a question,
+# (b) the verb itself is conditional (通りましたら / "if … fixed"), or (c) the FOLLOWING clause (after が、/ but / ; or the
+# next sentence) states something unmet.  「修正しましたが、テストはまだ通っていません。」 is a progress report; "… and the tests
+# pass, but let me know if anything else is needed." keeps its claim (a whole-sentence veto let any appended clause wash it
+# out).  Closed vocabulary unchanged (#181).  C15: a false unmet statement written next to the claim is not detected.
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[。．！？\n])\s*|(?<=[.!?])\s+")
-PARTIAL_MARKER_RE = re.compile(
-    r"(が、|けど|けれど|ものの|しかし|ただ|まだ|未(?:対応|実装|完了|検証|解決|修正|着手)|残り|一部|途中|しましたか|ますか|か\?|か？|\?|？|たら|れば|なら|"
-    r"\bbut\b|\bhowever\b|\byet\b|\bstill\b|\bnot\b|n't\b|\bremaining\b|\bpartial|\bsome of\b|\bif\b|\bonce\b|\bwhen\b|\blocally\b)",
+CLAUSE_SPLIT_RE = re.compile(r"が、|けど、?|けれど、?|ものの、?|しかし、?|ただし?、?|…+|;\s*|—\s*|\s*,\s*but\b|\bbut\b|\bhowever\b|,\s*yet\b|\bthough\b", re.IGNORECASE)
+QUESTION_RE = re.compile(r"(か[?？]|ますか|ましたか|でしょうか|\?|？)")
+# the conditional attached to the claim verb: 通りましたら / 修正すれば / "if|when|once|unless … fixed" with no comma between
+COND_AFTER_RE = re.compile(r"(?:ら|れば|なら|とき|場合|際)")
+COND_BEFORE_RE = re.compile(r"\b(?:if|when|once|unless|until|whenever|assuming|provided|after|before)\b[^,;.!?]*$", re.IGNORECASE)
+# Closed unmet vocabulary: every word occurs in a real run or an independent-review probe (owner rule (a)); lane indrev-p1a
+# pins one exempting and one non-exempting case per word.  `未達` is also the sentinel NEGATED_COMPLETION_RE leaves behind.
+UNMET_CLAUSE_RE = re.compile(
+    r"(未達|まだ|未対応|未完了|残り|失敗|通っていません|通りません|していません|確認中|調査中|途中|"
+    r"\bfail(?:s|ed|ing|ure|ures)?\b|\bred\b|\berror(?:s)?\b|\bremaining\b|\bremain(?:s)?\b|\byet\b|"
+    r"\bhave not\b|\bhaven't\b|\bdid not\b|\bdidn't\b)",
     re.IGNORECASE,
 )
+
+
+def _clause_claims(clause: str, following: str) -> bool:
+    """True when `clause` carries a past-tense claim that is neither conditional nor followed by an unmet statement."""
+    for m in PAST_TENSE_CLAIM_RE.finditer(clause):
+        if COND_AFTER_RE.match(clause, m.end()):
+            continue  # 通りましたら / 修正すれば: the verb is conditional
+        if COND_BEFORE_RE.search(clause[: m.start()]):
+            continue  # "if I fixed the right file": subordinate, no comma between the subordinator and the verb
+        if UNMET_CLAUSE_RE.search(following):
+            continue  # the contrast clause / next sentence says what is not done
+        return True
+    return False
+
+
+def _past_tense_claim(cleaned: str) -> bool:
+    sents = [x for x in SENTENCE_SPLIT_RE.split(cleaned) if x.strip()]
+    for i, sent in enumerate(sents):
+        if QUESTION_RE.search(sent):
+            continue
+        clauses = [c for c in CLAUSE_SPLIT_RE.split(sent) if c is not None]
+        nxt = sents[i + 1] if i + 1 < len(sents) else ""
+        for j, cl in enumerate(clauses):
+            if _clause_claims(cl, " ".join(clauses[j + 1 :]) + " " + nxt):
+                return True
+    return False
+
+
 PERSIST_CLAIM_RE = re.compile(r"(" + PERSIST_WORDS + r")", re.IGNORECASE)
 PUSH_CLAIM_RE = re.compile(
     r"(pushed|push済み|push した|merged|マージ済み|マージした)", re.IGNORECASE
@@ -130,15 +162,14 @@ DELETE_KIND_RE = re.compile(
 # Only an AFFIRMATIVE retraction verb counts (independent review 2026-10-16 P1): 「取り消します / 取り消しました /
 # 撤回します / 取り下げます / 成立しません」.  「取り消しません」「撤回の必要はありません」 keep the quoted claim.
 RETRACTION_WORDS = r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ます|ました|た)(?![かが])|成立し(?:ません|ない|ていません))"
-# Independent review 2026-10-16 P2-c: the quoted span is removed only when it is the OBJECT of the retraction — 「…」は /
-# 「…」を / 「…」という報告は 取り消します.  「「実装完了、全件 PASS、検証済み」。古いブランチは取り消しました。」 retracts a
-# branch, not the quote, so the quote keeps its claim.
-# PR #418 review P1-2 / P2(a): 「…」と書きましたが、撤回します / 「…」の記述は取り消します are retractions too; the span
-# between the object marker and the verb may not cross a sentence end (「…」は事実。予約は取り消しました keeps the claim).
+# Review 2026-10-16 P2-c: the quoted span is removed only as the OBJECT of the retraction (「…」。古いブランチは取り消しました keeps it).
+# PR #418 reviews P1-2 / P2(a): form A 「…」と書きましたが、撤回します / 「…」と書いたのは誤りでした。撤回します — the verb
+# follows directly (「…」と報告しました、古い予約は取り消しました retracts a reservation and keeps its claim);
 RETRACTION_OBJECT = (
-    r"(?:\s*(?:と(?:書き|言い|述べ|報告し|記し)ました(?:が|ので|けど|けれど)?[、,]?\s*|"
-    r"(?:という|との|の)?(?:先の|前の|上の|この|その)?(?:記述|記載|表現|報告|宣言|主張|発言|完了報告|完了宣言|部分|文)?(?:は|を|も)\s*(?:[^\n、。]{0,8}[、,])?)"
-    r"[^\n。．]{0,6})"
+    r"(?:\s*と(?:書き|言い|述べ|報告し|記し|記載し)ました(?:が|ので|けど|けれど)?[、,]?\s*|"
+    r"\s*と(?:書い|言っ|述べ|報告し|記し|記載し)たのは(?:誤り|間違い)(?:でした|です)?[。．、,]?\s*|"
+    # form B 「…」は / を / の記述は … 取り消します within the sentence (「…」は事実。予約は取り消しました keeps the claim)
+    r"\s*(?:という|との|の)?(?:先の|前の|上の|この|その)?(?:記述|記載|表現|報告|宣言|主張|発言|完了報告|完了宣言|部分|文)?(?:は|を|も)\s*(?:[^\n、。]{0,8}[、,])?[^\n。．]{0,6})"
 )
 NEGATED_COMPLETION_RE = re.compile(
     r"([「『][^「」『』\n]{0,80}[」』](?="
@@ -379,10 +410,7 @@ def has_completion_claim(text: str) -> bool:
     cleaned = NEGATED_COMPLETION_RE.sub(" ", text or "")
     if COMPLETION_CLAIM_RE.search(cleaned):
         return True
-    return any(
-        PAST_TENSE_CLAIM_RE.search(sent) and not PARTIAL_MARKER_RE.search(sent)
-        for sent in SENTENCE_SPLIT_RE.split(cleaned)
-    )
+    return _past_tense_claim(NEGATED_COMPLETION_RE.sub(" 未達 ", text or ""))
 
 
 def has_persist_claim(text: str) -> bool:

@@ -403,7 +403,7 @@ WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
 # same text inside a string literal (`print("open('a.py', 'w')")`) does not (Codex review P2).
 _NO_CHECK = r"(?!(?: \S+)* --(?:check|diff)\b)"
 WRITE_ALL_RE = re.compile(
-    r"^(tee|touch|patch|git apply|git checkout|sed(?=(?: +\S+)* +(?:-[A-Za-z]*i\S*|--in-place\b))|perl(?=(?: +\S+)* +-[A-Za-z]*i\S*)|"
+    r"^(tee|touch|patch|git apply|git checkout|sed(?=(?: +\S+)* +(?:-[A-Za-z]*i\S*|--in-place\b))|perl(?=(?: +\S+)* +-[plnaw]*i\S*)|"
     r"git restore(?!(?=(?: \S+)* (?:--staged|-S)\b)(?!(?: \S+)* (?:--worktree|-W)\b))|"
     r"(?:ruff format|black|isort|rustfmt|gofmt -w|dos2unix|unix2dos)" + _NO_CHECK + r"|"
     r"ruff check(?=(?: \S+)* --fix\b)" + _NO_CHECK + r"|prettier(?=(?: \S+)* (?:--write|-w)\b)" + _NO_CHECK + r"|"
@@ -504,7 +504,8 @@ def _row_written_paths(r: dict) -> list[str]:
         bare = _unquoted(
             seg
         )  # `git commit -m "a > b"` / `awk '$1 > 5'`: no redirection inside quotes
-        args = [t for t in re.findall(r"[\w./~-]+", bare)[1:] if not t.startswith("-")]
+        # `--in-place=.bak` / `--source=HEAD`: the value of a long option is not a path argument (review #2 P3)
+        args = [t for t in re.findall(r"[\w./~-]+", re.sub(r"--[\w-]+=\S*", " ", bare))[1:] if not t.startswith("-")]
         if WRITE_LAST_RE.match(bare) and args:
             cands.append(
                 args[-1]

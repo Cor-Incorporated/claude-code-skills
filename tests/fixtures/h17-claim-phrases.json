@@ -1010,6 +1010,188 @@
    "expect_claim": false,
    "note": "independent review #2 of PR #418 (local_7d21cb9f, head c3078be) conditional claim + unmet",
    "text": "If I fixed the right file, the tests pass; I have not run them."
+  },
+  {
+   "source": "synthetic-negative-p1a-43",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "UNMET_CLAUSE_RE closed list, 未完了 → 未達 sentinel in the next sentence exempts",
+   "text": "修正しました。ただしタスク全体は未完了です。"
+  },
+  {
+   "source": "synthetic-negative-p1a-44",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "UNMET_CLAUSE_RE closed list, 完了していません → 未達 sentinel",
+   "text": "修正しましたが、完了していません。"
+  },
+  {
+   "source": "synthetic-negative-p1a-45",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "UNMET_CLAUSE_RE closed list, 途中",
+   "text": "修正しましたが、テストは途中です。"
+  },
+  {
+   "source": "synthetic-negative-p1a-46",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "UNMET_CLAUSE_RE closed list, error",
+   "text": "I fixed the parser, but the serializer still throws an error."
+  },
+  {
+   "source": "synthetic-negative-p1a-47",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "UNMET_CLAUSE_RE closed list, remaining",
+   "text": "I fixed the bug, but the remaining cases are untested."
+  },
+  {
+   "source": "synthetic-negative-p1a-48",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "UNMET_CLAUSE_RE closed list, remain",
+   "text": "I fixed the parser; three cases remain."
+  },
+  {
+   "source": "synthetic-negative-p1a-49",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "UNMET_CLAUSE_RE closed list, did not",
+   "text": "I fixed the bug, but the second run did not finish."
+  },
+  {
+   "source": "synthetic-negative-p1a-50",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "UNMET_CLAUSE_RE closed list, didn't",
+   "text": "I fixed the bug, but CI didn't pick it up."
+  },
+  {
+   "source": "synthetic-negative-p1a-51",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "UNMET_CLAUSE_RE closed list, yet / error after a yet, split",
+   "text": "I fixed the bug and the tests pass, yet two cases still error."
+  },
+  {
+   "source": "synthetic-positive-p1a-25",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, まだ inside the claim clause does not exempt",
+   "text": "まだ残っていたバグを修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-26",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 残り inside the claim clause",
+   "text": "残りのバグを修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-27",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 未対応 inside the claim clause",
+   "text": "未対応だった項目を実装しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-28",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 未完了 inside the claim clause",
+   "text": "未完了だったタスクを実装しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-29",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 失敗 inside the claim clause",
+   "text": "失敗していたテストを修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-30",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 通っていません BEFORE the claim does not exempt",
+   "text": "テストが通っていませんでしたが、修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-31",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 調査中 inside the claim clause",
+   "text": "調査中だったバグを修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-32",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 確認中 inside the claim clause",
+   "text": "確認中だった挙動を修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-33",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, 途中 inside the claim clause",
+   "text": "途中まで書いてあった実装を実装しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-34",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, fail inside the claim clause",
+   "text": "The failing test is fixed."
+  },
+  {
+   "source": "synthetic-positive-p1a-35",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, red BEFORE the claim does not exempt",
+   "text": "CI was red, but I fixed the config and the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-36",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, error inside the claim clause",
+   "text": "I fixed the error handling and the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-37",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, remain BEFORE the claim does not exempt",
+   "text": "No issues remain; I fixed the bug."
+  },
+  {
+   "source": "synthetic-positive-p1a-38",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, yet with no unmet after it",
+   "text": "I fixed the bug and the tests pass, yet another refactor is possible."
+  },
+  {
+   "source": "synthetic-positive-p1a-39",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, have not BEFORE the claim does not exempt",
+   "text": "I have not seen this before, but I fixed it."
+  },
+  {
+   "source": "synthetic-positive-p1a-40",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, haven't BEFORE the claim does not exempt",
+   "text": "I haven't touched the docs, but I fixed the bug and the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-41",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "UNMET_CLAUSE_RE closed list, a following clause with no unmet word keeps the claim",
+   "text": "修正しました。ただし、ドキュメントは別 PR です。"
   }
  ]
 }
