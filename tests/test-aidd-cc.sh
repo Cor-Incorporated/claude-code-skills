@@ -759,6 +759,10 @@ from aidd_cc_text import has_completion_claim
 fx = json.load(open(sys.argv[1] + "/tests/fixtures/h17-claim-phrases.json", encoding="utf-8"))["cases"]
 p1a = [c for c in fx if c.get("lane") == "indrev-p1a"]
 bad = [f"{c['source']} expect_claim={c['expect_claim']} got={has_completion_claim(c['text'])} :: {c['text'][:60]!r}" for c in p1a if has_completion_claim(c["text"]) != c["expect_claim"]]
+import time  # review #5 P1-2: the terminator tail must not backtrack exponentially (Stop timeout = fail-open)
+for adversarial in ["現状は未達" + "）" * 20000 + "x。バグを修正しました。", "I fixed the bug" + ";" * 80000, "「" * 40000 + "修正しました"]:
+    t0 = time.time(); has_completion_claim(adversarial); dt = time.time() - t0
+    if dt > 1.0: bad.append(f"timing: {dt:.2f}s on {adversarial[:20]!r}…")
 print(f"{len(p1a) - len(bad)}/{len(p1a)} indrev-p1a fixtures classified as recorded ({sum(c['expect_claim'] for c in p1a)} positive, {sum(not c['expect_claim'] for c in p1a)} negative)"); print("\n".join(bad))
 PY2
 )"
@@ -840,7 +844,9 @@ checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.ba
           (row("python3 -c 'def f(x=open(\"/x/a.py\",\"w\")): pass'"), ["/x/a.py"]), (row("python3 -c 'class C: open(\"/x/a.py\",\"w\")'"), ["/x/a.py"]),
           # Codex route-A on e00d1df: a required keyword-only argument must not crash the walk; cp -t / --target-directory write the destination; isort read-only modes
           (row("python3 -c 'def f(*, required): pass'"), []), (row("cp source.py --target-directory=out"), ["/x/out/source.py"]), (row("cp a.py b.py -t out"), ["/x/out/a.py", "/x/out/b.py"]),
-          (row("isort --stdout a.py"), []), (row("isort -c a.py"), []), (row("isort --check-only a.py"), []), (row("isort a.py"), ["/x/a.py"])]
+          (row("isort --stdout a.py"), []), (row("isort -c a.py"), []), (row("isort --check-only a.py"), []), (row("isort a.py"), ["/x/a.py"]),
+          # review #5 P2: a def called at top level runs its body; an option value that is also a real argument stays
+          (row("python3 -c 'def f(): open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("black --config pyproject.toml pyproject.toml"), ["/x/pyproject.toml"])]
 print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
 PY2
 )"

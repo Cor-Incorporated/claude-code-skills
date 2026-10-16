@@ -1546,8 +1546,8 @@
   {
    "source": "synthetic-negative-p1a-71",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-2: ）terminates",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-2: ）terminates | review #5 P0-3: a parenthetical is not the main predicate (block side)",
    "text": "修正しました（ドキュメントは未達）。"
   },
   {
@@ -1619,6 +1619,146 @@
    "expect_claim": false,
    "note": "Codex route-A review of e00d1df (2026-10-16) P2: the comma option stays for 誤りで、 + verb",
    "text": "「修正しました」は誤りで、取り消します。"
+  },
+  {
+   "source": "synthetic-positive-p1a-78",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-2: a sentence-final token that is not the main predicate",
+   "text": "I fixed the timeout handling for context deadline exceeded."
+  },
+  {
+   "source": "synthetic-positive-p1a-79",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-2",
+   "text": "I fixed the flaky test that caused the deadline missed."
+  },
+  {
+   "source": "synthetic-positive-p1a-80",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-2",
+   "text": "I fixed the bug that marked tasks as UNMET."
+  },
+  {
+   "source": "synthetic-positive-p1a-81",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-2",
+   "text": "I fixed the bug and the tests pass; the label reads UNMET."
+  },
+  {
+   "source": "synthetic-positive-p1a-82",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-2: subordinate clause",
+   "text": "I implemented an alert that fires when the deadline is missed."
+  },
+  {
+   "source": "synthetic-positive-p1a-83",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-2: a quoted token inside brackets is not the predicate",
+   "text": "表示文言を修正しました（→「期限超過」）。"
+  },
+  {
+   "source": "synthetic-positive-p1a-84",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-2",
+   "text": "表示文言を修正しました：「期限超過」"
+  },
+  {
+   "source": "synthetic-positive-p1a-85",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-3: a parenthetical past state is not the main predicate",
+   "text": "バグを修正しました（以前は未達）。"
+  },
+  {
+   "source": "synthetic-positive-p1a-86",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-3: past-tense state",
+   "text": "I fixed the bug and the tests pass; yesterday the deadline was missed."
+  },
+  {
+   "source": "synthetic-positive-p1a-87",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-4: em dash without spaces",
+   "text": "I retract my earlier claim that the cache was the cause—the parser bug is now fixed"
+  },
+  {
+   "source": "synthetic-positive-p1a-88",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-4",
+   "text": "I retract my earlier claim that the cache was the cause but the parser bug is now fixed"
+  },
+  {
+   "source": "synthetic-positive-p1a-89",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-4",
+   "text": "I retract my earlier claim that the cache was the cause because the parser bug is now fixed"
+  },
+  {
+   "source": "synthetic-positive-p1a-90",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-4",
+   "text": "I retract my earlier claim that the cache was the cause (the bug is fixed)"
+  },
+  {
+   "source": "synthetic-positive-p1a-91",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-3 / block side: a parenthetical is not the main predicate — write 「…ドキュメントは未達です。」",
+   "text": "修正しました（ドキュメントは未達）。"
+  },
+  {
+   "source": "synthetic-positive-p1a-92",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) coverage: 間に合いません before the claim does not exempt",
+   "text": "期限に間に合いませんでしたが、今は修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-93",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) coverage: a retraction followed by a fresh claim",
+   "text": "「修正しました」は事実ではありませんでしたが、今は修正しました。"
+  },
+  {
+   "source": "synthetic-negative-p1a-77",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) coverage: 間に合いません as the main predicate",
+   "text": "修正しましたが、残りは期限に間に合いません。"
+  },
+  {
+   "source": "synthetic-negative-p1a-78",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) coverage: 正しくありません retracts",
+   "text": "「修正しました」は正しくありません。"
+  },
+  {
+   "source": "synthetic-negative-p1a-79",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-2: present copula + token at the end is the main predicate",
+   "text": "I fixed the first test; the second remains unmet."
+  },
+  {
+   "source": "synthetic-negative-p1a-80",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-3: 期限超過です is the predicate of the sentence — sanctioned under the owner's positional (c) ruling",
+   "text": "修正しました、原因は期限超過です。"
   }
  ]
 }
