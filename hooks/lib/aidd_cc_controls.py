@@ -402,7 +402,7 @@ WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
 # flags (-0pi / -00pi / -CSDpi, review #3 P2); -M / -m (modules), -I (include) and -x never are.  `python3 -c` / `python -c` code is parsed with
 # `ast` (surface form, never executed): `open(<str>, "w"|"a"|"x")` / `Path(<str>).write_*` CALLS write that path; the
 # same text inside a string literal (`print("open('a.py', 'w')")`) does not (Codex review P2).
-_NO_CHECK = r"(?!(?: \S+)* (?:--(?:check|diff|help|version)|-h|-V|--emit[= ](?:stdout|checkstyle|json))\b)"  # read-only modes (Codex 1397e64 P1)
+_NO_CHECK = r"(?!(?: \S+)* (?:--(?:check|check-only|diff|help|version|stdout|show-config|show-files)|-h|-V|-c|-d|--emit[= ](?:stdout|checkstyle|json))\b)"  # read-only modes (Codex 1397e64 P1, e00d1df P2)
 WRITE_ALL_RE = re.compile(
     r"^(tee|touch|patch|git apply|git checkout|sed(?=(?: +\S+)* +(?:-[A-Za-z]*i\S*|--in-place\b))|perl(?=(?: +\S+)* +-(?![MmIx])[0-9A-Za-z]*i\S*)|"
     r"git restore(?!(?=(?: \S+)* (?:--staged|-S)\b)(?!(?: \S+)* (?:--worktree|-W)\b))|"
@@ -410,6 +410,7 @@ WRITE_ALL_RE = re.compile(
     r"ruff check(?=(?: \S+)* --fix\b)" + _NO_CHECK + r"|prettier(?=(?: \S+)* (?:--write|-w)\b)" + _NO_CHECK + r"|"
     r"eslint(?=(?: \S+)* --fix\b)(?!(?: \S+)* --fix-dry-run\b))\b"
 )
+TARGET_DIR_RE = re.compile(r"(?:^|\s)(?:--target-directory[= ]|-t\s+)([\w./~-]+)")
 OPTION_VALUE_RE = re.compile(
     r"(?:^|\s)(?:--config|-c|--settings-path|--rcfile|--ignore-path|--ignore-pattern|--stdin-filename|--parser|--line-length|-l|"
     r"--target-version|-t|--extend-exclude|--exclude|--include|--source|--pathspec-from-file)\s+(\S+)"
@@ -461,7 +462,7 @@ def _top_level_nodes(tree: ast.AST):
         yield node
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             # the body runs only when called; defaults and decorators run at definition (Codex 1397e64 P2)
-            stack.extend(node.args.defaults + node.args.kw_defaults + list(getattr(node, "decorator_list", [])))
+            stack.extend(n for n in node.args.defaults + node.args.kw_defaults + list(getattr(node, "decorator_list", [])) if n is not None)  # kw_defaults holds None for a required kw-only arg (Codex e00d1df P1)
             continue
         stack.extend(ast.iter_child_nodes(node))  # a class body runs at definition: keep walking it
 
@@ -526,9 +527,11 @@ def _row_written_paths(r: dict) -> list[str]:
         # `--in-place=.bak` / `--source=HEAD`: the value of a long option is not a path argument (review #2 P3)
         args = [t for t in re.findall(r"[\w./~-]+", re.sub(r"--[\w-]+=\S*", " ", bare))[1:] if not t.startswith("-")]
         if WRITE_LAST_RE.match(bare) and args:
-            cands.append(
-                args[-1]
-            )  # the destination, whatever it is called (Codex r7 P2-c)
+            tdir = TARGET_DIR_RE.search(bare)
+            if tdir:  # `cp a.py --target-directory=out` / `cp a.py b.py -t out`: out/<basename> is written (Codex e00d1df P2)
+                cands += [tdir.group(1).rstrip("/") + "/" + a.rsplit("/", 1)[-1] for a in args if a != tdir.group(1)]
+            else:
+                cands.append(args[-1])  # the destination, whatever it is called (Codex r7 P2-c)
         elif bare.startswith("git checkout"):
             if (
                 " -- " in bare
