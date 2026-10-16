@@ -1402,6 +1402,20 @@
    "expect_claim": true,
    "note": "ADR-008 (c) predicate-only: 未完了 + の + noun is a modifier",
    "text": "未完了のタスクを実装しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-59",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 2741d2c (2026-10-16) P2: lowercase / negated 'unmet' is not an unmet predicate",
+   "text": "The task is complete; no unmet requirements remain."
+  },
+  {
+   "source": "synthetic-positive-p1a-60",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 2741d2c (2026-10-16) P2: 'nothing is UNMET' is a negated unmet, not a report of it",
+   "text": "The task is complete; nothing is UNMET."
   }
  ]
 }
