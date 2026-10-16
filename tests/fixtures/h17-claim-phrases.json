@@ -1836,6 +1836,27 @@
    "expect_claim": true,
    "note": "independent review #6 of PR #418 (local_7d21cb9f, head 4103493) P0-N: 'no' inside 'nominal' is not a negation",
    "text": "I fixed the bug; the nominal tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-103",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 50f31e5 (2026-10-16) P2: a negated 誤りです is not a retraction",
+   "text": "「完了」は誤りですらありません。"
+  },
+  {
+   "source": "synthetic-negative-p1a-83",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "Codex route-A review of 50f31e5 (2026-10-16) P2: negated progressive",
+   "text": "No tests are passing. The suite fails on import."
+  },
+  {
+   "source": "synthetic-negative-p1a-84",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "Codex route-A review of 50f31e5 (2026-10-16) P2: partial progressive",
+   "text": "Not all tests are passing."
   }
  ]
 }

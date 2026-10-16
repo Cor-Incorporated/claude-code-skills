@@ -846,7 +846,10 @@ checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.ba
           (row("python3 -c 'def f(*, required): pass'"), []), (row("cp source.py --target-directory=out"), ["/x/out/source.py"]), (row("cp a.py b.py -t out"), ["/x/out/a.py", "/x/out/b.py"]),
           (row("isort --stdout a.py"), []), (row("isort -c a.py"), []), (row("isort --check-only a.py"), []), (row("isort a.py"), ["/x/a.py"]),
           # review #5 P2: a def called at top level runs its body; an option value that is also a real argument stays
-          (row("python3 -c 'def f(): open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("black --config pyproject.toml pyproject.toml"), ["/x/pyproject.toml"])]
+          (row("python3 -c 'def f(): open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("black --config pyproject.toml pyproject.toml"), ["/x/pyproject.toml"]),
+          # Codex route-A on 50f31e5 P2: a called generator / async body does not run; option values with an "i" are not -i; -Ss is staged; patch -t is a flag
+          (row("python3 -c 'def f():\n    yield open(\"/x/a.py\",\"w\")\nf()'"), []), (row("python3 -c 'async def f(): open(\"/x/a.py\",\"w\")\nf()'"), []),
+          (row("sed -fscript.sed a.py"), []), (row("perl -Fpipe -ane 'print' a.py"), []), (row("git restore -Ss HEAD a.py"), []), (row("patch -t a.py"), ["/x/a.py"])]
 print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
 PY2
 )"
