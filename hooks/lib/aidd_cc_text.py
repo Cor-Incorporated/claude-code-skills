@@ -80,20 +80,32 @@ PAST_TENSE_CLAIM_RE = re.compile(r"(?<![A-Za-z])(" + PAST_TENSE_CLAIM + r")(?![A
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[。．！？\n])\s*|(?<=[.!?])\s+")
 # (c) predicate position only (owner 2026-10-16): 「残りは未達。」 / 「実装しましたが未完了です。」 exempt; 「未完了だったタスクを実装しました。」 does not.
 UNMET_PREDICATE_RE = re.compile(
-    r"(?:未達|未完了|期限超過|間に合(?:わ|い)ません)(?:のまま)?(?:です|でした|だ|である|となった|となりました|となる)?(?:ね|よ)?\s*"
-    r"(?:[。．.!?！？…‥)）」』]+\s*)*$"  # review #4 P0-2 / P1-2: 、,; and a following clause do not terminate; … ‥ ）」 do
-    r"|\b(?:UNMET|unmet)\s*[.;!?…)]*\s*$|\bdeadline (?:was |is )?(?:missed|exceeded)\s*[.;!?…)]*\s*$",  # review #4 P0-1: EN tokens at the sentence end only
+    # JA: token + optional copula ends the sentence (review #5: a bracketed / quoted token is not the predicate; flat class)
+    r"(?:未達|未完了|期限超過|間に合(?:わ|い)ません)(?:のまま)?(?:です|でした|だ|である|となった|となりました|となる)?(?:ね|よ)?[。．.!?！？…‥\s]*$"
+    # EN: present-tense copula + token ends the sentence, or a bare UNMET status marker; "reads UNMET" / "was missed" are not
+    r"|\b(?:is|are|was|were|remains|remain|stays|still)\s+(?:UNMET|unmet)[.;!?…\s]*$|^\s*UNMET\b[:：]|\bdeadline (?:is|was|remains|has been)\s+(?:missed|exceeded)[.;!?…\s]*$",
 )
-# Codex 1397e64 P1: a negation word before the token ("no requirements are UNMET.") cancels the exemption
-UNMET_NEGATION_RE = re.compile(r"\b(?:no|not|nothing|none|never|zero|without|neither|nor|n't)\b|n't\b", re.IGNORECASE)
-# a sentence ends at 。．！？ / newline or at . ! ? + whitespace, never inside 「…」『…』 (Codex 1397e64 P2)
+# a negation word before the token cancels (c); the token's clause must be a main clause (Codex 1397e64 P1, review #5 P0-2)
+UNMET_NEGATION_RE = re.compile(r"\b(?:no|not|nothing|none|never|zero|without|neither|nor)\b|n't\b", re.IGNORECASE)
+UNMET_SUBORD_RE = re.compile(r"\b(?:that|which|when|if|because|as|for|so that|while|since|until|unless|where)\b", re.IGNORECASE)
 _QUOTE_MASK = {"。": "\ue000", "．": "\ue001", "！": "\ue002", "？": "\ue003", ".": "\ue004", "!": "\ue005", "?": "\ue006"}
 _QUOTE_UNMASK = {v: k for k, v in _QUOTE_MASK.items()}
 
 
+# parent ruling on review #5 (block side): bracketed / quoted text is not (c) material; a past-state marker in the
+# predicate's clause never exempts ("以前は未達でした", "previously the deadline was missed")
+UNMET_BRACKET_RE = re.compile(r"[（(][^（）()\n]*[）)]|[「『][^「」『』\n]*[」』]")
+UNMET_PAST_RE = re.compile(r"以前|当初|元々|元は|従来|かつて|昨日|先週|先日|\b(?:previously|before|originally|used to|yesterday|last week|earlier|formerly)\b", re.IGNORECASE)
+
+
 def _unmet_predicate(sent: str) -> bool:
-    m = UNMET_PREDICATE_RE.search(sent)
-    return bool(m) and not UNMET_NEGATION_RE.search(sent[: m.start()])
+    probe = UNMET_BRACKET_RE.sub(" ", sent)
+    m = UNMET_PREDICATE_RE.search(probe)
+    if not m:
+        return False
+    before = probe[: m.start()]
+    clause = re.split(r"[;:—–(]", before)[-1]  # the token's own clause (a comma does not start a new one: "before, two were unmet")
+    return not (UNMET_NEGATION_RE.search(before) or UNMET_SUBORD_RE.search(clause) or UNMET_PAST_RE.search(clause))
 
 
 def _sentences(text: str) -> list[str]:
@@ -163,7 +175,6 @@ RETRACTION_WORDS = (
     r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ます|ました|た)(?![かが])|成立し(?:ません|ない|ていません)|"
     r"(?:誤り|間違い)(?:でした|です)|事実では(?:ありません|ない)|正しくありません)"  # ADR-008 §2(b) list (review #4 P1-1)
 )
-# Review 2026-10-16 P2-c: the quoted span is removed only as the OBJECT of the retraction (「…」。古いブランチは取り消しました keeps it).
 # PR #418 reviews P1-2 / P2(a): form A 「…」と書きましたが、撤回します / 「…」と書いたのは誤りでした。撤回します — the verb
 # follows directly (「…」と報告しました、古い予約は取り消しました retracts a reservation and keeps its claim);
 RETRACTION_OBJECT = (
@@ -181,11 +192,11 @@ NEGATED_COMPLETION_RE = re.compile(
     r"(?:先の|前の|上の|この|その|以前の)?(?:報告|宣言|主張|完了報告|完了宣言)は成立し(?:ません|ない|ていません)|"
     # the English form removes only its own clause: "I retract my earlier claim that the tests were flaky; all tests
     # are green and verified" keeps "verified" (review P1: the old `[^\n.]{0,100}` tail swallowed the next clause)
-    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that (?:(?! — | and | so |: |; )[^\n.;,]){0,60})?|"
+    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that (?:(?!\s(?:-|—|–|but|because|since|while|although|yet|so|and|which)\s)[^\n.;,:()—–]){0,60})?|"
     r"未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
     r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は[^。．.!?！？\n]{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
     r"has not been (?:verified|merged|pushed|saved|deployed|fixed|implemented|finished)|not everything is done|none of it is verified|hasn't been (?:pushed|fixed|implemented|finished)|"
-    r"no (?:files?|changes?|data)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified|fixed|implemented)|haven't (?:verified|saved|pushed|merged|fixed|implemented|finished)|"
+    r"\bno (?:files?|changes?|data)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified|fixed|implemented)|haven't (?:verified|saved|pushed|merged|fixed|implemented|finished)|"
     r"(?:保存|完了|配備|反映|マージ|push)(?:した|された|済み)?わけでは(?:ない|ありません)|"
     r"(?:完了|検証|push|マージ|配備)(?:には|は|に)?(?:至って|達して|届いて)(?:いない|いません|おらず)|nothing (?:is|has been|was) (?:done|verified|pushed|merged|deployed|saved|fixed|implemented|finished|working)|"
     r"(?:完了|マージ|配備|保存|反映|push|deploy)(?:は|を)?(?:まだ)?(?:してい(?:ない|ません)|していない|できていない|ではない|していません)|"
@@ -194,7 +205,7 @@ NEGATED_COMPLETION_RE = re.compile(
     # `all … pass(ed)` inside it was read as a claim (over-match).
     r"not all (?:\d+ )?(?:of )?(?:(?:the )?tests? )?pass(?:ed|ing)?(?: yet)?|"
     # Codex review 2026-10-16 P2: a partial quantifier is a progress report, not the new `tests pass` claim
-    r"(?:none|some|most|many|few|a few|half|several|only some|only a few) (?:of )?(?:the |these |those )?tests (?:still )?pass(?:ed)?|"
+    r"\b(?:none|some|most|many|few|a few|half|several|only some|only a few) (?:of )?(?:the |these |those )?tests (?:still )?pass(?:ed)?|"  # \b: "troublesome tests pass" (review #6 P0-N)
     r"isn'?t (?:done|verified|merged|deployed|saved|fixed|implemented|finished|complete|working)|incomplete|un(?:merged|deployed|saved|pushed|fixed|finished))",
     re.IGNORECASE,
 )
@@ -227,37 +238,9 @@ DEADLINE_RE = re.compile(
     r"(\d{1,3})\s*(?:分|min(?:utes?)?)\s*以内)",
     re.IGNORECASE,
 )
-STOPWORDS = {
-    "the",
-    "and",
-    "for",
-    "with",
-    "this",
-    "that",
-    "する",
-    "ます",
-    "です",
-    "して",
-    "ください",
-    "please",
-    "you",
-    "can",
-    "should",
-    "will",
-    "want",
-    "need",
-    "どう",
-    "ですか",
-    "しますか",
-    "か",
-    "を",
-    "に",
-    "は",
-    "が",
-    "の",
-    "で",
-    "も",
-}
+STOPWORDS = frozenset(
+    "the and for with this that する ます です して ください please you can should will want need どう ですか しますか か を に は が の で も".split()
+)
 
 
 # aidd-governance#186 P1-3: the repair-family breaker reads the COMMIT SUBJECT of a real
@@ -574,6 +557,10 @@ def shell_segments_with_separators(cmd: str) -> list[tuple[str, str]]:
     """Like shell_segments but returns (segment, separator_before_it); the
     separator is "" for the first segment, else one of && || ; | & \n.
     `2>&1`, `&>` and `>&` are redirections, not separators (Codex r4 P2-i)."""
+    return [(re.sub(r"\s+", " ", seg.strip()), s) for seg, s in _split_segments(cmd) if seg.strip()]
+
+
+def _split_segments(cmd: str) -> list[tuple[str, str]]:
     out, cur, quote, i, sep = [], [], None, 0, ""
     text = cmd or ""
     while i < len(text):
@@ -603,7 +590,12 @@ def shell_segments_with_separators(cmd: str) -> list[tuple[str, str]]:
             cur.append(ch)
             i += 1
     out.append(("".join(cur), sep))
-    return [(re.sub(r"\s+", " ", seg.strip()), s) for seg, s in out if seg.strip()]
+    return out
+
+
+def shell_segments_raw(cmd: str) -> list[str]:
+    """shell_segments without the whitespace normalisation: a newline inside `python -c '…'` is code (review #5 P2)."""
+    return [seg.strip() for seg, _s in _split_segments(cmd) if seg.strip()]
 
 
 REDIRECT_RE = re.compile(r"(\d?>>?\s*\S+|<\s*\S+|\d?>&\d|&>\s*\S+)")

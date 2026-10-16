@@ -26,6 +26,7 @@ from aidd_cc_text import (
     fix_scope_from_output,
     has_commit_segment,
     segment_runs,
+    shell_segments_raw,
     shell_segments_with_separators,
     is_confirmation_question,
     is_trivial_cmd,
@@ -453,16 +454,18 @@ def _str_const(node: ast.AST) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
-def _top_level_nodes(tree: ast.AST):
-    """ast.walk without descending into def / lambda BODIES: a call inside an unexecuted function is not
-    a write (Codex 2741d2c P2); defaults, decorators and class bodies run at definition (Codex 1397e64 P2)."""
+def _top_level_nodes(tree: ast.AST, called: frozenset[str] = frozenset()):
+    """ast.walk without descending into def / lambda BODIES unless the def is CALLED at top level (review #5
+    P2: `def f(): open(…,'w')\nf()` writes); defaults, decorators and class bodies run at definition."""
     stack = [tree]
     while stack:
         node = stack.pop()
         yield node
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            # the body runs only when called; defaults and decorators run at definition (Codex 1397e64 P2)
-            stack.extend(n for n in node.args.defaults + node.args.kw_defaults + list(getattr(node, "decorator_list", [])) if n is not None)  # kw_defaults holds None for a required kw-only arg (Codex e00d1df P1)
+            if getattr(node, "name", None) in called:
+                stack.extend(ast.iter_child_nodes(node))
+            else:  # kw_defaults holds None for a required kw-only arg (Codex e00d1df P1)
+                stack.extend(n for n in node.args.defaults + node.args.kw_defaults + list(getattr(node, "decorator_list", [])) if n is not None)
             continue
         stack.extend(ast.iter_child_nodes(node))  # a class body runs at definition: keep walking it
 
@@ -473,8 +476,9 @@ def _py_written_paths(code: str) -> list[str]:
         tree = ast.parse(code)
     except Exception:  # SyntaxError / ValueError / RecursionError / MemoryError: not a write we can read
         return []
+    called = frozenset(n.func.id for n in _top_level_nodes(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name))
     out: list[str] = []
-    for node in _top_level_nodes(tree):
+    for node in _top_level_nodes(tree, called):
         if not isinstance(node, ast.Call):
             continue
         f = node.func
@@ -540,16 +544,23 @@ def _row_written_paths(r: dict) -> list[str]:
                     t for t in bare.split(" -- ", 1)[1].split() if not t.startswith("-")
                 ]
         elif WRITE_ALL_RE.match(bare):
-            vals = set(OPTION_VALUE_RE.findall(bare))  # `--config pyproject.toml`: an input (Codex 2741d2c P2)
-            cands += [t for t in args if ("/" in t or "." in t) and t not in vals]
+            vals = list(OPTION_VALUE_RE.findall(bare))  # `--config pyproject.toml`: an input (Codex 2741d2c P2), counted once each
+            for t in args:
+                if t in vals:
+                    vals.remove(t)  # review #5 P2: `black --config pyproject.toml pyproject.toml` still formats the file
+                elif "/" in t or "." in t:
+                    cands.append(t)
         elif PY_CMD_RE.match(bare):
-            cands += _py_written_paths(_py_code_arg(seg))  # the code is inside the quotes: read `seg`, not `bare`
+            raw = shell_segments_raw(str(r.get("cmd", "")))  # the code is inside the quotes, newlines included (review #5 P2)
+            cands += _py_written_paths(_py_code_arg(raw[i] if i < len(raw) else seg))
         cands += re.findall(r"(?<![<>&\d])\d?>>?\s*([\w./~-]+)", bare)
     out: list[str] = []
     for c in cands:
         if c.startswith("/dev/"):
             continue  # /dev/null is not an artifact (reviewer-g)
-        p = Path(c).expanduser()
+        p = _expand(c)
+        if p is None:
+            continue  # `~nosuchuser/x`: not a path we can resolve, so not a write we can credit (review #6 P1-R)
         if not p.is_absolute():
             p = Path(cwd) / p if cwd else p
         try:
@@ -559,6 +570,14 @@ def _row_written_paths(r: dict) -> list[str]:
         if resolved not in out:
             out.append(resolved)
     return out
+
+
+def _expand(path: str) -> Path | None:
+    """Path.expanduser() that returns None instead of raising on `~unknownuser` (review #6 P1-R)."""
+    try:
+        return Path(path).expanduser()
+    except (RuntimeError, OSError, KeyError):
+        return None
 
 
 def _unquoted(seg: str) -> str:
@@ -744,7 +763,10 @@ def _readback_problems(text: str, cwd: str, touched: set[str]) -> list[str]:
         ]
     out = []
     for path, sha in claims:
-        p = Path(path).expanduser()
+        p = _expand(path)
+        if p is None:  # review #6 P1-R: `~nosuchuser/app.toml` raised RuntimeError and every later claim passed UNVERIFIED
+            out.append(f"readback path {path} unresolvable (unknown ~user): not a saved artifact this session can verify")
+            continue
         if not p.is_absolute():
             p = Path(cwd) / p
         try:

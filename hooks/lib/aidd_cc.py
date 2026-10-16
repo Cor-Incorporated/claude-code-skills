@@ -667,7 +667,11 @@ def cmd_denominator(args, payload):
 
 
 def cmd_readback(args, payload):
-    sha = ev.file_sha(Path(args.path).expanduser())
+    try:
+        target = Path(args.path).expanduser()
+    except (RuntimeError, OSError, KeyError):  # `~unknownuser/x` (review #6 P1-R)
+        target = Path(args.path)
+    sha = ev.file_sha(target)
     print(
         f"Readback: {args.path} sha256={sha}"
         if sha
