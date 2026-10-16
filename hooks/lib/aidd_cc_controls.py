@@ -402,7 +402,7 @@ WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
 # flags (-0pi / -00pi / -CSDpi, review #3 P2); -M / -m (modules), -I (include) and -x never are.  `python3 -c` / `python -c` code is parsed with
 # `ast` (surface form, never executed): `open(<str>, "w"|"a"|"x")` / `Path(<str>).write_*` CALLS write that path; the
 # same text inside a string literal (`print("open('a.py', 'w')")`) does not (Codex review P2).
-_NO_CHECK = r"(?!(?: \S+)* --(?:check|diff)\b)"
+_NO_CHECK = r"(?!(?: \S+)* (?:--(?:check|diff|help|version)|-h|-V|--emit[= ](?:stdout|checkstyle|json))\b)"  # read-only modes (Codex 1397e64 P1)
 WRITE_ALL_RE = re.compile(
     r"^(tee|touch|patch|git apply|git checkout|sed(?=(?: +\S+)* +(?:-[A-Za-z]*i\S*|--in-place\b))|perl(?=(?: +\S+)* +-(?![MmIx])[0-9A-Za-z]*i\S*)|"
     r"git restore(?!(?=(?: \S+)* (?:--staged|-S)\b)(?!(?: \S+)* (?:--worktree|-W)\b))|"
@@ -453,15 +453,17 @@ def _str_const(node: ast.AST) -> str | None:
 
 
 def _top_level_nodes(tree: ast.AST):
-    """ast.walk without descending into def / class / lambda bodies: a call inside an unexecuted
-    function is not a write (Codex 2741d2c P2)."""
+    """ast.walk without descending into def / lambda BODIES: a call inside an unexecuted function is not
+    a write (Codex 2741d2c P2); defaults, decorators and class bodies run at definition (Codex 1397e64 P2)."""
     stack = [tree]
     while stack:
         node = stack.pop()
         yield node
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            # the body runs only when called; defaults and decorators run at definition (Codex 1397e64 P2)
+            stack.extend(node.args.defaults + node.args.kw_defaults + list(getattr(node, "decorator_list", [])))
             continue
-        stack.extend(ast.iter_child_nodes(node))
+        stack.extend(ast.iter_child_nodes(node))  # a class body runs at definition: keep walking it
 
 
 def _py_written_paths(code: str) -> list[str]:

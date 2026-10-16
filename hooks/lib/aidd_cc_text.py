@@ -44,13 +44,11 @@ TEST_RESULT_CLAIM = (
     r"i have (?:executed|completed|finished|implemented|performed) (?:all |the |every )?(?:requested |necessary |required )?"
     r"(?:commands?|tasks?|steps?|work|changes?|implementation)\b"
 )
-# Independent review 2026-10-16 P1-a (aidd-governance PR #195, control_sha 9dc6b944): the vocabulary above was closed, so
-# "The task is complete." / 「修正しました。テストも通っています。」 / "I fixed the pagination bug and the tests pass." passed
-# the deployed entry with no tool run.  Owner decision 2026-10-16 (a): a claim word's provenance is a real run OR a recorded
-# independent-review probe (independent-review/vocab-check.txt, probe-transcript.txt PART C; fixture lane indrev-p1a).
-# Surface form only (C15); every word has a synthetic negative in tests/fixtures/h17-claim-phrases.json.  fixed / implemented
-# need an object or a copula ("a fixed-width column" never counts); "tests pass" needs no number in front ("10/12 tests pass"
-# is progress); `N passed in 0.12s` is pytest's all-green line (a failure count always precedes "passed").
+# Independent review 2026-10-16 P1-a (aidd-governance PR #195): the vocabulary above was closed, so "The task is complete." /
+# 「修正しました。テストも通っています。」 passed the deployed entry with no tool run.  Owner (a): a claim word's provenance is a
+# real run OR a recorded independent-review probe (fixture lane indrev-p1a; every word has a synthetic negative).  Surface form
+# only (C15): fixed / implemented need an object or copula; "tests pass" needs no number in front; `N passed in 0.12s` is
+# pytest's all-green line (a failure count always precedes "passed").
 PAST_TENSE_CLAIM = (
     r"修正しました|対応しました|実装しました|(?<!見)直しました|通りました|通っています|修正済み|パスしました|パスした|"  # 見直しました is a review, not a fix
     r"動作確認しました|動作確認済み|動作しました|everything works\b|it works\b|"  # PR #418 review #2 P3
@@ -74,28 +72,47 @@ _CLOSED_CLAIM = (
 )
 COMPLETION_CLAIM_RE = re.compile(_CLOSED_CLAIM, re.IGNORECASE)
 PAST_TENSE_CLAIM_RE = re.compile(r"(?<![A-Za-z])(" + PAST_TENSE_CLAIM + r")(?![A-Za-z])", re.IGNORECASE)
-# ADR-008 (aidd-governance#196, owner 2026-10-16, after PR #418 reviews #1-#3): claim detection ERRS ON THE BLOCK SIDE.
-# The past-tense verbs are judged per sentence like the closed vocabulary; the only exemptions are (a) an explicit negation
-# adjacent to the claim word (NEGATED_COMPLETION_RE, closed list, removed before the scan), (b) a quoted clause followed by
-# a retraction verb (RETRACTION_OBJECT), (c) an UNMET_RE word (未達 / 未完了 / UNMET …) as the PREDICATE of the same sentence.  No question,
-# conditional, window or next-sentence exemption: 「修正しましたか？」, "…tests pass, shall I open a PR?" and 「修正しましたが、
-# まだ通っていません。」 are blocked by design — a partial report says 未達 / 未完了 in that sentence or carries Evidence
-# (rules/quality.md).  Three window-based exemptions (c3078be, 87a77f7) were each bypassed (review #2 P0, #3 P0-1/P0-2).
+# ADR-008 (aidd-governance#196, owner 2026-10-16): claim detection ERRS ON THE BLOCK SIDE.  The past-tense verbs are judged
+# per sentence; the only exemptions are (a) an explicit negation adjacent to the claim word (NEGATED_COMPLETION_RE), (b) a
+# quoted clause + retraction verb (RETRACTION_OBJECT), (c) an UNMET_RE word as the PREDICATE of the same sentence.  No question,
+# conditional, window or next-sentence exemption (three such designs were bypassed: PR #418 reviews #2-#3) — a partial report
+# says 未達 / 未完了 as its predicate or carries Evidence (rules/quality.md).
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[。．！？\n])\s*|(?<=[.!?])\s+")
-# (c) counts only in PREDICATE position (owner 2026-10-16, block side): the UNMET_RE word is followed by a copula and/or the
-# sentence end with at most a short particle between — 「残りは未達。」 / 「実装しましたが未完了です。」 exempt, 「未完了だった
-# タスクを実装しました。」 (a modifier of the object) does not.  The English tokens (UNMET / deadline missed) are predicates.
+# (c) predicate position only (owner 2026-10-16): 「残りは未達。」 / 「実装しましたが未完了です。」 exempt; 「未完了だったタスクを実装しました。」 does not.
 UNMET_PREDICATE_RE = re.compile(
     r"(?:未達|未完了|期限超過|間に合(?:わ|い)ません)(?:のまま)?(?:です|でした|だ|である|となった|となりました|となる)?(?:ね|よ)?\s*"
     r"(?:[。．.!?！？…‥)）」』]+\s*)*$"  # review #4 P0-2 / P1-2: 、,; and a following clause do not terminate; … ‥ ）」 do
-    r"|(?<!no )(?<!not )(?<!zero )(?<!without )(?<!nothing is )(?<!nothing was )(?<!is not )\b(?:UNMET|unmet)\s*[.;!?…)]*\s*$|\bdeadline (?:was |is )?(?:missed|exceeded)\s*[.;!?…)]*\s*$",  # review #4 P0-1: EN tokens at the sentence end only
+    r"|\b(?:UNMET|unmet)\s*[.;!?…)]*\s*$|\bdeadline (?:was |is )?(?:missed|exceeded)\s*[.;!?…)]*\s*$",  # review #4 P0-1: EN tokens at the sentence end only
 )
+# Codex 1397e64 P1: a negation word before the token ("no requirements are UNMET.") cancels the exemption
+UNMET_NEGATION_RE = re.compile(r"\b(?:no|not|nothing|none|never|zero|without|neither|nor|n't)\b|n't\b", re.IGNORECASE)
+# a sentence ends at 。．！？ / newline or at . ! ? + whitespace, never inside 「…」『…』 (Codex 1397e64 P2)
+_QUOTE_MASK = {"。": "\ue000", "．": "\ue001", "！": "\ue002", "？": "\ue003", ".": "\ue004", "!": "\ue005", "?": "\ue006"}
+_QUOTE_UNMASK = {v: k for k, v in _QUOTE_MASK.items()}
+
+
+def _unmet_predicate(sent: str) -> bool:
+    m = UNMET_PREDICATE_RE.search(sent)
+    return bool(m) and not UNMET_NEGATION_RE.search(sent[: m.start()])
+
+
+def _sentences(text: str) -> list[str]:
+    out, depth, masked = [], 0, []
+    for ch in text:
+        if ch in "「『":
+            depth += 1
+        elif ch in "」』" and depth:
+            depth -= 1
+        masked.append(_QUOTE_MASK.get(ch, ch) if depth and ch in _QUOTE_MASK else ch)
+    for sent in SENTENCE_SPLIT_RE.split("".join(masked)):
+        out.append("".join(_QUOTE_UNMASK.get(c, c) for c in sent))
+    return out
 
 
 def _past_tense_claim(text: str) -> bool:
-    for raw in SENTENCE_SPLIT_RE.split(text):
-        if UNMET_PREDICATE_RE.search(raw):
-            continue  # ADR-008 (c): the sentence's predicate says 未達 / 未完了
+    for raw in _sentences(text):
+        if _unmet_predicate(raw):
+            continue  # ADR-008 (c): the sentence's predicate says 未達 / 未完了 (not a negated one)
         # (a)/(b) are removed within the sentence only (review #4 P0-3: a span must not cross a sentence end)
         if PAST_TENSE_CLAIM_RE.search(NEGATED_COMPLETION_RE.sub(" ", raw)):
             return True
@@ -470,9 +487,8 @@ def output_field_matches(claimed: str, recorded: str) -> bool | None:
 OUT_NUMBER_RE = re.compile(
     r"(?<![A-Za-z0-9.,])(?P<num>\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?P<pct>\s*%)?(?:\s+(?P<word>[A-Za-z]{2,}))?"
 )
-# Independent review 2026-10-16 P2-a: `Evidence: pytest -q | 47 tests passed | …` was allowed over a recorded "3 passed in
-# 0.12s" because the word after 47 ("tests") never appears in the output and the old rule skipped every such number.  Only
-# a `0` may be skipped (PR #418 review P2: `47 xpassed` / `2 skipped` the output never printed are made up too).
+# Independent review 2026-10-16 P2-a: `47 tests passed` over a recorded "3 passed" was allowed because "tests" never appears
+# in the output and every such number was skipped.  Only a `0` may be skipped (`2 skipped` never printed is made up too).
 STATUS_NUMBER_RE = re.compile(
     r"\b(?:rc|exit(?: code| status)?|status|returned)\s*[:=]?\s*\d+\b", re.IGNORECASE
 )
