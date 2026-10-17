@@ -618,8 +618,10 @@ def cmd_record_assistant(args, payload):
     meta, rows = load_meta(agent, session), load_tools(agent, session)
     text = str(
         payload.get("text") or payload.get("message") or payload.get("response") or ""
-    )[:20000]
-    meta["last_assistant"] = text
+    )
+    # judge the whole answer (its Status line is at the END); store a bounded copy for the next stop
+    # (Codex r4 P2: a 24k-char partial report lost its `Status: partial` to the [:20000] cut and was blocked)
+    meta["last_assistant"] = text[-20000:]
     verdict = (
         stop_check(meta, rows, text, _cwd(args, payload), not args.no_status_required)
         if text.strip()

@@ -176,7 +176,9 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
         // an `evidence.max-blocks.would-block` H6 row when it would have blocked.  The user-visible annotation
         // for headless runs is the one experimental.text.complete already appended to the text; this idle-time
         // pass only makes the release auditable in the ledger (review 2026-10-16: ledger-only, not a UI note).
-        await cc("stop", { sessionID, last_assistant_message: last }, ["--max-blocks", "0", "--no-count"])
+        const r = await cc("stop", { sessionID, last_assistant_message: last }, ["--max-blocks", "0", "--no-count"])
+        const line = (r as { note?: string }).note
+        if (line) process.stderr.write(`${line} — ${r.reason ?? ""}\n`) // the release is never silent (Codex r4 P2)
         lastPart.delete(sessionID) // judged; the exit fallback is released only now (Codex r3 P1: not before the await)
         return
       }
