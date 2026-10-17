@@ -31,7 +31,7 @@ out.iter_block_at = blocked;
 const t1 = await call("turn_end", { message: { content: [{ type: "text", text: "実装完了しました。" }] }, toolResults: [] });
 out.evidence_free_continue = !!(t1 && t1.continue);
 out.gate_message = t1?.entries?.[0]?.content?.slice(0, 40) ?? null;
-const t2 = await call("turn_end", { message: { content: [{ type: "text", text: "途中経過です。次に tests を走らせます。" }] }, toolResults: [] });
+const t2 = await call("turn_end", { message: { content: [{ type: "text", text: "途中経過です。次に tests を走らせます。\nStatus: partial" }] }, toolResults: [] });
 out.benign_continue = !!(t2 && t2.continue);
 // aidd-governance#186 P1-4: once the extension's own continuation budget is spent, a block-worthy
 // final answer must still get a visible note (no silent pass-through).

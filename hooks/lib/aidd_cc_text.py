@@ -60,6 +60,20 @@ PUSH_CLAIM_RE = re.compile(
 UNMET_RE = re.compile(
     r"(未達|UNMET|期限超過|deadline (missed|exceeded)|間に合(わ|い)ません|未完了)"
 )
+# ADR-009 (2026-10-17): the final answer DECLARES its status; the gate no longer infers a completion claim from
+# prose once the session has used a tool.  Closed set, case-insensitive, one line.
+STATUS_LINE_RE = re.compile(
+    r"^\s*Status\s*[:：]\s*(complete|partial|unverified)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def declared_status(text: str) -> str | None:
+    """`complete` / `partial` / `unverified` from the LAST `Status:` line, else None."""
+    found = STATUS_LINE_RE.findall(text or "")
+    return found[-1].lower() if found else None
+
+
 EVIDENCE_LINE_RE = re.compile(r"^\s*Evidence:\s*(.+?)\s*$", re.MULTILINE)
 READBACK_LINE_RE = re.compile(
     r"^\s*Readback:\s*(?P<path>\S+)\s+sha256=(?P<sha>[0-9a-fA-F]{64})\s*$", re.MULTILINE

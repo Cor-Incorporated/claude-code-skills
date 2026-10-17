@@ -50,7 +50,7 @@ control (crash, missing module, max-blocks release that would have blocked)
 is announced as a `systemMessage` and an H6 ledger `error` / `would-block`
 row — never a silent pass. Entry files: `aidd-cc-claude.sh`,
 `codex/aidd-cc-codex.sh`, `cursor/aidd-cc-cursor.sh`, `../opencode/aidd-cc.ts`,
-`../pi/aidd-cc.ts`, `../dsh/aidd-cc.patch.yml` (+ `aidd-cc-native.ts`, unverified);
+`../pi/aidd-cc.ts`, `../dsh/aidd-cc.patch.yml` (+ `aidd-cc-native.mts`, unverified);
 replay of the 47 dot incidents: `tests/dot-replay/run_replay.py` (arms: claude /
 codex / cursor / opencode / pi).
 
@@ -151,7 +151,7 @@ No matcher. 3 hooks.
 |---|---|
 | `aidd-h3-evidence-stop.sh` | H3: warn when a completion claim has no `Evidence:` trailer (warn only; superseded by H17's block) |
 | `aidd-turn-boundary-stop.sh` | Carry-over ledger: stop only the session that registered async work |
-| `aidd-cc-claude.sh` | H17 evidence gate: **blocks** (`decision: block`) a completion / save / push claim whose `Evidence:` commands were not executed, failed, are stale, are trivial, or whose output field does not match the recorded output; `Readback:` sha must match a file this session wrote. Releases (`stop_hook_active`, max-blocks) are evaluated and announced (`systemMessage` + `would-block` ledger row) |
+| `aidd-cc-claude.sh` | H17 evidence gate (ADR-009): once the session has used a tool, the final answer must end with one line `Status: complete \| partial \| unverified`. `complete` (or a full `Evidence:` trailer) is **bound** to the ledger: cited commands executed, not stale, output field matches, rc 0; `Readback:` sha must match a file this session wrote. `partial` / `unverified` pass with a `systemMessage` and an `evidence.status-partial` row. No `Status:` line → **block**. The gate does not infer a claim from prose (no negation / retraction / exemption rules); sessions with no tool rows keep the closed vocabulary as a backstop only. Releases (`stop_hook_active`, max-blocks) are evaluated and announced (`systemMessage` + `would-block` ledger row) |
 
 ---
 

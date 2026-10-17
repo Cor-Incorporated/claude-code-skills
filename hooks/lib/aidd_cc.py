@@ -541,6 +541,17 @@ def cmd_stop(args, payload):
         )
         return 2 if args.exit_style == "claude" else 0
     verdict = stop_check(meta, rows, text, _cwd(args, payload))
+    if verdict.get("status") in ("partial", "unverified"):
+        # ADR-009: a declared partial / unverified answer passes, visibly (note + its own row).
+        guard_ledger(
+            COMPONENT,
+            "measure",
+            "allow",
+            "evidence.status-partial",
+            verdict["status"],
+            agent,
+            session,
+        )
     # Every evaluation leaves a measure row: live runs prove the gate ran at the
     # registered entry even when nothing was blocked (DOT-INC-012/022).
     guard_ledger(

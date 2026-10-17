@@ -33,9 +33,9 @@ out.iter_throw_at = threw;
 const o1 = { text: "実装完了しました。" };
 await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "m", partID: "p" }, o1);
 out.gate_appended = o1.text.includes("[H17 evidence gate]");
-const o2 = { text: "途中経過です。次に tests を走らせます。" };
+const o2 = { text: "途中経過です。次に tests を走らせます。\nStatus: partial" };
 await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "m2", partID: "p2" }, o2);
-out.benign_untouched = o2.text === "途中経過です。次に tests を走らせます。";
+out.benign_untouched = o2.text === "途中経過です。次に tests を走らせます。\nStatus: partial";
 console.log(JSON.stringify(out));
 JS
 res="$(cd "$SB" && bun run drive.ts 2>"$SB/err.log")" || { echo "FAIL: bun run"; cat "$SB/err.log"; exit 1; }

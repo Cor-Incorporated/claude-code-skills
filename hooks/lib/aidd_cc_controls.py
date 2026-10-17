@@ -21,6 +21,7 @@ from aidd_cc_text import (
     STRATEGY_NOTE_RE,
     cmd_in_ledger,
     commit_subject,
+    declared_status,
     fix_scope,
     fix_scope_from_output,
     has_commit_segment,
@@ -510,9 +511,25 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
         problems.append(
             "deadline passed: report 未達 with the original deadline and real elapsed (DOT-INC-004/045)"
         )
-    if not (has_completion_claim(text) or has_persist_claim(text)):
-        return _verdict(problems)
+    # ADR-009: declared status first, inferred claim only as the no-tool backstop.
+    status = declared_status(text)
     trailers = evidence_trailers(text)
+    used_tools = any(r.get("event") in ("pre", "post") for r in rows)
+    if status in ("partial", "unverified"):
+        v = _verdict(problems)
+        v["status"] = status
+        v["note"] = f"[H17] Status: {status} — not verified by the evidence gate"
+        return v
+    if status is None and trailers:
+        status = "complete"  # a full Evidence trailer is a completion declaration (T1-T79 compat)
+    if status is None and used_tools and not mutated("evidence.trailer"):
+        problems.append(
+            "no status declared after tool use: end the answer with one line "
+            "`Status: complete | partial | unverified` (ADR-009; complete is bound to Evidence)"
+        )
+        # fall through: the trailer diagnostics below (incomplete trailer, …) still help the agent
+    elif status is None and not (has_completion_claim(text) or has_persist_claim(text)):
+        return _verdict(problems)  # no tools, no declaration, no claim: nothing to bind
     cmds = [c for c, _out, _when in trailers]
     for bad in incomplete_evidence_lines(text):
         if not mutated("evidence.trailer"):
