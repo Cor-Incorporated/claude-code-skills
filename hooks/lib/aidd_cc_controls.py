@@ -410,7 +410,7 @@ FORMATTER_RE = re.compile(r"^(?:ruff|black|isort|prettier|eslint|rustfmt|gofmt|g
 TARGET_DIR_RE = re.compile(r"(?:^|\s)(?:--target-directory[= ]|-t\s+)([\w./~-]+)")
 OPTION_VALUE_RE = re.compile(
     r"(?:^|\s)(?:--config|-c|--settings-path|--rcfile|--ignore-path|--ignore-pattern|--stdin-filename|--parser|--line-length|-l|"
-    r"--target-version|-t|--extend-exclude|--exclude|--include|--source|--pathspec-from-file)\s+(\S+)"
+    r"--target-version|-t|--extend-exclude|--exclude|--include|--source|--pathspec-from-file|--config-path|--edition)\s+(\S+)"
 )
 PY_CMD_RE = re.compile(r"^python[0-9.]*(?: -[A-Za-z]+)* -c\s+")
 

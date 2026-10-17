@@ -166,18 +166,18 @@ NEGATED_COMPLETION_RE = re.compile(
     r"(?:先の|前の|上の|この|その|以前の)?(?:報告|宣言|主張|完了報告|完了宣言)は成立し(?:ません|ない|ていません)|"
     # the English form removes only its own clause: "I retract my earlier claim that the tests were flaky; all tests
     # are green and verified" keeps "verified" (review P1: the old `[^\n.]{0,100}` tail swallowed the next clause)
-    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that (?![^\n.;,:()—–]*\b(?:(?:is|are|was|were|has been|have been|got)\s+(?:now\s+|all\s+)?)?(?:fixed|implemented|finished|complete[d]?|done|pass(?:es|ed|ing)?|work(?:s|ing)?|verified|merged|pushed|deployed|saved|green)\b)[^\n.;,:()—–]{0,120})?|"
+    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that (?![^\n.;,:()—–]*\b(?:(?:is|are|was|were|has been|have been|got)\s+(?:now\s+|all\s+)?)?(?:fixed|implemented|finished|complete[d]?|done|pass(?:es|ed|ing)?|work(?:s|ing)?|verified|merged|pushed|published|deployed|saved|persisted|applied|installed|written|green)\b)[^\n.;,:()—–]{0,120})?|"  # the lookahead covers the persist words too (Codex 7f8c762 P2)
     r"未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
     r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は[^。．.!?！？\n]{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
     r"has not been (?:verified|merged|pushed|saved|deployed|fixed|implemented|finished)|not everything is done|none of it is verified|hasn't been (?:pushed|fixed|implemented|finished)|"
-    r"\bno (?:files?|changes?|data)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified|fixed|implemented)|haven't (?:verified|saved|pushed|merged|fixed|implemented|finished)|"
+    r"\bno (?:files?|changes?|data|bugs?|issues?|errors?|tests?)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified|fixed|implemented)|haven't (?:verified|saved|pushed|merged|fixed|implemented|finished)|"
     r"(?:保存|完了|配備|反映|マージ|push)(?:した|された|済み)?わけでは(?:ない|ありません)|"
     r"(?:完了|検証|push|マージ|配備)(?:には|は|に)?(?:至って|達して|届いて)(?:いない|いません|おらず)|nothing (?:is|has been|was) (?:done|verified|pushed|merged|deployed|saved|fixed|implemented|finished|working)|"
     r"(?:完了|マージ|配備|保存|反映|push|deploy)(?:は|を)?(?:まだ)?(?:してい(?:ない|ません)|していない|できていない|ではない|していません)|"
     r"not (?:yet |still )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed|implemented|finished|working|in place)|"
     # PR #414 residual: "Not all tests pass" / "not all 12 tests passed yet" is an honest partial report; without this line the
     # `all … pass(ed)` inside it was read as a claim (over-match).
-    r"not all (?:\d+ )?(?:of )?(?:(?:the )?tests? )?(?:(?:are|is) )?pass(?:ed|ing)?(?: yet)?|\bno tests? (?:are|is) (?:passing|green)|"  # progressive forms too (Codex 50f31e5 P2)
+    r"not all (?:\d+ )?(?:of )?(?:(?:the )?tests? )?(?:(?:are|is) )?pass(?:ed|ing)?(?: yet)?|\bno tests? (?:are|is) (?:now |all |still )?(?:passing|green)|"  # progressive forms too (Codex 50f31e5 P2)
     # Codex review 2026-10-16 P2: a partial quantifier is a progress report, not the new `tests pass` claim
     r"\b(?:none|some|most|many|few|a few|half|several|only some|only a few) (?:of )?(?:the |these |those )?tests (?:still )?pass(?:ed)?|"  # \b: "troublesome tests pass" (review #6 P0-N)
     r"isn'?t (?:done|verified|merged|deployed|saved|fixed|implemented|finished|complete|working)|incomplete|un(?:merged|deployed|saved|pushed|fixed|finished))",
