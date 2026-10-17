@@ -96,6 +96,43 @@ def _norm_key(tool: str, tool_input: dict) -> str:
     )
 
 
+def _scope_fix_times(rows: list[dict], scope: str) -> list[float]:
+    """ts of this session's successful fix(<scope>) commits (post rows; #186 R4: a log read is not a commit)."""
+    return sorted(
+        float(r.get("ts", 0))
+        for r in rows
+        if r.get("event") == "post"
+        and r.get("rc") == 0
+        and (
+            fix_scope(str(r.get("cmd", "")))
+            or (
+                has_commit_segment(str(r.get("cmd", "")))
+                and fix_scope_from_output(str(r.get("out_sample", "")))
+            )
+        )
+        == scope
+    )
+
+
+def _strategy_cut(meta: dict, fix_times: list[float]) -> tuple[float, bool]:
+    """(ts of the last re-adjudication that applies to this scope, HOLD already consumed for it).
+    PIVOT / RETIRE always re-arm.  HOLD re-arms ONE time per cycle, and only a HOLD written while this scope had
+    a running streak (a fix(<scope>) since the previous cut) counts for this scope — a HOLD recorded for another
+    scope's streak is neither consumed nor a cut here (Codex review 2026-10-17 P2: HOLD state per scope)."""
+    strat_ts, hold_used = 0.0, False
+    for n in sorted(meta.get("notes", []), key=lambda n: n.get("ts", 0)):
+        kind, ts = strategy_kind(n.get("hypothesis", "")), float(n.get("ts", 0))
+        if kind in ("PIVOT", "RETIRE"):
+            strat_ts, hold_used = ts, False
+        elif (
+            kind == "HOLD"
+            and not hold_used
+            and any(strat_ts < t <= ts for t in fix_times)
+        ):
+            strat_ts, hold_used = ts, True
+    return strat_ts, hold_used
+
+
 def repair_family_check(
     rows: list[dict], meta: dict, cmd: str, cwd: str = ""
 ) -> dict | None:
@@ -113,14 +150,16 @@ def repair_family_check(
     # which 4 were HOLD, 8 review rounds): a note is a re-adjudication only once.  HOLD re-arms the counter ONE
     # time per PIVOT/RETIRE cycle; a second HOLD is ignored, so the next trip needs PIVOT / RETIRE or the
     # owner's decision (ADJUDICATION: <url> in a commit body, see branch_fix_streak).
-    strat_ts, hold_used = 0.0, False
-    for n in sorted(meta.get("notes", []), key=lambda n: n.get("ts", 0)):
-        kind = strategy_kind(n.get("hypothesis", ""))
-        if kind in ("PIVOT", "RETIRE"):
-            strat_ts, hold_used = n["ts"], False
-        elif kind == "HOLD" and not hold_used:
-            strat_ts, hold_used = n["ts"], True
-    branch = branch_fix_streak(cwd, cmd, scope)
+    if ADJUDICATION_RE.search(cmd or ""):
+        # the commit being made records the owner's decision (`-m 'ADJUDICATION: <url>'`, review 2026-10-17 P1):
+        # it is the remedy both breakers ask for.  Surface form by design — the url is auditable in the PR.
+        return None
+    fix_times = _scope_fix_times(rows, scope)
+    strat_ts, hold_used = _strategy_cut(meta, fix_times)
+    branch = branch_fix_streak(cwd, cmd, scope, meta.get("agent", "claude-code"))
+    strat_ts = max(
+        strat_ts, branch["adjudicated_ts"]
+    )  # an adjudication commit also cuts the session streak
     if branch["count"] >= BRANCH_FIX_LIMIT:
         sid = meta.get("session", "<session>")
         return {
@@ -134,23 +173,7 @@ def repair_family_check(
                 f"(session {sid})"
             ),
         }
-    prior = [
-        r
-        for r in rows
-        if r.get("event") == "post"
-        and r.get("rc") == 0
-        and (
-            fix_scope(str(r.get("cmd", "")))
-            or (
-                has_commit_segment(
-                    str(r.get("cmd", ""))
-                )  # #186 R4: a read of a log is not a commit
-                and fix_scope_from_output(str(r.get("out_sample", "")))
-            )
-        )
-        == scope
-        and r.get("ts", 0) > strat_ts
-    ]
+    prior = [t for t in fix_times if t > strat_ts]
     if len(prior) >= REPAIR_FAMILY_THRESHOLD:
         sid = meta.get("session", "<session>")
         subject = (commit_subject(cmd) or "")[:80]
@@ -178,71 +201,101 @@ BRANCH_FIX_LIMIT = (
     6  # same-scope fix commits on one branch since its base, across sessions
 )
 BRANCH_BASES = ("origin/develop", "develop", "origin/main", "main")
-GIT_C_RE = re.compile(r"(?:^|\s)git\s+(?:-C|--git-dir=)\s*(\S+)")
+GIT_C_RE = re.compile(
+    r"""(?:^|\s)git\s+(?:-C|--git-dir=)\s*(?:'([^']+)'|"([^"]+)"|(\S+))"""
+)
+CD_PREFIX_RE = re.compile(r"""^\s*cd\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*&&""")
+GIT_BUDGET_SEC = (
+    6.0  # the whole branch check stays well inside the harness's 12 s hook budget
+)
 
 
-def branch_fix_streak(cwd: str, cmd: str, scope: str) -> dict:
-    """fix(<scope>) commits on the current branch since its merge-base with develop/main, counted from the
-    newest commit back to the newest one whose body carries `ADJUDICATION: <url>` (the owner's decision).
-    Surface form from `git log`; a directory that is not a repository, or git failing, counts 0 (this check is
-    additive to the in-session breaker, never a silent pass of IT).  `git -C <dir>` in the command wins over cwd."""
+def _first_group(m) -> str | None:
+    return next((g for g in m.groups() if g), None) if m else None
+
+
+def _repo_for(cwd: str, cmd: str) -> Path:
+    """The repository a commit command acts on: `git -C <dir>` / `--git-dir=` / `cd <dir> &&` (quoted paths
+    allowed), else cwd (review 2026-10-17 P2: `cd … &&` and quoted `-C` were missed)."""
+    pick = _first_group(GIT_C_RE.search(cmd or "")) or _first_group(
+        CD_PREFIX_RE.match(cmd or "")
+    )
+    repo = Path(pick).expanduser() if pick else Path(cwd or ".")
+    return repo if repo.is_absolute() else Path(cwd or ".") / repo
+
+
+def branch_fix_streak(
+    cwd: str, cmd: str, scope: str, agent: str = "claude-code"
+) -> dict:
+    """fix(<scope>) commits on the current branch since its merge-base with develop/main (first-parent, so a
+    merged-in branch's fixes are not this branch's streak), counted from the newest commit back to the newest
+    one whose body carries `ADJUDICATION: <url>` (the owner's decision — for the branch, every scope); that
+    commit's time is returned as `adjudicated_ts` so the session counter is cut at the same point.  Surface
+    form from `git log`; a directory that is not a repository, or git failing, counts 0 (additive to the
+    in-session breaker).  The whole check runs under GIT_BUDGET_SEC; a timeout writes an H6 error row instead
+    of passing silently.  Known surface-form limits: `git commit -F file` has no subject here; a scope variant
+    (`fix(h17-gate)`) is another scope; a fabricated ADJUDICATION url is accepted as written (auditable in the PR)."""
     import subprocess
 
-    m = GIT_C_RE.search(cmd or "")
-    repo = Path(m.group(1)).expanduser() if m else Path(cwd or ".")
-    if not repo.is_absolute():
-        repo = Path(cwd or ".") / repo
+    repo = _repo_for(cwd, cmd)
+    deadline = time.monotonic() + GIT_BUDGET_SEC
+    none = {"count": 0, "base": "?", "adjudicated_ts": 0.0}
+
+    def git(*args: str) -> str | None:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise subprocess.TimeoutExpired(args, GIT_BUDGET_SEC)
+        p = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            timeout=left,
+        )
+        return p.stdout if p.returncode == 0 else None
+
     base_name, base = "", ""
-    for cand in BRANCH_BASES:
-        try:
-            p = subprocess.run(
-                ["git", "-C", str(repo), "merge-base", "HEAD", cand],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return {"count": 0, "base": "?"}
-        if p.returncode == 0 and p.stdout.strip():
-            base_name, base = cand, p.stdout.strip()
-            break
-    if not base:
-        return {"count": 0, "base": "?"}
     try:
-        head = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        ).stdout.strip()
-        if head == base:
-            return {"count": 0, "base": base_name}
-        log = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(repo),
-                "log",
-                "--format=%B%x00",
-                f"{base}..HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=5,
+        for cand in BRANCH_BASES:
+            out = git("merge-base", "HEAD", cand)
+            if out and out.strip():
+                base_name, base = cand, out.strip()
+                break
+        if not base:
+            return none
+        if (git("rev-parse", "HEAD") or "").strip() == base:
+            return {**none, "base": base_name}
+        log_out = (
+            git("log", "--first-parent", "--format=%ct%x1f%B%x00", f"{base}..HEAD")
+            or ""
         )
     except (OSError, subprocess.TimeoutExpired):
-        return {"count": 0, "base": base_name}
-    count = 0
-    for body in log.stdout.split("\x00"):  # newest first
+        from aidd_cc_session import guard_ledger
+
+        guard_ledger(
+            "H17",
+            "error",
+            "unavailable",
+            "iter.repair-family.git-timeout",
+            str(repo)[:100],
+            agent,
+            "unset",
+        )
+        return none
+    count, adjudicated_ts = 0, 0.0
+    for entry in log_out.split("\x00"):  # newest first
+        ct, _, body = entry.strip().partition("\x1f")
         body = body.strip()
         if not body:
             continue
         if ADJUDICATION_RE.search(body):
-            break  # the owner decided here; only commits after it count
+            # %ct is whole seconds: +1 so a row written in the same second as the commit is on the adjudicated side
+            adjudicated_ts = float(ct or 0) + 1.0
+            break
         subject = body.split("\n", 1)[0]
         fm = FIX_SUBJECT_RE.match(subject)
         if fm and fm.group(2).strip().lower() == scope:
             count += 1
-    return {"count": count, "base": base_name}
+    return {"count": count, "base": base_name, "adjudicated_ts": adjudicated_ts}
 
 
 def iteration_check(
