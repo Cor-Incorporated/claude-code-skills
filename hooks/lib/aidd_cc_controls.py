@@ -551,6 +551,21 @@ def stop_check(
             "`Status: complete | partial | unverified` (ADR-009; complete is bound to Evidence)"
         )
         # fall through: the trailer diagnostics below (incomplete trailer, …) still help the agent
+    elif status is None and used_tools and not require_status:
+        # an intermediate text part after tool use (OpenCode text.complete): the final answer is judged with the
+        # Status requirement at session.idle / process exit; here only a false push / save claim is bound — the
+        # vocabulary backstop is for sessions WITHOUT tool rows (ADR-009; independent review r2 P2)
+        if (
+            has_push_claim(text)
+            and not _push_executed(rows)
+            and not mutated("evidence.readback")
+        ):
+            problems.append(
+                "push/merge claimed but no successful push/merge command in the session ledger (DOT-INC-026)"
+            )
+        if has_persist_claim(text) and not mutated("evidence.readback"):
+            problems.extend(_readback_problems(text, cwd, _touched_paths(rows)))
+        return _verdict(problems)
     elif status is None and not (has_completion_claim(text) or has_persist_claim(text)):
         return _verdict(problems)  # no tools, no declaration, no claim: nothing to bind
     cmds = [c for c, _out, _when in trailers]

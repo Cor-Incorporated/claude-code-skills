@@ -780,14 +780,18 @@ o97j="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assist
 o97k="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assistant_message":"All done, pushed to main.\nStatus: unverified"}' | bash "$HOOK")"
 o97l="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assistant_message":"All done.\n```\nStatus: partial\n```"}' | bash "$HOOK")"
 o97t="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assistant_message":"All tests pass.\n~~~text\nStatus: partial\n~~~"}' | bash "$HOOK")"
+# Codex r3 P2: `Status: partial is only an example.` is prose, not a declaration; a 4-backtick fence is not closed by a
+# 3-backtick line inside it, so the example's Status stays fenced
+o97u="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assistant_message":"All done.\nStatus: partial is only an example."}' | bash "$HOOK")"
+o97v="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assistant_message":"All done.\n````md\n```\nStatus: partial\n```\n````"}' | bash "$HOOK")"
 # Codex review 2026-10-17 P2: the corrected partial answer after a block re-enters through stop_hook_active (and the
 # max-blocks release) — the note and the status-partial row must survive the release path
 c97="$(grep -c '"rule": "evidence.status-partial"' "$AIDD_LEDGER_PATH")"
 o97r="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","stop_hook_active":true,"last_assistant_message":"途中経過です。テストはまだ走らせていません。\nStatus: partial"}' | bash "$HOOK")"
 c97b="$(grep -c '"rule": "evidence.status-partial"' "$AIDD_LEDGER_PATH")"
 if printf '%s' "$o97" | grep -q '"systemMessage": *"\[H17\] Status: partial' && ! printf '%s' "$o97" | grep -q '"decision"' && printf '%s' "$o97j" | grep -q '"decision": "allow"' && printf '%s' "$o97j" | grep -q '"note"' && grep -q '"rule": "evidence.status-partial"' "$AIDD_LEDGER_PATH" \
-   && printf '%s' "$o97k" | grep -q 'push/merge claimed' && printf '%s' "$o97l" | grep -q 'Status: complete | partial | unverified' && printf '%s' "$o97t" | grep -q 'Status: complete | partial | unverified' \
-   && printf '%s' "$o97r" | grep -q '"systemMessage": *"\[H17\] Status: partial' && [ "$c97b" -gt "$c97" ]; then ok "T97 Status: partial/unverified allowed with a visible note and an H6 row (also on the stop_hook_active release path); a false push claim still blocks; a fenced (backtick or tilde) Status line is not a declaration"; else bad "T97: [$o97] [$o97j] [$o97k] [$o97l] [$o97t] [$o97r] rows $c97->$c97b"; fi
+   && printf '%s' "$o97k" | grep -q 'push/merge claimed' && printf '%s' "$o97l" | grep -q 'Status: complete | partial | unverified' && printf '%s' "$o97t" | grep -q 'Status: complete | partial | unverified' && printf '%s' "$o97u" | grep -q 'Status: complete | partial | unverified' && printf '%s' "$o97v" | grep -q 'Status: complete | partial | unverified' \
+   && printf '%s' "$o97r" | grep -q '"systemMessage": *"\[H17\] Status: partial' && [ "$c97b" -gt "$c97" ]; then ok "T97 Status: partial/unverified allowed with a visible note and an H6 row (also on the stop_hook_active release path); a false push claim still blocks; a fenced (backtick or tilde, nested) or prose Status line is not a declaration"; else bad "T97: [$o97] [$o97j] [$o97k] [$o97l] [$o97t] [$o97u] [$o97v] [$o97r] rows $c97->$c97b"; fi
 
 # (98) no tool rows: the closed vocabulary stays as the backstop (live lane prompt), plain Q&A is untouched
 o98="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg98","last_assistant_message":"実装完了しました。"}' | bash "$HOOK")"

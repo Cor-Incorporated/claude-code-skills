@@ -96,9 +96,9 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
   // ADR-009 (review r2 P1): the last text part of a session that no tool call followed is its final answer.
   // session.idle judges it in the TUI; headless `opencode run` exits before idle work lands, so the process
   // exit handler judges whatever is still here (Status required) — stderr line + H6 row, never silent.
-  const lastPart = new Map<string, string>()
+  const lastPart = new Map<string, { messageID: string; text: string }>()
   process.once("exit", () => {
-    for (const [sessionID, text] of lastPart) {
+    for (const [sessionID, { text }] of lastPart) {
       const v = ccSync("stop", { sessionID, last_assistant_message: text }, ["--max-blocks", "99", "--no-count"])
       const line = v.decision === "block" ? `[H17 evidence gate] ${v.reason ?? ""}` : (v as { note?: string }).note
       if (line) process.stderr.write(`${line}\n`)
@@ -145,18 +145,21 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
     ) => {
       const text = String(output.text ?? "")
       if (!text.trim()) return
+      // The text parts of one message are one answer (Codex r3 P2: Evidence in part 1, Status in part 2): judge the
+      // accumulated message text, not the part alone.
+      const prev = lastPart.get(input.sessionID)
+      const whole = prev && prev.messageID === input.messageID ? `${prev.text}\n${text}` : text
+      lastPart.set(input.sessionID, { messageID: input.messageID, text: whole })
       // ADR-009: a text part is not necessarily the final answer, so the Status line is demanded only at
-      // session.idle (below); here a declared `Status: complete` / a trailer / the vocabulary backstop still bind.
-      const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: text }, ["--max-blocks", "99", "--no-count", "--no-status-required"])
+      // session.idle / process exit; here a declared `Status: complete` / a trailer / the vocabulary backstop still bind.
+      const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: whole }, ["--max-blocks", "99", "--no-count", "--no-status-required"])
       if (v.decision === "block") output.text = `${text}\n\n[H17 evidence gate] ${v.reason ?? ""}`
       else if ((v as { note?: string }).note) output.text = `${text}\n\n${(v as { note?: string }).note}` // Status: partial is visible (Codex r2 P2)
-      lastPart.set(input.sessionID, text)
     },
     event: async ({ event }: { event: { type?: string; properties?: Record<string, unknown> } }) => {
       if (event.type !== "session.idle") return
       const sessionID = String(event.properties?.sessionID ?? "")
       if (!sessionID) return
-      lastPart.delete(sessionID) // judged here (TUI); the exit handler is for headless runs that never reach this
       const n = reprompts.get(sessionID) ?? 0
       let last = ""
       try {
@@ -174,9 +177,11 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
         // for headless runs is the one experimental.text.complete already appended to the text; this idle-time
         // pass only makes the release auditable in the ledger (review 2026-10-16: ledger-only, not a UI note).
         await cc("stop", { sessionID, last_assistant_message: last }, ["--max-blocks", "0", "--no-count"])
+        lastPart.delete(sessionID) // judged; the exit fallback is released only now (Codex r3 P1: not before the await)
         return
       }
       const v = await cc("stop", { sessionID, last_assistant_message: last })
+      lastPart.delete(sessionID) // judged; a headless exit during the awaits above still had the fallback
       if (v.decision !== "block") return
       reprompts.set(sessionID, n + 1)
       try {

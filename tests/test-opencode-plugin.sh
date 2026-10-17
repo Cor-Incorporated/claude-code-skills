@@ -32,7 +32,15 @@ for (let i = 0; i < 5; i++) {
 out.iter_throw_at = threw;
 const o1 = { text: "実装完了しました。" };
 await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "m", partID: "p" }, o1);
+// ADR-009 (review r2 P2): after tool use a text part is not judged by vocabulary at text.complete — the final answer
+// is judged (Status required) at session.idle / process exit; so o1 stays untouched here
 out.gate_appended = o1.text.includes("[H17 evidence gate]");
+// the regression anchor of 2026-10-14 (text.complete handler lost) lives on in a session WITHOUT tool rows: the
+// closed-vocabulary backstop still annotates the evidence-free claim at text.complete
+await hooks["chat.message"]({ sessionID: "oc-test-3" }, { parts: [{ type: "text", text: "進めて" }] });
+const o6 = { text: "実装完了しました。" };
+await hooks["experimental.text.complete"]({ sessionID: "oc-test-3", messageID: "m6", partID: "p6" }, o6);
+out.gate_appended_no_tools = o6.text.includes("[H17 evidence gate]");
 const o2 = { text: "途中経過です。次に tests を走らせます。\nStatus: partial" };
 await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "m2", partID: "p2" }, o2);
 // ADR-009 (Codex r2 P2): a declared partial answer is not blocked, but its "not verified" note is appended visibly
@@ -40,6 +48,9 @@ out.benign_untouched = o2.text.startsWith("途中経過です。次に tests を
 const o3 = { text: "I'll run the tests now." };   // ADR-009: an intermediate text part has no Status yet and must not be annotated
 await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "m3", partID: "p3" }, o3);
 out.intermediate_untouched = o3.text === "I'll run the tests now.";
+const o5 = { text: "テストは全て完了しました。次に進みます。" };   // review r2 P2: completion words in a mid-turn part are not a claim after tool use
+await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "m5", partID: "p5" }, o5);
+out.intermediate_claim_untouched = o5.text === "テストは全て完了しました。次に進みます。";
 // ADR-009 review r2: session 2 uses a tool, then declares Status: partial -> the note is appended at text.complete and
 // the exit handler (headless final answer) only notes; session 1's last part (o3, no Status, no tool after it) is
 // blocked at process exit: stderr line + H6 block row.  Asserted by the shell after bun exits.
@@ -48,6 +59,16 @@ await hooks["tool.execute.after"]({ tool: "bash", sessionID: "oc-test-2", args: 
 const o4 = { text: "Ran echo; nothing else verified.\nStatus: partial" };
 await hooks["experimental.text.complete"]({ sessionID: "oc-test-2", messageID: "m4", partID: "p4" }, o4);
 out.partial_note_appended = o4.text.includes("[H17] Status: partial");
+// Codex r3 P2: one message, two text parts — the Evidence line in part 1 and `Status: complete` in part 2 are judged
+// together (session oc-test-4 ran `pytest -q` with exit 0 and "3 passed")
+await hooks["tool.execute.before"]({ tool: "bash", sessionID: "oc-test-4" }, { args: { command: "pytest -q" } });
+await hooks["tool.execute.after"]({ tool: "bash", sessionID: "oc-test-4", args: { command: "pytest -q" } }, { title: "", output: "3 passed in 0.2s", metadata: { exit: 0 } });
+const o7 = { text: "Ran the suite.\nEvidence: pytest -q | 3 passed | 2026-10-17T05:00:00Z" };
+await hooks["experimental.text.complete"]({ sessionID: "oc-test-4", messageID: "m7", partID: "p7" }, o7);
+const o8 = { text: "Status: complete" };
+await hooks["experimental.text.complete"]({ sessionID: "oc-test-4", messageID: "m7", partID: "p8" }, o8);
+out.split_parts_untouched = !o7.text.includes("[H17") && !o8.text.includes("[H17");
+out.split_texts = [o7.text, o8.text];
 console.log(JSON.stringify(out));
 JS
 res="$(cd "$SB" && bun run drive.ts 2>"$SB/err.log")" || { echo "FAIL: bun run"; cat "$SB/err.log"; exit 1; }
@@ -58,10 +79,13 @@ r = json.loads(sys.argv[1])
 assert r["has_text_complete"] is True, r
 assert r["has_permission_ask"] is False, r          # auto-allow retired 2026-10-14
 assert r["iter_throw_at"] == 4, r
-assert r["gate_appended"] is True, r
+assert r["gate_appended"] is False, r           # ADR-009: after tool use, text.complete does not judge by vocabulary
+assert r["gate_appended_no_tools"] is True, r   # no tool rows: the closed-vocabulary backstop still annotates
 assert r["benign_untouched"] is True, r
 assert r["intermediate_untouched"] is True, r   # ADR-009 review P1: text parts are not the final answer
 assert r["partial_note_appended"] is True, r    # Codex r2 P2: Status: partial is visible on the OpenCode entry
+assert r["intermediate_claim_untouched"] is True, r   # review r2 P2: no vocabulary check on mid-turn parts after tool use
+assert r["split_parts_untouched"] is True, r   # Codex r3 P2: the parts of one message are judged as one text
 print("PASS: text.complete gate present / no permission.ask / 4th identical call throws / benign untouched / partial note")
 PY
 # ADR-009 review r2 P1 (headless final answer): the last text part of oc-test-1 had no Status and no tool call after it

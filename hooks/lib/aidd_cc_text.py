@@ -62,10 +62,11 @@ UNMET_RE = re.compile(
 )
 # ADR-009 (2026-10-17): the final answer DECLARES its status; the gate no longer infers a completion claim from
 # prose once the session has used a tool.  Closed set, case-insensitive, one line.
-STATUS_LINE_RE = re.compile(
-    r"^\s*Status\s*[:：]\s*(complete|partial|unverified)\b",
+STATUS_LINE_RE = re.compile(  # the whole line is the declaration (Codex r3 P2: `Status: complete means …` is prose)
+    r"^\s*Status\s*[:：]\s*(complete|partial|unverified)\s*[.。]?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 
 
 STATUS_TAIL_LINES = 6  # the declaration sits at the end: the last lines, with Evidence/Readback around it
@@ -75,14 +76,17 @@ def declared_status(text: str) -> str | None:
     """`complete` / `partial` / `unverified` from the LAST `Status:` line among the final
     STATUS_TAIL_LINES non-empty lines, ignoring lines inside ``` fences (a quoted or pasted
     `Status:` far above the answer is not the answer's declaration; review 2026-10-17 P2)."""
-    lines, fenced, tail = [], False, []
+    lines, fence, tail = [], "", []
     for line in (text or "").splitlines():
-        if line.strip().startswith(
-            ("```", "~~~")
-        ):  # Markdown fences, backtick or tilde (Codex r2 P2)
-            fenced = not fenced
+        fm = FENCE_RE.match(line)
+        if fm:  # CommonMark: a fence closes only on the same marker char, at least as long (Codex r3 P2)
+            mark = fm.group(1)
+            if not fence:
+                fence = mark
+            elif mark[0] == fence[0] and len(mark) >= len(fence):
+                fence = ""
             continue
-        if line.strip() and not fenced:
+        if line.strip() and not fence:
             lines.append(line)
     for line in lines[-STATUS_TAIL_LINES:]:
         m = STATUS_LINE_RE.match(line)
