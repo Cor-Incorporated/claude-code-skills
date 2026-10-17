@@ -26,9 +26,14 @@ merge前確認: env var/secret記載、CORS/domain、Mixed Content、IAM権限�
 ## 報告書の事実検証
 事実主張はCLI出力・git diff・APIレスポンスで裏取りする。推定は「（未検証）」と明記する。
 
-## 証跡トレーラー（不可逆・課金・完了宣言に限定）
-「完了」「verified」「根因確定」を含む報告の末尾に必須:
+## 証跡トレーラーと Status 宣言（ADR-009 = aidd-governance `docs/adr/009-status-declaration-protocol.md`）
+ツールを使ったターンの最終応答は末尾に 1 行 `Status: complete | partial | unverified` を書く。
+その行は値だけで終える（`Status: complete means …` のような文は宣言ではない）。コードフェンス内や末尾 6 非空行より上の `Status:` も宣言と見ない。
+`complete` のときは証跡トレーラーが必須:
 `Evidence: <実行コマンド> | <生出力の要点 or ログパス> | <実行時刻>`
+（コマンドは実行済み・最後の書込より新しい・出力欄が実出力と一致・rc 0。保存を伴うなら `Readback: <path> sha256=<hex>`）。
+`partial` / `unverified` は通るが未検証として可視化される。`Status:` 行なしは H17 が block する。
+部分的な進捗報告は `Status: partial` と書く（本文の言い回しで免除はされない）。
 トレーラーなき断定報告は未検証として検収キュー行き。
 宣言ファイル（設定・レイアウト・ポリシー）を変えたら、それを読んで強制する側の
 grep 結果を同じ報告に貼る。同じ事実が 2 箇所にあればリンクテストを書く。

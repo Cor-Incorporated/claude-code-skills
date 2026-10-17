@@ -18,9 +18,16 @@
 //   copy next to cordis.patch.yml and add to the patch layer:
 //     - insert:
 //         - id: aidd-cc-native
-//           name: ./aidd-cc-native.ts
+//           name: ./aidd-cc-native.mts
 //           config: { oracle: !!js `${process.env.HOME}/.claude/hooks/lib/aidd_cc.py` }
 //
+// STATUS 2026-10-17: LOADS on dsh 0.2.0-rc.1 (node 24.21.0, `--experimental-strip-types` implied by .mts):
+// `dsh --profile headless --patch dsh/aidd-cc.patch.yml` activates this entry (no "did not activate" warning) and
+// stops only at MISSING_CREDENTIAL for the LLM — the live Stop block still needs a DEEPSEEK_API_KEY run by the
+// owner (`bw-secrets run DEEPSEEK_API_KEY=DEEPSEEK_API_KEY -- dsh …`). Install: `npm i @deepseek-ai/dsh@0.2.0-rc.1
+// @deepseek-ai/dsh-hooks-claude-code@0.0.1-rc.5` in a scratch prefix (0.2.0-rc.2 pulls the npm-restricted
+// @deepseek-ai/dsh-bash-env and does not install). tests/test-dsh-native-plugin.sh checks the activation.
+// The .ts form failed to import ("set type: module or use .mjs"); .mts is what node loads here.
 // STATUS 2026-10-16: UNVERIFIED on a live dsh.  The dsh core packages are `publishConfig.access:
 // restricted` and the dependency `@deepseek-ai/dsh-bash-env@^0.0.1-rc.1` returns npm 404 on this
 // machine, so this file type-checks only against the API shapes visible in the bridge's compiled

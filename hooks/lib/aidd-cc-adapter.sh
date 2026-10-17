@@ -114,6 +114,8 @@ print(json.dumps({"decision":"block","reason":"[H17] "+v["reason"]},ensure_ascii
         # Pi / OpenCode entries already show is now visible at the Claude Code / Codex entry too.
         if [ "$(field "$v" would_block)" = "True" ]; then
           note "$(field "$v" note | sed 's/^\[H17\] //') — $(field "$v" reason)"
+        elif [ -n "$(field "$v" note)" ]; then
+          note "$(field "$v" note | sed 's/^\[H17\] //')"   # ADR-009: Status: partial / unverified is visible
         fi
         ;;
     esac

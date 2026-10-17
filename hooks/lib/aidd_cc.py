@@ -474,7 +474,7 @@ def _release(args, payload, meta, rows, rule: str, detail: str, why: str) -> int
         out["blocks"] = meta.get("stop_blocks", 0)
     text = _last_assistant(payload, meta)
     verdict = (
-        stop_check(meta, rows, text, _cwd(args, payload))
+        stop_check(meta, rows, text, _cwd(args, payload), not args.no_status_required)
         if text.strip()
         else {"decision": "allow"}
     )
@@ -494,6 +494,19 @@ def _release(args, payload, meta, rows, rule: str, detail: str, why: str) -> int
             reason=verdict["reason"],
             note=RELEASE_NOTE.format(why=why),
         )
+    elif verdict.get("status") in ("partial", "unverified"):
+        # ADR-009 on the release path too (Codex review 2026-10-17 P2): the corrected `Status: partial` answer
+        # after a block arrives through stop_hook_active / max-blocks and must stay visible — note + its own row.
+        guard_ledger(
+            COMPONENT,
+            "measure",
+            "allow",
+            "evidence.status-partial",
+            verdict["status"],
+            agent,
+            session,
+        )
+        out.update(status=verdict["status"], note=verdict.get("note", ""))
     _emit(out)
     return 0
 
@@ -540,7 +553,20 @@ def cmd_stop(args, payload):
             }
         )
         return 2 if args.exit_style == "claude" else 0
-    verdict = stop_check(meta, rows, text, _cwd(args, payload))
+    verdict = stop_check(
+        meta, rows, text, _cwd(args, payload), not args.no_status_required
+    )
+    if verdict.get("status") in ("partial", "unverified"):
+        # ADR-009: a declared partial / unverified answer passes, visibly (note + its own row).
+        guard_ledger(
+            COMPONENT,
+            "measure",
+            "allow",
+            "evidence.status-partial",
+            verdict["status"],
+            agent,
+            session,
+        )
     # Every evaluation leaves a measure row: live runs prove the gate ran at the
     # registered entry even when nothing was blocked (DOT-INC-012/022).
     guard_ledger(
@@ -592,10 +618,12 @@ def cmd_record_assistant(args, payload):
     meta, rows = load_meta(agent, session), load_tools(agent, session)
     text = str(
         payload.get("text") or payload.get("message") or payload.get("response") or ""
-    )[:20000]
-    meta["last_assistant"] = text
+    )
+    # judge the whole answer (its Status line is at the END); store a bounded copy for the next stop
+    # (Codex r4 P2: a 24k-char partial report lost its `Status: partial` to the [:20000] cut and was blocked)
+    meta["last_assistant"] = text[-20000:]
     verdict = (
-        stop_check(meta, rows, text, _cwd(args, payload))
+        stop_check(meta, rows, text, _cwd(args, payload), not args.no_status_required)
         if text.strip()
         else {"decision": "allow"}
     )
@@ -608,6 +636,17 @@ def cmd_record_assistant(args, payload):
         agent,
         session,
     )
+    if verdict.get("status") in ("partial", "unverified"):
+        # ADR-009 visibility on the Cursor path: the ledger row (Cursor's stop output has no message-only form)
+        guard_ledger(
+            COMPONENT,
+            "measure",
+            "allow",
+            "evidence.status-partial",
+            verdict["status"],
+            agent,
+            session,
+        )
     if verdict["decision"] == "block":
         meta["pending_block_reason"] = verdict["reason"]
         guard_ledger(
@@ -744,6 +783,11 @@ def main(argv=None) -> int:
         default=int(os.environ.get("AIDD_CC_MAX_STOP_BLOCKS", "2")),
     )
     ap.add_argument("--ignore-active", action="store_true")
+    ap.add_argument(
+        "--no-status-required",
+        action="store_true",
+        help="ADR-009: do not demand a Status line (intermediate text parts, not the final answer)",
+    )
     ap.add_argument(
         "--no-count",
         action="store_true",
