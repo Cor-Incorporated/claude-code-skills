@@ -218,6 +218,19 @@ STRATEGY_NOTE_RE = re.compile(
     r"STRATEGY\s*[:：]\s*(HOLD|PIVOT|RETIRE|STRATEGY_HOLD|STRATEGY_PIVOT)\b",
     re.IGNORECASE,
 )
+# An owner adjudication is recorded in a commit body as `ADJUDICATION: <issue / PR comment url>` — the URL of
+# the decision, not the agent's own wording (claude-code-skills#418 loop, 2026-10-17: 12 fix commits across 8
+# review rounds with only agent-written STRATEGY notes between them).
+ADJUDICATION_RE = re.compile(r"ADJUDICATION\s*[:：]\s*(https?://\S+)")
+
+
+def strategy_kind(hypothesis: str) -> str | None:
+    """HOLD / PIVOT / RETIRE of a STRATEGY note, else None."""
+    m = STRATEGY_NOTE_RE.search(hypothesis or "")
+    if not m:
+        return None
+    kind = m.group(1).upper().replace("STRATEGY_", "")
+    return kind
 
 
 def _logical_lines(text: str) -> list[tuple[str, list[str]]]:

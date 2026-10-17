@@ -199,7 +199,7 @@ def cmd_pre(args, payload):
         if any(v.get("remember") for v in verdicts):
             save_meta(agent, session, meta)
     else:
-        verdict = iteration_check(rows, meta, tool, ti)
+        verdict = iteration_check(rows, meta, tool, ti, _cwd(args, payload))
     key = _norm_key(tool, ti)
     record_tool(
         agent,

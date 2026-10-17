@@ -18,12 +18,14 @@ from pathlib import Path
 
 from aidd_cc_eval import deadline_status, file_sha
 from aidd_cc_text import (
-    STRATEGY_NOTE_RE,
+    ADJUDICATION_RE,
+    FIX_SUBJECT_RE,
     cmd_in_ledger,
     commit_subject,
     fix_scope,
     fix_scope_from_output,
     has_commit_segment,
+    strategy_kind,
     segment_runs,
     shell_segments_with_separators,
     is_confirmation_question,
@@ -94,7 +96,9 @@ def _norm_key(tool: str, tool_input: dict) -> str:
     )
 
 
-def repair_family_check(rows: list[dict], meta: dict, cmd: str) -> dict | None:
+def repair_family_check(
+    rows: list[dict], meta: dict, cmd: str, cwd: str = ""
+) -> dict | None:
     """C-ITER-FAMILY (aidd-governance#88 at the session entry, found on
     2026-10-14 when this harness's own author ran 8 review→fix rounds on one
     feature): the 4th `fix(<scope>)` commit of the same scope, with no
@@ -105,14 +109,31 @@ def repair_family_check(rows: list[dict], meta: dict, cmd: str) -> dict | None:
     scope = fix_scope(cmd)
     if not scope or mutated("iter.repair-family"):
         return None
-    strat_ts = max(
-        [
-            n["ts"]
-            for n in meta.get("notes", [])
-            if STRATEGY_NOTE_RE.search(n.get("hypothesis", ""))
-        ]
-        or [0]
-    )
+    # 2026-10-17 (this harness's own loop on claude-code-skills#418: 12 fix(h17) commits, 6 STRATEGY notes of
+    # which 4 were HOLD, 8 review rounds): a note is a re-adjudication only once.  HOLD re-arms the counter ONE
+    # time per PIVOT/RETIRE cycle; a second HOLD is ignored, so the next trip needs PIVOT / RETIRE or the
+    # owner's decision (ADJUDICATION: <url> in a commit body, see branch_fix_streak).
+    strat_ts, hold_used = 0.0, False
+    for n in sorted(meta.get("notes", []), key=lambda n: n.get("ts", 0)):
+        kind = strategy_kind(n.get("hypothesis", ""))
+        if kind in ("PIVOT", "RETIRE"):
+            strat_ts, hold_used = n["ts"], False
+        elif kind == "HOLD" and not hold_used:
+            strat_ts, hold_used = n["ts"], True
+    branch = branch_fix_streak(cwd, cmd, scope)
+    if branch["count"] >= BRANCH_FIX_LIMIT:
+        sid = meta.get("session", "<session>")
+        return {
+            "decision": "block",
+            "rule": "iter.repair-family",
+            "streak": branch["count"] + 1,
+            "reason": (
+                f"{branch['count']} fix({scope}) commits already on this branch since {branch['base']} with no owner "
+                f"adjudication (this counts across sessions; claude-code-skills#418 ran 12 rounds). Stop repairing: get the "
+                f"owner's decision and record it in the next commit body as `ADJUDICATION: <issue or PR comment url>` "
+                f"(session {sid})"
+            ),
+        }
     prior = [
         r
         for r in rows
@@ -133,6 +154,12 @@ def repair_family_check(rows: list[dict], meta: dict, cmd: str) -> dict | None:
     if len(prior) >= REPAIR_FAMILY_THRESHOLD:
         sid = meta.get("session", "<session>")
         subject = (commit_subject(cmd) or "")[:80]
+        options = (
+            "'STRATEGY: PIVOT|RETIRE — why' (HOLD was already used once for this scope; a second HOLD does not count), "
+            "or the owner's decision as `ADJUDICATION: <url>` in the commit body"
+            if hold_used
+            else "'STRATEGY: HOLD|PIVOT|RETIRE — why'"
+        )
         return {
             "decision": "block",
             "rule": "iter.repair-family",
@@ -141,13 +168,86 @@ def repair_family_check(rows: list[dict], meta: dict, cmd: str) -> dict | None:
                 f"{len(prior)} fix({scope}) commits already landed in this session with no re-adjudication "
                 f"(aidd-governance#88); this commit's subject: `{subject}`. Decide the strategy before the next repair: python3 "
                 f"~/.claude/hooks/lib/aidd_cc.py note --agent {meta.get('agent', 'claude-code')} --session {sid} "
-                "--hypothesis 'STRATEGY: HOLD|PIVOT|RETIRE — why' --change '...'"
+                f"--hypothesis {options} --change '...'"
             ),
         }
     return None
 
 
-def iteration_check(rows: list[dict], meta: dict, tool: str, tool_input: dict) -> dict:
+BRANCH_FIX_LIMIT = (
+    6  # same-scope fix commits on one branch since its base, across sessions
+)
+BRANCH_BASES = ("origin/develop", "develop", "origin/main", "main")
+GIT_C_RE = re.compile(r"(?:^|\s)git\s+(?:-C|--git-dir=)\s*(\S+)")
+
+
+def branch_fix_streak(cwd: str, cmd: str, scope: str) -> dict:
+    """fix(<scope>) commits on the current branch since its merge-base with develop/main, counted from the
+    newest commit back to the newest one whose body carries `ADJUDICATION: <url>` (the owner's decision).
+    Surface form from `git log`; a directory that is not a repository, or git failing, counts 0 (this check is
+    additive to the in-session breaker, never a silent pass of IT).  `git -C <dir>` in the command wins over cwd."""
+    import subprocess
+
+    m = GIT_C_RE.search(cmd or "")
+    repo = Path(m.group(1)).expanduser() if m else Path(cwd or ".")
+    if not repo.is_absolute():
+        repo = Path(cwd or ".") / repo
+    base_name, base = "", ""
+    for cand in BRANCH_BASES:
+        try:
+            p = subprocess.run(
+                ["git", "-C", str(repo), "merge-base", "HEAD", cand],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return {"count": 0, "base": "?"}
+        if p.returncode == 0 and p.stdout.strip():
+            base_name, base = cand, p.stdout.strip()
+            break
+    if not base:
+        return {"count": 0, "base": "?"}
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        ).stdout.strip()
+        if head == base:
+            return {"count": 0, "base": base_name}
+        log = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "log",
+                "--format=%B%x00",
+                f"{base}..HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"count": 0, "base": base_name}
+    count = 0
+    for body in log.stdout.split("\x00"):  # newest first
+        body = body.strip()
+        if not body:
+            continue
+        if ADJUDICATION_RE.search(body):
+            break  # the owner decided here; only commits after it count
+        subject = body.split("\n", 1)[0]
+        fm = FIX_SUBJECT_RE.match(subject)
+        if fm and fm.group(2).strip().lower() == scope:
+            count += 1
+    return {"count": count, "base": base_name}
+
+
+def iteration_check(
+    rows: list[dict], meta: dict, tool: str, tool_input: dict, cwd: str = ""
+) -> dict:
     """C-ITER: the same command recurs with no progress delta.
 
     Counts occurrences of this exact key among the last ITER_WINDOW pre rows
@@ -160,7 +260,12 @@ def iteration_check(rows: list[dict], meta: dict, tool: str, tool_input: dict) -
     """
     key = _norm_key(tool, tool_input)
     fam = family(tool, tool_input)
-    family_block = repair_family_check(rows, meta, str(tool_input.get("command") or ""))
+    family_block = repair_family_check(
+        rows,
+        meta,
+        str(tool_input.get("command") or ""),
+        cwd or str(tool_input.get("workdir") or ""),
+    )
     if family_block:
         return family_block
     if fam == "other" and not key.startswith("edit:"):
