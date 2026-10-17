@@ -745,5 +745,39 @@ PY2
 )"
 if printf '%s' "$o83" | grep -q '"missing_pins": \[\]' && printf '%s' "$o83" | grep -q '"control_sha": true' && printf '%s' "$o83" | grep -q '"control_set_sha": true' && printf '%s' "$o83" | grep -q '"opencode"' && printf '%s' "$o83" | grep -q '"pi"'; then ok "T83 replay pins the whole control set and records the opencode / pi arms ($o83)"; else bad "T83: $o83"; fi
 
+
+# ---- ADR-009 (2026-10-17): the gate no longer infers a completion claim from prose. A final answer in a session with
+#      tool rows must carry `Status: complete | partial | unverified`; `complete` (or a full Evidence trailer) is bound to
+#      the ledger, `partial`/`unverified` pass with a visible note, no Status at all is blocked. Sessions with no tool
+#      rows keep the closed vocabulary as a backstop. Red at develop e58c6e6 before the repair.
+tool95() { printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"}}" | bash "$HOOK" >/dev/null; printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"3 passed\"}}" | bash "$HOOK" >/dev/null; }
+# (95) #418 P1-a inputs: with tool rows and no Status line every wording is blocked — the gate does not read the prose
+fail95=""
+for t in "I fixed the pagination bug and the tests pass." "修正しました。テストも通っています。" "The task is complete." "Successfully implemented the feature." "I fixed the pagination bug and the tests pass, but let me know if anything else is needed." "The troublesome tests pass now." "3 件修正、残りは未達。" "どちらの方式にしますか？"; do
+  tool95 neg95
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg95\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
+  printf '%s' "$o" | grep -q 'Status: complete | partial | unverified' || fail95="$fail95 [allowed: $t]"
+done
+if [ -z "$fail95" ]; then ok "T95 tool rows + no Status line -> block, whatever the prose says (#418 P1-a inputs and the honest ones alike)"; else bad "T95:$fail95"; fi
+
+# (96) Status: complete is bound to evidence exactly like a claim; a full Evidence trailer implies complete (T1-T79 compat)
+tool95 neg96
+o96="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg96","last_assistant_message":"I fixed the pagination bug and the tests pass.\nStatus: complete"}' | bash "$HOOK")"
+o96b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg96","last_assistant_message":"I fixed the pagination bug and the tests pass.\nStatus: complete\nEvidence: pytest -q | 3 passed | 10:00"}' | bash "$HOOK")"
+o96c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg96","last_assistant_message":"I fixed the pagination bug and the tests pass.\nStatus: complete\nEvidence: pytest -q | 47 passed | 10:00"}' | bash "$HOOK")"
+o96d="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg96","last_assistant_message":"ran the suite.\nEvidence: pytest -q | 3 passed | 10:00"}' | bash "$HOOK")"
+if printf '%s' "$o96" | grep -q 'without `Evidence:' && [ -z "$o96b" ] && printf '%s' "$o96c" | grep -q '47' && [ -z "$o96d" ]; then ok "T96 Status: complete needs matching evidence; a full trailer counts as complete"; else bad "T96: [$o96] [$o96b] [$o96c] [$o96d]"; fi
+
+# (97) Status: partial / unverified pass with a visible note and a ledger row, even when the prose sounds finished
+tool95 neg97
+o97="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assistant_message":"I fixed the pagination bug and the tests pass.\nStatus: partial"}' | bash "$HOOK")"
+o97j="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assistant_message":"「実装完了しました。」は取り消します。\nStatus: unverified"}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent claude-code)"
+if printf '%s' "$o97" | grep -q '"systemMessage": *"\[H17\] Status: partial' && ! printf '%s' "$o97" | grep -q '"decision"' && printf '%s' "$o97j" | grep -q '"decision": "allow"' && printf '%s' "$o97j" | grep -q '"note"' && grep -q '"rule": "evidence.status-partial"' "$AIDD_LEDGER_PATH"; then ok "T97 Status: partial/unverified allowed with a visible note and an H6 row"; else bad "T97: [$o97] [$o97j]"; fi
+
+# (98) no tool rows: the closed vocabulary stays as the backstop (live lane prompt), plain Q&A is untouched
+o98="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg98","last_assistant_message":"実装完了しました。"}' | bash "$HOOK")"
+o98b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg98b","last_assistant_message":"2 + 2 は 4 です。"}' | bash "$HOOK")"
+if printf '%s' "$o98" | grep -q 'completion claim without' && [ -z "$o98b" ]; then ok "T98 no tool rows: vocabulary backstop blocks the live-lane claim, plain answers pass"; else bad "T98: [$o98] [$o98b]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
