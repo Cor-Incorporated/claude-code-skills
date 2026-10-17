@@ -307,17 +307,25 @@ _QNL = "\x01"  # a newline inside quotes, kept through the physical-line split
 
 
 def _join_quoted_newlines(text: str) -> str:
-    out, quote = [], None
-    for ch in text or "":
+    """Newlines inside a quoted run become _QNL — except a run that opens a heredoc (`"$(cat <<'EOF' …)"`), whose
+    body lines must stay physical lines for _logical_lines (Codex r4 P2: the Claude Code standard commit form)."""
+    out, quote, run, text = [], None, "", text or ""
+    i = 0
+    while i < len(text):
+        ch = text[i]
         if quote:
             if ch == quote:
                 quote = None
-            elif ch == "\n":
+            elif ch == "\n" and "<<" not in run:
                 out.append(_QNL)
+                i += 1
                 continue
         elif ch in ("'", '"'):
             quote = ch
+            end = text.find(ch, i + 1)
+            run = text[i : end if end >= 0 else len(text)]
         out.append(ch)
+        i += 1
     return "".join(out)
 
 
@@ -355,7 +363,9 @@ def commit_messages(cmd: str) -> list[str]:
                 continue
             rest = git.group("rest")
             args = _message_args(rest)
-            parts = list(args)
+            parts = [
+                a for a in args if not HEREDOC_MSG_RE.match(a)
+            ]  # the `$(cat <<EOF` arg IS its body
             if FILE_STDIN_RE.search(rest) or any(HEREDOC_MSG_RE.match(a) for a in args):
                 parts.extend(body)
             msgs.append("\n".join(p for p in parts if p).replace(_QNL, "\n"))

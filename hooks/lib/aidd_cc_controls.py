@@ -159,11 +159,11 @@ def repair_family_check(
     # which 4 were HOLD, 8 review rounds): a note is a re-adjudication only once.  HOLD re-arms the counter ONE
     # time per PIVOT/RETIRE cycle; a second HOLD is ignored, so the next trip needs PIVOT / RETIRE or the
     # owner's decision (ADJUDICATION: <url> in a commit body, see branch_fix_streak).
-    if any(
-        ADJUDICATION_RE.search(msg)
-        for msg in commit_messages(cmd or "")
-        if _message_scope(msg) == scope
-    ):
+    same_scope = [m for m in commit_messages(cmd or "") if _message_scope(m) == scope]
+    if same_scope and ADJUDICATION_RE.search(same_scope[0]):
+        # the FIRST fix(<scope>) commit of the line is the one judged (fix_scope reads it); a ruling on a later
+        # commit of the same line is not on this commit (Codex r4 P2: `… && false && git commit -m 'fix(x): b' -m
+        # 'ADJUDICATION: …'`)
         # the fix commit being made records the owner's decision in ITS OWN message (`-m 'fix(x): …' -m
         # 'ADJUDICATION: <url>'`, review 2026-10-17 P1): the remedy both breakers ask for.  A ruling in another
         # commit of the same line (`… && git commit -m docs -m 'ADJUDICATION: …'`), a shell comment or another
