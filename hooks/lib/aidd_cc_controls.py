@@ -43,9 +43,10 @@ from aidd_cc_text import (
     mutated,
     normalize_cmd,
     readback_claims,
-    commit_message_text,
     GIT_COMMIT_SEG_RE,
     shell_segments,
+    commit_messages,
+    WRAPPER_SEG_RE,
 )
 
 ITER_THRESHOLD = 4  # the 4th occurrence with no progress is blocked
@@ -97,6 +98,11 @@ def _norm_key(tool: str, tool_input: dict) -> str:
     return normalize_cmd(str(tool_input.get("command") or ""))[:4000] + (
         f" @{wd}" if wd else ""
     )
+
+
+def _message_scope(msg: str) -> str | None:
+    fm = FIX_SUBJECT_RE.match(msg.split("\n", 1)[0])
+    return fm.group(2).strip().lower() if fm else None
 
 
 def _scope_fix_times(rows: list[dict], scope: str) -> list[float]:
@@ -153,14 +159,21 @@ def repair_family_check(
     # which 4 were HOLD, 8 review rounds): a note is a re-adjudication only once.  HOLD re-arms the counter ONE
     # time per PIVOT/RETIRE cycle; a second HOLD is ignored, so the next trip needs PIVOT / RETIRE or the
     # owner's decision (ADJUDICATION: <url> in a commit body, see branch_fix_streak).
-    if ADJUDICATION_RE.search(commit_message_text(cmd or "")):
-        # the commit being made records the owner's decision (`-m 'ADJUDICATION: <url>'`, review 2026-10-17 P1):
-        # it is the remedy both breakers ask for.  Only the message text counts — a shell comment or another
-        # command's argument never reaches `git log` (Codex r2 P2).  Surface form by design — the url is auditable.
+    if any(
+        ADJUDICATION_RE.search(msg)
+        for msg in commit_messages(cmd or "")
+        if _message_scope(msg) == scope
+    ):
+        # the fix commit being made records the owner's decision in ITS OWN message (`-m 'fix(x): …' -m
+        # 'ADJUDICATION: <url>'`, review 2026-10-17 P1): the remedy both breakers ask for.  A ruling in another
+        # commit of the same line (`… && git commit -m docs -m 'ADJUDICATION: …'`), a shell comment or another
+        # argument never lands on this commit (Codex r2/r3 P2).  Surface form by design — the url is auditable.
         return None
     fix_times = _scope_fix_times(rows, scope)
     strat_ts, hold_used = _strategy_cut(meta, fix_times)
-    branch = branch_fix_streak(cwd, cmd, scope, meta.get("agent", "claude-code"))
+    branch = branch_fix_streak(
+        cwd, cmd, scope, meta.get("agent", "claude-code"), meta.get("session", "unset")
+    )
     strat_ts = max(
         strat_ts, branch["adjudicated_ts"]
     )  # an adjudication commit also cuts the session streak
@@ -205,8 +218,8 @@ BRANCH_FIX_LIMIT = (
     6  # same-scope fix commits on one branch since its base, across sessions
 )
 BRANCH_BASES = ("origin/develop", "develop", "origin/main", "main")
-GIT_C_RE = re.compile(
-    r"""(?:^|\s)git\s+(?:-C|--git-dir=)\s*(?:'([^']+)'|"([^"]+)"|(\S+))"""
+GIT_C_RE = re.compile(  # `git [-c k=v | --opt[=v] | -x] … -C <dir>` / `--git-dir=<dir>` (review r2 P3: global options before -C)
+    r"""(?:^|\s)(?:\S*/)?git\s+(?:(?:-c\s+\S+|--[\w-]+(?:=\S*)?|-[a-zA-Z]\S*)\s+)*?(?:-C\s*|--git-dir=\s*)(?:'([^']+)'|"([^"]+)"|(\S+))"""
 )
 CD_SEG_RE = re.compile(r"""^\s*cd\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*$""")
 GIT_BUDGET_SEC = (
@@ -225,6 +238,11 @@ def _repo_for(cwd: str, cmd: str) -> Path:
     status && git -C /target commit`).  Unexpandable shell variables stay literal → not a repository → count 0."""
     cur = Path(cwd or ".")
     for seg in shell_segments(cmd or ""):
+        wrapped = WRAPPER_SEG_RE.match(
+            seg
+        )  # bash -c 'cd /target && git commit …' (Codex r3 P2)
+        if wrapped:
+            return _repo_for(str(cur), wrapped.group("inner"))
         cd = CD_SEG_RE.match(seg)
         if cd:
             p = Path(_first_group(cd) or ".").expanduser()
@@ -240,7 +258,7 @@ def _repo_for(cwd: str, cmd: str) -> Path:
 
 
 def branch_fix_streak(
-    cwd: str, cmd: str, scope: str, agent: str = "claude-code"
+    cwd: str, cmd: str, scope: str, agent: str = "claude-code", session: str = "unset"
 ) -> dict:
     """fix(<scope>) commits on the current branch since its merge-base with develop/main (first-parent, so a
     merged-in branch's fixes are not this branch's streak), counted from the newest commit back to the newest
@@ -299,7 +317,7 @@ def branch_fix_streak(
             "iter.repair-family.git-timeout",
             str(repo)[:100],
             agent,
-            "unset",
+            session,
         )
         return none
     count, adjudicated_ts = 0, 0.0

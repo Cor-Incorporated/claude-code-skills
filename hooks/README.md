@@ -92,6 +92,7 @@ none of these block the session from starting.
 | Hook | Purpose |
 |---|---|
 | `block-local-hooks-write.sh` | **Blocks** (`exit 2`) `settings.local.json` writes that would override the global `hooks` section |
+| `aidd-cc-claude.sh` (`git commit` via Bash) | H17 repair-family breaker (aidd-governance#88): the 4th `fix(<scope>)` commit of one scope in a session with no re-adjudication is **blocked**. A re-adjudication is a `note` whose hypothesis carries `STRATEGY: HOLD\|PIVOT\|RETIRE`; HOLD counts **once per scope per PIVOT/RETIRE cycle** (a second HOLD is ignored — this harness's own loop on claude-code-skills#418 was "satisfied" by 4 HOLDs). Branch-wide: ≥ 6 `fix(<scope>)` commits since the merge-base with develop/main (first-parent, across sessions) block the next one in any session until a commit body carries `ADJUDICATION: <issue or PR comment url>` — the owner's decision; that commit (or the pending commit's own `-m`) passes and cuts both counters. Repository = `git -C` / `cd <dir> &&` in the command, else cwd; not a repo → 0; ≤ 6 s, a timeout is an H6 `error` row |
 
 ### PostToolUse
 
@@ -142,7 +143,6 @@ No matcher. 1 hook.
 | Hook | Purpose |
 |---|---|
 | `aidd-cc-claude.sh` | H17: register user decisions (for re-ask suppression only), deadlines (`6h以内`, write-once) and the declared denominator (`全47ケース`) |
-| `aidd-cc-claude.sh` (Bash `git commit`) | H17 repair-family breaker (aidd-governance#88): the 4th `fix(<scope>)` commit of one scope in a session with no re-adjudication is **blocked**. A re-adjudication is a `note` whose hypothesis carries `STRATEGY: HOLD\|PIVOT\|RETIRE`; HOLD counts **once per scope per PIVOT/RETIRE cycle** (a second HOLD is ignored — this harness's own loop on claude-code-skills#418 was "satisfied" by 4 HOLDs). Branch-wide: ≥ 6 `fix(<scope>)` commits since the merge-base with develop/main (first-parent, across sessions) block the next one in any session until a commit body carries `ADJUDICATION: <issue or PR comment url>` — the owner's decision; that commit (or the pending commit's own `-m`) passes and cuts both counters. Repository = `git -C` / `cd <dir> &&` in the command, else cwd; not a repo → 0; ≤ 6 s, a timeout is an H6 `error` row |
 
 ### Stop
 

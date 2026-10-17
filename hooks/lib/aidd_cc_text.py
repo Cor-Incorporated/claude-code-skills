@@ -195,7 +195,8 @@ FIX_SUBJECT_RE = re.compile(r"^\s*(fix|hotfix)\(([^)]+)\)")
 _GIT_PREFIX = (
     # `env -u X` / `nice -n 10` / `sudo -u bob` / `time -p`: a prefix flag may carry one argument
     r"^\(?\s*(?:(?:env|command|exec|nice|time|sudo)\s+(?:(?:-n|-u|-g|-C|-S)\s+\S+\s+|-\w+\s+)*)*"
-    r"(?:[A-Za-z_]\w*=\S*\s+)*(?:\S*/)?git\s+(?:(?:-[Cc]|--git-dir|--work-tree)[= ]\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
+    # a quoted -C / --git-dir path may contain spaces (review r2: `git -C '/p q' commit`)
+    r"(?:[A-Za-z_]\w*=\S*\s+)*(?:\S*/)?git\s+(?:(?:-[Cc]|--git-dir|--work-tree)[= ](?:'[^']*'|\"[^\"]*\"|\S+)\s+|--[\w-]+(?:=\S+)?\s+)*"
 )
 GIT_COMMIT_SEG_RE = re.compile(_GIT_PREFIX + r"commit\b(?P<rest>.*)$", re.S)
 # Every git subcommand that lands a commit and prints `[branch sha] subject` on success — the rows whose
@@ -287,8 +288,42 @@ def commit_subject(cmd: str) -> str | None:
     return None
 
 
+def _strip_shell_comment(rest: str) -> str:
+    """Cut an unquoted ` # …` comment off one segment (Codex r3 P2: `# -m 'ADJUDICATION: …'` never reaches git)."""
+    quote, prev = None, " "
+    for i, ch in enumerate(rest):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "#" and prev.isspace():
+            return rest[:i]
+        prev = ch
+    return rest
+
+
+_QNL = "\x01"  # a newline inside quotes, kept through the physical-line split
+
+
+def _join_quoted_newlines(text: str) -> str:
+    out, quote = [], None
+    for ch in text or "":
+        if quote:
+            if ch == quote:
+                quote = None
+            elif ch == "\n":
+                out.append(_QNL)
+                continue
+        elif ch in ("'", '"'):
+            quote = ch
+        out.append(ch)
+    return "".join(out)
+
+
 def _message_args(rest: str) -> list[str]:
-    """Every -m / --message argument of one `git commit` segment, unquoted, in order."""
+    """Every -m / --message argument of one `git commit` segment, unquoted, in order (comment excluded)."""
+    rest = _strip_shell_comment(rest)
     out: list[str] = []
     while True:
         m = MSG_FLAG_RE.search(rest)
@@ -302,27 +337,34 @@ def _message_args(rest: str) -> list[str]:
         rest = val[lead + len(arg) + (2 if quoted else 0) :]
 
 
-def commit_message_text(cmd: str) -> str:
-    """The text that will become the commit message of the real `git … commit` segments in `cmd`: every -m /
-    --message argument and the heredoc body of a `-F -` / `-m "$(cat <<EOF …)"` form, joined.  A shell comment
-    (`# ADJUDICATION: <url>`), another command's arguments or the rest of the line are NOT part of it (Codex review
-    2026-10-17 r2 P2: the owner's ruling is accepted only where `git log` will later show it)."""
-    parts: list[str] = []
-    for line, body in _logical_lines(cmd):
+def commit_messages(cmd: str) -> list[str]:
+    """One message text per real `git … commit` segment in `cmd`: its -m / --message arguments (a quoted newline
+    inside one argument is kept — subject + body in one -m) and the heredoc body of a `-F -` / `-m "$(cat <<EOF …)"`
+    form.  A shell comment, another command's arguments or the rest of the line are NOT part of it (Codex review
+    2026-10-17 r2/r3 P2: the owner's ruling is accepted only where `git log` will later show it, on the commit
+    that carries it)."""
+    msgs: list[str] = []
+    for line, body in _logical_lines(_join_quoted_newlines(cmd)):
         for seg in shell_segments(line):
             wrapped = WRAPPER_SEG_RE.match(seg)
             if wrapped:
-                parts.append(commit_message_text(wrapped.group("inner")))
+                msgs.extend(commit_messages(wrapped.group("inner").replace(_QNL, "\n")))
                 continue
             git = GIT_COMMIT_SEG_RE.match(seg)
             if not git:
                 continue
             rest = git.group("rest")
             args = _message_args(rest)
-            parts.extend(args)
+            parts = list(args)
             if FILE_STDIN_RE.search(rest) or any(HEREDOC_MSG_RE.match(a) for a in args):
                 parts.extend(body)
-    return "\n".join(p for p in parts if p)
+            msgs.append("\n".join(p for p in parts if p).replace(_QNL, "\n"))
+    return msgs
+
+
+def commit_message_text(cmd: str) -> str:
+    """All commit messages of `cmd` joined (see commit_messages)."""
+    return "\n".join(m for m in commit_messages(cmd) if m)
 
 
 def has_commit_segment(cmd: str) -> bool:
