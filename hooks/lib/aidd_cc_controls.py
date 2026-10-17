@@ -11,6 +11,7 @@ Adapters translate that into each harness's wire format.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import re
 import time
@@ -25,6 +26,7 @@ from aidd_cc_text import (
     fix_scope_from_output,
     has_commit_segment,
     segment_runs,
+    shell_segments_raw,
     shell_segments_with_separators,
     is_confirmation_question,
     is_trivial_cmd,
@@ -367,11 +369,9 @@ def _last_write_row(rows: list[dict]) -> tuple[dict, str, str] | None:
     return last
 
 
-def _stale_problems(cited: str, row: dict, rows: list[dict]) -> list[str]:
-    """aidd-governance#186 P1-2 / R2: evidence recorded before the newest successful write no
-    longer describes the tree (`pytest -q` → Edit a.py → cite the old pytest; `pytest -q` →
-    `sed -i … a.py` → same).  Any written file counts — the conservative side."""
-    last = _last_write_row(rows)
+def _stale_problems(cited: str, row: dict, last: tuple[dict, str, str] | None) -> list[str]:
+    """aidd-governance#186 P1-2 / R2: evidence recorded before the newest successful write (`last`, computed
+    once per Stop — review #8 F-2) no longer describes the tree.  Any written file counts — the conservative side."""
     if last is None or row.get("ts", 0) >= last[0].get("ts", 0):
         return []
     edit, path, how = last
@@ -392,8 +392,111 @@ WRITE_CMD_RE = re.compile(
 )
 
 
+MAX_TRAILERS = 20  # ruling on review #8 F-2: trailers beyond 20 are not evaluated and are a block-side problem
 WRITE_LAST_RE = re.compile(r"^(cp|mv|rsync|install|ln)\b")
-WRITE_ALL_RE = re.compile(r"^(tee|touch|patch|git apply|git checkout|sed -i)\b")
+# Review 2026-10-16 P2-b + Codex rounds: a real sed / perl `-i` cluster, the formatter verbs and `git restore` (worktree
+# form) write every path argument; check / diff / emit-stdout modes, index-only restore and option VALUES are reads;
+# `python -c` code is parsed with `ast` (never executed): only open(w|a|x|+) / Path.write_* CALLS that run write.
+_NO_CHECK = r"(?!(?: \S+)* (?:--(?:check|check-only|diff|help|version|stdout|show-config|show-files)|-h|-V|-c|-d|--emit[= ](?:stdout|checkstyle|json))\b)"  # read-only modes (Codex 1397e64 P1, e00d1df P2)
+WRITE_ALL_RE = re.compile(
+    r"^(tee|touch|patch|git apply|git checkout|sed(?=(?: +\S+)* +(?:-[nrEsuz]*i\S*|--in-place\b))|perl(?=(?: +\S+)* +-[plnaw0-9CSD]*i\S*)|"
+    r"git restore(?!(?=(?: \S+)* (?:--staged|-[a-zA-Z]*S[a-zA-Z]*)\b)(?!(?: \S+)* (?:--worktree|-[a-zA-Z]*W[a-zA-Z]*)\b))|"
+    r"(?:ruff format|black|isort|rustfmt|gofmt -w|dos2unix|unix2dos)" + _NO_CHECK + r"|"
+    r"ruff check(?=(?: \S+)* --fix\b)" + _NO_CHECK + r"|prettier(?=(?: \S+)* (?:--write|-w)\b)" + _NO_CHECK + r"|"
+    r"eslint(?=(?: \S+)* --fix\b)(?!(?: \S+)* --fix-dry-run\b))\b"
+)
+EXTLESS_FILES = frozenset("Makefile Dockerfile Containerfile LICENSE README CHANGELOG Procfile Gemfile Rakefile Vagrantfile Jenkinsfile".split())  # review #8 F-6
+FORMATTER_RE = re.compile(r"^(?:ruff|black|isort|prettier|eslint|rustfmt|gofmt|git restore)\b")  # verbs whose option VALUES are inputs (git restore --pathspec-from-file: Codex 4d4561b P2)
+TARGET_DIR_RE = re.compile(r"(?:^|\s)(?:--target-directory[= ]|-t\s+)([\w./~-]+)")
+OPTION_VALUE_RE = re.compile(
+    r"(?:^|\s)(?:--config|-c|--settings-path|--rcfile|--ignore-path|--ignore-pattern|--stdin-filename|--parser|--line-length|-l|"
+    r"--target-version|-t|--extend-exclude|--exclude|--include|--source|--pathspec-from-file|--config-path|--edition)\s+(\S+)"
+)
+PY_CMD_RE = re.compile(r"^python[0-9.]*(?: -[A-Za-z]+)* -c\s+")
+
+
+def _py_code_arg(seg: str) -> str:
+    """The code argument of `python -c <code>` as the shell would pass it (quotes and escapes resolved)."""
+    m = PY_CMD_RE.match(seg)
+    rest = seg[m.end() :] if m else ""
+    if rest[:1] == "'":
+        end = rest.find("'", 1)
+        return rest[1:] if end < 0 else rest[1:end]
+    if rest[:1] == '"':
+        out, i = [], 1
+        while i < len(rest):
+            ch = rest[i]
+            if ch == "\\" and i + 1 < len(rest) and rest[i + 1] in '$`"\\\n':  # the shell drops a backslash only before these (Codex a8a4f04 P2)
+                out.append(rest[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                break
+            out.append(ch)
+            i += 1
+        return "".join(out)
+    return rest.split(None, 1)[0] if rest else ""
+
+
+def _is_path_ctor(func: ast.AST) -> bool:
+    """`Path(...)` or `pathlib.Path(...)`."""
+    return (isinstance(func, ast.Name) and func.id == "Path") or (
+        isinstance(func, ast.Attribute) and func.attr == "Path"
+    )
+
+
+def _str_const(node: ast.AST) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _top_level_nodes(tree: ast.AST, called: frozenset[str] = frozenset()):
+    """ast.walk; a def / lambda body is walked only when the def is called at top level (review #5 P2)."""
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.If, ast.While)) and isinstance(node.test, ast.Constant) and not node.test.value:
+            stack.extend(node.orelse)  # `if False:` / `while 0:` never runs its body (Codex 4d4561b P2)
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            if getattr(node, "name", None) in called:  # generator / async bodies count too (review #8 F-3, block side)
+                stack.extend(ast.iter_child_nodes(node))
+            else:  # kw_defaults holds None for a required kw-only arg (Codex e00d1df P1)
+                stack.extend(n for n in node.args.defaults + node.args.kw_defaults + list(getattr(node, "decorator_list", [])) if n is not None)
+            continue
+        stack.extend(ast.iter_child_nodes(node))  # a class body runs at definition: keep walking it
+
+
+def _py_written_paths(code: str) -> list[str]:
+    """Literal paths that `code` opens for writing or writes through pathlib — AST calls only."""
+    try:
+        tree = ast.parse(code)
+    except Exception:  # SyntaxError / ValueError / RecursionError / MemoryError: not a write we can read
+        return []
+    called = frozenset(n.func.id for n in _top_level_nodes(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name))
+    out: list[str] = []
+    for node in _top_level_nodes(tree, called):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Name) and f.id == "open" and node.args:
+            path = _str_const(node.args[0])
+            mode = _str_const(node.args[1]) if len(node.args) > 1 else None
+            for kw in node.keywords:
+                if kw.arg == "mode":
+                    mode = _str_const(kw.value)
+            if path and mode and (mode[:1] in "wax" or "+" in mode):
+                out.append(path)
+        elif (
+            isinstance(f, ast.Attribute)
+            and f.attr in ("write_text", "write_bytes")
+            and isinstance(f.value, ast.Call)
+            and _is_path_ctor(f.value.func)
+            and f.value.args
+            and _str_const(f.value.args[0])
+        ):
+            out.append(_str_const(f.value.args[0]))
+    return out
 
 
 def _row_written_paths(r: dict) -> list[str]:
@@ -414,19 +517,23 @@ def _row_written_paths(r: dict) -> list[str]:
     if key.startswith("edit:"):
         cands.append(_edit_key_path(key))
     parts = shell_segments_with_separators(str(r.get("cmd", "")))
+    raw: list[str] | None = None  # the un-normalised segments, split once per row (review #7 P0-T2: per-fragment was quadratic)
     for i, (seg, _sep) in enumerate(parts):
         # A write whose own result is masked (`cp a b || true`) has unknown success (Codex r5 P2-b); a write
         # followed by `;` / `|` / `&&` with the line's rc 0 is counted (review 2026-10-16: `printf x | tee a.py`).
         if i + 1 < len(parts) and parts[i + 1][1] == "||":
             continue
-        bare = _unquoted(
-            seg
-        )  # `git commit -m "a > b"` / `awk '$1 > 5'`: no redirection inside quotes
-        args = [t for t in re.findall(r"[\w./~-]+", bare)[1:] if not t.startswith("-")]
+        bare = re.sub(
+            r" {2,}", " ", _unquoted(seg)
+        )  # `git commit -m "a > b"` / `awk '$1 > 5'`: no redirection inside quotes; blanks collapsed (Codex 2741d2c P2)
+        # `--in-place=.bak` / `--source=HEAD`: the value of a long option is not a path argument (review #2 P3)
+        args = [t for t in re.findall(r"[\w./~-]+", re.sub(r"--[\w-]+=\S*", " ", bare))[1:] if not t.startswith("-")]
         if WRITE_LAST_RE.match(bare) and args:
-            cands.append(
-                args[-1]
-            )  # the destination, whatever it is called (Codex r7 P2-c)
+            tdir = TARGET_DIR_RE.search(bare) if re.match(r"(?:cp|mv|install)\b", bare) else None  # the sync tool's -t keeps times (Codex a8a4f04 P2)
+            if tdir:  # `cp a.py --target-directory=out` / `cp a.py b.py -t out`: out/<basename> is written (Codex e00d1df P2)
+                cands += [tdir.group(1).rstrip("/") + "/" + a.rsplit("/", 1)[-1] for a in args if a != tdir.group(1)]
+            else:
+                cands.append(args[-1])  # the destination, whatever it is called (Codex r7 P2-c)
         elif bare.startswith("git checkout"):
             if (
                 " -- " in bare
@@ -435,27 +542,43 @@ def _row_written_paths(r: dict) -> list[str]:
                     t for t in bare.split(" -- ", 1)[1].split() if not t.startswith("-")
                 ]
         elif WRITE_ALL_RE.match(bare):
-            cands += [t for t in args if "/" in t or "." in t]
+            # `--config pyproject.toml`: an input (Codex 2741d2c P2), counted once each — formatters only: `patch -t` is a flag (Codex 50f31e5 P2)
+            vals = list(OPTION_VALUE_RE.findall(bare)) if FORMATTER_RE.match(bare) else []
+            for t in args:
+                if t in vals:
+                    vals.remove(t)  # review #5 P2: `black --config pyproject.toml pyproject.toml` still formats the file
+                elif "/" in t or "." in t or t in EXTLESS_FILES:
+                    cands.append(t)
+        elif PY_CMD_RE.match(bare):
+            raw = shell_segments_raw(str(r.get("cmd", ""))) if raw is None else raw  # newlines inside the quotes survive (review #5 P2)
+            cands += _py_written_paths(_py_code_arg(raw[i] if i < len(raw) else seg))
         cands += re.findall(r"(?<![<>&\d])\d?>>?\s*([\w./~-]+)", bare)
     out: list[str] = []
     for c in cands:
-        if c.startswith("/dev/"):
-            continue  # /dev/null is not an artifact (reviewer-g)
-        p = Path(c).expanduser()
+        if c.startswith("/dev/") or "\x00" in c:
+            continue  # /dev/null is not an artifact (reviewer-g); a NUL path is not a file (Codex 4d4561b P1)
+        p = _expand(c) or Path(c)  # `~tmp/../src/a.py`: the literal cwd-relative path still goes stale (review #7 P0/P1-W)
         if not p.is_absolute():
             p = Path(cwd) / p if cwd else p
         try:
             resolved = str(p.resolve())
-        except OSError:
+        except (OSError, ValueError, RuntimeError):  # NUL path (Codex 4d4561b P1) / symlink loop (review #8 F-4): never a fail-open
             resolved = str(p)
         if resolved not in out:
             out.append(resolved)
     return out
 
 
+def _expand(path: str) -> Path | None:
+    """Path.expanduser() that returns None instead of raising on `~unknownuser` (review #6 P1-R)."""
+    try:
+        return Path(path).expanduser()
+    except (RuntimeError, OSError, KeyError):
+        return None
+
+
 def _unquoted(seg: str) -> str:
-    """The segment with the CONTENT of single/double-quoted strings blanked, so `>` inside an argument
-    (`git commit -m "a > b"`, `jq '.a > 3'`) is not read as a redirection (review 2026-10-16 P2)."""
+    """The segment with quoted CONTENT blanked, so `>` inside an argument is not a redirection (review 2026-10-16 P2)."""
     out, quote = [], None
     for ch in seg:
         if quote:
@@ -524,6 +647,10 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
             "completion claim without `Evidence: <cmd> | <output> | <time>` trailer (DOT-INC-010)"
         )
     executed = _executed_commands(rows)
+    last_write = _last_write_row(rows)  # once per Stop, not once per trailer (review #8 F-2)
+    if len(trailers) > MAX_TRAILERS:
+        problems.append(f"too many Evidence trailers ({len(trailers)}); cite the commands that produced the result")
+        trailers = trailers[:MAX_TRAILERS]
     substantive = False
     for c, claimed_out, _when in trailers:
         if not cmd_in_ledger(c, executed) and not mutated("evidence.executed"):
@@ -535,7 +662,7 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
         if row is not None and not mutated("evidence.trailer"):
             problems.extend(_output_problems(c, claimed_out, row))  # #186 P1-1
         if row is not None and not mutated("evidence.executed"):
-            problems.extend(_stale_problems(c, row, rows))  # #186 P1-2
+            problems.extend(_stale_problems(c, row, last_write))  # #186 P1-2
         rc, out_bytes = _rc_for(rows, c)
         if rc is None and mutated("evidence.executed"):
             rc = 0  # the old behaviour: a typed command is trusted as if it ran and passed
@@ -636,12 +763,18 @@ def _readback_problems(text: str, cwd: str, touched: set[str]) -> list[str]:
         ]
     out = []
     for path, sha in claims:
-        p = Path(path).expanduser()
+        p = _expand(path)
+        if p is None:  # review #6 P1-R: `~nosuchuser/app.toml` raised RuntimeError and every later claim passed UNVERIFIED
+            out.append(f"readback path {path} unresolvable (unknown ~user): not a saved artifact this session can verify")
+            continue
         if not p.is_absolute():
             p = Path(cwd) / p
         try:
             resolved = str(p.resolve())
-        except OSError:
+        except RuntimeError:  # symlink loop (ruling on review #8 F-4): block side, like an unknown ~user
+            out.append(f"readback path {path} unresolvable (symlink loop): not a saved artifact this session can verify")
+            continue
+        except (OSError, ValueError):
             resolved = str(p)
         actual = file_sha(p)
         if actual != sha:

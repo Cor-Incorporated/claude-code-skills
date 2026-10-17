@@ -635,10 +635,13 @@ if [ -z "$o75" ] && printf '%s' "$o75b" | grep -q 'repair-family\|re-adjudicatio
 # (76) R5: an honest retraction is not a completion claim (Residual 11: the live claude.json re-entry wrote a false
 #      evidence.loop-guard.would-block row for 「『実装完了しました。』は取り消します」)
 fail76=""
-for t in "「実装完了しました。」は取り消します。" "『実装完了しました。』は取り消します" "完了したものは何もありません。" "先の報告は成立しません。証跡がないためです。" "I retract the earlier claim that the implementation is complete."; do
+for t in "「実装完了しました。」は取り消します。" "『実装完了しました。』は取り消します" "完了したものは何もありません。" "先の報告は成立しません。証跡がないためです。" "I retract the earlier claim that the implementation was flawed."; do
   o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
   [ -n "$o" ] && fail76="$fail76 [$t -> $o]"
 done
+# ruling on review #8 F-1 (block side): an English that-clause that itself contains a claim word is evaluated as a claim
+o76r="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76r","last_assistant_message":"I retract the earlier claim that the implementation is complete."}' | bash "$HOOK")"
+printf '%s' "$o76r" | grep -q 'completion claim without' || fail76="$fail76 [that-clause with a claim word not evaluated: $o76r]"
 printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76b\",\"stop_hook_active\":true,\"last_assistant_message\":$(j "「実装完了しました。」は取り消します。")}" | bash "$HOOK" >/dev/null
 grep -q '"rule": "evidence.loop-guard.would-block".*"session": "neg76b"' "$AIDD_LEDGER_PATH" && fail76="$fail76 [would-block row on retraction]"
 o76c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76c","last_assistant_message":"取り消しは完了です。"}' | bash "$HOOK")"
@@ -744,6 +747,203 @@ print(json.dumps({"missing_pins": missing, "control_sha": bool(s.get("control_sh
 PY2
 )"
 if printf '%s' "$o83" | grep -q '"missing_pins": \[\]' && printf '%s' "$o83" | grep -q '"control_sha": true' && printf '%s' "$o83" | grep -q '"control_set_sha": true' && printf '%s' "$o83" | grep -q '"opencode"' && printf '%s' "$o83" | grep -q '"pi"'; then ok "T83 replay pins the whole control set and records the opencode / pi arms ($o83)"; else bad "T83: $o83"; fi
+
+
+# ---- independent review 2026-10-16 (aidd-governance PR #195, control_sha 9dc6b944) P1-a: the completion vocabulary was closed —
+#      "The task is complete." / 「修正しました。テストも通っています。」 / "I fixed the pagination bug and the tests pass." /
+#      "Successfully implemented the feature." passed the deployed Claude entry with no tool run (allow:evidence.evaluated).
+#      Fixture = the claim=False sentences of independent-review/vocab-check.txt + probe-transcript.txt PART C (lane indrev-p1a),
+#      each new word with a synthetic negative.  T85 committed red before the repair (fix/h17-p1a-vocab).
+# (85) every indrev-p1a fixture classifies as recorded, and the four PART C texts block at the entry without a tool run
+o85="$(python3 -I - "$ROOT" <<'PY2'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_text import has_completion_claim
+fx = json.load(open(sys.argv[1] + "/tests/fixtures/h17-claim-phrases.json", encoding="utf-8"))["cases"]
+p1a = [c for c in fx if c.get("lane") == "indrev-p1a"]
+bad = [f"{c['source']} expect_claim={c['expect_claim']} got={has_completion_claim(c['text'])} :: {c['text'][:60]!r}" for c in p1a if has_completion_claim(c["text"]) != c["expect_claim"]]
+import time  # review #5 P1-2: the terminator tail must not backtrack exponentially (Stop timeout = fail-open)
+for adversarial in ["現状は未達" + "）" * 20000 + "x。バグを修正しました。", "I fixed the bug" + ";" * 80000, "「" * 40000 + "修正しました"]:
+    t0 = time.time(); has_completion_claim(adversarial); dt = time.time() - t0
+    if dt > 1.0: bad.append(f"timing: {dt:.2f}s on {adversarial[:20]!r}…")
+print(f"{len(p1a) - len(bad)}/{len(p1a)} indrev-p1a fixtures classified as recorded ({sum(c['expect_claim'] for c in p1a)} positive, {sum(not c['expect_claim'] for c in p1a)} negative)"); print("\n".join(bad))
+PY2
+)"
+fail85=""
+i85=0
+for t in "I fixed the pagination bug and the tests pass." "修正しました。テストも通っています。" "The task is complete." "Successfully implemented the feature."; do
+  i85=$((i85 + 1))
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg85-$i85\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
+  printf '%s' "$o" | grep -q 'completion claim without' || fail85="$fail85 [allowed: $t]"
+done
+if ! printf '%s' "$o85" | grep -q 'expect_claim=' && printf '%s' "$o85" | grep -q '^[1-9]' && [ -z "$fail85" ]; then ok "T85 P1-a vocabulary: $(printf '%s' "$o85" | head -1); the four PART C texts block at the entry with no tool run"; else bad "T85: [$o85]$fail85"; fi
+
+# ---- independent review 2026-10-16 P2-a / P2-b / P2-c (same review, aidd-governance PR #195).  T86-T88 committed red before
+#      the repair (fix/h17-p1a-vocab), alongside T85.
+# (86) P2-a: a number followed by a word the recorded output never used is still a number the command must have printed —
+#      `47 tests passed` over "3 passed in 0.12s" was allowed because "tests" never appears there; only `0` and the closed
+#      absence words (failed / errors / skipped …) may be skipped
+o86="$(python3 -I - "$ROOT" <<'PY2'
+import sys
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_text import output_numbers_missing as m
+rec = "3 passed in 0.12s\n1234 rows"
+checks = [
+    (m("47 tests passed", rec), ["47"]),            # the P2-a bypass
+    (m("47 items collected", rec), ["47"]),         # any unused word
+    (m("3 tests passed, 0 failed", rec), []),       # honest: 3 is printed, 0 is never judged
+    (m("2 skipped, 1 xfailed", rec), ["2", "1"]),   # PR #418 review P2: a non-zero count the output never printed is made up
+    (m("3 passed, 0 failed, rc=0, 1,234 rows, 100%", rec), []),  # the honest field of T72 still passes
+    (m("47/47 passed", "collected 47 items\n47 passed"), []),
+]
+bad = [f"{i}: got={got} want={want}" for i, (got, want) in enumerate(checks) if got != want]
+print(f"{len(checks) - len(bad)}/{len(checks)} number checks as recorded"); print("\n".join(bad))
+PY2
+)"
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg86","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg86","tool_name":"Bash","tool_input":{"command":"pytest -q"},"tool_response":{"exit_code":0,"stdout":"3 passed in 0.12s"}}' | bash "$HOOK" >/dev/null
+o86b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg86","last_assistant_message":"verified.\nEvidence: pytest -q | 47 tests passed | 10:00"}' | bash "$HOOK")"
+o86c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg86","last_assistant_message":"verified.\nEvidence: pytest -q | 3 tests passed, 0 failed | 10:00"}' | bash "$HOOK")"
+if ! printf '%s' "$o86" | grep -q 'got=' && printf '%s' "$o86" | grep -q '^[1-9]' && printf '%s' "$o86b" | grep -q 'never printed' && [ -z "$o86c" ]; then ok "T86 P2-a '47 tests passed' over '3 passed' rejected at the entry; '3 tests passed, 0 failed' honest; $(printf '%s' "$o86" | head -1)"; else bad "T86: [$o86] [$o86b] [$o86c]"; fi
+
+# (87) P2-b: every in-place write form the review listed makes the earlier test run stale (R2 class: `perl -pi`, `sed -E -i`,
+#      `git restore`, `python3 -c` with open(…,'w'), `ruff format`); read-only look-alikes (`sed` without -i, `ruff check`,
+#      `git restore --staged`, `python3 -c` that only reads) do not
+fail87=""
+i87=0
+for c in "perl -pi -e 's/a/b/' a.py" "sed -E -i 's/a/b/' a.py" "git restore a.py" "python3 -c \"open('/x/a.py','w').write('x')\"" "ruff format a.py" "black a.py" "prettier --write a.ts" \
+         "sed -Ei 's/a/b/' a.py" "sed --in-place 's/a/b/' a.py" "sed -e 's/a/b/' -i a.py" "prettier -w a.ts" "python3 -c 'import pathlib; pathlib.Path(\"/x/a.py\").write_text(\"x\")'" "python3 -c \"open('/x/a.py','r+').write('x')\""; do
+  i87=$((i87 + 1)); sid="neg87-$i87"
+  printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"}}" | bash "$HOOK" >/dev/null
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"3 passed\"}}" | bash "$HOOK" >/dev/null
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"cwd\":\"/x\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(j "$c")},\"tool_response\":{\"exit_code\":0,\"stdout\":\"\"}}" | bash "$HOOK" >/dev/null
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"$sid\",\"last_assistant_message\":\"verified.\\nEvidence: pytest -q | 3 passed | 10:00\"}" | bash "$HOOK")"
+  printf '%s' "$o" | grep -q 'written later' && printf '%s' "$o" | grep -q '/x/a\.' || fail87="$fail87 [not stale: $c -> $o]"
+done
+# Codex review 2026-10-16 (route A) P2: check-only formatter modes, index-only restore in any flag order, and a Python
+# string literal that merely mentions open(…,'w') are reads, not writes
+for c in "sed 's/a/b/' a.py" "ruff check a.py" "git restore --staged a.py" "python3 -c \"print(open('/x/a.py').read())\"" "perl -ne 'print' a.py" \
+         "black --check a.py" "ruff format --check a.py" "rustfmt --check a.rs" "git restore --source=HEAD --staged a.py" "python3 -c \"print(\\\"open('/x/a.py', 'w')\\\")\"" "python3 -c 'print(\"open(/x/a.py, w)\")'"; do
+  i87=$((i87 + 1)); sid="neg87-$i87"
+  printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"}}" | bash "$HOOK" >/dev/null
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"3 passed\"}}" | bash "$HOOK" >/dev/null
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$sid\",\"cwd\":\"/x\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(j "$c")},\"tool_response\":{\"exit_code\":0,\"stdout\":\"\"}}" | bash "$HOOK" >/dev/null
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"$sid\",\"last_assistant_message\":\"verified.\\nEvidence: pytest -q | 3 passed | 10:00\"}" | bash "$HOOK")"
+  [ -z "$o" ] || fail87="$fail87 [read treated as write: $c -> $o]"
+done
+# review #2 P3: `-Mstrict` is not `-i`; `--in-place=.bak` writes the file, not `.bak`
+o87p="$(python3 -I - "$ROOT" 2>&1 <<'PY2'
+import sys
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_controls import _row_written_paths as w
+row = lambda c: w({"event": "post", "rc": 0, "cwd": "/x", "cmd": c})
+checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.bak 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -pi -e 's/a/b/' a.py"), ["/x/a.py"]),
+          (row("perl -0pi -e 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -00pi -e 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -CSDpi -e 's/a/b/' a.py"), ["/x/a.py"]), (row("perl -Ilib -e 'print 1' a.py"), []),  # review #3 P2
+          # Codex route-A on 2741d2c P2: an unexecuted def body is not a write; --config values are inputs; quoted option values must not hide --check
+          (row("python3 -c 'def f(): open(\"/x/a.py\",\"w\").write(\"x\")'"), []), (row("black --config pyproject.toml a.py"), ["/x/a.py"]),
+          (row("black --config \"pyproject.toml\" --check a.py"), []), (row("git restore --source=\"HEAD\" --staged a.py"), []), (row("ruff format --config \"ruff.toml\" src/a.py"), ["/x/src/a.py"]),
+          # Codex route-A on 1397e64: read-only formatter modes are reads; default arguments and class bodies run at definition
+          (row("rustfmt --emit stdout a.rs"), []), (row("rustfmt --emit=stdout a.rs"), []), (row("black --version"), []),
+          (row("python3 -c 'def f(x=open(\"/x/a.py\",\"w\")): pass'"), ["/x/a.py"]), (row("python3 -c 'class C: open(\"/x/a.py\",\"w\")'"), ["/x/a.py"]),
+          # Codex route-A on e00d1df: a required keyword-only argument must not crash the walk; cp -t / --target-directory write the destination; isort read-only modes
+          (row("python3 -c 'def f(*, required): pass'"), []), (row("cp source.py --target-directory=out"), ["/x/out/source.py"]), (row("cp a.py b.py -t out"), ["/x/out/a.py", "/x/out/b.py"]),
+          (row("isort --stdout a.py"), []), (row("isort -c a.py"), []), (row("isort --check-only a.py"), []), (row("isort a.py"), ["/x/a.py"]),
+          (row("rustfmt --config-path rustfmt.toml main.rs"), ["/x/main.rs"]),  # Codex route-A on 7f8c762 P2: --config-path is an input
+          # review #5 P2: a def called at top level runs its body; an option value that is also a real argument stays
+          (row("python3 -c 'def f(): open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("black --config pyproject.toml pyproject.toml"), ["/x/pyproject.toml"]),
+          # Codex route-A on 50f31e5 P2: a called generator / async body does not run; option values with an "i" are not -i; -Ss is staged; patch -t is a flag
+          (row("python3 -c 'def f():\n    yield open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("python3 -c 'async def f(): open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]),  # review #8 F-3: block side — a called generator / async COUNTS
+          (row("python3 -c 'def f():\n    def g(): yield 1\n    open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("python3 -c 'def f():\n    yield open(\"/x/a.py\",\"w\")\nlist(f())'"), ["/x/a.py"]),
+          (row("sed -fscript.sed a.py"), []), (row("perl -Fpipe -ane 'print' a.py"), []), (row("git restore -Ss HEAD a.py"), []), (row("patch -t a.py"), ["/x/a.py"]),
+          # review #7 P0/P1-W: an unexpandable ~name falls back to the literal cwd-relative path (a write that makes evidence stale)
+          (row("echo x > ~tmp/../src/a.py"), ["/x/src/a.py"]),
+          # Codex route-A on 4d4561b: a NUL in an AST path must not raise (P1); restore inputs are not writes; a constant-false branch does not run
+          (row("python3 -c 'open(\"\\x00\",\"w\")'"), []), (row("git restore --pathspec-from-file manifest.txt"), []), (row("python3 -c 'if False: open(\"/x/a.py\",\"w\")'"), []),
+          (row("python3 -c 'if True: open(\"/x/a.py\",\"w\")'"), ["/x/a.py"]),
+          # review #8 F-6: in-place writes to extension-less files are writes
+          (row("sed -i 's/a/b/' Makefile"), ["/x/Makefile"]), (row("tee Dockerfile"), ["/x/Dockerfile"]),
+          # Codex route-A on a8a4f04 P2: inside double quotes the shell removes a backslash only before dollar, backtick, double quote, backslash or newline; the -t of the sync tool is a timestamp flag, not a target directory
+          (row("python3 -c \"open('a\\x2epy','w').write('x')\""), ["/x/a.py"]), (row("rsync -t source.py dest.py"), ["/x/dest.py"])]
+print("\n".join(f"{i}: got={g} want={wnt}" for i, (g, wnt) in enumerate(checks) if g != wnt))
+PY2
+)"
+[ -z "$o87p" ] || fail87="$fail87 [paths: $o87p]"
+if [ -z "$fail87" ]; then ok "T87 P2-b perl -pi / sed -E -i / git restore / python3 -c open(w) / ruff format / black / prettier --write make the old run stale; sed, ruff check, restore --staged (any order), --check modes, read-only / string-literal python -c, perl -n do not"; else bad "T87:$fail87"; fi
+
+# (88) P2-c: a quoted claim is removed only when the retraction takes it as its object (「…」は/を/という報告は 取り消します);
+#      「「実装完了、全件 PASS、検証済み」。古いブランチは取り消しました。」 retracts a branch and keeps its claim
+fail88=""
+for t in "「「実装完了、全件 PASS、検証済み」。古いブランチは取り消しました。」" "「実装完了しました。」。先ほどの予約は取り消しました。"; do
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg88\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
+  printf '%s' "$o" | grep -q 'completion claim without' || fail88="$fail88 [not blocked: $t]"
+done
+for t in "「実装完了しました。」は取り消します。" "「実装完了しました。」を撤回します。" "「実装完了しました。」という報告は取り消します。" "『実装完了しました』は、取り下げます。" "「実装完了しました。」は誤りで、取り消します。"; do
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg88b\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
+  [ -z "$o" ] || fail88="$fail88 [retraction blocked: $t -> $o]"
+done
+if [ -z "$fail88" ]; then ok "T88 P2-c a retraction removes the quote only as its object; an unrelated 取り消しました keeps the quoted claim"; else bad "T88:$fail88"; fi
+
+
+# (89) parent ruling on review #5 P1-2: has_completion_claim must stay fast on a 2,000-character synthetic body that mixes
+#      claim words, unmet words, brackets and quotes (the 12 s hook timeout is the harness's fail-open; this bound is the only defence)
+o89="$(python3 -I - "$ROOT" <<'PY2'
+import sys, time
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_text import has_completion_claim
+unit = "「修正しました（ドキュメントは未達）。」と書きましたが、残りは未達です。I fixed the bug (the tests pass); the third is unmet. "
+body = (unit * (2000 // len(unit) + 1))[:2000]
+t0 = time.perf_counter(); r = has_completion_claim(body); dt = time.perf_counter() - t0
+worst = 0.0
+for adversarial in ["現状は未達" + "）" * 20000 + "x。修正しました。", "I fixed the bug" + ";" * 80000, "「" * 40000 + "修正しました", "I retract my earlier claim that " + "x" * 5000]:
+    t0 = time.perf_counter(); has_completion_claim(adversarial); worst = max(worst, time.perf_counter() - t0)
+# review #6 P0-T: the 43-character input that killed the hook at 12 s (silent allow at the entry) must stay under 0.1 s
+r6 = "現状は未達" + "…" * 28 + "x。バグを修正しました。テストも通っています。"
+t0 = time.perf_counter(); c6 = has_completion_claim(r6); d6 = time.perf_counter() - t0
+print(f"body2000={dt:.3f}s claim={r} adversarial_worst={worst:.3f}s r6={d6:.3f}s claim6={c6}")
+PY2
+)"
+if printf '%s' "$o89" | grep -qE 'body2000=0\.[0-4][0-9]*s' && printf '%s' "$o89" | grep -qE 'adversarial_worst=(0\.[0-9]+|1\.0+)s' && printf '%s' "$o89" | grep -qE 'r6=0\.0[0-9]*s claim6=True'; then ok "T89 has_completion_claim is linear: $o89"; else bad "T89: $o89"; fi
+
+# (90) review #6 P1-S: a python exit without output at the adapter is announced as a systemMessage, never silent
+STUB90="$SB/stub-cc.py"; printf '%s\n' 'import sys; sys.exit(3)' > "$STUB90"
+o90="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg90","last_assistant_message":"The task is complete."}' | AIDD_CC_PY="$STUB90" bash "$HOOK")"
+if printf '%s' "$o90" | grep -q '"systemMessage": *"\[H17\] control error (python exit 3)' && ! printf '%s' "$o90" | grep -q '"decision"' && grep -q '"rule":"python-exit-3:stop"' "$AIDD_LEDGER_PATH"; then ok "T90 python exit without output -> visible systemMessage + ledger row, no decision"; else bad "T90: [$o90]"; fi
+
+# (91) review #6 P1-R: a Readback path with an unknown ~user does not crash the control into UNVERIFIED; it is a block-side problem
+o91="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg91","last_assistant_message":"保存しました。\nReadback: ~nosuchuser-h17/app.toml sha256=0000000000000000000000000000000000000000000000000000000000000000"}' | bash "$HOOK")"
+if printf '%s' "$o91" | grep -q '"decision": "block"' && printf '%s' "$o91" | grep -qi 'unresolvable' && ! printf '%s' "$o91" | grep -q 'UNVERIFIED'; then ok "T91 unresolvable ~user readback path is a block-side problem, not a crash"; else bad "T91: [$o91]"; fi
+
+
+# (92) review #7 P0-T2: stop_check must stay fast with many long Bash rows (4,000-character `python3 -c 1;` lines): the
+#      per-fragment re-split of the whole row was quadratic and a 40-row session killed the hook at 12 s (silent allow)
+o92="$(python3 -I - "$ROOT" <<'PY2'
+import sys, time
+sys.path.insert(0, sys.argv[1] + "/hooks/lib")
+from aidd_cc_controls import stop_check
+line = "python3 -c 1;" * 307
+rows = [{"event": "post", "rc": 0, "cwd": "/x", "cmd": line, "key": "bash:" + str(i), "ts": 1000 + i, "out_sample": ""} for i in range(40)]
+rows.append({"event": "post", "rc": 0, "cwd": "/x", "cmd": "pytest -q", "key": "bash:pytest", "ts": 999, "out_sample": "3 passed"})
+t0 = time.perf_counter(); v = stop_check({}, rows, "verified.\nEvidence: pytest -q | 999 passed | 10:00", "/x"); dt = time.perf_counter() - t0
+# review #8 F-2 (ruling): 40 rows × 50 trailers under 0.5 s; trailers beyond 20 are not evaluated and are a block-side problem
+many = "verified.\n" + "\n".join(f"Evidence: pytest -q | 999 passed | 10:{i:02d}" for i in range(50))
+t1 = time.perf_counter(); v2 = stop_check({}, rows, many, "/x"); dt2 = time.perf_counter() - t1
+cap = any("too many Evidence trailers (50)" in p for p in v2.get("problems", []))
+print(f"stop40x4000={dt:.3f}s decision={v.get('decision')} stop40x50trailers={dt2:.3f}s decision2={v2.get('decision')} cap={cap}")
+PY2
+)"
+if printf '%s' "$o92" | grep -qE 'stop40x4000=0\.[0-9]+s decision=block' && printf '%s' "$o92" | grep -qE 'stop40x50trailers=0\.[0-4][0-9]*s decision2=block cap=True'; then ok "T92 stop_check with 40 long rows / 50 trailers is under 0.5 s, caps at 20 and still blocks: $o92"; else bad "T92: $o92"; fi
+
+# (93) review #8 F-4: a symlink loop makes Path.resolve() raise RuntimeError (Python <= 3.12); it must not crash the control
+#      into UNVERIFIED — the write is credited by its literal path and the stale check still fires
+D93="$SB/loop93"; mkdir -p "$D93"; ln -s l1 "$D93/l1" 2>/dev/null
+printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg93\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"}}" | bash "$HOOK" >/dev/null
+printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg93\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pytest -q\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"3 passed\"}}" | bash "$HOOK" >/dev/null
+printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg93\",\"cwd\":\"$D93\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo x > l1/a.py\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"\"}}" | bash "$HOOK" >/dev/null
+o93="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg93","last_assistant_message":"verified.\nEvidence: pytest -q | 3 passed | 10:00"}' | bash "$HOOK")"
+# ruling: a Readback whose path is a symlink loop is a block-side "unresolvable" problem too
+o93b="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg93\",\"last_assistant_message\":\"保存しました。\\nReadback: $D93/l1/a.py sha256=0000000000000000000000000000000000000000000000000000000000000000\"}" | bash "$HOOK")"
+# Python >= 3.13 resolves a symlink loop without raising, so the readback is then a plain mismatch: either way it is a block, never UNVERIFIED (Codex a8a4f04 P2)
+if printf '%s' "$o93" | grep -q '"decision": "block"' && ! printf '%s' "$o93" | grep -q 'UNVERIFIED' && printf '%s' "$o93b" | grep -q '"decision": "block"' && printf '%s' "$o93b" | grep -qE 'unresolvable|readback mismatch' && ! printf '%s' "$o93b" | grep -q 'UNVERIFIED'; then ok "T93 a symlink-loop path never crashes the control: the old run is stale and the readback is blocked (unresolvable or mismatch)"; else bad "T93: [$o93] [$o93b]"; fi
 
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

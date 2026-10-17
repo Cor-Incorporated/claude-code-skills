@@ -28,6 +28,7 @@ done
 
 input="$(cat 2>/dev/null || true)"
 [ "${AIDD_CC_DISABLE:-0}" = "1" ] && exit 0
+exec 3>&1  # the harness's stdout, reachable from inside a $(…) capture (run_cc's own note, review #6 P1-S)
 
 ledger_error() {
   local ledger="${AIDD_LEDGER_PATH:-$HOME/.claude/hooks/ledger/guard-ledger.jsonl}"
@@ -61,8 +62,12 @@ except Exception: print("")' 2>/dev/null)"
 run_cc() {
   local out rc
   out="$(printf '%s' "$input" | AIDD_CC_AGENT="$AGENT" python3 -I "$CC_PY" "$@" --agent "$AGENT" 2>/dev/null)"; rc=$?
-  # An import-time crash exits non-zero before _main_guarded can record it: record here.
-  [ "$rc" -ne 0 ] && [ -z "$out" ] && ledger_error "python-exit-$rc:$1"
+  # An import-time crash exits non-zero before _main_guarded can record it: record here and announce it
+  # (review #6 P1-S: a ledger row alone was a silent pass at the harness).  No decision is attached.
+  if [ "$rc" -ne 0 ] && [ -z "$out" ]; then
+    ledger_error "python-exit-$rc:$1"
+    note "control error (python exit $rc) on $1 — nothing was evaluated on this event; this report passed UNVERIFIED" >&3
+  fi
   printf '%s' "$out"
 }
 

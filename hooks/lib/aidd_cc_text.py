@@ -11,6 +11,7 @@ can disable exactly one control and prove the oracle goes red (片側変異).
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 from typing import Iterable
@@ -44,15 +45,66 @@ TEST_RESULT_CLAIM = (
     r"i have (?:executed|completed|finished|implemented|performed) (?:all |the |every )?(?:requested |necessary |required )?"
     r"(?:commands?|tasks?|steps?|work|changes?|implementation)\b"
 )
-COMPLETION_CLAIM_RE = re.compile(
+# Independent review 2026-10-16 P1-a (aidd-governance PR #195): the vocabulary above was closed, so "The task is complete." /
+# 「修正しました。テストも通っています。」 passed the deployed entry with no tool run.  Owner (a): a claim word's provenance is a
+# real run OR a recorded independent-review probe (fixture lane indrev-p1a; every word has a synthetic negative).  Surface form
+# only (C15): fixed / implemented need an object or copula; "tests pass" needs no number in front; `N passed in 0.12s` is
+# pytest's all-green line (a failure count always precedes "passed").
+PAST_TENSE_CLAIM = (
+    r"修正しました|対応しました|実装しました|(?<!見)直しました|通りました|通っています|修正済み|パスしました|パスした|"  # 見直しました is a review, not a fix
+    r"動作確認しました|動作確認済み|動作しました|everything works\b|it works\b|"  # PR #418 review #2 P3
+    r"(?:^|(?<=[.!?。\n] )|(?<=[.!?。\n]))(?:fixed|implemented)[.!]|tests (?:are|is) (?:now )?passing\b|"  # "Fixed." / "Tests are passing." (PR #418 review P2)
+    r"(?:i |we |i've |we've |i have |we have )?(?:fixed|implemented|finished)(?: (?:the|a|an|this|that|it|all|my|our|your|every|both|what|everything|two|\d+(?= ))\b| (?=`))|"
+    r"(?:bugs?|issues?|errors?) (?:are |were |have been |has been )?fixed\b|"
+    r"(?:is|are|was|were|has been|have been|got) (?:now |all )?(?:fixed|implemented|finished|complete|done)\b|"
+    r"successfully (?:implemented|fixed|completed|finished|applied|migrated|added)\b|"
+    r"(?:works|is working|are working) now\b|everything (?:is )?(?:now )?working\b|"
+    r"changes are (?:now )?in place\b|"
+    r"(?<!no )(?<![\d/] )(?<![\d/])(?:the |both |my |our )?tests (?:now |all )?pass(?:ed)?\b|"
+    r"(?<!failed, )(?<![\d.,])[1-9]\d{0,3} passed in [\d.]+\s*s\b"  # `2 failed, 12 passed in`: no restart inside `12`
+)
+_CLOSED_CLAIM = (
     r"(?<![A-Za-z])(verified|完了|根因確定|検証済み|実装済み|解決済み|対応済み|"
     r"done|"
     + TEST_RESULT_CLAIM
     + r"|全件\s*PASS|merged|マージ済み|マージした|pushed|push済み|published|"
     + PERSIST_WORDS
-    + r")(?![A-Za-z])",
-    re.IGNORECASE,
+    + r")(?![A-Za-z])"
 )
+COMPLETION_CLAIM_RE = re.compile(_CLOSED_CLAIM, re.IGNORECASE)
+PAST_TENSE_CLAIM_RE = re.compile(r"(?<![A-Za-z])(" + PAST_TENSE_CLAIM + r")(?![A-Za-z])", re.IGNORECASE)
+# ADR-008 (aidd-governance#196, owner 2026-10-16; revised 2026-10-17): claim detection ERRS ON THE BLOCK SIDE.  The past-tense
+# verbs are judged per sentence; the only exemptions are (a) an explicit negation adjacent to the claim word
+# (NEGATED_COMPLETION_RE) and (b) a quoted clause + retraction verb (RETRACTION_OBJECT).  No question, conditional, window,
+# next-sentence or 未達 / 未完了 predicate exemption (the predicate form (c) was withdrawn on 2026-10-17 after PR #418 reviews
+# #5-#8 found its plumbing to be a bypass source) — a partial report carries Evidence on the claim or avoids the claim words
+# (rules/quality.md).  UNMET_RE below serves only the deadline unmet-report check (has_unmet_report, DOT-INC-004/045).
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[。．！？\n])\s*|(?<=[.!?])\s+")
+_QUOTE_MASK = {"。": "\ue000", "．": "\ue001", "！": "\ue002", "？": "\ue003", ".": "\ue004", "!": "\ue005", "?": "\ue006"}
+_QUOTE_UNMASK = {v: k for k, v in _QUOTE_MASK.items()}
+
+
+def _sentences(text: str) -> list[str]:
+    out, depth, masked = [], 0, []
+    for ch in text:
+        if ch in "「『":
+            depth += 1
+        elif ch in "」』" and depth:
+            depth -= 1
+        masked.append(_QUOTE_MASK.get(ch, ch) if depth and ch in _QUOTE_MASK else ch)
+    for sent in SENTENCE_SPLIT_RE.split("".join(masked)):
+        out.append("".join(_QUOTE_UNMASK.get(c, c) for c in sent))
+    return out
+
+
+def _past_tense_claim(text: str) -> bool:
+    for raw in _sentences(text):
+        # (a)/(b) are removed within the sentence only (review #4 P0-3: a span must not cross a sentence end)
+        if PAST_TENSE_CLAIM_RE.search(NEGATED_COMPLETION_RE.sub(" ", raw)):
+            return True
+    return False
+
+
 PERSIST_CLAIM_RE = re.compile(r"(" + PERSIST_WORDS + r")", re.IGNORECASE)
 PUSH_CLAIM_RE = re.compile(
     r"(pushed|push済み|push した|merged|マージ済み|マージした)", re.IGNORECASE
@@ -93,26 +145,42 @@ DELETE_KIND_RE = re.compile(
 # is removed: 「取り消しは完了です」 keeps its claim (a retraction and a claim in one sentence stay on the claim side).
 # Only an AFFIRMATIVE retraction verb counts (independent review 2026-10-16 P1): 「取り消します / 取り消しました /
 # 撤回します / 取り下げます / 成立しません」.  「取り消しません」「撤回の必要はありません」 keep the quoted claim.
-RETRACTION_WORDS = r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ます|ました|た)(?![かが])|成立し(?:ません|ない|ていません))"
+RETRACTION_WORDS = (
+    r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ます|ました|た)(?![かが])|成立し(?:ません|ない|ていません)|"
+    r"(?:(?:誤り|間違い)(?:でした|です)|事実では(?:ありません|ない)|正しくありません)(?![らとかが]))"  # ADR-008 §2(b) list; 誤りですらありません / 誤りですとは言っていません / 正しくありませんか？ are not retractions (Codex 50f31e5, 4d4561b)
+)
+# PR #418 reviews P1-2 / P2(a): form A 「…」と書きましたが、撤回します / 「…」と書いたのは誤りでした。撤回します — the verb
+# follows directly (「…」と報告しました、古い予約は取り消しました retracts a reservation and keeps its claim);
+RETRACTION_OBJECT = (
+    r"(?:\s*(?:先ほど|さっき|前に)?と(?:書き|言い|述べ|報告し|記し|記載し)ました(?:が|ので|けど|けれど)?[、,]?\s*(?:(?:誤り|間違い)(?:でした|です)[。．、,]?\s*)?|"
+    r"\s*と(?:書い|言っ|述べ|報告し|記し|記載し)たのは|"  # … + 誤りでした / 取り消します (RETRACTION_WORDS)
+    r"\s*(?:という|との|の)?(?:先の|前の|上の|この|その)?(?:記述|記載|表現|報告|宣言|主張|発言|完了報告|完了宣言|部分|文)?(?:は|を|も)\s*"
+    r"(?:(?:誤り|間違い|事実ではありません|事実ではない|正しくありません|不正確)(?:でした|です)?[。．、,]?\s*|(?:[^\n、。はがも]{0,8}[、,])?[^\n。．はがも]{0,6}))"  # no new subject before the verb (Codex e00d1df P2)
+)
 NEGATED_COMPLETION_RE = re.compile(
-    r"([「『][^「」『』\n]{0,80}[」』](?=[^\n]{0,12}" + RETRACTION_WORDS + r")|"
+    r"([「『][^「」『』\n]{0,80}[」』](?="
+    + RETRACTION_OBJECT
+    + RETRACTION_WORDS
+    + r")|"
     r"完了したものは(?:何も|なにも|一つも|ひとつも)?(?:ありません|ない|無い|存在しません)|"
     r"(?:先の|前の|上の|この|その|以前の)?(?:報告|宣言|主張|完了報告|完了宣言)は成立し(?:ません|ない|ていません)|"
     # the English form removes only its own clause: "I retract my earlier claim that the tests were flaky; all tests
     # are green and verified" keeps "verified" (review P1: the old `[^\n.]{0,100}` tail swallowed the next clause)
-    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that [^\n.;,]{0,60})?|"
+    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that (?![^\n.;,:()—–]*\b(?:(?:is|are|was|were|has been|have been|got)\s+(?:now\s+|all\s+)?)?(?:fixed|implemented|finished|complete[d]?|done|pass(?:es|ed|ing)?|work(?:s|ing)?|verified|merged|pushed|published|deployed|saved|persisted|applied|installed|written|green)\b)[^\n.;,:()—–]{0,120})?|"  # the lookahead covers the persist words too (Codex 7f8c762 P2)
     r"未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
-    r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は.{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
-    r"has not been (?:verified|merged|pushed|saved|deployed)|not everything is done|none of it is verified|hasn't been pushed|"
-    r"no (?:files?|changes?|data)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified)|haven't (?:verified|saved|pushed|merged)|"
+    r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は[^。．.!?！？\n]{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
+    r"has not been (?:verified|merged|pushed|saved|deployed|fixed|implemented|finished)|not everything is done|none of it is verified|hasn't been (?:pushed|fixed|implemented|finished)|"
+    r"\bno (?:files?|changes?|data|bugs?|issues?|errors?|tests?)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified|fixed|implemented)|haven't (?:verified|saved|pushed|merged|fixed|implemented|finished)|"
     r"(?:保存|完了|配備|反映|マージ|push)(?:した|された|済み)?わけでは(?:ない|ありません)|"
-    r"(?:完了|検証|push|マージ|配備)(?:には|は|に)?(?:至って|達して|届いて)(?:いない|いません|おらず)|nothing (?:is|has been|was) (?:done|verified|pushed|merged|deployed|saved)|"
+    r"(?:完了|検証|push|マージ|配備)(?:には|は|に)?(?:至って|達して|届いて)(?:いない|いません|おらず)|nothing (?:is|has been|was) (?:done|verified|pushed|merged|deployed|saved|fixed|implemented|finished|working)|"
     r"(?:完了|マージ|配備|保存|反映|push|deploy)(?:は|を)?(?:まだ)?(?:してい(?:ない|ません)|していない|できていない|ではない|していません)|"
-    r"not (?:yet )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed)|"
+    r"not (?:yet |still )?(?:done|verified|fixed|complete[d]?|merged|deployed|saved|pushed|applied|installed|implemented|finished|working|in place)|"
     # PR #414 residual: "Not all tests pass" / "not all 12 tests passed yet" is an honest partial report; without this line the
     # `all … pass(ed)` inside it was read as a claim (over-match).
-    r"not all (?:\d+ )?(?:(?:the )?tests? )?pass(?:ed|ing)?(?: yet)?|"
-    r"isn'?t (?:done|verified|merged|deployed|saved)|incomplete|un(?:merged|deployed|saved|pushed))",
+    r"not all (?:\d+ )?(?:of )?(?:(?:the )?tests? )?(?:(?:are|is) )?pass(?:ed|ing)?(?: yet)?|\bno tests? (?:are|is) (?:now |all |still )?(?:passing|green)|"  # progressive forms too (Codex 50f31e5 P2)
+    # Codex review 2026-10-16 P2: a partial quantifier is a progress report, not the new `tests pass` claim
+    r"\b(?:none|some|most|many|few|a few|half|several|only some|only a few) (?:of )?(?:the |these |those )?tests (?:still )?pass(?:ed)?|"  # \b: "troublesome tests pass" (review #6 P0-N)
+    r"isn'?t (?:done|verified|merged|deployed|saved|fixed|implemented|finished|complete|working)|incomplete|un(?:merged|deployed|saved|pushed|fixed|finished))",
     re.IGNORECASE,
 )
 APPROVAL_RE = re.compile(
@@ -144,37 +212,9 @@ DEADLINE_RE = re.compile(
     r"(\d{1,3})\s*(?:分|min(?:utes?)?)\s*以内)",
     re.IGNORECASE,
 )
-STOPWORDS = {
-    "the",
-    "and",
-    "for",
-    "with",
-    "this",
-    "that",
-    "する",
-    "ます",
-    "です",
-    "して",
-    "ください",
-    "please",
-    "you",
-    "can",
-    "should",
-    "will",
-    "want",
-    "need",
-    "どう",
-    "ですか",
-    "しますか",
-    "か",
-    "を",
-    "に",
-    "は",
-    "が",
-    "の",
-    "で",
-    "も",
-}
+STOPWORDS = frozenset(
+    "the and for with this that する ます です して ください please you can should will want need どう ですか しますか か を に は が の で も".split()
+)
 
 
 # aidd-governance#186 P1-3: the repair-family breaker reads the COMMIT SUBJECT of a real
@@ -326,7 +366,9 @@ def has_completion_claim(text: str) -> bool:
     honest unmet report is never treated as a claim (Codex review P2-7).
     """
     cleaned = NEGATED_COMPLETION_RE.sub(" ", text or "")
-    return bool(COMPLETION_CLAIM_RE.search(cleaned))
+    if COMPLETION_CLAIM_RE.search(cleaned):
+        return True
+    return _past_tense_claim(text or "")
 
 
 def has_persist_claim(text: str) -> bool:
@@ -402,6 +444,8 @@ def output_field_matches(claimed: str, recorded: str) -> bool | None:
 OUT_NUMBER_RE = re.compile(
     r"(?<![A-Za-z0-9.,])(?P<num>\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?P<pct>\s*%)?(?:\s+(?P<word>[A-Za-z]{2,}))?"
 )
+# Independent review 2026-10-16 P2-a: `47 tests passed` over a recorded "3 passed" was allowed because "tests" never appears
+# in the output and every such number was skipped.  Only a `0` may be skipped (`2 skipped` never printed is made up too).
 STATUS_NUMBER_RE = re.compile(
     r"\b(?:rc|exit(?: code| status)?|status|returned)\s*[:=]?\s*\d+\b", re.IGNORECASE
 )
@@ -424,8 +468,9 @@ def output_numbers_missing(claimed: str, recorded: str) -> list[str]:
     "47 passed" shares the word but not the number — that is the fabrication the token overlap
     (output_field_matches) let through.  Surface form only (C15), judged per number:
       * `N word` (e.g. `0 failed`): if the recorded output uses that word, it must say `N word` too;
-        if the word never appears there (pytest printed only "3 passed"), `0 failed` is an honest
-        summary of its absence and is not judged
+        if the word never appears there, `N` is judged as a bare number — except `0` (`0 failed` over an
+        output that never says "failed" summarises an absence); `47 tests passed` and `2 skipped` over
+        "3 passed" are therefore missing (independent review 2026-10-16 P2-a, PR #418 review P2)
       * a bare number / ratio (`47/47`): must appear in the recorded output; `0` alone is never judged
       * status markers (`rc=0`, `exit=0`), `%` values and thousands separators never count as missing
     A field without numbers is not judged here."""
@@ -437,9 +482,7 @@ def output_numbers_missing(claimed: str, recorded: str) -> list[str]:
         n, word = _normalize_number(m.group("num")), (m.group("word") or "").lower()
         if m.group("pct") or n in seen:
             continue
-        if word:
-            if not re.search(r"\b" + re.escape(word) + r"\b", rec_lower):
-                continue  # the recorded output never speaks of `word`: `0 failed` summarises an absence
+        if word and re.search(r"\b" + re.escape(word) + r"\b", rec_lower):
             if re.search(
                 r"(?<![A-Za-z0-9.,])" + re.escape(n) + r"\s*" + re.escape(word) + r"\b",
                 rec_lower.replace(",", ""),
@@ -449,7 +492,9 @@ def output_numbers_missing(claimed: str, recorded: str) -> list[str]:
             continue
         if n == "0" or n in recorded_numbers:
             continue
-        seen.append(n)
+        seen.append(
+            n
+        )  # `47 tests passed` vs `3 passed in 0.12s`: a word the output never used is no excuse (P2-a)
     return seen
 
 
@@ -478,14 +523,23 @@ def normalize_cmd(cmd: str) -> str:
 def shell_segments(cmd: str) -> list[str]:
     """Split a shell line into command segments on ; | & and newlines, ignoring
     separators inside single/double quotes (`printf '%s' 'a;pytest'` is one
-    segment)."""
-    return [seg for seg, _sep in shell_segments_with_separators(cmd)]
+    segment).  Cached: a Stop re-reads the same rows once per trailer (review #8 F-2)."""
+    return list(_shell_segments_cached(cmd))
+
+
+@functools.lru_cache(maxsize=512)
+def _shell_segments_cached(cmd: str) -> tuple[str, ...]:
+    return tuple(seg for seg, _sep in shell_segments_with_separators(cmd))
 
 
 def shell_segments_with_separators(cmd: str) -> list[tuple[str, str]]:
     """Like shell_segments but returns (segment, separator_before_it); the
     separator is "" for the first segment, else one of && || ; | & \n.
     `2>&1`, `&>` and `>&` are redirections, not separators (Codex r4 P2-i)."""
+    return [(re.sub(r"\s+", " ", seg.strip()), s) for seg, s in _split_segments(cmd) if seg.strip()]
+
+
+def _split_segments(cmd: str) -> list[tuple[str, str]]:
     out, cur, quote, i, sep = [], [], None, 0, ""
     text = cmd or ""
     while i < len(text):
@@ -515,7 +569,12 @@ def shell_segments_with_separators(cmd: str) -> list[tuple[str, str]]:
             cur.append(ch)
             i += 1
     out.append(("".join(cur), sep))
-    return [(re.sub(r"\s+", " ", seg.strip()), s) for seg, s in out if seg.strip()]
+    return out
+
+
+def shell_segments_raw(cmd: str) -> list[str]:
+    """shell_segments without the whitespace normalisation: a newline inside `python -c '…'` is code (review #5 P2)."""
+    return [seg.strip() for seg, _s in _split_segments(cmd) if seg.strip()]
 
 
 REDIRECT_RE = re.compile(r"(\d?>>?\s*\S+|<\s*\S+|\d?>&\d|&>\s*\S+)")
