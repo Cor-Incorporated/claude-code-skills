@@ -758,7 +758,10 @@ for t in "I fixed the pagination bug and the tests pass." "修正しました。
   o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg95\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
   printf '%s' "$o" | grep -q 'Status: complete | partial | unverified' || fail95="$fail95 [allowed: $t]"
 done
-if [ -z "$fail95" ]; then ok "T95 tool rows + no Status line -> block, whatever the prose says (#418 P1-a inputs and the honest ones alike)"; else bad "T95:$fail95"; fi
+# Codex r2 P1: Cursor fires `stop` with an EMPTY text before afterAgentResponse delivers the answer — an empty text
+# is not an undeclared answer (the real text is judged by record-assistant and parked as pending_block_reason)
+o95e="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg95","last_assistant_message":""}' | bash "$HOOK")"
+if [ -z "$fail95" ] && ! printf '%s' "$o95e" | grep -q 'no status declared'; then ok "T95 tool rows + no Status line -> block, whatever the prose says (#418 P1-a inputs and the honest ones alike); an empty text (Cursor pre-text stop) is not judged"; else bad "T95:$fail95"; fi
 
 # (96) Status: complete is bound to evidence exactly like a claim; a full Evidence trailer implies complete (T1-T79 compat)
 tool95 neg96
@@ -776,14 +779,15 @@ o97j="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assist
 # or far above the tail is not the answer's declaration
 o97k="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assistant_message":"All done, pushed to main.\nStatus: unverified"}' | bash "$HOOK")"
 o97l="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assistant_message":"All done.\n```\nStatus: partial\n```"}' | bash "$HOOK")"
+o97t="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","last_assistant_message":"All tests pass.\n~~~text\nStatus: partial\n~~~"}' | bash "$HOOK")"
 # Codex review 2026-10-17 P2: the corrected partial answer after a block re-enters through stop_hook_active (and the
 # max-blocks release) — the note and the status-partial row must survive the release path
 c97="$(grep -c '"rule": "evidence.status-partial"' "$AIDD_LEDGER_PATH")"
 o97r="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg97","stop_hook_active":true,"last_assistant_message":"途中経過です。テストはまだ走らせていません。\nStatus: partial"}' | bash "$HOOK")"
 c97b="$(grep -c '"rule": "evidence.status-partial"' "$AIDD_LEDGER_PATH")"
 if printf '%s' "$o97" | grep -q '"systemMessage": *"\[H17\] Status: partial' && ! printf '%s' "$o97" | grep -q '"decision"' && printf '%s' "$o97j" | grep -q '"decision": "allow"' && printf '%s' "$o97j" | grep -q '"note"' && grep -q '"rule": "evidence.status-partial"' "$AIDD_LEDGER_PATH" \
-   && printf '%s' "$o97k" | grep -q 'push/merge claimed' && printf '%s' "$o97l" | grep -q 'Status: complete | partial | unverified' \
-   && printf '%s' "$o97r" | grep -q '"systemMessage": *"\[H17\] Status: partial' && [ "$c97b" -gt "$c97" ]; then ok "T97 Status: partial/unverified allowed with a visible note and an H6 row (also on the stop_hook_active release path); a false push claim still blocks; a fenced Status line is not a declaration"; else bad "T97: [$o97] [$o97j] [$o97k] [$o97l] [$o97r] rows $c97->$c97b"; fi
+   && printf '%s' "$o97k" | grep -q 'push/merge claimed' && printf '%s' "$o97l" | grep -q 'Status: complete | partial | unverified' && printf '%s' "$o97t" | grep -q 'Status: complete | partial | unverified' \
+   && printf '%s' "$o97r" | grep -q '"systemMessage": *"\[H17\] Status: partial' && [ "$c97b" -gt "$c97" ]; then ok "T97 Status: partial/unverified allowed with a visible note and an H6 row (also on the stop_hook_active release path); a false push claim still blocks; a fenced (backtick or tilde) Status line is not a declaration"; else bad "T97: [$o97] [$o97j] [$o97k] [$o97l] [$o97t] [$o97r] rows $c97->$c97b"; fi
 
 # (98) no tool rows: the closed vocabulary stays as the backstop (live lane prompt), plain Q&A is untouched
 o98="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg98","last_assistant_message":"実装完了しました。"}' | bash "$HOOK")"

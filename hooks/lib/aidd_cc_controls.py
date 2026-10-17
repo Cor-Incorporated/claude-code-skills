@@ -542,6 +542,7 @@ def stop_check(
         status is None
         and used_tools
         and require_status
+        and text.strip()  # Cursor fires `stop` with an empty text before afterAgentResponse (Codex r2 P1)
         and not mutated("evidence.trailer")
     ):
         undeclared = True

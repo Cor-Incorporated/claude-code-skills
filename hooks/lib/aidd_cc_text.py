@@ -77,7 +77,9 @@ def declared_status(text: str) -> str | None:
     `Status:` far above the answer is not the answer's declaration; review 2026-10-17 P2)."""
     lines, fenced, tail = [], False, []
     for line in (text or "").splitlines():
-        if line.strip().startswith("```"):
+        if line.strip().startswith(
+            ("```", "~~~")
+        ):  # Markdown fences, backtick or tilde (Codex r2 P2)
             fenced = not fenced
             continue
         if line.strip() and not fenced:

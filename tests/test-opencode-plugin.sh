@@ -35,10 +35,19 @@ await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "
 out.gate_appended = o1.text.includes("[H17 evidence gate]");
 const o2 = { text: "途中経過です。次に tests を走らせます。\nStatus: partial" };
 await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "m2", partID: "p2" }, o2);
-out.benign_untouched = o2.text === "途中経過です。次に tests を走らせます。\nStatus: partial";
+// ADR-009 (Codex r2 P2): a declared partial answer is not blocked, but its "not verified" note is appended visibly
+out.benign_untouched = o2.text.startsWith("途中経過です。次に tests を走らせます。\nStatus: partial") && !o2.text.includes("[H17 evidence gate]") && o2.text.includes("[H17] Status: partial");
 const o3 = { text: "I'll run the tests now." };   // ADR-009: an intermediate text part has no Status yet and must not be annotated
 await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "m3", partID: "p3" }, o3);
 out.intermediate_untouched = o3.text === "I'll run the tests now.";
+// ADR-009 review r2: session 2 uses a tool, then declares Status: partial -> the note is appended at text.complete and
+// the exit handler (headless final answer) only notes; session 1's last part (o3, no Status, no tool after it) is
+// blocked at process exit: stderr line + H6 block row.  Asserted by the shell after bun exits.
+await hooks["tool.execute.before"]({ tool: "bash", sessionID: "oc-test-2" }, { args: { command: "echo ok" } });
+await hooks["tool.execute.after"]({ tool: "bash", sessionID: "oc-test-2", args: { command: "echo ok" } }, { title: "", output: "ok", metadata: { exit: 0 } });
+const o4 = { text: "Ran echo; nothing else verified.\nStatus: partial" };
+await hooks["experimental.text.complete"]({ sessionID: "oc-test-2", messageID: "m4", partID: "p4" }, o4);
+out.partial_note_appended = o4.text.includes("[H17] Status: partial");
 console.log(JSON.stringify(out));
 JS
 res="$(cd "$SB" && bun run drive.ts 2>"$SB/err.log")" || { echo "FAIL: bun run"; cat "$SB/err.log"; exit 1; }
@@ -52,8 +61,11 @@ assert r["iter_throw_at"] == 4, r
 assert r["gate_appended"] is True, r
 assert r["benign_untouched"] is True, r
 assert r["intermediate_untouched"] is True, r   # ADR-009 review P1: text parts are not the final answer
-print("PASS: text.complete gate present / no permission.ask / 4th identical call throws / benign untouched")
+assert r["partial_note_appended"] is True, r    # Codex r2 P2: Status: partial is visible on the OpenCode entry
+print("PASS: text.complete gate present / no permission.ask / 4th identical call throws / benign untouched / partial note")
 PY
+# ADR-009 review r2 P1 (headless final answer): the last text part of oc-test-1 had no Status and no tool call after it
+if grep -q 'H17 evidence gate.*no status declared' "$SB/err.log" && grep -q '"rule": "evidence"' "$AIDD_LEDGER_PATH" && grep -q 'no status declared' "$AIDD_LEDGER_PATH" && grep -q 'Status: partial' "$SB/err.log"; then echo "PASS: T99-oc headless final part without Status is blocked at process exit (stderr + H6 row); the partial one is noted"; else echo "FAIL: T99-oc exit path"; cat "$SB/err.log"; exit 1; fi
 grep -q '"component": "H17"' "$AIDD_LEDGER_PATH" && echo "PASS: H6 ledger rows written by the opencode entry" || { echo "FAIL: no ledger rows"; exit 1; }
 # aidd-governance#186 P2-2: an oracle that cannot be spawned leaves an H6 error row (decision unavailable), never a silent allow
 : >"$SB/err-ledger.jsonl"

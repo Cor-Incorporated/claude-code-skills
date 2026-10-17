@@ -77,7 +77,11 @@ def inherited_decisions() -> list[dict]:
         sessions = (state_dir() / "sessions").resolve()
     except OSError:
         return []
-    if resolved.parent != sessions or resolved.suffix != ".json" or "__" not in resolved.stem:
+    if (
+        resolved.parent != sessions
+        or resolved.suffix != ".json"
+        or "__" not in resolved.stem
+    ):
         return []
     try:
         parent = json.loads(resolved.read_text(encoding="utf-8"))

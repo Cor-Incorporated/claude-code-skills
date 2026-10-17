@@ -634,6 +634,17 @@ def cmd_record_assistant(args, payload):
         agent,
         session,
     )
+    if verdict.get("status") in ("partial", "unverified"):
+        # ADR-009 visibility on the Cursor path: the ledger row (Cursor's stop output has no message-only form)
+        guard_ledger(
+            COMPONENT,
+            "measure",
+            "allow",
+            "evidence.status-partial",
+            verdict["status"],
+            agent,
+            session,
+        )
     if verdict["decision"] == "block":
         meta["pending_block_reason"] = verdict["reason"]
         guard_ledger(

@@ -27,6 +27,8 @@ cat >"$SB/patch.yml" <<YML
   disabled: true
 YML
 # shellcheck disable=SC2086  # $TMO is intentionally word-split ("timeout 120" or empty)
-out="$(cd "$PKG" && PATH="$NODE24:$PATH" DSH_HOME="$SB/home" AIDD_LEDGER_PATH="$SB/l.jsonl" AIDD_LEDGER_SOURCE=test $TMO "$DSH" --profile headless --patch "$SB/patch.yml" "probe" 2>&1)"
+# Codex r2 P2: an inherited provider key would turn this boot check into a real (billed) LLM call — strip it; the
+# copied profile must be credential-free too (a configured profile makes this test FAIL on purpose, not SKIP)
+out="$(cd "$PKG" && env -u DEEPSEEK_API_KEY -u DEEPSEEK_API_BASE -u OPENAI_API_KEY -u ANTHROPIC_API_KEY PATH="$NODE24:$PATH" DSH_HOME="$SB/home" AIDD_LEDGER_PATH="$SB/l.jsonl" AIDD_LEDGER_SOURCE=test $TMO "$DSH" --profile headless --patch "$SB/patch.yml" "probe" 2>&1)"
 if printf '%s' "$out" | grep -q 'did not activate\|failed to import'; then echo "FAIL: native plugin did not activate"; printf '%s\n' "$out" | tail -5; exit 1; fi
 if printf '%s' "$out" | grep -q 'MISSING_CREDENTIAL'; then echo "PASS: dsh native plugin activates on the headless profile (boot reached the LLM credential check)"; else echo "FAIL: unexpected boot output"; printf '%s\n' "$out" | tail -5; exit 1; fi
