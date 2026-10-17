@@ -18,13 +18,15 @@ from pathlib import Path
 
 from aidd_cc_eval import deadline_status, file_sha
 from aidd_cc_text import (
-    STRATEGY_NOTE_RE,
+    ADJUDICATION_RE,
+    FIX_SUBJECT_RE,
     cmd_in_ledger,
     commit_subject,
     declared_status,
     fix_scope,
     fix_scope_from_output,
     has_commit_segment,
+    strategy_kind,
     segment_runs,
     shell_segments_with_separators,
     is_confirmation_question,
@@ -42,6 +44,10 @@ from aidd_cc_text import (
     mutated,
     normalize_cmd,
     readback_claims,
+    GIT_COMMIT_SEG_RE,
+    shell_segments,
+    commit_messages,
+    WRAPPER_SEG_RE,
 )
 
 ITER_THRESHOLD = 4  # the 4th occurrence with no progress is blocked
@@ -95,7 +101,51 @@ def _norm_key(tool: str, tool_input: dict) -> str:
     )
 
 
-def repair_family_check(rows: list[dict], meta: dict, cmd: str) -> dict | None:
+def _message_scope(msg: str) -> str | None:
+    fm = FIX_SUBJECT_RE.match(msg.split("\n", 1)[0])
+    return fm.group(2).strip().lower() if fm else None
+
+
+def _scope_fix_times(rows: list[dict], scope: str) -> list[float]:
+    """ts of this session's successful fix(<scope>) commits (post rows; #186 R4: a log read is not a commit)."""
+    return sorted(
+        float(r.get("ts", 0))
+        for r in rows
+        if r.get("event") == "post"
+        and r.get("rc") == 0
+        and (
+            fix_scope(str(r.get("cmd", "")))
+            or (
+                has_commit_segment(str(r.get("cmd", "")))
+                and fix_scope_from_output(str(r.get("out_sample", "")))
+            )
+        )
+        == scope
+    )
+
+
+def _strategy_cut(meta: dict, fix_times: list[float]) -> tuple[float, bool]:
+    """(ts of the last re-adjudication that applies to this scope, HOLD already consumed for it).
+    PIVOT / RETIRE always re-arm.  HOLD re-arms ONE time per cycle, and only a HOLD written while this scope had
+    a running streak (a fix(<scope>) since the previous cut) counts for this scope — a HOLD recorded for another
+    scope's streak is neither consumed nor a cut here (Codex review 2026-10-17 P2: HOLD state per scope)."""
+    strat_ts, hold_used = 0.0, False
+    for n in sorted(meta.get("notes", []), key=lambda n: n.get("ts", 0)):
+        kind, ts = strategy_kind(n.get("hypothesis", "")), float(n.get("ts", 0))
+        if kind in ("PIVOT", "RETIRE"):
+            strat_ts, hold_used = ts, False
+        elif (
+            kind == "HOLD"
+            and not hold_used
+            and any(strat_ts < t <= ts for t in fix_times)
+        ):
+            strat_ts, hold_used = ts, True
+    return strat_ts, hold_used
+
+
+def repair_family_check(
+    rows: list[dict], meta: dict, cmd: str, cwd: str = ""
+) -> dict | None:
     """C-ITER-FAMILY (aidd-governance#88 at the session entry, found on
     2026-10-14 when this harness's own author ran 8 review→fix rounds on one
     feature): the 4th `fix(<scope>)` commit of the same scope, with no
@@ -106,34 +156,51 @@ def repair_family_check(rows: list[dict], meta: dict, cmd: str) -> dict | None:
     scope = fix_scope(cmd)
     if not scope or mutated("iter.repair-family"):
         return None
-    strat_ts = max(
-        [
-            n["ts"]
-            for n in meta.get("notes", [])
-            if STRATEGY_NOTE_RE.search(n.get("hypothesis", ""))
-        ]
-        or [0]
+    # 2026-10-17 (this harness's own loop on claude-code-skills#418: 12 fix(h17) commits, 6 STRATEGY notes of
+    # which 4 were HOLD, 8 review rounds): a note is a re-adjudication only once.  HOLD re-arms the counter ONE
+    # time per PIVOT/RETIRE cycle; a second HOLD is ignored, so the next trip needs PIVOT / RETIRE or the
+    # owner's decision (ADJUDICATION: <url> in a commit body, see branch_fix_streak).
+    same_scope = [m for m in commit_messages(cmd or "") if _message_scope(m) == scope]
+    if same_scope and ADJUDICATION_RE.search(same_scope[0]):
+        # the FIRST fix(<scope>) commit of the line is the one judged (fix_scope reads it); a ruling on a later
+        # commit of the same line is not on this commit (Codex r4 P2: `… && false && git commit -m 'fix(x): b' -m
+        # 'ADJUDICATION: …'`)
+        # the fix commit being made records the owner's decision in ITS OWN message (`-m 'fix(x): …' -m
+        # 'ADJUDICATION: <url>'`, review 2026-10-17 P1): the remedy both breakers ask for.  A ruling in another
+        # commit of the same line (`… && git commit -m docs -m 'ADJUDICATION: …'`), a shell comment or another
+        # argument never lands on this commit (Codex r2/r3 P2).  Surface form by design — the url is auditable.
+        return None
+    fix_times = _scope_fix_times(rows, scope)
+    strat_ts, hold_used = _strategy_cut(meta, fix_times)
+    branch = branch_fix_streak(
+        cwd, cmd, scope, meta.get("agent", "claude-code"), meta.get("session", "unset")
     )
-    prior = [
-        r
-        for r in rows
-        if r.get("event") == "post"
-        and r.get("rc") == 0
-        and (
-            fix_scope(str(r.get("cmd", "")))
-            or (
-                has_commit_segment(
-                    str(r.get("cmd", ""))
-                )  # #186 R4: a read of a log is not a commit
-                and fix_scope_from_output(str(r.get("out_sample", "")))
-            )
-        )
-        == scope
-        and r.get("ts", 0) > strat_ts
-    ]
+    strat_ts = max(
+        strat_ts, branch["adjudicated_ts"]
+    )  # an adjudication commit also cuts the session streak
+    if branch["count"] >= BRANCH_FIX_LIMIT:
+        sid = meta.get("session", "<session>")
+        return {
+            "decision": "block",
+            "rule": "iter.repair-family",
+            "streak": branch["count"] + 1,
+            "reason": (
+                f"{branch['count']} fix({scope}) commits already on this branch since {branch['base']} with no owner "
+                f"adjudication (this counts across sessions; claude-code-skills#418 ran 12 rounds). Stop repairing: get the "
+                f"owner's decision and record it in the next commit body as `ADJUDICATION: <issue or PR comment url>` "
+                f"(session {sid})"
+            ),
+        }
+    prior = [t for t in fix_times if t > strat_ts]
     if len(prior) >= REPAIR_FAMILY_THRESHOLD:
         sid = meta.get("session", "<session>")
         subject = (commit_subject(cmd) or "")[:80]
+        options = (
+            "'STRATEGY: PIVOT|RETIRE — why' (HOLD was already used once for this scope; a second HOLD does not count), "
+            "or the owner's decision as `ADJUDICATION: <url>` in the commit body"
+            if hold_used
+            else "'STRATEGY: HOLD|PIVOT|RETIRE — why'"
+        )
         return {
             "decision": "block",
             "rule": "iter.repair-family",
@@ -142,13 +209,143 @@ def repair_family_check(rows: list[dict], meta: dict, cmd: str) -> dict | None:
                 f"{len(prior)} fix({scope}) commits already landed in this session with no re-adjudication "
                 f"(aidd-governance#88); this commit's subject: `{subject}`. Decide the strategy before the next repair: python3 "
                 f"~/.claude/hooks/lib/aidd_cc.py note --agent {meta.get('agent', 'claude-code')} --session {sid} "
-                "--hypothesis 'STRATEGY: HOLD|PIVOT|RETIRE — why' --change '...'"
+                f"--hypothesis {options} --change '...'"
             ),
         }
     return None
 
 
-def iteration_check(rows: list[dict], meta: dict, tool: str, tool_input: dict) -> dict:
+BRANCH_FIX_LIMIT = (
+    6  # same-scope fix commits on one branch since its base, across sessions
+)
+BRANCH_BASES = ("origin/develop", "develop", "origin/main", "main")
+GIT_C_RE = re.compile(  # `git [-c k=v | --opt[=v] | -x] … -C <dir>` / `--git-dir=<dir>` (review r2 P3: global options before -C)
+    r"""(?:^|\s)(?:\S*/)?git\s+(?:(?:-c\s+\S+|--[\w-]+(?:=\S*)?|-[a-zA-Z]\S*)\s+)*?(?:-C\s*|--git-dir=\s*)(?:'([^']+)'|"([^"]+)"|(\S+))"""
+)
+CD_SEG_RE = re.compile(r"""^\s*cd\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*$""")
+GIT_BUDGET_SEC = (
+    6.0  # the whole branch check stays well inside the harness's 12 s hook budget
+)
+
+
+def _first_group(m) -> str | None:
+    return next((g for g in m.groups() if g), None) if m else None
+
+
+def _repo_for(cwd: str, cmd: str) -> Path:
+    """The repository the `git … commit` segment acts on: its own `-C <dir>` / `--git-dir=` (quoted paths allowed),
+    resolved against the `cd <dir>` segments that precede it (chained cds apply in order), else that directory;
+    no commit segment → cwd.  A `-C` on another git call in the same line is not it (Codex r2 P2: `git -C /other
+    status && git -C /target commit`).  Unexpandable shell variables stay literal → not a repository → count 0."""
+    cur = Path(cwd or ".")
+    for seg in shell_segments(cmd or ""):
+        wrapped = WRAPPER_SEG_RE.match(
+            seg
+        )  # bash -c 'cd /target && git commit …' (Codex r3 P2)
+        if wrapped:
+            return _repo_for(str(cur), wrapped.group("inner"))
+        cd = CD_SEG_RE.match(seg)
+        if cd:
+            p = Path(_first_group(cd) or ".").expanduser()
+            cur = p if p.is_absolute() else cur / p
+            continue
+        if GIT_COMMIT_SEG_RE.match(seg):
+            pick = _first_group(GIT_C_RE.search(seg))
+            if not pick:
+                return cur
+            p = Path(pick).expanduser()
+            return p if p.is_absolute() else cur / p
+    return cur
+
+
+def branch_fix_streak(
+    cwd: str, cmd: str, scope: str, agent: str = "claude-code", session: str = "unset"
+) -> dict:
+    """fix(<scope>) commits on the current branch since its merge-base with develop/main (first-parent, so a
+    merged-in branch's fixes are not this branch's streak), counted from the newest commit back to the newest
+    one whose body carries `ADJUDICATION: <url>` (the owner's decision — for the branch, every scope); that
+    commit's time is returned as `adjudicated_ts` so the session counter is cut at the same point.  Surface
+    form from `git log`; a directory that is not a repository, or git failing, counts 0 (additive to the
+    in-session breaker).  The whole check runs under GIT_BUDGET_SEC; a timeout writes an H6 error row instead
+    of passing silently.  Known surface-form limits: `git commit -F file` has no subject here; a scope variant
+    (`fix(h17-gate)`) is another scope; a fabricated ADJUDICATION url is accepted as written (auditable in the PR)."""
+    import subprocess
+
+    repo = _repo_for(cwd, cmd)
+    deadline = time.monotonic() + GIT_BUDGET_SEC
+    none = {"count": 0, "base": "?", "adjudicated_ts": 0.0}
+
+    def git(*args: str) -> str | None:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise subprocess.TimeoutExpired(args, GIT_BUDGET_SEC)
+        p = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            timeout=left,
+        )
+        return p.stdout if p.returncode == 0 else None
+
+    base_name, base = "", ""
+    try:
+        for cand in BRANCH_BASES:
+            out = git("merge-base", "HEAD", cand)
+            if out and out.strip():
+                base_name, base = cand, out.strip()
+                break
+        if not base:
+            return none
+        if (git("rev-parse", "HEAD") or "").strip() == base:
+            return {**none, "base": base_name}
+        log_out = (
+            git(
+                "log",
+                "--first-parent",
+                "--no-show-signature",
+                "--format=%ct%x1f%B%x00",
+                f"{base}..HEAD",
+            )
+            or ""
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        from aidd_cc_session import guard_ledger
+
+        guard_ledger(
+            "H17",
+            "error",
+            "unavailable",
+            "iter.repair-family.git-timeout",
+            str(repo)[:100],
+            agent,
+            session,
+        )
+        return none
+    count, adjudicated_ts = 0, 0.0
+    for entry in log_out.split("\x00"):  # newest first
+        ct, _, body = entry.strip().partition("\x1f")
+        body = body.strip()
+        if not body:
+            continue
+        if ADJUDICATION_RE.search(body):
+            # %ct is whole seconds: a session row written in the ruling's own second (before or after it) counts
+            # toward the streak — errs to block (Codex r2 P2 chose this over +1 s, which dropped fixes made right
+            # after the ruling); an unparsable time is no cut at all.
+            try:
+                adjudicated_ts = float(ct)
+            except ValueError:
+                adjudicated_ts = 0.0
+            break
+        subject = body.split("\n", 1)[0]
+        fm = FIX_SUBJECT_RE.match(subject)
+        if fm and fm.group(2).strip().lower() == scope:
+            count += 1
+    return {"count": count, "base": base_name, "adjudicated_ts": adjudicated_ts}
+
+
+def iteration_check(
+    rows: list[dict], meta: dict, tool: str, tool_input: dict, cwd: str = ""
+) -> dict:
     """C-ITER: the same command recurs with no progress delta.
 
     Counts occurrences of this exact key among the last ITER_WINDOW pre rows
@@ -161,7 +358,12 @@ def iteration_check(rows: list[dict], meta: dict, tool: str, tool_input: dict) -
     """
     key = _norm_key(tool, tool_input)
     fam = family(tool, tool_input)
-    family_block = repair_family_check(rows, meta, str(tool_input.get("command") or ""))
+    family_block = repair_family_check(
+        rows,
+        meta,
+        str(tool_input.get("command") or ""),
+        cwd or str(tool_input.get("workdir") or ""),
+    )
     if family_block:
         return family_block
     if fam == "other" and not key.startswith("edit:"):

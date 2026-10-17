@@ -230,7 +230,8 @@ FIX_SUBJECT_RE = re.compile(r"^\s*(fix|hotfix)\(([^)]+)\)")
 _GIT_PREFIX = (
     # `env -u X` / `nice -n 10` / `sudo -u bob` / `time -p`: a prefix flag may carry one argument
     r"^\(?\s*(?:(?:env|command|exec|nice|time|sudo)\s+(?:(?:-n|-u|-g|-C|-S)\s+\S+\s+|-\w+\s+)*)*"
-    r"(?:[A-Za-z_]\w*=\S*\s+)*(?:\S*/)?git\s+(?:(?:-[Cc]|--git-dir|--work-tree)[= ]\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
+    # a quoted -C / --git-dir path may contain spaces (review r2: `git -C '/p q' commit`)
+    r"(?:[A-Za-z_]\w*=\S*\s+)*(?:\S*/)?git\s+(?:(?:-[Cc]|--git-dir|--work-tree)[= ](?:'[^']*'|\"[^\"]*\"|\S+)\s+|--[\w-]+(?:=\S+)?\s+)*"
 )
 GIT_COMMIT_SEG_RE = re.compile(_GIT_PREFIX + r"commit\b(?P<rest>.*)$", re.S)
 # Every git subcommand that lands a commit and prints `[branch sha] subject` on success — the rows whose
@@ -253,6 +254,19 @@ STRATEGY_NOTE_RE = re.compile(
     r"STRATEGY\s*[:：]\s*(HOLD|PIVOT|RETIRE|STRATEGY_HOLD|STRATEGY_PIVOT)\b",
     re.IGNORECASE,
 )
+# An owner adjudication is recorded in a commit body as `ADJUDICATION: <issue / PR comment url>` — the URL of
+# the decision, not the agent's own wording (claude-code-skills#418 loop, 2026-10-17: 12 fix commits across 8
+# review rounds with only agent-written STRATEGY notes between them).
+ADJUDICATION_RE = re.compile(r"ADJUDICATION\s*[:：]\s*(https?://\S+)")
+
+
+def strategy_kind(hypothesis: str) -> str | None:
+    """HOLD / PIVOT / RETIRE of a STRATEGY note, else None."""
+    m = STRATEGY_NOTE_RE.search(hypothesis or "")
+    if not m:
+        return None
+    kind = m.group(1).upper().replace("STRATEGY_", "")
+    return kind
 
 
 def _logical_lines(text: str) -> list[tuple[str, list[str]]]:
@@ -307,6 +321,95 @@ def commit_subject(cmd: str) -> str | None:
                 return first_body or None
             return arg.split("\n", 1)[0].strip() or None
     return None
+
+
+def _strip_shell_comment(rest: str) -> str:
+    """Cut an unquoted ` # …` comment off one segment (Codex r3 P2: `# -m 'ADJUDICATION: …'` never reaches git)."""
+    quote, prev = None, " "
+    for i, ch in enumerate(rest):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "#" and prev.isspace():
+            return rest[:i]
+        prev = ch
+    return rest
+
+
+_QNL = "\x01"  # a newline inside quotes, kept through the physical-line split
+
+
+def _join_quoted_newlines(text: str) -> str:
+    """Newlines inside a quoted run become _QNL — except a run that opens a heredoc (`"$(cat <<'EOF' …)"`), whose
+    body lines must stay physical lines for _logical_lines (Codex r4 P2: the Claude Code standard commit form)."""
+    out, quote, run, text = [], None, "", text or ""
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == quote:
+                quote = None
+            elif ch == "\n" and "<<" not in run:
+                out.append(_QNL)
+                i += 1
+                continue
+        elif ch in ("'", '"'):
+            quote = ch
+            end = text.find(ch, i + 1)
+            run = text[i : end if end >= 0 else len(text)]
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _message_args(rest: str) -> list[str]:
+    """Every -m / --message argument of one `git commit` segment, unquoted, in order (comment excluded)."""
+    rest = _strip_shell_comment(rest)
+    out: list[str] = []
+    while True:
+        m = MSG_FLAG_RE.search(rest)
+        if not m:
+            return out
+        val = m.group("val")
+        arg = _first_shell_arg(val)
+        out.append(arg)
+        lead = len(val) - len(val.lstrip())
+        quoted = val.lstrip()[:1] in ("'", '"')
+        rest = val[lead + len(arg) + (2 if quoted else 0) :]
+
+
+def commit_messages(cmd: str) -> list[str]:
+    """One message text per real `git … commit` segment in `cmd`: its -m / --message arguments (a quoted newline
+    inside one argument is kept — subject + body in one -m) and the heredoc body of a `-F -` / `-m "$(cat <<EOF …)"`
+    form.  A shell comment, another command's arguments or the rest of the line are NOT part of it (Codex review
+    2026-10-17 r2/r3 P2: the owner's ruling is accepted only where `git log` will later show it, on the commit
+    that carries it)."""
+    msgs: list[str] = []
+    for line, body in _logical_lines(_join_quoted_newlines(cmd)):
+        for seg in shell_segments(line):
+            wrapped = WRAPPER_SEG_RE.match(seg)
+            if wrapped:
+                msgs.extend(commit_messages(wrapped.group("inner").replace(_QNL, "\n")))
+                continue
+            git = GIT_COMMIT_SEG_RE.match(seg)
+            if not git:
+                continue
+            rest = git.group("rest")
+            args = _message_args(rest)
+            parts = [
+                a for a in args if not HEREDOC_MSG_RE.match(a)
+            ]  # the `$(cat <<EOF` arg IS its body
+            if FILE_STDIN_RE.search(rest) or any(HEREDOC_MSG_RE.match(a) for a in args):
+                parts.extend(body)
+            msgs.append("\n".join(p for p in parts if p).replace(_QNL, "\n"))
+    return msgs
+
+
+def commit_message_text(cmd: str) -> str:
+    """All commit messages of `cmd` joined (see commit_messages)."""
+    return "\n".join(m for m in commit_messages(cmd) if m)
 
 
 def has_commit_segment(cmd: str) -> bool:

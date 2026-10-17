@@ -13,6 +13,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
+cd "$SB"   # Codex r3 P2: payloads without cwd must not read the real branch's fix(<scope>) history (not a repo → 0)
 export AIDD_LEDGER_SOURCE=test AIDD_LEDGER_PATH="$SB/ledger.jsonl" AIDD_CC_STATE_DIR="$SB/state" AIDD_CC_MAX_STOP_BLOCKS=99
 pass=0; fail=0
 ok() { echo "PASS: $1"; pass=$((pass + 1)); }
@@ -745,6 +746,77 @@ PY2
 )"
 if printf '%s' "$o83" | grep -q '"missing_pins": \[\]' && printf '%s' "$o83" | grep -q '"control_sha": true' && printf '%s' "$o83" | grep -q '"control_set_sha": true' && printf '%s' "$o83" | grep -q '"opencode"' && printf '%s' "$o83" | grep -q '"pi"'; then ok "T83 replay pins the whole control set and records the opencode / pi arms ($o83)"; else bad "T83: $o83"; fi
 
+
+# ---- repair-family breaker v2 (2026-10-17, this harness's own loop on claude-code-skills#418: 12 fix(h17) commits and
+#      6 STRATEGY notes — 4 of them HOLD — on one branch across 8 independent-review rounds; the breaker fired and was
+#      "satisfied" by a note each time). Red at develop e58c6e6 before the repair.
+# (93) HOLD is accepted once per scope: the second breaker trip needs PIVOT / RETIRE or an owner adjudication
+fix93() { printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg93\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): r$1'\"}}" | bash "$HOOK"; printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg93\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): r$1'\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"ok\"}}" | bash "$HOOK" >/dev/null; }
+for i in 1 2 3; do fix93 $i >/dev/null; done
+o93a="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg93","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'fix(h17): r4'"'"'"}}' | bash "$HOOK")"
+python3 -I "$ROOT/hooks/lib/aidd_cc.py" note --agent claude-code --session neg93 --hypothesis "STRATEGY: HOLD — design unchanged, implementation defect only" --change "fix 4" >/dev/null
+for i in 4 5 6; do fix93 $i >/dev/null; done
+o93b="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg93","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'fix(h17): r7'"'"'"}}' | bash "$HOOK")"
+python3 -I "$ROOT/hooks/lib/aidd_cc.py" note --agent claude-code --session neg93 --hypothesis "STRATEGY: HOLD — still the same design, another implementation defect" --change "fix 7" >/dev/null
+o93c="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg93","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'fix(h17): r7'"'"'"}}' | bash "$HOOK")"
+python3 -I "$ROOT/hooks/lib/aidd_cc.py" note --agent claude-code --session neg93 --hypothesis "STRATEGY: PIVOT — drop exemption (c) (ADR-008 rev1)" --change "remove UNMET exemption" >/dev/null
+o93d="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg93","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'fix(h17): r7 after pivot'"'"'"}}' | bash "$HOOK")"
+# Codex review 2026-10-17 P2: HOLD state is per scope — a HOLD that released h17's streak is not auth's HOLD
+fixrow() { printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix($2): r$3'\"}}" | bash "$HOOK"; printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix($2): r$3'\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"ok\"}}" | bash "$HOOK" >/dev/null; }
+for i in 1 2 3; do fixrow neg93s h17 $i >/dev/null; done
+python3 -I "$ROOT/hooks/lib/aidd_cc.py" note --agent claude-code --session neg93s --hypothesis "STRATEGY: HOLD — h17 design unchanged" --change "h17 fix 4" >/dev/null
+for i in 1 2 3; do fixrow neg93s auth $i >/dev/null; done
+o93e="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg93s","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'fix(auth): r4'"'"'"}}' | bash "$HOOK")"
+python3 -I "$ROOT/hooks/lib/aidd_cc.py" note --agent claude-code --session neg93s --hypothesis "STRATEGY: HOLD — auth design unchanged" --change "auth fix 4" >/dev/null
+o93f="$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg93s","tool_name":"Bash","tool_input":{"command":"git commit -q -m '"'"'fix(auth): r4'"'"'"}}' | bash "$HOOK")"
+if printf '%s' "$o93a" | grep -q 're-adjudication' && printf '%s' "$o93b" | grep -q 're-adjudication' && printf '%s' "$o93c" | grep -q 'HOLD was already used' && printf '%s' "$o93c" | grep -q 'PIVOT\|RETIRE\|ADJUDICATION' && [ -z "$o93d" ] && printf '%s' "$o93e" | grep -q "'STRATEGY: HOLD|PIVOT|RETIRE" && [ -z "$o93f" ]; then ok "T93 second HOLD does not release the repair-family breaker; PIVOT does; HOLD state is per scope (auth's first HOLD counts after h17's)"; else bad "T93: [$o93a] [$o93b] [$o93c] [$o93d] [$o93e] [$o93f]"; fi
+
+# (94) branch-level count across sessions: >= 6 fix(<scope>) commits since the merge-base with develop, none of the last
+#      3 carrying `ADJUDICATION: <url>`, blocks the next fix(<scope>) commit in ANY session (the #418 loop crossed sessions)
+R94="$SB/repo94"; git init -q "$R94"; git -C "$R94" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m init; git -C "$R94" branch -M develop; git -C "$R94" checkout -q -b fix/h17-loop
+for i in 1 2 3 4 5 6; do git -C "$R94" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m "fix(h17): branch round $i"; done
+o94="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94\",\"cwd\":\"$R94\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): branch round 7'\"}}" | bash "$HOOK")"
+o94b="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94\",\"cwd\":\"$R94\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'docs(h17): record the loop'\"}}" | bash "$HOOK")"
+git -C "$R94" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m "$(printf 'fix(h17): branch round 7 after owner ruling\n\nADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-6227962777')"
+o94c="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94\",\"cwd\":\"$R94\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): branch round 8'\"}}" | bash "$HOOK")"
+o94m="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94m\",\"cwd\":\"$R94\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): branch round 7'\"}}" | AIDD_CC_MUTATE=iter.repair-family bash "$HOOK")"
+# review 2026-10-17 P1: the remedy itself must pass — the 7th commit carrying the url in its own message; P2: a merged-in
+# branch's fix commits are not this branch's streak (first-parent); `cd <dir> &&` names the repository
+o94d="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94d\",\"cwd\":\"$R94\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): branch round 7' -m 'ADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-6227962777'\"}}" | bash "$HOOK")"
+R94B="$SB/repo94b"; git init -q "$R94B"; git -C "$R94B" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m init; git -C "$R94B" branch -M develop
+git -C "$R94B" checkout -q -b feat/x; for i in 1 2 3 4 5 6; do git -C "$R94B" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m "fix(h17): on x $i"; done
+git -C "$R94B" checkout -q develop; git -C "$R94B" checkout -q -b feat/y; git -C "$R94B" -c user.name=t -c user.email=t@x.invalid merge -q --no-ff -m "merge x" feat/x
+o94e="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94e\",\"cwd\":\"/\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd $R94B && git commit -q -m 'fix(h17): first own fix on y'\"}}" | bash "$HOOK")"
+R94C="$SB/repo94c"; git clone -q "$R94B" "$R94C" 2>/dev/null; git -C "$R94C" checkout -q feat/x 2>/dev/null; git -C "$R94C" branch -q develop origin/develop 2>/dev/null
+o94f="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94f\",\"cwd\":\"/\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd $R94C && git commit -q -m 'fix(h17): branch round 7 via cd'\"}}" | bash "$HOOK")"
+# Codex r2 P2: a ruling url in a shell comment never reaches git log -> still blocked; `git -C <other> status && git -C
+# <target> commit` resolves the target from the commit's own segment (R94 is adjudicated, R94C is not)
+o94i="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94i\",\"cwd\":\"/\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd $R94C && git commit -q -m 'fix(h17): branch round 8' # ADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-1\"}}" | bash "$HOOK")"
+o94j="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94j\",\"cwd\":\"/\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $R94 status --short && git -C $R94C commit -q -m 'fix(h17): branch round 9'\"}}" | bash "$HOOK")"
+o94k="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94k\",\"cwd\":\"/\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -c user.name=t -C $R94C commit -q -m 'fix(h17): branch round 10'\"}}" | bash "$HOOK")"
+R94S="$SB/repo 94s"; git clone -q "$R94B" "$R94S" 2>/dev/null; git -C "$R94S" checkout -q feat/x 2>/dev/null; git -C "$R94S" branch -q develop origin/develop 2>/dev/null
+o94l="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94l\",\"cwd\":\"/\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C '$R94S' commit -q -m 'fix(h17): branch round 11'\"}}" | bash "$HOOK")"
+# Codex r3 P2: a ruling on ANOTHER commit of the same line, or in a comment's -m, does not release the fix commit; the
+# fix commit's own single -m with a quoted newline body does; /usr/bin/git and bash -c wrappers resolve the repo
+o94n="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94n\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): r12' && false && git commit -q -m docs -m 'ADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-1'\"}}" | bash "$HOOK")"
+o94o="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94o\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): r13' # -m 'ADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-1'\"}}" | bash "$HOOK")"
+o94p="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94p\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): r14\\n\\nADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-1'\"}}" | bash "$HOOK")"
+o94q="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94q\",\"cwd\":\"/\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"/usr/bin/git -C $R94C commit -q -m 'fix(h17): r15'\"}}" | bash "$HOOK")"
+o94s="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94s\",\"cwd\":\"/\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bash -c 'cd $R94C && git commit -q -m \\\"fix(h17): r16\\\"'\"}}" | bash "$HOOK")"
+# Codex r4 P2: the Claude Code standard heredoc form carrying the ruling passes; a ruling on a LATER fix commit of the
+# same line does not release the first one
+o94t="$(python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":"neg94t","cwd":sys.argv[1],"tool_name":"Bash","tool_input":{"command":"git commit -q -m \"$(cat <<'"'"'EOF'"'"'\nfix(h17): r17 after the ruling\n\nADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-1\nEOF\n)\""}}))' "$R94C" | bash "$HOOK")"
+o94u="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94u\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): r18' && false && git commit -q -m 'fix(h17): r19' -m 'ADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-1'\"}}" | bash "$HOOK")"
+# Codex review 2026-10-17 P2: the owner's ADJUDICATION commit (in a docs commit, outside this session) also cuts the
+# session-side streak — 3 session fixes, then the recorded ruling, then the 4th fix passes
+R94D="$SB/repo94d"; git init -q "$R94D"; git -C "$R94D" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m init; git -C "$R94D" branch -M develop; git -C "$R94D" checkout -q -b fix/h17-s
+fixrow94() { printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94g\",\"cwd\":\"$R94D\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): s$1'\"}}" | bash "$HOOK"; printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg94g\",\"cwd\":\"$R94D\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): s$1'\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"ok\"}}" | bash "$HOOK" >/dev/null; git -C "$R94D" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m "fix(h17): s$1"; }
+for i in 1 2 3; do fixrow94 $i >/dev/null; done
+sleep 1   # %ct is whole seconds: the ruling must be in a later second than the 3 session rows
+o94g="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94g\",\"cwd\":\"$R94D\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): s4'\"}}" | bash "$HOOK")"
+git -C "$R94D" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m "$(printf 'docs(h17): record the owner ruling\n\nADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-6227962777')"
+o94h="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg94g\",\"cwd\":\"$R94D\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): s4 after ruling'\"}}" | bash "$HOOK")"
+if printf '%s' "$o94" | grep -q 'no owner adjudication' && printf '%s' "$o94" | grep -q 'ADJUDICATION' && printf '%s' "$o94" | grep -q '6 fix(h17)' && [ -z "$o94b" ] && [ -z "$o94c" ] && [ -z "$o94m" ] && [ -z "$o94d" ] && [ -z "$o94e" ] && printf '%s' "$o94f" | grep -q 'no owner adjudication' && printf '%s' "$o94g" | grep -q 're-adjudication' && [ -z "$o94h" ] && printf '%s' "$o94i" | grep -q 'no owner adjudication' && printf '%s' "$o94j" | grep -q 'no owner adjudication' && printf '%s' "$o94k" | grep -q 'no owner adjudication' && printf '%s' "$o94l" | grep -q 'no owner adjudication' && printf '%s' "$o94n" | grep -q 'no owner adjudication' && printf '%s' "$o94o" | grep -q 'no owner adjudication' && [ -z "$o94p" ] && printf '%s' "$o94q" | grep -q 'no owner adjudication' && printf '%s' "$o94s" | grep -q 'no owner adjudication' && [ -z "$o94t" ] && printf '%s' "$o94u" | grep -q 'no owner adjudication'; then ok "T94 6 same-scope fix commits on the branch (across sessions) block the 7th until an ADJUDICATION commit; the adjudicating commit itself passes; merged-in fixes do not count; cd <dir> && names the repo; docs commits pass; an ADJUDICATION commit cuts the session streak too; a comment url is not a ruling; -C of the commit segment wins (also after -c k=v, quoted path with a space, /usr/bin/git, bash -c); a ruling on another commit of the line or in a comment does not release; a quoted-newline body or the heredoc form does; a ruling on a later fix commit of the line does not; mutation RED"; else bad "T94: [$o94] [$o94b] [$o94c] [$o94m] [$o94d] [$o94e] [$o94f] [$o94g] [$o94h] [$o94i] [$o94j] [$o94k] [$o94l] [$o94n] [$o94o] [$o94p] [$o94q] [$o94s] [$o94t] [$o94u]"; fi
 
 # ---- ADR-009 (2026-10-17): the gate no longer infers a completion claim from prose. A final answer in a session with
 #      tool rows must carry `Status: complete | partial | unverified`; `complete` (or a full Evidence trailer) is bound to
