@@ -158,7 +158,8 @@ export default function aiddCommonControl(pi: any) {
     // spent, the unverified claim gets a visible note in the session instead of passing unmarked.
     const note = v.decision === "block"
       ? "[H17] evidence unverified (continuation budget exhausted)"
-      : v.would_block ? (v.note ?? "[H17] evidence unverified (max-blocks released)") : null;
+      : v.would_block ? (v.note ?? "[H17] evidence unverified (max-blocks released)")
+      : (v.note ?? null); // ADR-009: Status: partial / unverified passes with its note shown (Codex r2 P2)
     if (!note) return undefined;
     return {
       entries: [{ type: "custom_message", customType: "aidd-cc", display: true, content: `${note} — ${v.reason ?? ""}` }],

@@ -6,6 +6,9 @@
 //   tool.execute.after    -> post              (record rc/output for evidence binding)
 //   (permission.ask: retired 2026-10-14 — H17 never auto-allows; see hooks/lib/aidd_cc_controls.py)
 //   event session.idle    -> stop              (C-EVIDENCE; re-prompts the session once)
+//   process exit          -> stop              (headless `opencode run`: the last text part of each session that no
+//                                               tool call followed is the final answer; ADR-009 Status is required
+//                                               there, the verdict goes to stderr + the H6 ledger — review r2 P1)
 //
 // The verdict logic is python (hooks/lib/aidd_cc.py) shared with Claude/Codex/Cursor,
 // so one oracle covers all four real entries.  Session key: sessionID.
@@ -59,6 +62,28 @@ async function cc(cmd: string, payload: Record<string, unknown>, extra: string[]
   }
 }
 
+// Synchronous twin of cc() for the process-exit path (an exit handler cannot await).
+function ccSync(cmd: string, payload: Record<string, unknown>, extra: string[] = []): Verdict {
+  if (process.env.AIDD_CC_DISABLE === "1") return { decision: "allow", rule: "disabled" }
+  try {
+    const proc = Bun.spawnSync(["python3", "-I", CC_PY, cmd, "--agent", AGENT, ...extra], {
+      stdin: new TextEncoder().encode(JSON.stringify(payload)),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, AIDD_CC_AGENT: AGENT },
+    })
+    const line = new TextDecoder().decode(proc.stdout).trim().split("\n").pop() ?? ""
+    if (!line) {
+      ledgerError(`python-exit-${proc.exitCode}:${cmd}`, "")
+      return { decision: "allow", rule: "empty" }
+    }
+    return JSON.parse(line) as Verdict
+  } catch (e) {
+    ledgerError(`spawn-or-parse-error:${cmd}`, String(e))
+    return { decision: "allow", rule: "error", reason: String(e) }
+  }
+}
+
 function textOf(parts: unknown): string {
   if (!Array.isArray(parts)) return ""
   return parts
@@ -68,6 +93,18 @@ function textOf(parts: unknown): string {
 
 export const AiddCommonControl = async ({ client }: { client: any }) => {
   const reprompts = new Map<string, number>()
+  // ADR-009 (review r2 P1): the last text part of a session that no tool call followed is its final answer.
+  // session.idle judges it in the TUI; headless `opencode run` exits before idle work lands, so the process
+  // exit handler judges whatever is still here (Status required) — stderr line + H6 row, never silent.
+  const lastPart = new Map<string, { messageID: string; text: string }>()
+  process.once("exit", () => {
+    for (const [sessionID, { text }] of lastPart) {
+      const v = ccSync("stop", { sessionID, last_assistant_message: text }, ["--max-blocks", "99", "--no-count"])
+      const line = v.decision === "block" ? `[H17 evidence gate] ${v.reason ?? ""}` : (v as { note?: string }).note
+      if (line) process.stderr.write(`${line}\n`)
+    }
+    lastPart.clear()
+  })
   return {
     "chat.message": async (
       input: { sessionID?: string },
@@ -83,6 +120,7 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
       item: { tool: string; sessionID?: string; callID?: unknown },
       out: { args: Record<string, unknown> },
     ) => {
+      lastPart.delete(item.sessionID ?? "unset") // a tool call follows: the previous text part was intermediate
       const v = await cc("pre", { sessionID: item.sessionID ?? "unset", tool_name: item.tool, tool_input: out.args ?? {} })
       if (v.decision === "block") throw new Error(`[H17] ${v.reason ?? v.rule}`)
     },
@@ -107,8 +145,16 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
     ) => {
       const text = String(output.text ?? "")
       if (!text.trim()) return
-      const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: text }, ["--max-blocks", "99", "--no-count"])
+      // The text parts of one message are one answer (Codex r3 P2: Evidence in part 1, Status in part 2): judge the
+      // accumulated message text, not the part alone.
+      const prev = lastPart.get(input.sessionID)
+      const whole = prev && prev.messageID === input.messageID ? `${prev.text}\n${text}` : text
+      lastPart.set(input.sessionID, { messageID: input.messageID, text: whole })
+      // ADR-009: a text part is not necessarily the final answer, so the Status line is demanded only at
+      // session.idle / process exit; here a declared `Status: complete` / a trailer / the vocabulary backstop still bind.
+      const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: whole }, ["--max-blocks", "99", "--no-count", "--no-status-required"])
       if (v.decision === "block") output.text = `${text}\n\n[H17 evidence gate] ${v.reason ?? ""}`
+      else if ((v as { note?: string }).note) output.text = `${text}\n\n${(v as { note?: string }).note}` // Status: partial is visible (Codex r2 P2)
     },
     event: async ({ event }: { event: { type?: string; properties?: Record<string, unknown> } }) => {
       if (event.type !== "session.idle") return
@@ -130,10 +176,14 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
         // an `evidence.max-blocks.would-block` H6 row when it would have blocked.  The user-visible annotation
         // for headless runs is the one experimental.text.complete already appended to the text; this idle-time
         // pass only makes the release auditable in the ledger (review 2026-10-16: ledger-only, not a UI note).
-        await cc("stop", { sessionID, last_assistant_message: last }, ["--max-blocks", "0", "--no-count"])
+        const r = await cc("stop", { sessionID, last_assistant_message: last }, ["--max-blocks", "0", "--no-count"])
+        const line = (r as { note?: string }).note
+        if (line) process.stderr.write(`${line} — ${r.reason ?? ""}\n`) // the release is never silent (Codex r4 P2)
+        lastPart.delete(sessionID) // judged; the exit fallback is released only now (Codex r3 P1: not before the await)
         return
       }
       const v = await cc("stop", { sessionID, last_assistant_message: last })
+      lastPart.delete(sessionID) // judged; a headless exit during the awaits above still had the fallback
       if (v.decision !== "block") return
       reprompts.set(sessionID, n + 1)
       try {

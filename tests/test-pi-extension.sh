@@ -31,8 +31,9 @@ out.iter_block_at = blocked;
 const t1 = await call("turn_end", { message: { content: [{ type: "text", text: "実装完了しました。" }] }, toolResults: [] });
 out.evidence_free_continue = !!(t1 && t1.continue);
 out.gate_message = t1?.entries?.[0]?.content?.slice(0, 40) ?? null;
-const t2 = await call("turn_end", { message: { content: [{ type: "text", text: "途中経過です。次に tests を走らせます。" }] }, toolResults: [] });
+const t2 = await call("turn_end", { message: { content: [{ type: "text", text: "途中経過です。次に tests を走らせます。\nStatus: partial" }] }, toolResults: [] });
 out.benign_continue = !!(t2 && t2.continue);
+out.partial_note = t2?.entries?.[0]?.content ?? null;   // ADR-009 (Codex r2 P2): the declared partial answer shows its "not verified" note
 // aidd-governance#186 P1-4: once the extension's own continuation budget is spent, a block-worthy
 // final answer must still get a visible note (no silent pass-through).
 await call("turn_end", { message: { content: [{ type: "text", text: "実装完了しました。" }] }, toolResults: [] });
@@ -60,6 +61,7 @@ r = json.loads(sys.argv[1])
 assert r["iter_block_at"] == 4, r           # 3 recorded repeats, 4th call blocked
 assert r["evidence_free_continue"] is True, r
 assert r["benign_continue"] is False, r
+assert r["partial_note"] and "Status: partial" in r["partial_note"], r   # Codex r2 P2: allow-with-note is shown on Pi
 print("PASS: iter block at 4th identical call / evidence-free turn_end forced continuation / benign turn ends")
 PY
 # aidd-governance#186 P1-4 (T69-pi): both release paths leave a visible note instead of a silent pass-through
