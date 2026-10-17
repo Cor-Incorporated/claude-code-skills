@@ -73,40 +73,15 @@ _CLOSED_CLAIM = (
 )
 COMPLETION_CLAIM_RE = re.compile(_CLOSED_CLAIM, re.IGNORECASE)
 PAST_TENSE_CLAIM_RE = re.compile(r"(?<![A-Za-z])(" + PAST_TENSE_CLAIM + r")(?![A-Za-z])", re.IGNORECASE)
-# ADR-008 (aidd-governance#196, owner 2026-10-16): claim detection ERRS ON THE BLOCK SIDE.  The past-tense verbs are judged
-# per sentence; the only exemptions are (a) an explicit negation adjacent to the claim word (NEGATED_COMPLETION_RE), (b) a
-# quoted clause + retraction verb (RETRACTION_OBJECT), (c) an UNMET_RE word as the PREDICATE of the same sentence.  No question,
-# conditional, window or next-sentence exemption (three such designs were bypassed: PR #418 reviews #2-#3) — a partial report
-# says 未達 / 未完了 as its predicate or carries Evidence (rules/quality.md).
+# ADR-008 (aidd-governance#196, owner 2026-10-16; revised 2026-10-17): claim detection ERRS ON THE BLOCK SIDE.  The past-tense
+# verbs are judged per sentence; the only exemptions are (a) an explicit negation adjacent to the claim word
+# (NEGATED_COMPLETION_RE) and (b) a quoted clause + retraction verb (RETRACTION_OBJECT).  No question, conditional, window,
+# next-sentence or 未達 / 未完了 predicate exemption (the predicate form (c) was withdrawn on 2026-10-17 after PR #418 reviews
+# #5-#8 found its plumbing to be a bypass source) — a partial report carries Evidence on the claim or avoids the claim words
+# (rules/quality.md).  UNMET_RE below serves only the deadline unmet-report check (has_unmet_report, DOT-INC-004/045).
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[。．！？\n])\s*|(?<=[.!?])\s+")
-# (c) predicate position only (owner 2026-10-16): 「残りは未達。」 / 「実装しましたが未完了です。」 exempt; 「未完了だったタスクを実装しました。」 does not.
-UNMET_PREDICATE_RE = re.compile(
-    # JA: token + optional copula ends the sentence (review #5: a bracketed / quoted token is not the predicate; flat class)
-    r"(?:未達|未完了|期限超過|間に合(?:わ|い)ません)(?:のまま)?(?:です|でした|だ|である|となった|となりました|となる)?(?:ね|よ)?[。．.!！…‥\s]*$"
-    # EN: present-tense copula + token ends the sentence, or a bare UNMET status marker; "reads UNMET" / "was missed" are not
-    r"|\b(?:is|are|was|were|remains|remain|stays|still)\s+(?:UNMET|unmet)[.;!…\s]*$|^\s*UNMET\b[:：]|\bdeadline (?:is|was|remains|has been)\s+(?:missed|exceeded)[.;!…\s]*$",
-)
-# a negation word before the token cancels (c); the token's clause must be a main clause (Codex 1397e64 P1, review #5 P0-2)
-UNMET_NEGATION_RE = re.compile(r"\b(?:no|not|nothing|none|never|zero|without|neither|nor)\b|n't\b", re.IGNORECASE)
-UNMET_SUBORD_RE = re.compile(r"\b(?:that|which|when|if|because|as|for|so that|while|since|until|unless|where)\b", re.IGNORECASE)
 _QUOTE_MASK = {"。": "\ue000", "．": "\ue001", "！": "\ue002", "？": "\ue003", ".": "\ue004", "!": "\ue005", "?": "\ue006"}
 _QUOTE_UNMASK = {v: k for k, v in _QUOTE_MASK.items()}
-
-
-# parent ruling on review #5 (block side): bracketed / quoted text is not (c) material; a past-state marker in the
-# predicate's clause never exempts ("以前は未達でした", "previously the deadline was missed")
-UNMET_BRACKET_RE = re.compile(r"[（(][^（）()\n]*[）)]|[「『][^「」『』\n]*[」』]")
-UNMET_PAST_RE = re.compile(r"以前|当初|元々|元は|従来|かつて|昨日|先週|先日|\b(?:previously|before|originally|used to|yesterday|last week|earlier|formerly)\b", re.IGNORECASE)
-
-
-def _unmet_predicate(sent: str) -> bool:
-    probe = UNMET_BRACKET_RE.sub(" ", sent)
-    m = UNMET_PREDICATE_RE.search(probe)
-    if not m:
-        return False
-    before = probe[: m.start()]
-    clause = re.split(r"[;:—–(]", before)[-1]  # the token's own clause (a comma does not start a new one: "before, two were unmet")
-    return not (UNMET_NEGATION_RE.search(before) or UNMET_SUBORD_RE.search(clause) or UNMET_PAST_RE.search(clause))
 
 
 def _sentences(text: str) -> list[str]:
@@ -124,8 +99,6 @@ def _sentences(text: str) -> list[str]:
 
 def _past_tense_claim(text: str) -> bool:
     for raw in _sentences(text):
-        if _unmet_predicate(raw):
-            continue  # ADR-008 (c): the sentence's predicate says 未達 / 未完了 (not a negated one)
         # (a)/(b) are removed within the sentence only (review #4 P0-3: a span must not cross a sentence end)
         if PAST_TENSE_CLAIM_RE.search(NEGATED_COMPLETION_RE.sub(" ", raw)):
             return True
