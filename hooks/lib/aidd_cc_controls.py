@@ -499,7 +499,9 @@ def _push_executed(rows: list[dict]) -> bool:
     return False
 
 
-def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
+def stop_check(
+    meta: dict, rows: list[dict], text: str, cwd: str, require_status: bool = True
+) -> dict:
     """C-EVIDENCE: a completion claim must be bound to executed, readable evidence."""
     problems: list[str] = []
     ds = deadline_status(meta.get("deadline"))
@@ -516,13 +518,33 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
     trailers = evidence_trailers(text)
     used_tools = any(r.get("event") in ("pre", "post") for r in rows)
     if status in ("partial", "unverified"):
+        # A partial answer still may not claim a push/merge or a save it did not do (DOT-INC-026/017,
+        # review 2026-10-17 P2): those two bindings run even here; the evidence trailer is not required.
+        if (
+            has_push_claim(text)
+            and not _push_executed(rows)
+            and not mutated("evidence.readback")
+        ):
+            problems.append(
+                "push/merge claimed but no successful push/merge command in the session ledger (DOT-INC-026)"
+            )
+        if has_persist_claim(text) and not mutated("evidence.readback"):
+            problems.extend(_readback_problems(text, cwd, _touched_paths(rows)))
         v = _verdict(problems)
         v["status"] = status
-        v["note"] = f"[H17] Status: {status} — not verified by the evidence gate"
+        if v["decision"] == "allow":
+            v["note"] = f"[H17] Status: {status} — not verified by the evidence gate"
         return v
     if status is None and trailers:
         status = "complete"  # a full Evidence trailer is a completion declaration (T1-T79 compat)
-    if status is None and used_tools and not mutated("evidence.trailer"):
+    undeclared = False
+    if (
+        status is None
+        and used_tools
+        and require_status
+        and not mutated("evidence.trailer")
+    ):
+        undeclared = True
         problems.append(
             "no status declared after tool use: end the answer with one line "
             "`Status: complete | partial | unverified` (ADR-009; complete is bound to Evidence)"
@@ -537,9 +559,12 @@ def stop_check(meta: dict, rows: list[dict], text: str, cwd: str) -> dict:
                 f"incomplete Evidence trailer (need <cmd> | <output> | <time>): {bad}"
             )
     if not cmds and not mutated("evidence.trailer"):
-        problems.append(
-            "completion claim without `Evidence: <cmd> | <output> | <time>` trailer (DOT-INC-010)"
-        )
+        # T2's mutation anchor is this line; the message is skipped when the only defect is the missing Status
+        # (review 2026-10-17 P3: no claim was made, so "completion claim without Evidence" would mislead)
+        if not undeclared:
+            problems.append(
+                "completion claim without `Evidence: <cmd> | <output> | <time>` trailer (DOT-INC-010)"
+            )
     executed = _executed_commands(rows)
     substantive = False
     for c, claimed_out, _when in trailers:

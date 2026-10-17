@@ -474,7 +474,7 @@ def _release(args, payload, meta, rows, rule: str, detail: str, why: str) -> int
         out["blocks"] = meta.get("stop_blocks", 0)
     text = _last_assistant(payload, meta)
     verdict = (
-        stop_check(meta, rows, text, _cwd(args, payload))
+        stop_check(meta, rows, text, _cwd(args, payload), not args.no_status_required)
         if text.strip()
         else {"decision": "allow"}
     )
@@ -494,6 +494,19 @@ def _release(args, payload, meta, rows, rule: str, detail: str, why: str) -> int
             reason=verdict["reason"],
             note=RELEASE_NOTE.format(why=why),
         )
+    elif verdict.get("status") in ("partial", "unverified"):
+        # ADR-009 on the release path too (Codex review 2026-10-17 P2): the corrected `Status: partial` answer
+        # after a block arrives through stop_hook_active / max-blocks and must stay visible — note + its own row.
+        guard_ledger(
+            COMPONENT,
+            "measure",
+            "allow",
+            "evidence.status-partial",
+            verdict["status"],
+            agent,
+            session,
+        )
+        out.update(status=verdict["status"], note=verdict.get("note", ""))
     _emit(out)
     return 0
 
@@ -540,7 +553,9 @@ def cmd_stop(args, payload):
             }
         )
         return 2 if args.exit_style == "claude" else 0
-    verdict = stop_check(meta, rows, text, _cwd(args, payload))
+    verdict = stop_check(
+        meta, rows, text, _cwd(args, payload), not args.no_status_required
+    )
     if verdict.get("status") in ("partial", "unverified"):
         # ADR-009: a declared partial / unverified answer passes, visibly (note + its own row).
         guard_ledger(
@@ -606,7 +621,7 @@ def cmd_record_assistant(args, payload):
     )[:20000]
     meta["last_assistant"] = text
     verdict = (
-        stop_check(meta, rows, text, _cwd(args, payload))
+        stop_check(meta, rows, text, _cwd(args, payload), not args.no_status_required)
         if text.strip()
         else {"decision": "allow"}
     )
@@ -755,6 +770,11 @@ def main(argv=None) -> int:
         default=int(os.environ.get("AIDD_CC_MAX_STOP_BLOCKS", "2")),
     )
     ap.add_argument("--ignore-active", action="store_true")
+    ap.add_argument(
+        "--no-status-required",
+        action="store_true",
+        help="ADR-009: do not demand a Status line (intermediate text parts, not the final answer)",
+    )
     ap.add_argument(
         "--no-count",
         action="store_true",

@@ -26,7 +26,7 @@ merge前確認: env var/secret記載、CORS/domain、Mixed Content、IAM権限�
 ## 報告書の事実検証
 事実主張はCLI出力・git diff・APIレスポンスで裏取りする。推定は「（未検証）」と明記する。
 
-## 証跡トレーラーと Status 宣言（ADR-009）
+## 証跡トレーラーと Status 宣言（ADR-009 = aidd-governance `docs/adr/009-status-declaration-protocol.md`）
 ツールを使ったターンの最終応答は末尾に 1 行 `Status: complete | partial | unverified` を書く。
 `complete` のときは証跡トレーラーが必須:
 `Evidence: <実行コマンド> | <生出力の要点 or ログパス> | <実行時刻>`

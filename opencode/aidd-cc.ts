@@ -107,7 +107,9 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
     ) => {
       const text = String(output.text ?? "")
       if (!text.trim()) return
-      const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: text }, ["--max-blocks", "99", "--no-count"])
+      // ADR-009: a text part is not necessarily the final answer, so the Status line is demanded only at
+      // session.idle (below); here a declared `Status: complete` / a trailer / the vocabulary backstop still bind.
+      const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: text }, ["--max-blocks", "99", "--no-count", "--no-status-required"])
       if (v.decision === "block") output.text = `${text}\n\n[H17 evidence gate] ${v.reason ?? ""}`
     },
     event: async ({ event }: { event: { type?: string; properties?: Record<string, unknown> } }) => {

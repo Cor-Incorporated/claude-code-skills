@@ -36,6 +36,9 @@ out.gate_appended = o1.text.includes("[H17 evidence gate]");
 const o2 = { text: "途中経過です。次に tests を走らせます。\nStatus: partial" };
 await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "m2", partID: "p2" }, o2);
 out.benign_untouched = o2.text === "途中経過です。次に tests を走らせます。\nStatus: partial";
+const o3 = { text: "I'll run the tests now." };   // ADR-009: an intermediate text part has no Status yet and must not be annotated
+await hooks["experimental.text.complete"]({ sessionID: "oc-test-1", messageID: "m3", partID: "p3" }, o3);
+out.intermediate_untouched = o3.text === "I'll run the tests now.";
 console.log(JSON.stringify(out));
 JS
 res="$(cd "$SB" && bun run drive.ts 2>"$SB/err.log")" || { echo "FAIL: bun run"; cat "$SB/err.log"; exit 1; }
@@ -48,6 +51,7 @@ assert r["has_permission_ask"] is False, r          # auto-allow retired 2026-10
 assert r["iter_throw_at"] == 4, r
 assert r["gate_appended"] is True, r
 assert r["benign_untouched"] is True, r
+assert r["intermediate_untouched"] is True, r   # ADR-009 review P1: text parts are not the final answer
 print("PASS: text.complete gate present / no permission.ask / 4th identical call throws / benign untouched")
 PY
 grep -q '"component": "H17"' "$AIDD_LEDGER_PATH" && echo "PASS: H6 ledger rows written by the opencode entry" || { echo "FAIL: no ledger rows"; exit 1; }

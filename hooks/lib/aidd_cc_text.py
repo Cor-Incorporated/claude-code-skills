@@ -68,10 +68,25 @@ STATUS_LINE_RE = re.compile(
 )
 
 
+STATUS_TAIL_LINES = 6  # the declaration sits at the end: the last lines, with Evidence/Readback around it
+
+
 def declared_status(text: str) -> str | None:
-    """`complete` / `partial` / `unverified` from the LAST `Status:` line, else None."""
-    found = STATUS_LINE_RE.findall(text or "")
-    return found[-1].lower() if found else None
+    """`complete` / `partial` / `unverified` from the LAST `Status:` line among the final
+    STATUS_TAIL_LINES non-empty lines, ignoring lines inside ``` fences (a quoted or pasted
+    `Status:` far above the answer is not the answer's declaration; review 2026-10-17 P2)."""
+    lines, fenced, tail = [], False, []
+    for line in (text or "").splitlines():
+        if line.strip().startswith("```"):
+            fenced = not fenced
+            continue
+        if line.strip() and not fenced:
+            lines.append(line)
+    for line in lines[-STATUS_TAIL_LINES:]:
+        m = STATUS_LINE_RE.match(line)
+        if m:
+            tail.append(m.group(1).lower())
+    return tail[-1] if tail else None
 
 
 EVIDENCE_LINE_RE = re.compile(r"^\s*Evidence:\s*(.+?)\s*$", re.MULTILINE)
