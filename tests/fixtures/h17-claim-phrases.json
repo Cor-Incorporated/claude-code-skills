@@ -1322,8 +1322,8 @@
   {
    "source": "synthetic-negative-p1a-57",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "ADR-008 (c): UNMET_RE word in the same sentence",
+   "expect_claim": true,
+   "note": "ADR-008 (c): UNMET_RE word in the same sentence | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "修正しましたが、未達です。"
   },
   {
@@ -1343,8 +1343,8 @@
   {
    "source": "synthetic-negative-p1a-60",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "ADR-008 (c)",
+   "expect_claim": true,
+   "note": "ADR-008 (c) | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "一部修正しましたが、残り 2 件は未完了です。"
   },
   {
@@ -1364,8 +1364,8 @@
   {
    "source": "synthetic-negative-p1a-61",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "ADR-008 (c) predicate: 未完了 + です + 。",
+   "expect_claim": true,
+   "note": "ADR-008 (c) predicate: 未完了 + です + 。 | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "実装しましたが未完了です。"
   },
   {
@@ -1378,15 +1378,15 @@
   {
    "source": "synthetic-negative-p1a-63",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "ADR-008 (c) predicate: 未達 + のまま + です",
+   "expect_claim": true,
+   "note": "ADR-008 (c) predicate: 未達 + のまま + です | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "修正しましたが、残りは未達のままです。"
   },
   {
    "source": "synthetic-negative-p1a-64",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "ADR-008 (c): UNMET token is a predicate",
+   "expect_claim": true,
+   "note": "ADR-008 (c): UNMET token is a predicate | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "I fixed two of the three; the third is UNMET."
   },
   {
@@ -1539,8 +1539,8 @@
   {
    "source": "synthetic-negative-p1a-70",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-2: … terminates",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P1-2: … terminates | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "修正しましたが、テストは未達です…"
   },
   {
@@ -1553,15 +1553,15 @@
   {
    "source": "synthetic-negative-p1a-72",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-1: lowercase unmet at the sentence end is a predicate",
+   "expect_claim": true,
+   "note": "independent review #4 of PR #418 (local_7d21cb9f, head 2741d2c) P0-1: lowercase unmet at the sentence end is a predicate | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "I fixed two of the three; the third is unmet."
   },
   {
    "source": "synthetic-negative-p1a-73",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "review #4 P0-1 / parent ruling on review #5: was / were are copulas; a past STATE needs an explicit marker (previously / yesterday / before …) to block",
+   "expect_claim": true,
+   "note": "review #4 P0-1 / parent ruling on review #5: was / were are copulas; a past STATE needs an explicit marker (previously / yesterday / before …) to block | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "I fixed the first test; the deadline was missed."
   },
   {
@@ -1735,8 +1735,8 @@
   {
    "source": "synthetic-negative-p1a-77",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) coverage: 間に合いません as the main predicate",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) coverage: 間に合いません as the main predicate | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "修正しましたが、残りは期限に間に合いません。"
   },
   {
@@ -1749,15 +1749,15 @@
   {
    "source": "synthetic-negative-p1a-79",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-2: present copula + token at the end is the main predicate",
+   "expect_claim": true,
+   "note": "independent review #5 of PR #418 (local_7d21cb9f, head 4103493) P0-2: present copula + token at the end is the main predicate | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "I fixed the first test; the second remains unmet."
   },
   {
    "source": "synthetic-negative-p1a-80",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "review #5 P0-3: pending the owner ruling on ADR-008 (c) (2026-10-16); at 50f31e5 this is allow",
+   "expect_claim": true,
+   "note": "review #5 P0-3: pending the owner ruling on ADR-008 (c) (2026-10-16); at 50f31e5 this is allow | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "修正しました、原因は期限超過です。"
   },
   {
@@ -1805,8 +1805,8 @@
   {
    "source": "synthetic-negative-p1a-82",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "parent ruling on review #5 (2026-10-16, block side) P0-2: copula + token (parent's copula list includes was/were; no past marker)",
+   "expect_claim": true,
+   "note": "parent ruling on review #5 (2026-10-16, block side) P0-2: copula + token (parent's copula list includes was/were; no past marker) | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "I fixed the first test; the second was unmet."
   },
   {
@@ -1889,15 +1889,15 @@
   {
    "source": "synthetic-negative-p1a-85",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) regression guard: copula + token at the end",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) regression guard: copula + token at the end | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "I fixed the first test; the second is unmet."
   },
   {
    "source": "synthetic-negative-p1a-86",
    "lane": "indrev-p1a",
-   "expect_claim": false,
-   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) regression guard",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) regression guard | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "修正しましたが、残りは未達です。"
   },
   {
@@ -2018,6 +2018,97 @@
    "expect_claim": false,
    "note": "parent ruling on review #8 (2026-10-16, structural (b)) regression guard: claim words INSIDE the quote are allowed",
    "text": "「完了」と書いたのは誤りでした。"
+  },
+  {
+   "source": "synthetic-positive-p1a-122",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-U: a sentence-initial UNMET: marker | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "UNMET: none; I fixed the bug and the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-123",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-U | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "UNMET: 0 items; I fixed the bug and the tests pass."
+  },
+  {
+   "source": "synthetic-positive-p1a-124",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-U | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "UNMET: なし、修正しました、テストも通っています。"
+  },
+  {
+   "source": "synthetic-positive-p1a-125",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-B: a bracket after the token | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "全て修正しました、未達（なし）。"
+  },
+  {
+   "source": "synthetic-positive-p1a-126",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-B | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "残りは未達（0件）。全て修正しました。"
+  },
+  {
+   "source": "synthetic-positive-p1a-127",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-B | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "I fixed the bug and the tests pass; remaining items are unmet (none)."
+  },
+  {
+   "source": "synthetic-positive-p1a-128",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-P: a past-state subject | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "修正しました、前回は未達でした。"
+  },
+  {
+   "source": "synthetic-positive-p1a-129",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-P | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "I fixed the bug; initially two were unmet."
+  },
+  {
+   "source": "synthetic-positive-p1a-130",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-P | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "I fixed the bug; at first the deadline was missed."
+  },
+  {
+   "source": "synthetic-positive-p1a-131",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-R: wh-class relatives | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "I fixed what was unmet."
+  },
+  {
+   "source": "synthetic-positive-p1a-132",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-R | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "I fixed the test whose deadline was missed."
+  },
+  {
+   "source": "synthetic-positive-p1a-133",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P0-R: a verb in the clause before the copula | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "I fixed the ones you said were unmet."
+  },
+  {
+   "source": "synthetic-positive-p1a-134",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P2: 0 is a negation | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
+   "text": "The task is complete; 0 requirements are unmet."
   }
  ]
 }
