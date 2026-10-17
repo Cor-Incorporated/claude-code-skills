@@ -287,6 +287,44 @@ def commit_subject(cmd: str) -> str | None:
     return None
 
 
+def _message_args(rest: str) -> list[str]:
+    """Every -m / --message argument of one `git commit` segment, unquoted, in order."""
+    out: list[str] = []
+    while True:
+        m = MSG_FLAG_RE.search(rest)
+        if not m:
+            return out
+        val = m.group("val")
+        arg = _first_shell_arg(val)
+        out.append(arg)
+        lead = len(val) - len(val.lstrip())
+        quoted = val.lstrip()[:1] in ("'", '"')
+        rest = val[lead + len(arg) + (2 if quoted else 0) :]
+
+
+def commit_message_text(cmd: str) -> str:
+    """The text that will become the commit message of the real `git … commit` segments in `cmd`: every -m /
+    --message argument and the heredoc body of a `-F -` / `-m "$(cat <<EOF …)"` form, joined.  A shell comment
+    (`# ADJUDICATION: <url>`), another command's arguments or the rest of the line are NOT part of it (Codex review
+    2026-10-17 r2 P2: the owner's ruling is accepted only where `git log` will later show it)."""
+    parts: list[str] = []
+    for line, body in _logical_lines(cmd):
+        for seg in shell_segments(line):
+            wrapped = WRAPPER_SEG_RE.match(seg)
+            if wrapped:
+                parts.append(commit_message_text(wrapped.group("inner")))
+                continue
+            git = GIT_COMMIT_SEG_RE.match(seg)
+            if not git:
+                continue
+            rest = git.group("rest")
+            args = _message_args(rest)
+            parts.extend(args)
+            if FILE_STDIN_RE.search(rest) or any(HEREDOC_MSG_RE.match(a) for a in args):
+                parts.extend(body)
+    return "\n".join(p for p in parts if p)
+
+
 def has_commit_segment(cmd: str) -> bool:
     """True when `cmd` contains a real `git … commit` segment (any form GIT_COMMIT_SEG_RE knows,
     including inside `bash -c "…"`), whatever its message form.  aidd-governance#186 R4: the stdout

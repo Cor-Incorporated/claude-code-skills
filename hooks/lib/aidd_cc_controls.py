@@ -43,6 +43,9 @@ from aidd_cc_text import (
     mutated,
     normalize_cmd,
     readback_claims,
+    commit_message_text,
+    GIT_COMMIT_SEG_RE,
+    shell_segments,
 )
 
 ITER_THRESHOLD = 4  # the 4th occurrence with no progress is blocked
@@ -150,9 +153,10 @@ def repair_family_check(
     # which 4 were HOLD, 8 review rounds): a note is a re-adjudication only once.  HOLD re-arms the counter ONE
     # time per PIVOT/RETIRE cycle; a second HOLD is ignored, so the next trip needs PIVOT / RETIRE or the
     # owner's decision (ADJUDICATION: <url> in a commit body, see branch_fix_streak).
-    if ADJUDICATION_RE.search(cmd or ""):
+    if ADJUDICATION_RE.search(commit_message_text(cmd or "")):
         # the commit being made records the owner's decision (`-m 'ADJUDICATION: <url>'`, review 2026-10-17 P1):
-        # it is the remedy both breakers ask for.  Surface form by design — the url is auditable in the PR.
+        # it is the remedy both breakers ask for.  Only the message text counts — a shell comment or another
+        # command's argument never reaches `git log` (Codex r2 P2).  Surface form by design — the url is auditable.
         return None
     fix_times = _scope_fix_times(rows, scope)
     strat_ts, hold_used = _strategy_cut(meta, fix_times)
@@ -204,7 +208,7 @@ BRANCH_BASES = ("origin/develop", "develop", "origin/main", "main")
 GIT_C_RE = re.compile(
     r"""(?:^|\s)git\s+(?:-C|--git-dir=)\s*(?:'([^']+)'|"([^"]+)"|(\S+))"""
 )
-CD_PREFIX_RE = re.compile(r"""^\s*cd\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*&&""")
+CD_SEG_RE = re.compile(r"""^\s*cd\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*$""")
 GIT_BUDGET_SEC = (
     6.0  # the whole branch check stays well inside the harness's 12 s hook budget
 )
@@ -215,13 +219,24 @@ def _first_group(m) -> str | None:
 
 
 def _repo_for(cwd: str, cmd: str) -> Path:
-    """The repository a commit command acts on: `git -C <dir>` / `--git-dir=` / `cd <dir> &&` (quoted paths
-    allowed), else cwd (review 2026-10-17 P2: `cd … &&` and quoted `-C` were missed)."""
-    pick = _first_group(GIT_C_RE.search(cmd or "")) or _first_group(
-        CD_PREFIX_RE.match(cmd or "")
-    )
-    repo = Path(pick).expanduser() if pick else Path(cwd or ".")
-    return repo if repo.is_absolute() else Path(cwd or ".") / repo
+    """The repository the `git … commit` segment acts on: its own `-C <dir>` / `--git-dir=` (quoted paths allowed),
+    resolved against the `cd <dir>` segments that precede it (chained cds apply in order), else that directory;
+    no commit segment → cwd.  A `-C` on another git call in the same line is not it (Codex r2 P2: `git -C /other
+    status && git -C /target commit`).  Unexpandable shell variables stay literal → not a repository → count 0."""
+    cur = Path(cwd or ".")
+    for seg in shell_segments(cmd or ""):
+        cd = CD_SEG_RE.match(seg)
+        if cd:
+            p = Path(_first_group(cd) or ".").expanduser()
+            cur = p if p.is_absolute() else cur / p
+            continue
+        if GIT_COMMIT_SEG_RE.match(seg):
+            pick = _first_group(GIT_C_RE.search(seg))
+            if not pick:
+                return cur
+            p = Path(pick).expanduser()
+            return p if p.is_absolute() else cur / p
+    return cur
 
 
 def branch_fix_streak(
@@ -265,7 +280,13 @@ def branch_fix_streak(
         if (git("rev-parse", "HEAD") or "").strip() == base:
             return {**none, "base": base_name}
         log_out = (
-            git("log", "--first-parent", "--format=%ct%x1f%B%x00", f"{base}..HEAD")
+            git(
+                "log",
+                "--first-parent",
+                "--no-show-signature",
+                "--format=%ct%x1f%B%x00",
+                f"{base}..HEAD",
+            )
             or ""
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -288,8 +309,13 @@ def branch_fix_streak(
         if not body:
             continue
         if ADJUDICATION_RE.search(body):
-            # %ct is whole seconds: +1 so a row written in the same second as the commit is on the adjudicated side
-            adjudicated_ts = float(ct or 0) + 1.0
+            # %ct is whole seconds: a session row written in the ruling's own second (before or after it) counts
+            # toward the streak — errs to block (Codex r2 P2 chose this over +1 s, which dropped fixes made right
+            # after the ruling); an unparsable time is no cut at all.
+            try:
+                adjudicated_ts = float(ct)
+            except ValueError:
+                adjudicated_ts = 0.0
             break
         subject = body.split("\n", 1)[0]
         fm = FIX_SUBJECT_RE.match(subject)
