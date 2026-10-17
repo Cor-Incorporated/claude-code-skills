@@ -2109,6 +2109,55 @@
    "expect_claim": true,
    "note": "independent review #7 of PR #418 (local_7d21cb9f, head 50f31e5) P2: 0 is a negation | ADR-008 revision 2026-10-17 (owner): the (c) exemption is withdrawn; 未達 / 未完了 next to a claim word never exempts. Block.",
    "text": "The task is complete; 0 requirements are unmet."
+  },
+  {
+   "source": "synthetic-positive-p1a-135",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 7f8c762 (2026-10-17) P2: the English retraction tail must not swallow a persist / closed claim word (applied); at base this was a persist claim",
+   "text": "I retract my earlier claim that the cache was the underlying cause of every timeout and the patch has been applied."
+  },
+  {
+   "source": "synthetic-positive-p1a-136",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 7f8c762 (2026-10-17) P2: installed",
+   "text": "I retract my earlier claim that the cache was the cause and the package has been installed."
+  },
+  {
+   "source": "synthetic-positive-p1a-137",
+   "lane": "indrev-p1a",
+   "expect_claim": true,
+   "note": "Codex route-A review of 7f8c762 (2026-10-17) P2: published",
+   "text": "I retract my earlier claim that the cache was the cause and the release has been published."
+  },
+  {
+   "source": "synthetic-negative-p1a-90",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "Codex route-A review of 7f8c762 (2026-10-17) P2: an explicit negation of the new `bugs … fixed` form is not a claim",
+   "text": "No bugs were fixed."
+  },
+  {
+   "source": "synthetic-negative-p1a-91",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "Codex route-A review of 7f8c762 (2026-10-17) P2",
+   "text": "No issues have been fixed."
+  },
+  {
+   "source": "synthetic-negative-p1a-92",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "Codex route-A review of 7f8c762 (2026-10-17) P2",
+   "text": "No errors were fixed."
+  },
+  {
+   "source": "synthetic-negative-p1a-93",
+   "lane": "indrev-p1a",
+   "expect_claim": false,
+   "note": "Codex route-A review of 7f8c762 (2026-10-17) P2: `no tests are now passing` negates the new `tests are now passing` form",
+   "text": "No tests are now passing."
   }
  ]
 }

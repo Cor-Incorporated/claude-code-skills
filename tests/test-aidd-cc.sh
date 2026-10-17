@@ -848,6 +848,7 @@ checks = [(row("perl -Mstrict -e 'print 1' a.py"), []), (row("sed --in-place=.ba
           # Codex route-A on e00d1df: a required keyword-only argument must not crash the walk; cp -t / --target-directory write the destination; isort read-only modes
           (row("python3 -c 'def f(*, required): pass'"), []), (row("cp source.py --target-directory=out"), ["/x/out/source.py"]), (row("cp a.py b.py -t out"), ["/x/out/a.py", "/x/out/b.py"]),
           (row("isort --stdout a.py"), []), (row("isort -c a.py"), []), (row("isort --check-only a.py"), []), (row("isort a.py"), ["/x/a.py"]),
+          (row("rustfmt --config-path rustfmt.toml main.rs"), ["/x/main.rs"]),  # Codex route-A on 7f8c762 P2: --config-path is an input
           # review #5 P2: a def called at top level runs its body; an option value that is also a real argument stays
           (row("python3 -c 'def f(): open(\"/x/a.py\",\"w\")\nf()'"), ["/x/a.py"]), (row("black --config pyproject.toml pyproject.toml"), ["/x/pyproject.toml"]),
           # Codex route-A on 50f31e5 P2: a called generator / async body does not run; option values with an "i" are not -i; -Ss is staged; patch -t is a flag
