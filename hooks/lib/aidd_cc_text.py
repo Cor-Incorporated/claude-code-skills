@@ -284,6 +284,12 @@ def _logical_lines(text: str) -> list[tuple[str, list[str]]]:
                 body.append(lines[i])
                 i += 1
             i += 1  # the delimiter line itself
+        if delims and i < len(lines) and lines[i].lstrip().startswith(")"):
+            # `-m "$(cat <<'EOF' … EOF\n)" && git commit -m 'fix(x): …'`: the closing `)"` line ends the opener's
+            # quoted argument, so it belongs to the opener line — otherwise the opener keeps an unclosed quote and
+            # the chained commit after `)"` is never split into its own segment (review of #422, P2)
+            line = line + lines[i]
+            i += 1
         out.append((line, body))
     return out
 
