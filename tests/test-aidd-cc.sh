@@ -656,7 +656,14 @@ grep -q '"rule": "evidence.loop-guard.would-block".*"session": "neg76b"' "$AIDD_
 o76c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76c","last_assistant_message":"取り消しは完了です。"}' | bash "$HOOK")"
 # the honest form under ADR-009: the same retraction with a Status line passes (vocabulary backstop yields to the declaration)
 o76s="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76s","last_assistant_message":"「実装完了しました。」は取り消します。\nStatus: unverified"}' | bash "$HOOK")"
-if [ -z "$fail76" ] && printf '%s' "$o76c" | grep -q 'completion claim without' && ! printf '%s' "$o76s" | grep -q '"decision"'; then ok "T76 Option A: quoted / English retractions, negated retraction verbs and the 完了は…予定 window are claims on the no-tool backstop; (a) negations stay; the Status: unverified form passes"; else bad "T76:$fail76 [$o76c] [$o76s]"; fi
+# Codex review of #423: after tool use, `Status: unverified` still binds push / save claims (ADR-009), and a retraction that
+# QUOTES the claim word (「マージ済み」は取り消します) is a push claim now — by design (err toward block; the honest form
+# names no push/merge/save word). Documented, not an exemption.
+printf '%s' '{"hook_event_name":"PreToolUse","session_id":"neg76t","tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | bash "$HOOK" >/dev/null
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg76t","tool_name":"Bash","tool_input":{"command":"pytest -q"},"tool_response":{"exit_code":0,"stdout":"3 passed"}}' | bash "$HOOK" >/dev/null
+o76t="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76t","last_assistant_message":"「マージ済み」は取り消します。\nStatus: unverified"}' | bash "$HOOK")"
+o76u="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76t","last_assistant_message":"先の報告は誤りでした。develop には何も入れていません。\nStatus: unverified"}' | bash "$HOOK")"
+if [ -z "$fail76" ] && printf '%s' "$o76c" | grep -q 'completion claim without' && ! printf '%s' "$o76s" | grep -q '"decision"' && printf '%s' "$o76t" | grep -q 'push/merge claimed' && ! printf '%s' "$o76u" | grep -q '"decision"'; then ok "T76 Option A: quoted / English retractions, negated retraction verbs and the 完了は…予定 window are claims on the no-tool backstop; (a) negations stay; the Status: unverified form passes; after tool use a retraction quoting マージ済み is still a push claim while the form without the claim word passes"; else bad "T76:$fail76 [$o76c] [$o76s] [$o76t] [$o76u]"; fi
 
 # (77) R6: quote stripping on the trailer's command field removes only a matching outer pair (Addendum P3: the closing
 #      quote of `date '+%Y-%m-%d %H:%M:%S'` was stripped and the executed command reported as not executed)
