@@ -870,5 +870,39 @@ o98="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg98","last_assista
 o98b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg98b","last_assistant_message":"2 + 2 は 4 です。"}' | bash "$HOOK")"
 if printf '%s' "$o98" | grep -q 'completion claim without' && [ -z "$o98b" ]; then ok "T98 no tool rows: vocabulary backstop blocks the live-lane claim, plain answers pass"; else bad "T98: [$o98] [$o98b]"; fi
 
+
+# ---- (100) chained commits (independent acceptance 2026-10-18 P2-b, claude-code-skills#421): `git commit -m 'chore: x' &&
+#      git commit -m 'fix(<scope>): …'` hid the fix commit from the pre-check because only the FIRST commit segment was
+#      read; the chained form could keep both breakers from firing. Every commit segment is judged, a chained fix is
+#      counted when recorded, and the ruling must sit on the fix segment itself. Red at develop 43a91a7 before the repair.
+R100="$SB/repo100"; git init -q "$R100"; git -C "$R100" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m init; git -C "$R100" branch -M develop; git -C "$R100" checkout -q -b fix/h17-chain
+for i in 1 2 3; do fixrow neg100 h17 $i >/dev/null; done
+o100a="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100\",\"cwd\":\"$R100\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' && git commit -q -m 'fix(h17): r4 chained'\"}}" | bash "$HOOK")"
+# the chained form, when it LANDS, must count toward the session streak too
+chainrow() { printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100b\",\"cwd\":\"$R100\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: c$1' && git commit -q -m 'fix(h17): c$1'\"}}" | bash "$HOOK"; printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg100b\",\"cwd\":\"$R100\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: c$1' && git commit -q -m 'fix(h17): c$1'\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"ok\"}}" | bash "$HOOK" >/dev/null; }
+for i in 1 2 3; do chainrow $i >/dev/null; done
+o100b="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100b\",\"cwd\":\"$R100\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): plain after 3 chained'\"}}" | bash "$HOOK")"
+# branch level: 6 fix(h17) on the branch (R94C from T94), a chained 7th is blocked; the ruling must be on the fix segment,
+# not on the chore segment before it
+o100c="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100c\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' && git commit -q -m 'fix(h17): branch chained'\"}}" | bash "$HOOK")"
+o100d="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100d\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' -m 'ADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-1' && git commit -q -m 'fix(h17): branch chained 2'\"}}" | bash "$HOOK")"
+o100e="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100e\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' && git commit -q -m 'fix(h17): branch chained 3' -m 'ADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-1'\"}}" | bash "$HOOK")"
+# review of #422 P2: a heredoc chore whose closing `)"` line carries the chained fix commit
+o100f="$(python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":"neg100f","cwd":sys.argv[1],"tool_name":"Bash","tool_input":{"command":"git commit -q -m \"$(cat <<'"'"'EOF'"'"'\nchore: x\nEOF\n)\" && git commit -q -m '"'"'fix(h17): heredoc chained'"'"'"}}))' "$R94C" | bash "$HOOK")"
+# Codex review of #422: a comment apostrophe before the commit, a heredoc fix subject followed by `-m 'Refs: …'`, the
+# fix segment's own `-C` repository (A has 6 fixes, R100 has none), and a `||` fallback fix that did not run
+o100g="$(python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":"neg100","cwd":sys.argv[1],"tool_name":"Bash","tool_input":{"command":"# Don'"'"'t forget the tests\ngit commit -q -m '"'"'fix(h17): r5 after a comment'"'"'"}}))' "$R100" | bash "$HOOK")"
+o100h="$(python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":"neg100h","cwd":sys.argv[1],"tool_name":"Bash","tool_input":{"command":"git commit -q -m \"$(cat <<'"'"'EOF'"'"'\nfix(h17): heredoc subject\nEOF\n)\" -m '"'"'Refs: #421'"'"'"}}))' "$R94C" | bash "$HOOK")"
+o100i="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100i\",\"cwd\":\"/\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $R94C commit -q -m 'chore: x' && git -C $R100 commit -q -m 'fix(h17): first fix in another repo'\"}}" | bash "$HOOK")"
+fbrow() { printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg100j\",\"cwd\":\"$R100\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: c$1' || git commit -q -m 'fix(h17): fallback $1'\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"\"}}" | bash "$HOOK" >/dev/null; }
+for i in 1 2 3; do fbrow $i; done
+o100j="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100j\",\"cwd\":\"$R100\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): first real fix'\"}}" | bash "$HOOK")"
+# Codex re-review of #422: a heredoc FILE body with an apostrophe before the commit, and a heredoc-message commit into
+# another repository via -C (R94C has 6 fixes; cwd is not a repository)
+o100k="$(python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":"neg100","cwd":sys.argv[1],"tool_name":"Bash","tool_input":{"command":"cat > notes.md <<'"'"'EOF'"'"'\nDon'"'"'t forget the tests\nEOF\ngit commit -q -m '"'"'fix(h17): r6 after a heredoc file'"'"'"}}))' "$R100" | bash "$HOOK")"
+o100l="$(python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":"neg100l","cwd":"/","tool_name":"Bash","tool_input":{"command":"git -C "+sys.argv[1]+" commit -q -m \"$(cat <<'"'"'EOF'"'"'\nfix(h17): heredoc into -C repo\nEOF\n)\""}}))' "$R94C" | bash "$HOOK")"
+o100m="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100m\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' && git commit -q -m 'fix(h17): branch chained'\"}}" | AIDD_CC_MUTATE=iter.repair-family bash "$HOOK")"
+if printf '%s' "$o100a" | grep -q 're-adjudication' && printf '%s' "$o100b" | grep -q 're-adjudication' && printf '%s' "$o100c" | grep -q 'no owner adjudication' && printf '%s' "$o100d" | grep -q 'no owner adjudication' && [ -z "$o100e" ] && printf '%s' "$o100f" | grep -q 'no owner adjudication' && printf '%s' "$o100g" | grep -q 're-adjudication' && printf '%s' "$o100h" | grep -q 'no owner adjudication' && [ -z "$o100i" ] && [ -z "$o100j" ] && printf '%s' "$o100k" | grep -q 're-adjudication' && printf '%s' "$o100l" | grep -q 'no owner adjudication' && [ -z "$o100m" ]; then ok "T100 a fix commit chained after a non-fix commit is judged (session and branch), counted when it lands, and released only by a ruling on the fix segment itself; a heredoc chore's closing line or a comment apostrophe does not hide it; a heredoc fix subject keeps its scope; the fix segment's own -C repo is judged; a || fallback that did not run is not counted; a heredoc file body or a heredoc -C commit keeps the scope; mutation RED"; else bad "T100: [$o100a] [$o100b] [$o100c] [$o100d] [$o100e] [$o100f] [$o100g] [$o100h] [$o100i] [$o100j] [$o100k] [$o100l] [$o100m]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

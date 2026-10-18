@@ -284,6 +284,12 @@ def _logical_lines(text: str) -> list[tuple[str, list[str]]]:
                 body.append(lines[i])
                 i += 1
             i += 1  # the delimiter line itself
+        if delims and i < len(lines) and lines[i].lstrip().startswith(")"):
+            # `-m "$(cat <<'EOF' … EOF\n)" && git commit -m 'fix(x): …'`: the closing `)"` line ends the opener's
+            # quoted argument, so it belongs to the opener line — otherwise the opener keeps an unclosed quote and
+            # the chained commit after `)"` is never split into its own segment (review of #422, P2)
+            line = line + lines[i]
+            i += 1
         out.append((line, body))
     return out
 
@@ -342,25 +348,41 @@ _QNL = "\x01"  # a newline inside quotes, kept through the physical-line split
 
 
 def _join_quoted_newlines(text: str) -> str:
-    """Newlines inside a quoted run become _QNL — except a run that opens a heredoc (`"$(cat <<'EOF' …)"`), whose
-    body lines must stay physical lines for _logical_lines (Codex r4 P2: the Claude Code standard commit form)."""
-    out, quote, run, text = [], None, "", text or ""
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        if quote:
-            if ch == quote:
-                quote = None
-            elif ch == "\n" and "<<" not in run:
-                out.append(_QNL)
-                i += 1
-                continue
-        elif ch in ("'", '"'):
-            quote = ch
-            end = text.find(ch, i + 1)
-            run = text[i : end if end >= 0 else len(text)]
-        out.append(ch)
+    """Newlines inside a quoted run become _QNL so a multi-line `-m '…'` survives the physical-line split.  Heredoc
+    bodies are copied verbatim (their apostrophes are prose, not quotes — Codex review of #422: `cat > notes.md
+    <<'EOF' … Don't … EOF` before the commit emptied fix_scopes()); an unquoted `#` comment runs to the end of its
+    line without opening quotes."""
+    lines, out, quote, i = (text or "").split("\n"), [], None, 0
+    while i < len(lines):
+        line, buf, j = lines[i], [], 0
+        while j < len(line):
+            ch = line[j]
+            if quote is None and ch == "#" and (j == 0 or line[j - 1] in " \t"):
+                buf.append(line[j:])
+                break
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in ("'", '"'):
+                quote = ch
+            buf.append(ch)
+            j += 1
+        out.append("".join(buf))
+        delims = [m.group(2) for m in HEREDOC_OPEN_RE.finditer(line)]
         i += 1
+        if delims:  # the body lines and their delimiters stay physical lines, whatever the quote state
+            for d in delims:
+                while i < len(lines) and lines[i].strip() != d:
+                    out.append("\n" + lines[i])
+                    i += 1
+                if i < len(lines):
+                    out.append("\n" + lines[i])
+                    i += 1
+            if i < len(lines):
+                out.append("\n")
+            continue
+        if i < len(lines):
+            out.append(_QNL if quote else "\n")
     return "".join(out)
 
 
@@ -398,10 +420,12 @@ def commit_messages(cmd: str) -> list[str]:
                 continue
             rest = git.group("rest")
             args = _message_args(rest)
-            parts = [
-                a for a in args if not HEREDOC_MSG_RE.match(a)
-            ]  # the `$(cat <<EOF` arg IS its body
-            if FILE_STDIN_RE.search(rest) or any(HEREDOC_MSG_RE.match(a) for a in args):
+            parts: list[str] = []
+            for a in args:  # argument order: a heredoc -m is its body, in place (Codex review of #422)
+                parts.extend(body if HEREDOC_MSG_RE.match(a) else [a])
+            if FILE_STDIN_RE.search(rest) and not any(
+                HEREDOC_MSG_RE.match(a) for a in args
+            ):
                 parts.extend(body)
             msgs.append("\n".join(p for p in parts if p).replace(_QNL, "\n"))
     return msgs
@@ -431,6 +455,44 @@ def fix_scope(cmd: str) -> str | None:
     """`git commit … -m 'fix(h17): …'` -> "h17" (same repair family, aidd-governance#88)."""
     m = FIX_SUBJECT_RE.match(commit_subject(cmd) or "")
     return m.group(2).strip().lower() if m else None
+
+
+def fix_scopes(cmd: str) -> list[str]:
+    """Every `fix(<scope>)` subject among the commit segments of `cmd`, in order, deduplicated — `git commit -m
+    'chore: x' && git commit -m 'fix(h17): …'` is a fix(h17) commit too (acceptance 2026-10-18 P2-b, #421)."""
+    out: list[str] = []
+    for msg in commit_messages(cmd or ""):
+        m = FIX_SUBJECT_RE.match(msg.split("\n", 1)[0])
+        if m and m.group(2).strip().lower() not in out:
+            out.append(m.group(2).strip().lower())
+    return out
+
+
+def landed_fix_scopes(cmd: str, out: str) -> list[str]:
+    """The fix scopes of `cmd` that a successful call (rc 0) actually landed: a commit segment reached through
+    `||` ran only if the previous one failed, so such a scope counts only when it also appears in a segment that
+    ran unconditionally or in git's own stdout (Codex review of #422: `git commit -m 'chore: x' || git commit -m
+    'fix(h17): fallback'` was counted).  Heredoc commits (body outside the segment) are judged by the whole
+    command, as before (T68a)."""
+    scopes = fix_scopes(cmd)
+    if not scopes:
+        return []
+    printed, firm, fallback = fix_scopes_from_output(out), set(), set()
+    for line, _body in _logical_lines(_join_quoted_newlines(cmd or "")):
+        for seg, sep in shell_segments_with_separators(line):
+            for sc in fix_scopes(seg.replace(_QNL, "\n")):
+                (fallback if sep == "||" else firm).add(sc)
+    return [sc for sc in scopes if sc not in fallback or sc in firm or sc in printed]
+
+
+def fix_scopes_from_output(out: str) -> list[str]:
+    """Every scope git itself printed as `[branch sha] fix(scope): …` (several commits in one call)."""
+    scopes: list[str] = []
+    for subject in COMMIT_STDOUT_RE.findall(out or ""):
+        m = FIX_SUBJECT_RE.match(subject)
+        if m and m.group(2).strip().lower() not in scopes:
+            scopes.append(m.group(2).strip().lower())
+    return scopes
 
 
 def fix_scope_from_output(out: str) -> str | None:

@@ -23,8 +23,6 @@ from aidd_cc_text import (
     cmd_in_ledger,
     commit_subject,
     declared_status,
-    fix_scope,
-    fix_scope_from_output,
     has_commit_segment,
     strategy_kind,
     segment_runs,
@@ -48,6 +46,9 @@ from aidd_cc_text import (
     shell_segments,
     commit_messages,
     WRAPPER_SEG_RE,
+    fix_scopes,
+    fix_scopes_from_output,
+    landed_fix_scopes,
 )
 
 ITER_THRESHOLD = 4  # the 4th occurrence with no progress is blocked
@@ -114,13 +115,13 @@ def _scope_fix_times(rows: list[dict], scope: str) -> list[float]:
         if r.get("event") == "post"
         and r.get("rc") == 0
         and (
-            fix_scope(str(r.get("cmd", "")))
+            scope
+            in landed_fix_scopes(str(r.get("cmd", "")), str(r.get("out_sample", "")))
             or (
                 has_commit_segment(str(r.get("cmd", "")))
-                and fix_scope_from_output(str(r.get("out_sample", "")))
+                and scope in fix_scopes_from_output(str(r.get("out_sample", "")))
             )
         )
-        == scope
     )
 
 
@@ -153,9 +154,20 @@ def repair_family_check(
     note whose hypothesis carries `STRATEGY: HOLD|PIVOT|RETIRE` (#88 closed
     vocabulary).  Normal development is untouched: feat/docs/test commits and
     fixes of different scopes never count."""
-    scope = fix_scope(cmd)
-    if not scope or mutated("iter.repair-family"):
+    if mutated("iter.repair-family"):
         return None
+    # acceptance 2026-10-18 P2-b (#421): every fix(<scope>) commit segment of the line is judged, not only the first
+    # (`git commit -m 'chore: x' && git commit -m 'fix(h17): …'` escaped both breakers at pre)
+    for scope in fix_scopes(cmd):
+        verdict = _repair_family_scope(rows, meta, cmd, cwd, scope)
+        if verdict:
+            return verdict
+    return None
+
+
+def _repair_family_scope(
+    rows: list[dict], meta: dict, cmd: str, cwd: str, scope: str
+) -> dict | None:
     # 2026-10-17 (this harness's own loop on claude-code-skills#418: 12 fix(h17) commits, 6 STRATEGY notes of
     # which 4 were HOLD, 8 review rounds): a note is a re-adjudication only once.  HOLD re-arms the counter ONE
     # time per PIVOT/RETIRE cycle; a second HOLD is ignored, so the next trip needs PIVOT / RETIRE or the
@@ -232,7 +244,7 @@ def _first_group(m) -> str | None:
     return next((g for g in m.groups() if g), None) if m else None
 
 
-def _repo_for(cwd: str, cmd: str) -> Path:
+def _repo_for(cwd: str, cmd: str, scope: str | None = None) -> Path:
     """The repository the `git … commit` segment acts on: its own `-C <dir>` / `--git-dir=` (quoted paths allowed),
     resolved against the `cd <dir>` segments that precede it (chained cds apply in order), else that directory;
     no commit segment → cwd.  A `-C` on another git call in the same line is not it (Codex r2 P2: `git -C /other
@@ -243,13 +255,20 @@ def _repo_for(cwd: str, cmd: str) -> Path:
             seg
         )  # bash -c 'cd /target && git commit …' (Codex r3 P2)
         if wrapped:
-            return _repo_for(str(cur), wrapped.group("inner"))
+            return _repo_for(str(cur), wrapped.group("inner"), scope)
         cd = CD_SEG_RE.match(seg)
         if cd:
             p = Path(_first_group(cd) or ".").expanduser()
             cur = p if p.is_absolute() else cur / p
             continue
         if GIT_COMMIT_SEG_RE.match(seg):
+            if (
+                scope
+                and scope not in fix_scopes(seg)
+                and commit_subject(seg) is not None
+            ):
+                continue  # another commit of the line (chore / other scope); a heredoc commit, whose subject is
+                # not inline here, stays a candidate (Codex re-review of #422)
             pick = _first_group(GIT_C_RE.search(seg))
             if not pick:
                 return cur
@@ -271,7 +290,7 @@ def branch_fix_streak(
     (`fix(h17-gate)`) is another scope; a fabricated ADJUDICATION url is accepted as written (auditable in the PR)."""
     import subprocess
 
-    repo = _repo_for(cwd, cmd)
+    repo = _repo_for(cwd, cmd, scope)
     deadline = time.monotonic() + GIT_BUDGET_SEC
     none = {"count": 0, "base": "?", "adjudicated_ts": 0.0}
 
