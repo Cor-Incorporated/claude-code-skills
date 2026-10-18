@@ -21,6 +21,10 @@
 //           name: ./aidd-cc-native.mts
 //           config: { oracle: !!js `${process.env.HOME}/.claude/hooks/lib/aidd_cc.py` }
 //
+// STATUS 2026-10-18: live with DEEPSEEK_API_KEY (owner terminal): pre/post rows recorded, bash tool ran; the stop
+// handler read `session.events` (not a field) and returned silently → fixed to `session.log` + an H6 error row on
+// empty text. Install: dsh 0.2.0-rc.1 ONLY, with npm overrides pinning dsh-tools / dsh-agent to 0.2.0-rc.1 — the
+// rc.5 Claude-Code bridge hoists older copies and the bash tool dies with "reading 'prepare'" (runbook §2).
 // STATUS 2026-10-17: LOADS on dsh 0.2.0-rc.1 (node 24.21.0, `--experimental-strip-types` implied by .mts):
 // `dsh --profile headless --patch dsh/aidd-cc.patch.yml` activates this entry (no "did not activate" warning) and
 // stops only at MISSING_CREDENTIAL for the LLM — the live Stop block still needs a DEEPSEEK_API_KEY run by the
@@ -109,7 +113,10 @@ function blocksToText(content: unknown): string {
 
 /** The last `assistant/message` of the current turn from the session event log. */
 function lastAssistantText(agent: any): string {
-  const events: any[] = [...(agent?.session?.events ?? [])];
+  // dsh 0.2.0-rc.1: the session keeps its event log in `session.log` (seq-ordered `{type, data}` events, the same
+  // shape as session.v4.jsonl); `events` was never a field — the live run of 2026-10-18 20:00 JST read nothing.
+  const session = agent?.session;
+  const events: any[] = [...(session?.log ?? session?.events ?? [])];
   const turnStart = events.findLast((e) => e?.type === "turn/start");
   const turn = turnStart?.data?.turn;
   const msg = events.findLast((e) => e?.type === "assistant/message" && (turn === undefined || e?.data?.turn === turn));
@@ -121,6 +128,10 @@ function exitCodeOf(text: string): number | undefined {
   const m = /\[exit code: (-?\d{1,3})\]\s*$/.exec(text.trim());
   return m ? Number(m[1]) : undefined;
 }
+
+// Session format v4 wants a producer-owned source kind (the generic "plugin" is rejected: `format v4 message requires
+// a producer-owned source kind`, live 2026-10-18 20:11 JST); dsh's own bridges use `{ kind: "hooks-codex" }`.
+const AIDD_SOURCE = { kind: "aidd-cc" };
 
 export function apply(ctx: any, config: Config = {}): void {
   const oracle = config.oracle ?? join(homedir(), ".claude", "hooks", "lib", "aidd_cc.py");
@@ -160,7 +171,11 @@ export function apply(ctx: any, config: Config = {}): void {
   ctx.on("agent/turn-stopping", async ({ agent }: any) => {
     const sid = String(agent?.session?.header?.id ?? "unset");
     const text = lastAssistantText(agent);
-    if (!text.trim()) return;
+    if (!text.trim()) {
+      // never a silent pass (#186 P2-2): the stop ran but found no assistant text — visible as an H6 error row
+      ledgerError("stop-no-assistant-text", `session=${sid} log=${(agent?.session?.log ?? []).length}`);
+      return;
+    }
     const n = steers.get(sid) ?? 0;
     const extra = n >= maxSteers ? ["--max-blocks", "0", "--no-count"] : [];
     const v = await runCC(oracle, "stop", { session_id: sid, last_assistant_message: text, cwd: agent?.session?.header?.cwd }, extra);
@@ -170,12 +185,12 @@ export function apply(ctx: any, config: Config = {}): void {
     if (!note) return;
     if (v.decision === "block" && n < maxSteers) {
       steers.set(sid, n + 1);
-      agent.steer(createUserMessage({ content: [{ type: "text", text: note }], source: { kind: "plugin", plugin: name } }));
+      agent.steer(createUserMessage({ content: [{ type: "text", text: note }], source: AIDD_SOURCE }));
       return;
     }
     // Budget spent or python released: the claim passes WITH the visible note (never silently, #186 P1-4).
     try {
-      agent.inject?.(createUserMessage({ content: [{ type: "text", text: note }], source: { kind: "plugin", plugin: name } }));
+      agent.inject?.(createUserMessage({ content: [{ type: "text", text: note }], source: AIDD_SOURCE }));
     } catch {
       /* the would-block row written by aidd_cc.py is the durable record */
     }
