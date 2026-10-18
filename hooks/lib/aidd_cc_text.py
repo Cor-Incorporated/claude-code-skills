@@ -348,33 +348,41 @@ _QNL = "\x01"  # a newline inside quotes, kept through the physical-line split
 
 
 def _join_quoted_newlines(text: str) -> str:
-    """Newlines inside a quoted run become _QNL — except a run that opens a heredoc (`"$(cat <<'EOF' …)"`), whose
-    body lines must stay physical lines for _logical_lines (Codex r4 P2: the Claude Code standard commit form)."""
-    out, quote, run, text = [], None, "", text or ""
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        if not quote and ch == "#" and (i == 0 or text[i - 1] in " \t\n"):
-            # an unquoted shell comment runs to the end of the line: its apostrophes are not quotes
-            # (Codex review of #422: `# Don't forget the tests` made fix_scopes() empty)
-            end = text.find("\n", i)
-            end = len(text) if end < 0 else end
-            out.append(text[i:end])
-            i = end
-            continue
-        if quote:
-            if ch == quote:
-                quote = None
-            elif ch == "\n" and "<<" not in run:
-                out.append(_QNL)
-                i += 1
-                continue
-        elif ch in ("'", '"'):
-            quote = ch
-            end = text.find(ch, i + 1)
-            run = text[i : end if end >= 0 else len(text)]
-        out.append(ch)
+    """Newlines inside a quoted run become _QNL so a multi-line `-m '…'` survives the physical-line split.  Heredoc
+    bodies are copied verbatim (their apostrophes are prose, not quotes — Codex review of #422: `cat > notes.md
+    <<'EOF' … Don't … EOF` before the commit emptied fix_scopes()); an unquoted `#` comment runs to the end of its
+    line without opening quotes."""
+    lines, out, quote, i = (text or "").split("\n"), [], None, 0
+    while i < len(lines):
+        line, buf, j = lines[i], [], 0
+        while j < len(line):
+            ch = line[j]
+            if quote is None and ch == "#" and (j == 0 or line[j - 1] in " \t"):
+                buf.append(line[j:])
+                break
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in ("'", '"'):
+                quote = ch
+            buf.append(ch)
+            j += 1
+        out.append("".join(buf))
+        delims = [m.group(2) for m in HEREDOC_OPEN_RE.finditer(line)]
         i += 1
+        if delims:  # the body lines and their delimiters stay physical lines, whatever the quote state
+            for d in delims:
+                while i < len(lines) and lines[i].strip() != d:
+                    out.append("\n" + lines[i])
+                    i += 1
+                if i < len(lines):
+                    out.append("\n" + lines[i])
+                    i += 1
+            if i < len(lines):
+                out.append("\n")
+            continue
+        if i < len(lines):
+            out.append(_QNL if quote else "\n")
     return "".join(out)
 
 

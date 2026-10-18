@@ -262,8 +262,13 @@ def _repo_for(cwd: str, cmd: str, scope: str | None = None) -> Path:
             cur = p if p.is_absolute() else cur / p
             continue
         if GIT_COMMIT_SEG_RE.match(seg):
-            if scope and scope not in fix_scopes(seg):
-                continue  # another commit of the line; the fix(<scope>) segment's own repository is wanted
+            if (
+                scope
+                and scope not in fix_scopes(seg)
+                and commit_subject(seg) is not None
+            ):
+                continue  # another commit of the line (chore / other scope); a heredoc commit, whose subject is
+                # not inline here, stays a candidate (Codex re-review of #422)
             pick = _first_group(GIT_C_RE.search(seg))
             if not pick:
                 return cur
