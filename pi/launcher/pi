@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# `pi` — Pi coding agent 1.2.0 with the AIDD H17 common control extension, launched like `opencode`.
+#   pi                      interactive TUI
+#   pi -p "prompt"          one shot (print mode)
+#   pi <any pi args>        passed through (pi --help for the list)
+# Credentials, in this order: (1) OPENROUTER_API_KEY already in the environment, or pi's own credential store
+#   (`pi auth …`, the owner registers keys there) → run pi directly; (2) a Bitwarden session in this shell
+#   (BW_SESSION, i.e. bw-unlock was run or inherited under ~/Developer) → inject OPENROUTER_API_KEY through
+#   `bw-secrets run` for the child only. The interactive TUI under bw-secrets runs inside `script -q /dev/null`
+#   because bw-secrets gives the child a pipe for stdout (it redacts secrets) and pi's TUI exits silently without a TTY.
+# Default model: openrouter google/gemini-2.5-flash unless --provider/--model is given.
+# The real binary is the node-24 install; ~/.local/bin precedes the mise shims on PATH, so this file wins.
+set -uo pipefail
+N24="$HOME/.local/share/mise/installs/node/24.21.0/bin"
+PI_BIN="$N24/pi"
+EXT="$HOME/.pi/agent/extensions/aidd-cc.ts"
+export PATH="$N24:$PATH"
+[ -x "$PI_BIN" ] || { echo "pi: $PI_BIN missing (node 24 install of @earendil-works/pi-coding-agent)" >&2; exit 1; }
+[ -f "$EXT" ] || { echo "pi: $EXT missing — run bash ~/Developer/claude-code-skills/setup.sh" >&2; exit 1; }
+args=("$@")
+case " $* " in *" --provider "*|*" --model "*|*" --version "*|*" -V "*|*" --help "*|*" -h "*|*" install "*|*" remove "*|*" update "*|*" list "*|*" auth "*) ;; *) args=(--provider openrouter --model google/gemini-2.5-flash "${args[@]}");; esac
+case " $* " in *" --version "*|*" -V "*|*" --help "*|*" -h "*|*" install "*|*" remove "*|*" update "*|*" list "*|*" auth "*) exec "$PI_BIN" "$@";; esac
+interactive=1; case " $* " in *" -p "*|*" --print "*) interactive=0;; esac
+if [ -n "${OPENROUTER_API_KEY:-}" ] || [ -z "${BW_SESSION:-}" ]; then
+  exec "$PI_BIN" -e "$EXT" "${args[@]}"
+fi
+if [ "$interactive" = 1 ]; then
+  exec bw-secrets run OPENROUTER_API_KEY=OPENROUTER_API_KEY -- script -q /dev/null "$PI_BIN" -e "$EXT" "${args[@]}"
+fi
+exec bw-secrets run OPENROUTER_API_KEY=OPENROUTER_API_KEY -- "$PI_BIN" -e "$EXT" "${args[@]}"

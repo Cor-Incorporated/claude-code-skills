@@ -32,6 +32,18 @@ bash ~/.claude/scripts/claude-provider.sh zai
 
 Details: [docs/runbooks/provider-switching.md](docs/runbooks/provider-switching.md).
 
+## Entry launchers for Pi and DeepSeek Harness
+
+`setup.sh` installs two launchers into `~/.local/bin` so that Pi and dsh start with the H17 common control the way
+`opencode` and `cursor-agent` already do:
+
+| command | what it does |
+|---|---|
+| `pi` / `pi -p "…"` | Pi 1.2.0 with `~/.pi/agent/extensions/aidd-cc.ts`; default `--provider openrouter --model google/gemini-2.5-flash`. Uses pi's own credential store or `OPENROUTER_API_KEY`; with a Bitwarden session in the shell it injects the key through `bw-secrets run` (the TUI then runs under `script -q /dev/null` because bw-secrets pipes stdout). |
+| `dsh "task"` / `dsh web` / `dsh --session-id <id> "…"` | DeepSeek Harness 0.2.0-rc.1 (`~/.dsh-aidd/pkg`, dsh only + npm overrides `dsh-tools` / `dsh-agent` = 0.2.0-rc.1) with `dsh/aidd-cc-native.mts`. dsh 0.2.0-rc.1 has no terminal TUI (profiles acp / headless / sdk / sdk-minimal / web), so `dsh` offers one-shot, session continuation and the browser UI. Never add the rc.5 Claude-Code bridge: a second `dsh-tools` copy breaks the bash tool. |
+
+Sources: `pi/launcher/pi`, `dsh/launcher/dsh`. Runbook with the live procedure: aidd-governance `design/ops/runbooks/h17-human-gate-20261017.md`.
+
 ## Repository Structure
 
 ```
