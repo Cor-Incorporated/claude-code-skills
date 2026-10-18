@@ -433,6 +433,27 @@ def fix_scope(cmd: str) -> str | None:
     return m.group(2).strip().lower() if m else None
 
 
+def fix_scopes(cmd: str) -> list[str]:
+    """Every `fix(<scope>)` subject among the commit segments of `cmd`, in order, deduplicated — `git commit -m
+    'chore: x' && git commit -m 'fix(h17): …'` is a fix(h17) commit too (acceptance 2026-10-18 P2-b, #421)."""
+    out: list[str] = []
+    for msg in commit_messages(cmd or ""):
+        m = FIX_SUBJECT_RE.match(msg.split("\n", 1)[0])
+        if m and m.group(2).strip().lower() not in out:
+            out.append(m.group(2).strip().lower())
+    return out
+
+
+def fix_scopes_from_output(out: str) -> list[str]:
+    """Every scope git itself printed as `[branch sha] fix(scope): …` (several commits in one call)."""
+    scopes: list[str] = []
+    for subject in COMMIT_STDOUT_RE.findall(out or ""):
+        m = FIX_SUBJECT_RE.match(subject)
+        if m and m.group(2).strip().lower() not in scopes:
+            scopes.append(m.group(2).strip().lower())
+    return scopes
+
+
 def fix_scope_from_output(out: str) -> str | None:
     """Scope from git's own `[branch sha] fix(scope): …` line in the recorded stdout — covers
     `-F msg.txt` and editor commits whose subject is not on the command line (#186 P1-3a).
