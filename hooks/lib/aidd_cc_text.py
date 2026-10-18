@@ -122,22 +122,15 @@ WRITE_KIND_RE = re.compile(
 DELETE_KIND_RE = re.compile(
     r"(削除|消去|消して|delete|remove|rm\b|drop|truncate)", re.IGNORECASE
 )
-# aidd-governance#186 R5 (independent-review Residual 11, Claude live 2026-10-15 23:37Z re-entry): an honest retraction
-# quotes the claim it withdraws — 「『実装完了しました。』は取り消します」 — or says nothing was completed; the quoted claim
-# and the retraction sentence are removed before the claim scan.  Only the quoted span followed by a retraction verb
-# is removed: 「取り消しは完了です」 keeps its claim (a retraction and a claim in one sentence stay on the claim side).
-# Only an AFFIRMATIVE retraction verb counts (independent review 2026-10-16 P1): 「取り消します / 取り消しました /
-# 撤回します / 取り下げます / 成立しません」.  「取り消しません」「撤回の必要はありません」 keep the quoted claim.
-RETRACTION_WORDS = r"(?:(?:取り消|取消|撤回|取り下げ)(?:し)?(?:ます|ました|た)(?![かが])|成立し(?:ません|ない|ていません))"
+# Exemption (a) only (ADR-009; owner decision 2026-10-18 = Option A, claude-code-skills#421): an explicit negation
+# adjacent to the claim word is not a claim.  Exemption (b) — a quoted claim followed by a retraction verb, the English
+# "I retract … claim that …" clause and the 完了は…予定 window — was removed with its three bypasses (review #9 of #418
+# P0-2/3/4: sentence-end class, negated retraction verb, claim words inside the window).  This scan runs only for a
+# session WITHOUT tool rows; a retraction there is written as `Status: unverified` or without the claim words.
 NEGATED_COMPLETION_RE = re.compile(
-    r"([「『][^「」『』\n]{0,80}[」』](?=[^\n]{0,12}" + RETRACTION_WORDS + r")|"
-    r"完了したものは(?:何も|なにも|一つも|ひとつも)?(?:ありません|ない|無い|存在しません)|"
-    r"(?:先の|前の|上の|この|その|以前の)?(?:報告|宣言|主張|完了報告|完了宣言)は成立し(?:ません|ない|ていません)|"
-    # the English form removes only its own clause: "I retract my earlier claim that the tests were flaky; all tests
-    # are green and verified" keeps "verified" (review P1: the old `[^\n.]{0,100}` tail swallowed the next clause)
-    r"\bi (?:retract|withdraw) (?:the |my )?(?:earlier |previous |prior )?(?:claim|statement|report|assertion)(?: that [^\n.;,]{0,60})?|"
+    r"(完了したものは(?:何も|なにも|一つも|ひとつも)?(?:ありません|ない|無い|存在しません)|"
     r"未完了|未マージ|未配備|未保存|未反映|未push|未検証|未実装|未対応|未解決|完了ではありません|完了予定|完了まで|"
-    r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了は.{0,12}予定|完了できていません|完了しませんでした|完了には至らず|"
+    r"完了条件|完了基準|完了判定|完了定義|完了報告の|完了後|完了時|完了宣言|完了しておらず|完了できていません|完了しませんでした|完了には至らず|"
     r"has not been (?:verified|merged|pushed|saved|deployed)|not everything is done|none of it is verified|hasn't been pushed|"
     r"no (?:files?|changes?|data)? ?(?:were|was|have been|has been|is|are)? ?(?:saved|made|pushed|merged|deployed|written|verified)|haven't (?:verified|saved|pushed|merged)|"
     r"(?:保存|完了|配備|反映|マージ|push)(?:した|された|済み)?わけでは(?:ない|ありません)|"
