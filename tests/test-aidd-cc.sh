@@ -870,5 +870,25 @@ o98="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg98","last_assista
 o98b="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg98b","last_assistant_message":"2 + 2 は 4 です。"}' | bash "$HOOK")"
 if printf '%s' "$o98" | grep -q 'completion claim without' && [ -z "$o98b" ]; then ok "T98 no tool rows: vocabulary backstop blocks the live-lane claim, plain answers pass"; else bad "T98: [$o98] [$o98b]"; fi
 
+
+# ---- (100) chained commits (independent acceptance 2026-10-18 P2-b, claude-code-skills#421): `git commit -m 'chore: x' &&
+#      git commit -m 'fix(<scope>): …'` hid the fix commit from the pre-check because only the FIRST commit segment was
+#      read; the chained form could keep both breakers from firing. Every commit segment is judged, a chained fix is
+#      counted when recorded, and the ruling must sit on the fix segment itself. Red at develop 43a91a7 before the repair.
+R100="$SB/repo100"; git init -q "$R100"; git -C "$R100" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m init; git -C "$R100" branch -M develop; git -C "$R100" checkout -q -b fix/h17-chain
+for i in 1 2 3; do fixrow neg100 h17 $i >/dev/null; done
+o100a="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100\",\"cwd\":\"$R100\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' && git commit -q -m 'fix(h17): r4 chained'\"}}" | bash "$HOOK")"
+# the chained form, when it LANDS, must count toward the session streak too
+chainrow() { printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100b\",\"cwd\":\"$R100\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: c$1' && git commit -q -m 'fix(h17): c$1'\"}}" | bash "$HOOK"; printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"neg100b\",\"cwd\":\"$R100\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: c$1' && git commit -q -m 'fix(h17): c$1'\"},\"tool_response\":{\"exit_code\":0,\"stdout\":\"ok\"}}" | bash "$HOOK" >/dev/null; }
+for i in 1 2 3; do chainrow $i >/dev/null; done
+o100b="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100b\",\"cwd\":\"$R100\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): plain after 3 chained'\"}}" | bash "$HOOK")"
+# branch level: 6 fix(h17) on the branch (R94C from T94), a chained 7th is blocked; the ruling must be on the fix segment,
+# not on the chore segment before it
+o100c="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100c\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' && git commit -q -m 'fix(h17): branch chained'\"}}" | bash "$HOOK")"
+o100d="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100d\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' -m 'ADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-1' && git commit -q -m 'fix(h17): branch chained 2'\"}}" | bash "$HOOK")"
+o100e="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100e\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' && git commit -q -m 'fix(h17): branch chained 3' -m 'ADJUDICATION: https://github.com/Cor-Incorporated/aidd-governance/issues/186#issuecomment-1'\"}}" | bash "$HOOK")"
+o100m="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100m\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' && git commit -q -m 'fix(h17): branch chained'\"}}" | AIDD_CC_MUTATE=iter.repair-family bash "$HOOK")"
+if printf '%s' "$o100a" | grep -q 're-adjudication' && printf '%s' "$o100b" | grep -q 're-adjudication' && printf '%s' "$o100c" | grep -q 'no owner adjudication' && printf '%s' "$o100d" | grep -q 'no owner adjudication' && [ -z "$o100e" ] && [ -z "$o100m" ]; then ok "T100 a fix commit chained after a non-fix commit is judged (session and branch), counted when it lands, and released only by a ruling on the fix segment itself; mutation RED"; else bad "T100: [$o100a] [$o100b] [$o100c] [$o100d] [$o100e] [$o100m]"; fi
+
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
