@@ -633,22 +633,30 @@ for i in 1 2 3; do printf '%s' '{"hook_event_name":"PostToolUse","session_id":"n
 o75d="$(pre68 neg75d "git commit -m 'fix(h17): real after three cherry-picks'")"   # review 2026-10-16: cherry-pick / revert / merge land commits too
 if [ -z "$o75" ] && printf '%s' "$o75b" | grep -q 'repair-family\|re-adjudication' && [ -z "$o75c" ] && printf '%s' "$o75d" | grep -q 'repair-family\|re-adjudication'; then ok "T75 cat of a commit-shaped log is not a repair commit; -F file / cherry-pick commits with the subject in stdout still count as prior repairs"; else bad "T75: [$o75] [$o75b] [$o75c] [$o75d]"; fi
 
-# (76) R5: an honest retraction is not a completion claim (Residual 11: the live claude.json re-entry wrote a false
-#      evidence.loop-guard.would-block row for 「『実装完了しました。』は取り消します」)
+# (76) Option A (owner decision 2026-10-18, claude-code-skills#421 comment 6248693056; ADR-009 "no exemption rules"):
+#      the no-tool-row backstop keeps only exemption (a) — explicit negation adjacent to the claim word. Exemption (b)
+#      (quoted claim + retraction verb, the English "I retract … claim that …" clause, the 完了は…予定 window) is gone,
+#      with its three develop-era bypasses (review #9 of #418 P0-2/3/4). A no-tool retraction is written as
+#      `Status: unverified` or without the claim words. Red at develop 2177b89 before the repair.
 fail76=""
-for t in "「実装完了しました。」は取り消します。" "『実装完了しました。』は取り消します" "完了したものは何もありません。" "先の報告は成立しません。証跡がないためです。" "I retract the earlier claim that the implementation is complete."; do
+for t in "「実装完了しました。」は取り消します。" "『実装完了しました。』は取り消します" "I retract the earlier claim that the implementation is complete." \
+         "I retract my earlier claim that the cache was the cause! 実装完了です。" "「実装完了」を撤回したわけではありません。" "作業完了は全件PASSで予定通り。" \
+         "「実装完了・全テスト検証済みです」。この報告は取り消しません。" "『実装完了しました』—撤回の必要はありません。" "I retract my earlier claim that the tests were flaky; all tests are green and verified now"; do
   o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
-  [ -n "$o" ] && fail76="$fail76 [$t -> $o]"
-done
-printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76b\",\"stop_hook_active\":true,\"last_assistant_message\":$(j "「実装完了しました。」は取り消します。")}" | bash "$HOOK" >/dev/null
-grep -q '"rule": "evidence.loop-guard.would-block".*"session": "neg76b"' "$AIDD_LEDGER_PATH" && fail76="$fail76 [would-block row on retraction]"
-o76c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76c","last_assistant_message":"取り消しは完了です。"}' | bash "$HOOK")"
-# review 2026-10-16 P1: a NEGATED retraction keeps the claim; the English form removes only its own clause
-for t in "「実装完了・全テスト検証済みです」。この報告は取り消しません。" "『実装完了しました』—撤回の必要はありません。" "I retract my earlier claim that the tests were flaky; all tests are green and verified now"; do
-  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76d\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
   printf '%s' "$o" | grep -q 'completion claim without' || fail76="$fail76 [not blocked: $t]"
 done
-if [ -z "$fail76" ] && printf '%s' "$o76c" | grep -q 'completion claim without'; then ok "T76 retractions are not claims (no would-block row on re-entry); 取り消しは完了です / 取り消しません / retract-then-verified are still claims"; else bad "T76:$fail76 [$o76c]"; fi
+# (a) stays: an explicit negation next to the claim word is not a claim
+for t in "完了したものは何もありません。" "実装は完了していません。テストも未検証です。" "not yet done; nothing has been verified."; do
+  o="$(printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76a\",\"last_assistant_message\":$(j "$t")}" | bash "$HOOK")"
+  [ -n "$o" ] && fail76="$fail76 [(a) blocked: $t -> $o]"
+done
+# re-entry with a quoted retraction is on the block side too: the release leaves a would-block row
+printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"neg76b\",\"stop_hook_active\":true,\"last_assistant_message\":$(j "「実装完了しました。」は取り消します。")}" | bash "$HOOK" >/dev/null
+grep -q '"rule": "evidence.loop-guard.would-block".*"session": "neg76b"' "$AIDD_LEDGER_PATH" || fail76="$fail76 [no would-block row on the re-entered retraction]"
+o76c="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76c","last_assistant_message":"取り消しは完了です。"}' | bash "$HOOK")"
+# the honest form under ADR-009: the same retraction with a Status line passes (vocabulary backstop yields to the declaration)
+o76s="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg76s","last_assistant_message":"「実装完了しました。」は取り消します。\nStatus: unverified"}' | bash "$HOOK")"
+if [ -z "$fail76" ] && printf '%s' "$o76c" | grep -q 'completion claim without' && ! printf '%s' "$o76s" | grep -q '"decision"'; then ok "T76 Option A: quoted / English retractions, negated retraction verbs and the 完了は…予定 window are claims on the no-tool backstop; (a) negations stay; the Status: unverified form passes"; else bad "T76:$fail76 [$o76c] [$o76s]"; fi
 
 # (77) R6: quote stripping on the trailer's command field removes only a matching outer pair (Addendum P3: the closing
 #      quote of `date '+%Y-%m-%d %H:%M:%S'` was stripped and the executed command reported as not executed)
