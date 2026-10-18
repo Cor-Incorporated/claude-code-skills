@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# `dsh` — DeepSeek Harness 0.2.0-rc.1 with the AIDD H17 common control native plugin, launched like `opencode`.
+#   dsh "task"                      one task, answer on stdout, exit (headless profile)
+#   dsh --session-id <id> "task"    continue a persisted session from the terminal (multi-turn by hand)
+#   dsh web [--no-open]             the browser UI at http://127.0.0.1:3080 (web profile, same plugin)
+#   dsh --raw <dsh args…>           the bare dsh launcher without the plugin patch (profiles, --dump-config, …)
+#   dsh                             this help. dsh 0.2.0-rc.1 ships no terminal TUI (profiles: acp, headless, sdk,
+#                                   sdk-minimal, web), so there is no opencode-style interactive terminal mode.
+# Credentials, in this order: (1) DEEPSEEK_API_KEY in the environment, or dsh's own credentials service (the web
+#   Models page writes it; the owner registers keys there) → run directly; (2) a Bitwarden session in this shell
+#   (BW_SESSION) → inject DEEPSEEK_API_KEY through `bw-secrets run` for the child only.
+# Install (~/.dsh-aidd/pkg): dsh 0.2.0-rc.1 ONLY with npm overrides dsh-tools/dsh-agent=0.2.0-rc.1 — never add the
+# rc.5 Claude-Code bridge (a second dsh-tools copy makes the bash tool die with "reading 'prepare'").
+set -uo pipefail
+PKG="$HOME/.dsh-aidd/pkg"
+export PATH="$HOME/.local/share/mise/installs/node/24.21.0/bin:$PATH"
+DSH_BIN="$PKG/node_modules/.bin/dsh"
+[ -x "$DSH_BIN" ] || { echo "dsh: $PKG has no dsh — see the install note at the top of this script" >&2; exit 1; }
+if [ "$#" -eq 0 ]; then sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0; fi
+case "$1" in
+  --raw) shift; exec env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@" ;;
+  web)   shift; set -- web --patch "$PKG/aidd.patch.yml" "$@" ;;
+  *)     set -- --profile headless --patch "$PKG/aidd.patch.yml" "$@" ;;
+esac
+if [ -n "${DEEPSEEK_API_KEY:-}" ] || [ -z "${BW_SESSION:-}" ]; then
+  exec env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
+fi
+exec bw-secrets run DEEPSEEK_API_KEY=DEEPSEEK_API_KEY -- env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"

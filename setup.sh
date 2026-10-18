@@ -109,6 +109,15 @@ if [ -d "$HOME/.pi/agent/extensions" ]; then
   cp "$REPO_DIR/pi/aidd-cc.ts" "$HOME/.pi/agent/extensions/aidd-cc.ts"
   echo "  Copied H17 Pi extension (~/.pi/agent/extensions/aidd-cc.ts)"
 fi
+# Entry launchers (2026-10-18): `pi` and `dsh` start the agents with the H17 control the way `opencode` does
+# (pi/launcher/pi, dsh/launcher/dsh). ~/.local/bin precedes the mise shims on PATH; the old names pi-h17 / dsh-h17
+# stay as symlinks for the runbooks of 2026-10-17.
+if [ -d "$HOME/.local/bin" ]; then
+  cp "$REPO_DIR/pi/launcher/pi" "$HOME/.local/bin/pi" && chmod +x "$HOME/.local/bin/pi"
+  cp "$REPO_DIR/dsh/launcher/dsh" "$HOME/.local/bin/dsh" && chmod +x "$HOME/.local/bin/dsh"
+  ln -sfn "$HOME/.local/bin/pi" "$HOME/.local/bin/pi-h17"; ln -sfn "$HOME/.local/bin/dsh" "$HOME/.local/bin/dsh-h17"
+  echo "  Copied H17 launchers (~/.local/bin/pi, ~/.local/bin/dsh)"
+fi
 
 # 6. Copy scripts
 echo "[6/9] Installing scripts..."
