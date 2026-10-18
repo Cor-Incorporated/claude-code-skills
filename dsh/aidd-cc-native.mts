@@ -129,6 +129,10 @@ function exitCodeOf(text: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+// Session format v4 wants a producer-owned source kind (the generic "plugin" is rejected: `format v4 message requires
+// a producer-owned source kind`, live 2026-10-18 20:11 JST); dsh's own bridges use `{ kind: "hooks-codex" }`.
+const AIDD_SOURCE = { kind: "aidd-cc" };
+
 export function apply(ctx: any, config: Config = {}): void {
   const oracle = config.oracle ?? join(homedir(), ".claude", "hooks", "lib", "aidd_cc.py");
   const maxSteers = config.maxSteers ?? 2;
@@ -181,12 +185,12 @@ export function apply(ctx: any, config: Config = {}): void {
     if (!note) return;
     if (v.decision === "block" && n < maxSteers) {
       steers.set(sid, n + 1);
-      agent.steer(createUserMessage({ content: [{ type: "text", text: note }], source: { kind: "plugin", plugin: name } }));
+      agent.steer(createUserMessage({ content: [{ type: "text", text: note }], source: AIDD_SOURCE }));
       return;
     }
     // Budget spent or python released: the claim passes WITH the visible note (never silently, #186 P1-4).
     try {
-      agent.inject?.(createUserMessage({ content: [{ type: "text", text: note }], source: { kind: "plugin", plugin: name } }));
+      agent.inject?.(createUserMessage({ content: [{ type: "text", text: note }], source: AIDD_SOURCE }));
     } catch {
       /* the would-block row written by aidd_cc.py is the durable record */
     }
