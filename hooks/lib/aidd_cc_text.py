@@ -354,6 +354,14 @@ def _join_quoted_newlines(text: str) -> str:
     i = 0
     while i < len(text):
         ch = text[i]
+        if not quote and ch == "#" and (i == 0 or text[i - 1] in " \t\n"):
+            # an unquoted shell comment runs to the end of the line: its apostrophes are not quotes
+            # (Codex review of #422: `# Don't forget the tests` made fix_scopes() empty)
+            end = text.find("\n", i)
+            end = len(text) if end < 0 else end
+            out.append(text[i:end])
+            i = end
+            continue
         if quote:
             if ch == quote:
                 quote = None
@@ -404,10 +412,12 @@ def commit_messages(cmd: str) -> list[str]:
                 continue
             rest = git.group("rest")
             args = _message_args(rest)
-            parts = [
-                a for a in args if not HEREDOC_MSG_RE.match(a)
-            ]  # the `$(cat <<EOF` arg IS its body
-            if FILE_STDIN_RE.search(rest) or any(HEREDOC_MSG_RE.match(a) for a in args):
+            parts: list[str] = []
+            for a in args:  # argument order: a heredoc -m is its body, in place (Codex review of #422)
+                parts.extend(body if HEREDOC_MSG_RE.match(a) else [a])
+            if FILE_STDIN_RE.search(rest) and not any(
+                HEREDOC_MSG_RE.match(a) for a in args
+            ):
                 parts.extend(body)
             msgs.append("\n".join(p for p in parts if p).replace(_QNL, "\n"))
     return msgs
@@ -448,6 +458,23 @@ def fix_scopes(cmd: str) -> list[str]:
         if m and m.group(2).strip().lower() not in out:
             out.append(m.group(2).strip().lower())
     return out
+
+
+def landed_fix_scopes(cmd: str, out: str) -> list[str]:
+    """The fix scopes of `cmd` that a successful call (rc 0) actually landed: a commit segment reached through
+    `||` ran only if the previous one failed, so such a scope counts only when it also appears in a segment that
+    ran unconditionally or in git's own stdout (Codex review of #422: `git commit -m 'chore: x' || git commit -m
+    'fix(h17): fallback'` was counted).  Heredoc commits (body outside the segment) are judged by the whole
+    command, as before (T68a)."""
+    scopes = fix_scopes(cmd)
+    if not scopes:
+        return []
+    printed, firm, fallback = fix_scopes_from_output(out), set(), set()
+    for line, _body in _logical_lines(_join_quoted_newlines(cmd or "")):
+        for seg, sep in shell_segments_with_separators(line):
+            for sc in fix_scopes(seg.replace(_QNL, "\n")):
+                (fallback if sep == "||" else firm).add(sc)
+    return [sc for sc in scopes if sc not in fallback or sc in firm or sc in printed]
 
 
 def fix_scopes_from_output(out: str) -> list[str]:

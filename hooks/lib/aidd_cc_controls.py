@@ -48,6 +48,7 @@ from aidd_cc_text import (
     WRAPPER_SEG_RE,
     fix_scopes,
     fix_scopes_from_output,
+    landed_fix_scopes,
 )
 
 ITER_THRESHOLD = 4  # the 4th occurrence with no progress is blocked
@@ -114,7 +115,8 @@ def _scope_fix_times(rows: list[dict], scope: str) -> list[float]:
         if r.get("event") == "post"
         and r.get("rc") == 0
         and (
-            scope in fix_scopes(str(r.get("cmd", "")))
+            scope
+            in landed_fix_scopes(str(r.get("cmd", "")), str(r.get("out_sample", "")))
             or (
                 has_commit_segment(str(r.get("cmd", "")))
                 and scope in fix_scopes_from_output(str(r.get("out_sample", "")))
@@ -242,7 +244,7 @@ def _first_group(m) -> str | None:
     return next((g for g in m.groups() if g), None) if m else None
 
 
-def _repo_for(cwd: str, cmd: str) -> Path:
+def _repo_for(cwd: str, cmd: str, scope: str | None = None) -> Path:
     """The repository the `git … commit` segment acts on: its own `-C <dir>` / `--git-dir=` (quoted paths allowed),
     resolved against the `cd <dir>` segments that precede it (chained cds apply in order), else that directory;
     no commit segment → cwd.  A `-C` on another git call in the same line is not it (Codex r2 P2: `git -C /other
@@ -253,13 +255,15 @@ def _repo_for(cwd: str, cmd: str) -> Path:
             seg
         )  # bash -c 'cd /target && git commit …' (Codex r3 P2)
         if wrapped:
-            return _repo_for(str(cur), wrapped.group("inner"))
+            return _repo_for(str(cur), wrapped.group("inner"), scope)
         cd = CD_SEG_RE.match(seg)
         if cd:
             p = Path(_first_group(cd) or ".").expanduser()
             cur = p if p.is_absolute() else cur / p
             continue
         if GIT_COMMIT_SEG_RE.match(seg):
+            if scope and scope not in fix_scopes(seg):
+                continue  # another commit of the line; the fix(<scope>) segment's own repository is wanted
             pick = _first_group(GIT_C_RE.search(seg))
             if not pick:
                 return cur
@@ -281,7 +285,7 @@ def branch_fix_streak(
     (`fix(h17-gate)`) is another scope; a fabricated ADJUDICATION url is accepted as written (auditable in the PR)."""
     import subprocess
 
-    repo = _repo_for(cwd, cmd)
+    repo = _repo_for(cwd, cmd, scope)
     deadline = time.monotonic() + GIT_BUDGET_SEC
     none = {"count": 0, "base": "?", "adjudicated_ts": 0.0}
 
