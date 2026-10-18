@@ -103,6 +103,12 @@ cp "$REPO_DIR/opencode/aidd-cc.ts" "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-c
 python3 "$REPO_DIR/scripts/register-aidd-cc-hooks.py" \
   --codex "$HOME/.codex/hooks.json" --cursor "$HOME/.cursor/hooks.json" --opencode "$OPENCODE_CONFIG"
 echo "  Copied + registered H17 common control (codex / cursor / opencode)"
+# OpenCode 2.x (upstream @opencode/cli): the plugin is a DIRECTORY (`<dir>/index.ts`, `export default { id, setup }`),
+# deployed next to the 1.x file; the `opencode2` launcher lists it in its own XDG config (~/.opencode-2) so the 1.x
+# `opencode` config above is untouched. See opencode/aidd-cc-v2/index.ts and opencode/launcher/opencode2.
+mkdir -p "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-cc-v2"
+cp "$REPO_DIR/opencode/aidd-cc-v2/index.ts" "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-cc-v2/index.ts"
+echo "  Copied H17 OpenCode 2.x plugin (plugins/aidd-cc-v2/index.ts)"
 # Pi (@earendil-works/pi-coding-agent) loads extensions from ~/.pi/agent/extensions. The extension is
 # deployed only where Pi is already set up (the directory exists); Pi itself is not installed here.
 if [ -d "$HOME/.pi/agent/extensions" ]; then
@@ -115,8 +121,9 @@ fi
 if [ -d "$HOME/.local/bin" ]; then
   cp "$REPO_DIR/pi/launcher/pi" "$HOME/.local/bin/pi" && chmod +x "$HOME/.local/bin/pi"
   cp "$REPO_DIR/dsh/launcher/dsh" "$HOME/.local/bin/dsh" && chmod +x "$HOME/.local/bin/dsh"
+  cp "$REPO_DIR/opencode/launcher/opencode2" "$HOME/.local/bin/opencode2" && chmod +x "$HOME/.local/bin/opencode2"
   ln -sfn "$HOME/.local/bin/pi" "$HOME/.local/bin/pi-h17"; ln -sfn "$HOME/.local/bin/dsh" "$HOME/.local/bin/dsh-h17"
-  echo "  Copied H17 launchers (~/.local/bin/pi, ~/.local/bin/dsh)"
+  echo "  Copied H17 launchers (~/.local/bin/pi, ~/.local/bin/dsh, ~/.local/bin/opencode2)"
 fi
 
 # 6. Copy scripts

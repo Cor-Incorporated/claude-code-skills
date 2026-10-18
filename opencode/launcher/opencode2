@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# `opencode2` — upstream @opencode/cli 2.x with the AIDD H17 common control 2.x plugin, launched like `pi` / `dsh`.
+#   opencode2                      TUI (background service of the 2.x CLI)
+#   opencode2 run "prompt"         one shot; the H17 verdicts of this run are printed after the CLI returns (see below)
+#   opencode2 --standalone run …   private server instead of the service
+# State: XDG dirs under ~/.opencode-2 (config / data / state / cache), fully separate from the 1.x fork's `opencode`.
+# Plugin: ~/.config/opencode/plugins/aidd-cc-v2 (installed by setup.sh from opencode/aidd-cc-v2), listed in
+#   ~/.opencode-2/config/opencode/opencode.json `plugins`; the guardrails profile of the Cor fork is used when
+#   OPENCODE_GUARDRAILS_BIN points at its bin/opencode-guardrails (default: the fork checkout's 2.x branch), which then
+#   owns the config dir and receives the H17 plugin through OPENCODE_GUARDRAILS_EXTRA_PLUGINS.
+# Keys: the 2.x CLI's own `opencode2 auth login`, or OPENROUTER_API_KEY in the environment (owner terminal only).
+#
+# Headless visibility (Codex #426 P1-c): in 2.x the plugin runs inside the server process and `opencode run` returns on
+# the same `session.execution.succeeded` event the plugin judges on, so a re-prompt or note of the evidence gate cannot
+# reach the terminal from inside the plugin. The H6 ledger row is written regardless; this launcher prints the block /
+# would-block rows of the run (agent=opencode, ts ≥ start) to stderr once the CLI has returned — never silent.
+set -uo pipefail
+export PATH="$HOME/.local/share/mise/installs/node/24.21.0/bin:$PATH"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.opencode-2/config}" XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.opencode-2/data}"
+export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.opencode-2/state}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.opencode-2/cache}"
+BIN="${OPENCODE_BIN_PATH:-$HOME/.opencode-2/pkg/node_modules/.bin/opencode}"
+[ -x "$BIN" ] || { echo "opencode2: $BIN missing — cd ~/.opencode-2/pkg && npm i @opencode/cli@2.0.32" >&2; exit 1; }
+PLUGIN="$HOME/.config/opencode/plugins/aidd-cc-v2"
+[ -f "$PLUGIN/index.ts" ] || echo "opencode2: $PLUGIN/index.ts missing — run bash ~/Developer/claude-code-skills/setup.sh (H17 control is OFF)" >&2
+GUARD="${OPENCODE_GUARDRAILS_BIN:-$HOME/Developer/opencode/.worktrees/claude/sync-upstream-dev/packages/guardrails/bin/opencode-guardrails}"
+LEDGER="${AIDD_LEDGER_PATH:-$HOME/.claude/hooks/ledger/guard-ledger.jsonl}"
+start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [ -f "$GUARD" ]; then
+  OPENCODE_BIN_PATH="$BIN" OPENCODE_GUARDRAILS_EXTRA_PLUGINS="$PLUGIN" node "$GUARD" "$@"
+else
+  "$BIN" "$@"
+fi
+rc=$?
+case " $* " in *" run "*) ;; *) exit $rc ;; esac
+[ -f "$LEDGER" ] && python3 -I - "$LEDGER" "$start" <<'PY' >&2
+import json, sys
+path, start = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8", errors="replace") as fh:
+    rows = [r for r in (json.loads(l) for l in fh if l.strip()) if r.get("component") == "H17" and r.get("agent") == "opencode" and r.get("ts", "") >= start]
+for r in rows:
+    if r.get("decision") in ("block", "would-block", "unavailable"):
+        print(f"[H17 {r.get('decision')}] {r.get('rule')}: {str(r.get('cmd_head', ''))[:160]}")
+PY
+exit $rc

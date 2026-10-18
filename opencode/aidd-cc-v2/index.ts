@@ -73,6 +73,9 @@ function cc(cmd: string, payload: Record<string, unknown>, extra: string[] = [])
           resolve({ decision: "allow", rule: "error", reason: String(e) })
         }
       })
+      // Codex #426 P2: on Node 22 a child that exits before reading a large payload raises an async EPIPE on stdin,
+      // which neither proc.on("error") nor the outer try/catch sees. The close handler already settles the verdict.
+      proc.stdin.on("error", (e) => ledgerError(`stdin-error:${cmd}`, String(e)))
       proc.stdin.end(JSON.stringify(payload))
     } catch (e) {
       ledgerError(`spawn-or-parse-error:${cmd}`, String(e))
@@ -112,6 +115,30 @@ function exitCodeOf(result: unknown, text: string): number | undefined {
   return t ? Number(t[1]) : undefined
 }
 
+/**
+ * Codex #426 P1-b: 2.x GPT-family models edit through the native `patch` tool (`{ patchText }` in the
+ * `*** Begin Patch / *** Update File: <path> / *** Add File: / *** Delete File: / *** Move to:` grammar of
+ * packages/util/src/patch.ts). The shared oracle recognizes edits by tool name + file_path (family `edit:<path>`,
+ * iteration key = digest of the edit body), so a patch is presented as an Edit of its first file with the whole
+ * patch text as the body; every touched path travels in `edits` for the ledger.
+ */
+function normalizeCall(tool: string, input: unknown): { tool: string; input: Record<string, unknown> } {
+  const raw = (input && typeof input === "object" ? input : {}) as Record<string, unknown>
+  if (tool !== "patch" || typeof raw.patchText !== "string") return { tool, input: raw }
+  const edits = [...raw.patchText.matchAll(/^\*\*\* (Update|Add|Delete) File: (.+)$/gm)].map((m) => ({ op: m[1].toLowerCase(), path: m[2].trim() }))
+  const moves = [...raw.patchText.matchAll(/^\*\*\* Move to: (.+)$/gm)].map((m) => m[1].trim())
+  return {
+    tool: edits[0]?.op === "add" ? "Write" : "Edit",
+    input: {
+      ...raw,
+      file_path: edits[0]?.path ?? "?",
+      edits: [...edits, ...moves.map((path) => ({ op: "move", path }))],
+      new_string: raw.patchText,
+      content: raw.patchText,
+    },
+  }
+}
+
 function eventData(ev: unknown): Record<string, any> {
   const e = ev as { data?: Record<string, any>; properties?: Record<string, any> }
   return e?.data ?? e?.properties ?? (ev as Record<string, any>) ?? {}
@@ -142,17 +169,19 @@ export default {
     await ctx.tool.hook("execute.before", async (e: any) => {
       const sid = String(e?.sessionID ?? "unset")
       texts.delete(sid) // a tool call follows: whatever text came before was intermediate
-      const v = await cc("pre", { sessionID: sid, tool_name: e?.tool, tool_input: e?.input ?? {} })
+      const call = normalizeCall(String(e?.tool ?? ""), e?.input)
+      const v = await cc("pre", { sessionID: sid, tool_name: call.tool, tool_input: call.input })
       if (v.decision === "block") throw new Error(`[H17] ${v.reason ?? v.rule}`) // -> Tool.Error, the call is denied
     })
 
     await ctx.tool.hook("execute.after", async (e: any) => {
       const sid = String(e?.sessionID ?? "unset")
       const text = e?.status === "completed" ? resultText(e?.result) : String(e?.error?.message ?? "")
+      const call = normalizeCall(String(e?.tool ?? ""), e?.input)
       await cc("post", {
         sessionID: sid,
-        tool_name: e?.tool,
-        tool_input: e?.input ?? {},
+        tool_name: call.tool,
+        tool_input: call.input,
         tool_response: { exit_code: e?.status === "completed" ? exitCodeOf(e?.result, text) : undefined, output: text.slice(0, 4000) },
       })
     })
@@ -186,7 +215,9 @@ export default {
     const note = async (sid: string, text: string) => {
       try {
         if (typeof ctx.session?.synthetic === "function") {
-          await ctx.session.synthetic({ sessionID: sid, text, description: "H17 evidence gate" })
+          // Codex #426 P1-a: 2.x `session.synthetic` resumes the session by default, which would re-run the model
+          // on the note (and note the new answer again, forever). A display-only note must not resume.
+          await ctx.session.synthetic({ sessionID: sid, text, description: "H17 evidence gate", resume: false })
           return
         }
       } catch {

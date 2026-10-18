@@ -58,6 +58,18 @@ push({ type: "session.execution.succeeded", data: { sessionID: sid2 } });
 await new Promise((r) => setTimeout(r, 4000));
 out.partial_prompts = out.prompts.length - out.reprompted;
 out.partial_note = out.synthetic.find((s: any) => s.sessionID === sid2)?.text?.slice(0, 60) ?? null;
+out.partial_resume = out.synthetic.find((s: any) => s.sessionID === sid2)?.resume;
+// a third session: the native 2.x `patch` tool ({ patchText }) is normalized to an edit → the 4th identical patch is denied
+const sid3 = "ses_v2test3";
+const patchText = "*** Begin Patch\n*** Update File: src/app.ts\n@@\n-old\n+new\n*** End Patch\n";
+let patchDenied = 0;
+for (let i = 0; i < 5; i++) {
+  try {
+    await hooks["tool.execute.before"]({ tool: "patch", sessionID: sid3, agent: "build", messageID: "m3", id: `p${i}`, input: { patchText } });
+    await hooks["tool.execute.after"]({ tool: "patch", sessionID: sid3, agent: "build", messageID: "m3", id: `p${i}`, input: { patchText }, status: "completed", result: { content: "Success. Updated the following files:\nM src/app.ts" } });
+  } catch (e) { patchDenied = i + 1; out.patch_deny_message = String((e as Error).message).slice(0, 80); break; }
+}
+out.patch_denied_at = patchDenied;
 console.log(JSON.stringify(out));
 process.exit(0);
 JS
@@ -71,7 +83,9 @@ assert r["registered"] == ["session.prompt", "tool.execute.after", "tool.execute
 assert r["iter_denied_at"] == 4 and r["deny_message"].startswith("[H17]"), r      # C-ITER: 4th identical call denied via throw
 assert r["reprompted"] == 1 and "no status declared" in (r["reprompt_text"] or ""), r  # ADR-009 on the final answer
 assert r["partial_prompts"] == 0 and r["partial_note"] and "Status: partial" in r["partial_note"], r
-print("PASS: v2 plugin — prompt/tool hooks registered, 4th identical call denied, final answer without Status re-prompted, Status: partial passes with a synthetic note")
+assert r["partial_resume"] is False, r            # Codex #426 P1-a: a display-only note must not resume the session
+assert r["patch_denied_at"] == 4 and "edit" in r["patch_deny_message"].lower(), r  # Codex #426 P1-b: native patch counts as an edit
+print("PASS: v2 plugin — prompt/tool hooks registered, 4th identical call denied, final answer without Status re-prompted, Status: partial passes with a synthetic note (resume:false), native patch normalized to an edit")
 PY
 grep -q '"component": "H17"' "$AIDD_LEDGER_PATH" && echo "PASS: H6 ledger rows written by the v2 entry" || { echo "FAIL: no ledger rows"; exit 1; }
 : >"$SB/err-ledger.jsonl"
