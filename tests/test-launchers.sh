@@ -63,6 +63,6 @@ done
 expected="$(printf '%s\n' 'run --standalone -m openrouter/google/gemini-2.5-flash hi' '--standalone' 'service status' 'run --standalone x')"
 if [ "$(cat "$SB/oc2/args.log")" = "$expected" ]; then ok "opencode2 adds --standalone (run after the subcommand, TUI first; service / explicit flag untouched)"; else bad "opencode2 args: $(tr '\n' '|' <"$SB/oc2/args.log")"; fi
 # setup.sh deploys both launchers when ~/.local/bin exists
-grep -q 'pi/launcher/pi' "$ROOT/setup.sh" && grep -q 'dsh/launcher/dsh' "$ROOT/setup.sh" && grep -q 'opencode/launcher/opencode2' "$ROOT/setup.sh" && grep -q 'Registered aidd-cc-v2' "$ROOT/setup.sh" && ok "setup.sh copies the launchers and registers aidd-cc-v2" || bad "setup.sh does not copy the launchers"
+grep -q 'pi/launcher/pi' "$ROOT/setup.sh" && grep -q 'dsh/launcher/dsh' "$ROOT/setup.sh" && grep -q 'opencode/launcher/opencode2' "$ROOT/setup.sh" && grep -q 'Registered aidd-cc-v2' "$ROOT/setup.sh" && grep -q 'dsh/aidd-cc-native.mts" "$HOME/.dsh-aidd/pkg/aidd-cc-native.mts' "$ROOT/setup.sh" && ok "setup.sh copies the launchers, registers aidd-cc-v2 and deploys the dsh plugin" || bad "setup.sh does not copy the launchers"
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
