@@ -103,6 +103,32 @@ cp "$REPO_DIR/opencode/aidd-cc.ts" "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-c
 python3 "$REPO_DIR/scripts/register-aidd-cc-hooks.py" \
   --codex "$HOME/.codex/hooks.json" --cursor "$HOME/.cursor/hooks.json" --opencode "$OPENCODE_CONFIG"
 echo "  Copied + registered H17 common control (codex / cursor / opencode)"
+# OpenCode 2.x (upstream @opencode/cli): the plugin is a DIRECTORY (`<dir>/index.ts`, `export default { id, setup }`),
+# deployed next to the 1.x file; the `opencode2` launcher lists it in its own XDG config (~/.opencode-2) so the 1.x
+# `opencode` config above is untouched. See opencode/aidd-cc-v2/index.ts and opencode/launcher/opencode2.
+mkdir -p "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-cc-v2"
+cp "$REPO_DIR/opencode/aidd-cc-v2/index.ts" "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-cc-v2/index.ts"
+echo "  Copied H17 OpenCode 2.x plugin (plugins/aidd-cc-v2/index.ts)"
+# Register the plugin directory in the 2.x CLI's own config (~/.opencode-2) so a bare `opencode2` (no guardrails
+# launcher) still loads it; review #426 M2. Idempotent: the path is added once, other keys are kept.
+OC2_CONFIG="$HOME/.opencode-2/config/opencode/opencode.json"
+mkdir -p "$(dirname "$OC2_CONFIG")"
+python3 -I - "$OC2_CONFIG" "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-cc-v2" <<'PY_OC2'
+import json, os, sys
+path, plugin = sys.argv[1], sys.argv[2]
+cfg = {}
+if os.path.exists(path):
+    with open(path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+plugins = cfg.get("plugins") if isinstance(cfg.get("plugins"), list) else []
+if plugin not in plugins:
+    cfg["plugins"] = [*plugins, plugin]
+    cfg.setdefault("$schema", "https://opencode.ai/config.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(cfg, fh, indent=2)
+        fh.write("\n")
+PY_OC2
+echo "  Registered aidd-cc-v2 in $OC2_CONFIG plugins"
 # Pi (@earendil-works/pi-coding-agent) loads extensions from ~/.pi/agent/extensions. The extension is
 # deployed only where Pi is already set up (the directory exists); Pi itself is not installed here.
 if [ -d "$HOME/.pi/agent/extensions" ]; then
@@ -115,8 +141,9 @@ fi
 if [ -d "$HOME/.local/bin" ]; then
   cp "$REPO_DIR/pi/launcher/pi" "$HOME/.local/bin/pi" && chmod +x "$HOME/.local/bin/pi"
   cp "$REPO_DIR/dsh/launcher/dsh" "$HOME/.local/bin/dsh" && chmod +x "$HOME/.local/bin/dsh"
+  cp "$REPO_DIR/opencode/launcher/opencode2" "$HOME/.local/bin/opencode2" && chmod +x "$HOME/.local/bin/opencode2"
   ln -sfn "$HOME/.local/bin/pi" "$HOME/.local/bin/pi-h17"; ln -sfn "$HOME/.local/bin/dsh" "$HOME/.local/bin/dsh-h17"
-  echo "  Copied H17 launchers (~/.local/bin/pi, ~/.local/bin/dsh)"
+  echo "  Copied H17 launchers (~/.local/bin/pi, ~/.local/bin/dsh, ~/.local/bin/opencode2)"
 fi
 
 # 6. Copy scripts

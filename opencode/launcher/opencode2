@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# `opencode2` — upstream @opencode/cli 2.x with the AIDD H17 common control 2.x plugin, launched like `pi` / `dsh`.
+#   opencode2                      TUI (background service of the 2.x CLI)
+#   opencode2 run "prompt"         one shot; the H17 verdicts of this run are printed after the CLI returns (see below)
+#   opencode2 --standalone run …   private server instead of the service
+# State: XDG dirs under ~/.opencode-2 (config / data / state / cache), fully separate from the 1.x fork's `opencode`.
+# Plugin: ~/.config/opencode/plugins/aidd-cc-v2 (installed by setup.sh from opencode/aidd-cc-v2). It is loaded either
+#   by the Cor fork's 2.x guardrails launcher (OPENCODE_GUARDRAILS_BIN, default: the fork checkout's 2.x branch), which
+#   receives it through OPENCODE_GUARDRAILS_EXTRA_PLUGINS, or — without that launcher — from the `plugins` list of
+#   ~/.opencode-2/config/opencode/opencode.json, which setup.sh maintains. If neither path can load it, the launcher
+#   refuses to start (H17 must never be silently off); AIDD_CC_ALLOW_UNCONTROLLED=1 overrides with a warning.
+# Keys: the 2.x CLI's own `opencode2 auth login`, or the provider env var (owner terminal only).
+#
+# Headless visibility (Codex #426 P1-c): in 2.x the plugin runs inside the server process and `opencode run` returns on
+# the same `session.execution.succeeded` event the plugin judges on, so a re-prompt or note of the evidence gate cannot
+# reach the terminal from inside the plugin. The H6 ledger row is written regardless; after a `run` this launcher
+# prints the H17 block / would-block / unavailable rows written since it started to stderr. Rows are filtered by
+# agent=opencode and time only, so a concurrent OpenCode session's rows can appear too (labelled with their session).
+set -uo pipefail
+export PATH="$HOME/.local/share/mise/installs/node/24.21.0/bin:$PATH"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.opencode-2/config}" XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.opencode-2/data}"
+export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.opencode-2/state}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.opencode-2/cache}"
+BIN="${OPENCODE_BIN_PATH:-$HOME/.opencode-2/pkg/node_modules/.bin/opencode}"
+[ -x "$BIN" ] || { echo "opencode2: $BIN missing — cd ~/.opencode-2/pkg && npm i @opencode/cli@2.0.32" >&2; exit 1; }
+PLUGIN="${AIDD_CC_V2_PLUGIN:-$HOME/.config/opencode/plugins/aidd-cc-v2}"
+GUARD="${OPENCODE_GUARDRAILS_BIN:-$HOME/Developer/opencode/.worktrees/claude/sync-upstream-dev/packages/guardrails/bin/opencode-guardrails}"
+CONFIG="$XDG_CONFIG_HOME/opencode/opencode.json"
+LEDGER="${AIDD_LEDGER_PATH:-$HOME/.claude/hooks/ledger/guard-ledger.jsonl}"
+
+uncontrolled() {
+  if [ "${AIDD_CC_ALLOW_UNCONTROLLED:-}" = 1 ]; then
+    echo "opencode2: WARNING — $1; running WITHOUT the H17 control (AIDD_CC_ALLOW_UNCONTROLLED=1)" >&2
+    return 0
+  fi
+  echo "opencode2: $1 — H17 control would be OFF; run bash ~/Developer/claude-code-skills/setup.sh (or set AIDD_CC_ALLOW_UNCONTROLLED=1)" >&2
+  exit 1
+}
+[ -f "$PLUGIN/index.ts" ] || uncontrolled "$PLUGIN/index.ts missing"
+if [ ! -f "$GUARD" ] && ! grep -qF "\"$PLUGIN\"" "$CONFIG" 2>/dev/null; then
+  uncontrolled "$PLUGIN is not listed in $CONFIG plugins and no guardrails launcher at $GUARD"
+fi
+
+# `run` is the subcommand only when it is the first non-flag argument (`opencode2 "please run tests"` is a TUI prompt)
+is_run=0
+for a in "$@"; do
+  case "$a" in
+    --standalone|--auto|--continue|-c|--print-logs) continue ;;
+    -*) break ;;
+    run) is_run=1; break ;;
+    *) break ;;
+  esac
+done
+
+start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [ -f "$GUARD" ]; then
+  OPENCODE_BIN_PATH="$BIN" OPENCODE_GUARDRAILS_EXTRA_PLUGINS="$PLUGIN" node "$GUARD" "$@"
+else
+  "$BIN" "$@"
+fi
+rc=$?
+[ "$is_run" = 1 ] || exit $rc
+[ -f "$LEDGER" ] && python3 -I - "$LEDGER" "$start" <<'PY' >&2
+import json, sys
+path, start = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8", errors="replace") as fh:
+    for line in fh:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue  # the shared ledger has non-JSON lines from other writers; one bad line must not hide the rest
+        if not isinstance(r, dict) or not isinstance(r.get("ts"), str):
+            continue
+        if r.get("component") != "H17" or r.get("agent") != "opencode" or r["ts"] < start:
+            continue
+        if r.get("decision") in ("block", "would-block", "unavailable"):
+            print(f"[H17 {r.get('decision')}] {r.get('rule')} (session {r.get('session')}): {str(r.get('cmd_head', ''))[:160]}")
+PY
+exit $rc

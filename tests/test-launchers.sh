@@ -32,7 +32,28 @@ o="$(HOME="$SB" OPENROUTER_API_KEY=x BW_SESSION= bash "$ROOT/pi/launcher/pi" --m
 printf '%s' "$o" | grep -q 'gemini' && bad "pi launcher overrode --model" || ok "pi launcher keeps an explicit --model"
 o="$(HOME="$SB" bash "$ROOT/pi/launcher/pi" --version 2>&1)"
 printf '%s' "$o" | grep -q 'aidd-cc.ts' && bad "pi --version loaded the extension" || ok "pi --version is a plain pass-through"
+# opencode2 (review #426): fail closed when the plugin cannot load; `run` detection; the ledger tail survives bad lines
+L="$ROOT/opencode/launcher/opencode2"
+bash -n "$L" && ok "opencode2 parses" || bad "opencode2 syntax"
+mkdir -p "$SB/oc2/bin" "$SB/oc2/plugin" "$SB/oc2/cfg/opencode"
+cat >"$SB/oc2/bin/opencode" <<'FAKE'
+#!/usr/bin/env bash
+printf '{"ts":"2099-01-01T00:00:00Z","component":"H17","agent":"opencode","decision":"block","rule":"evidence.pending","session":"ses_t","cmd_head":"no status declared"}\n' >>"$AIDD_LEDGER_PATH"
+exit 7
+FAKE
+chmod +x "$SB/oc2/bin/opencode"
+o="$(HOME="$SB" XDG_CONFIG_HOME="$SB/oc2/cfg" OPENCODE_BIN_PATH="$SB/oc2/bin/opencode" AIDD_CC_V2_PLUGIN="$SB/oc2/plugin" OPENCODE_GUARDRAILS_BIN="$SB/none" bash "$L" run x 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && printf '%s' "$o" | grep -q 'H17 control would be OFF'; then ok "opencode2 fails closed without the plugin"; else bad "opencode2 no plugin: rc=$rc [$o]"; fi
+: >"$SB/oc2/plugin/index.ts"
+o="$(HOME="$SB" XDG_CONFIG_HOME="$SB/oc2/cfg" OPENCODE_BIN_PATH="$SB/oc2/bin/opencode" AIDD_CC_V2_PLUGIN="$SB/oc2/plugin" OPENCODE_GUARDRAILS_BIN="$SB/none" bash "$L" run x 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && printf '%s' "$o" | grep -q 'not listed'; then ok "opencode2 fails closed when the plugin is not registered"; else bad "opencode2 unregistered: rc=$rc [$o]"; fi
+printf '{"plugins":["%s"]}\n' "$SB/oc2/plugin" >"$SB/oc2/cfg/opencode/opencode.json"
+printf 'PREPUSH: not json\n{"ts": "bad \\q escape"}\n' >"$SB/oc2/ledger.jsonl"
+o="$(HOME="$SB" XDG_CONFIG_HOME="$SB/oc2/cfg" OPENCODE_BIN_PATH="$SB/oc2/bin/opencode" AIDD_CC_V2_PLUGIN="$SB/oc2/plugin" OPENCODE_GUARDRAILS_BIN="$SB/none" AIDD_LEDGER_PATH="$SB/oc2/ledger.jsonl" bash "$L" run x 2>&1)"; rc=$?
+if [ "$rc" -eq 7 ] && printf '%s' "$o" | grep -q '\[H17 block\] evidence.pending (session ses_t)' && ! printf '%s' "$o" | grep -q Traceback; then ok "opencode2 run: CLI rc kept, H17 row printed past malformed ledger lines"; else bad "opencode2 tail: rc=$rc [$o]"; fi
+o="$(HOME="$SB" XDG_CONFIG_HOME="$SB/oc2/cfg" OPENCODE_BIN_PATH="$SB/oc2/bin/opencode" AIDD_CC_V2_PLUGIN="$SB/oc2/plugin" OPENCODE_GUARDRAILS_BIN="$SB/none" AIDD_LEDGER_PATH="$SB/oc2/ledger.jsonl" bash "$L" "please run tests" 2>&1)"
+printf '%s' "$o" | grep -q '\[H17' && bad "opencode2 tailed for a TUI prompt containing 'run'" || ok "opencode2: 'run' inside a prompt is not the run subcommand"
 # setup.sh deploys both launchers when ~/.local/bin exists
-grep -q 'pi/launcher/pi' "$ROOT/setup.sh" && grep -q 'dsh/launcher/dsh' "$ROOT/setup.sh" && ok "setup.sh copies both launchers" || bad "setup.sh does not copy the launchers"
+grep -q 'pi/launcher/pi' "$ROOT/setup.sh" && grep -q 'dsh/launcher/dsh' "$ROOT/setup.sh" && grep -q 'opencode/launcher/opencode2' "$ROOT/setup.sh" && grep -q 'Registered aidd-cc-v2' "$ROOT/setup.sh" && ok "setup.sh copies the launchers and registers aidd-cc-v2" || bad "setup.sh does not copy the launchers"
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

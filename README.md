@@ -32,17 +32,18 @@ bash ~/.claude/scripts/claude-provider.sh zai
 
 Details: [docs/runbooks/provider-switching.md](docs/runbooks/provider-switching.md).
 
-## Entry launchers for Pi and DeepSeek Harness
+## Entry launchers for Pi, DeepSeek Harness and OpenCode 2.x
 
-`setup.sh` installs two launchers into `~/.local/bin` so that Pi and dsh start with the H17 common control the way
-`opencode` and `cursor-agent` already do:
+`setup.sh` installs three launchers into `~/.local/bin` so that Pi, dsh and the upstream OpenCode 2.x start with the
+H17 common control the way the 1.x `opencode` and `cursor-agent` already do:
 
 | command | what it does |
 |---|---|
+| `opencode2` / `opencode2 run "…"` | upstream `@opencode/cli` 2.x (`~/.opencode-2/pkg`, XDG dirs under `~/.opencode-2`) with the 2.x directory plugin `~/.config/opencode/plugins/aidd-cc-v2` (`opencode/aidd-cc-v2/index.ts`). When the Cor fork's 2.x guardrails launcher exists (`OPENCODE_GUARDRAILS_BIN`, Cor-Incorporated/opencode#343) it runs the guardrails profile and passes the H17 plugin through `OPENCODE_GUARDRAILS_EXTRA_PLUGINS`. After `opencode2 run …` returns it prints the run's H17 block / would-block rows to stderr: in 2.x the plugin runs inside the server process and `run` exits on the event the plugin judges on, so the launcher is the headless visibility path. Keys: `opencode2 auth login` or the provider env var. |
 | `pi` / `pi -p "…"` | Pi 1.2.0 with `~/.pi/agent/extensions/aidd-cc.ts`; default `--provider openrouter --model google/gemini-2.5-flash`. Uses pi's own credential store or `OPENROUTER_API_KEY`; with a Bitwarden session in the shell it injects the key through `bw-secrets run` (the TUI then runs under `script -q /dev/null` because bw-secrets pipes stdout). |
 | `dsh "task"` / `dsh web` / `dsh --session-id <id> "…"` | DeepSeek Harness 0.2.0-rc.1 (`~/.dsh-aidd/pkg`, dsh only + npm overrides `dsh-tools` / `dsh-agent` = 0.2.0-rc.1) with `dsh/aidd-cc-native.mts`. dsh 0.2.0-rc.1 has no terminal TUI (profiles acp / headless / sdk / sdk-minimal / web), so `dsh` offers one-shot, session continuation and the browser UI. Never add the rc.5 Claude-Code bridge: a second `dsh-tools` copy breaks the bash tool. |
 
-Sources: `pi/launcher/pi`, `dsh/launcher/dsh`. Runbook with the live procedure: aidd-governance `design/ops/runbooks/h17-human-gate-20261017.md`.
+Sources: `pi/launcher/pi`, `dsh/launcher/dsh`, `opencode/launcher/opencode2`. Runbook with the live procedure: aidd-governance `design/ops/runbooks/h17-human-gate-20261017.md`.
 
 ## Repository Structure
 
