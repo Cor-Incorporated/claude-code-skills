@@ -38,7 +38,8 @@ bash -n "$L" && ok "opencode2 parses" || bad "opencode2 syntax"
 mkdir -p "$SB/oc2/bin" "$SB/oc2/plugin" "$SB/oc2/cfg/opencode"
 cat >"$SB/oc2/bin/opencode" <<'FAKE'
 #!/usr/bin/env bash
-printf '{"ts":"2099-01-01T00:00:00Z","component":"H17","agent":"opencode","decision":"block","rule":"evidence.pending","session":"ses_t","cmd_head":"no status declared"}\n' >>"$AIDD_LEDGER_PATH"
+printf '%s\n' "$*" >>"${OC2_ARGS_LOG:-/dev/null}"
+[ -n "${AIDD_LEDGER_PATH:-}" ] && printf '{"ts":"2099-01-01T00:00:00Z","component":"H17","agent":"opencode","decision":"block","rule":"evidence.pending","session":"ses_t","cmd_head":"no status declared"}\n' >>"$AIDD_LEDGER_PATH"
 exit 7
 FAKE
 chmod +x "$SB/oc2/bin/opencode"
@@ -53,6 +54,14 @@ o="$(HOME="$SB" XDG_CONFIG_HOME="$SB/oc2/cfg" OPENCODE_BIN_PATH="$SB/oc2/bin/ope
 if [ "$rc" -eq 7 ] && printf '%s' "$o" | grep -q '\[H17 block\] evidence.pending (session ses_t)' && ! printf '%s' "$o" | grep -q Traceback; then ok "opencode2 run: CLI rc kept, H17 row printed past malformed ledger lines"; else bad "opencode2 tail: rc=$rc [$o]"; fi
 o="$(HOME="$SB" XDG_CONFIG_HOME="$SB/oc2/cfg" OPENCODE_BIN_PATH="$SB/oc2/bin/opencode" AIDD_CC_V2_PLUGIN="$SB/oc2/plugin" OPENCODE_GUARDRAILS_BIN="$SB/none" AIDD_LEDGER_PATH="$SB/oc2/ledger.jsonl" bash "$L" "please run tests" 2>&1)"
 printf '%s' "$o" | grep -q '\[H17' && bad "opencode2 tailed for a TUI prompt containing 'run'" || ok "opencode2: 'run' inside a prompt is not the run subcommand"
+# 2026-10-19: every invocation runs on a private server (the background service never gets this call's keys / profile)
+: >"$SB/oc2/args.log"
+for argv in "run -m openrouter/google/gemini-2.5-flash hi" "" "service status" "run --standalone x"; do
+  # shellcheck disable=SC2086
+  HOME="$SB" XDG_CONFIG_HOME="$SB/oc2/cfg" OPENCODE_BIN_PATH="$SB/oc2/bin/opencode" AIDD_CC_V2_PLUGIN="$SB/oc2/plugin" OPENCODE_GUARDRAILS_BIN="$SB/none" OC2_ARGS_LOG="$SB/oc2/args.log" AIDD_LEDGER_PATH= bash "$L" $argv >/dev/null 2>&1
+done
+expected="$(printf '%s\n' 'run --standalone -m openrouter/google/gemini-2.5-flash hi' '--standalone' 'service status' 'run --standalone x')"
+if [ "$(cat "$SB/oc2/args.log")" = "$expected" ]; then ok "opencode2 adds --standalone (run after the subcommand, TUI first; service / explicit flag untouched)"; else bad "opencode2 args: $(tr '\n' '|' <"$SB/oc2/args.log")"; fi
 # setup.sh deploys both launchers when ~/.local/bin exists
 grep -q 'pi/launcher/pi' "$ROOT/setup.sh" && grep -q 'dsh/launcher/dsh' "$ROOT/setup.sh" && grep -q 'opencode/launcher/opencode2' "$ROOT/setup.sh" && grep -q 'Registered aidd-cc-v2' "$ROOT/setup.sh" && ok "setup.sh copies the launchers and registers aidd-cc-v2" || bad "setup.sh does not copy the launchers"
 echo "--- $pass passed, $fail failed ---"

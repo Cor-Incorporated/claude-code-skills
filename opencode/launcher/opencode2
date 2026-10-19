@@ -51,11 +51,36 @@ for a in "$@"; do
   esac
 done
 
+# Private server for every run (2026-10-19): the 2.x background service is a long-lived process started earlier with
+# its own environment, so keys injected for this call (`bw-secrets run …`) and the guardrails profile never reach it
+# ("Model unavailable"). The guardrails launcher rewrites its own arguments (bin/standalone-args.js); the bare path
+# applies the same rule here. Set OPENCODE_GUARDRAILS_ALLOW_SERVICE=1 to use the shared service on purpose.
+standalone_args() {
+  local a i=0 sub="" pos=-1
+  for a in "$@"; do
+    case "$a" in --standalone|--server|--server=*|--help|-h|--version|-v|--completions) printf '%s\0' "$@"; return ;; esac
+  done
+  for a in "$@"; do
+    case "$a" in -*) ;; *) sub="$a"; pos=$i; break ;; esac
+    i=$((i + 1))
+  done
+  case "$sub" in
+    service|upgrade|update|uninstall) printf '%s\0' "$@" ;;
+    run|models|stats|session|mcp|auth|plugin|debug|acp|mini|api)
+      printf '%s\0' "${@:1:$((pos + 1))}" --standalone "${@:$((pos + 2))}" ;;
+    *) printf '%s\0' --standalone "$@" ;;
+  esac
+}
+
 start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if [ -f "$GUARD" ]; then
   OPENCODE_BIN_PATH="$BIN" OPENCODE_GUARDRAILS_EXTRA_PLUGINS="$PLUGIN" node "$GUARD" "$@"
-else
+elif [ "${OPENCODE_GUARDRAILS_ALLOW_SERVICE:-}" = 1 ]; then
   "$BIN" "$@"
+else
+  args=()
+  while IFS= read -r -d '' a; do args+=("$a"); done < <(standalone_args "$@")
+  "$BIN" "${args[@]}"
 fi
 rc=$?
 [ "$is_run" = 1 ] || exit $rc
