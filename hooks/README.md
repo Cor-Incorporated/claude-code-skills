@@ -49,7 +49,8 @@ save claim without executed, fresh, output-matched `Evidence:` /
 control (crash, missing module, max-blocks release that would have blocked)
 is announced as a `systemMessage` and an H6 ledger `error` / `would-block`
 row — never a silent pass. Entry files: `aidd-cc-claude.sh`,
-`codex/aidd-cc-codex.sh`, `cursor/aidd-cc-cursor.sh`, `../opencode/aidd-cc.ts`,
+`codex/aidd-cc-codex.sh`, `cursor/aidd-cc-cursor.sh`, `../opencode/aidd-cc.ts` (1.x fork build),
+`../opencode/aidd-cc-v2/index.ts` (upstream 2.x directory plugin, launcher `../opencode/launcher/opencode2`),
 `../pi/aidd-cc.ts`, `../dsh/aidd-cc.patch.yml` (+ `aidd-cc-native.mts`, unverified);
 replay of the 47 dot incidents: `tests/dot-replay/run_replay.py` (arms: claude /
 codex / cursor / opencode / pi).
