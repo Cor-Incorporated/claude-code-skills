@@ -93,6 +93,49 @@ print("PASS: v2 plugin — prompt/tool hooks registered, 4th identical call deni
 PY
 if grep -rqs 'edit:[^"]*src/a.ts' "$AIDD_CC_STATE_DIR" && grep -rqs 'edit:[^"]*src/b.ts' "$AIDD_CC_STATE_DIR"; then echo "PASS: two-file patch -> a post row per touched file"; else echo "FAIL: per-file post rows missing"; grep -rho 'edit:[^"]*' "$AIDD_CC_STATE_DIR" | sort -u | head; exit 1; fi
 grep -q '"component": "H17"' "$AIDD_LEDGER_PATH" && echo "PASS: H6 ledger rows written by the v2 entry" || { echo "FAIL: no ledger rows"; exit 1; }
+# owner live run 2026-10-19: `opencode2 run` returns on session.execution.succeeded and the CLI stops its private
+# server with SIGTERM to the process group; the stop oracle died mid-judgment (`python-exit-null:stop`). The oracle
+# now runs in its own process group, so killing the plugin's group leaves it to finish and write its ledger row.
+cat >"$SB/drive-kill.ts" <<'JS'
+import plugin from "./plugin/index.ts";
+const queue: any[] = []; let wake: (() => void) | null = null;
+const push = (ev: any) => { queue.push(ev); wake?.(); };
+async function* events() { while (true) { if (queue.length) { yield queue.shift(); continue; } await new Promise<void>((r) => (wake = r)); wake = null; } }
+const hooks: Record<string, Function> = {};
+await plugin.setup({
+  session: { hook: async (n: string, f: Function) => { hooks["session." + n] = f; }, prompt: async () => {}, synthetic: async () => {} },
+  tool: { hook: async (n: string, f: Function) => { hooks["tool." + n] = f; } },
+  event: { subscribe: () => events() },
+  location: { directory: process.cwd() },
+});
+const sid = "ses_v2kill";
+await hooks["session.prompt"]({ sessionID: sid, messageID: "k1", prompt: { text: "a.txt を表示して", files: [] }, delivery: "steer" });
+await hooks["tool.execute.before"]({ tool: "shell", sessionID: sid, agent: "build", messageID: "k1", id: "k1c", input: { command: "cat a.txt" } });
+await hooks["tool.execute.after"]({ tool: "shell", sessionID: sid, agent: "build", messageID: "k1", id: "k1c", input: { command: "cat a.txt" }, status: "completed", result: { content: "hello", metadata: { exit: 0 } } });
+push({ type: "session.text.ended", data: { sessionID: sid, assistantMessageID: "k2", ordinal: 0, text: "実装完了しました。" } });
+push({ type: "session.execution.succeeded", data: { sessionID: sid } });
+await new Promise((r) => setTimeout(r, 300));
+console.log("SPAWNED");
+await new Promise((r) => setTimeout(r, 60000));
+JS
+# the live stop judgment took seconds (cold python + ledger I/O); a 2 s delay on `stop` reproduces that window here
+cat >"$SB/slow_cc.py" <<'PYW'
+import os, runpy, sys, time
+if len(sys.argv) > 1 and sys.argv[1] == "stop":
+    time.sleep(2)
+real = os.environ["AIDD_CC_PY_REAL"]
+sys.argv = [real] + sys.argv[1:]
+sys.path.insert(0, os.path.dirname(real))
+runpy.run_path(real, run_name="__main__")
+PYW
+set -m
+(cd "$SB" && AIDD_CC_PY_REAL="$AIDD_CC_PY" AIDD_CC_PY="$SB/slow_cc.py" exec bun run drive-kill.ts >"$SB/kill.out" 2>&1) &
+kpid=$!
+set +m
+for _ in $(seq 1 100); do grep -q SPAWNED "$SB/kill.out" 2>/dev/null && break; sleep 0.1; done
+kill -TERM -- "-$kpid" 2>/dev/null; wait "$kpid" 2>/dev/null
+for _ in $(seq 1 60); do grep -q '"session": "ses_v2kill"' "$AIDD_LEDGER_PATH" 2>/dev/null && grep '"session": "ses_v2kill"' "$AIDD_LEDGER_PATH" | grep -q '"decision": "block"' && break; sleep 0.1; done
+if grep '"session": "ses_v2kill"' "$AIDD_LEDGER_PATH" | grep -q '"decision": "block"'; then echo "PASS: SIGTERM to the plugin's process group -> the stop oracle still writes its block row"; else echo "FAIL: no block row after the group SIGTERM"; grep 'ses_v2kill' "$AIDD_LEDGER_PATH" | tail -3; cat "$SB/kill.out"; exit 1; fi
 : >"$SB/err-ledger.jsonl"
 (cd "$SB" && AIDD_CC_PY=/nonexistent/aidd_cc.py AIDD_LEDGER_PATH="$SB/err-ledger.jsonl" timeout 30 bun run drive.ts >/dev/null 2>&1) || true
 if grep -q '"event":"error"' "$SB/err-ledger.jsonl" && grep -q '"decision":"unavailable"' "$SB/err-ledger.jsonl"; then echo "PASS: missing oracle -> H6 error rows (unavailable), no silent pass"; else echo "FAIL: no error row"; cat "$SB/err-ledger.jsonl"; exit 1; fi

@@ -49,9 +49,14 @@ function cc(cmd: string, payload: Record<string, unknown>, extra: string[] = [])
   if (process.env.AIDD_CC_DISABLE === "1") return Promise.resolve({ decision: "allow", rule: "disabled" })
   return new Promise((resolve) => {
     try {
+      // detached = its own process group (owner live run 2026-10-19: `opencode2 run` → `[H17 unavailable]
+      // python-exit-null:stop`). `run` returns on the same session.execution.succeeded event the stop judgment starts on,
+      // and the CLI then stops its private server with SIGTERM to the group; the oracle died mid-judgment before writing
+      // its ledger row. In its own group it finishes and writes the row, which the launcher prints after the CLI returns.
       const proc = spawn("python3", ["-I", CC_PY, cmd, "--agent", AGENT, ...extra], {
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, AIDD_CC_AGENT: AGENT },
+        detached: true,
       })
       let out = ""
       proc.stdout.on("data", (d) => (out += String(d)))

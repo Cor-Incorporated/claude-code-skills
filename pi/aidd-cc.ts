@@ -135,7 +135,7 @@ export default function aiddCommonControl(pi: any) {
     return undefined;
   });
 
-  pi.on("turn_end", async (event: any) => {
+  pi.on("turn_end", async (event: any, ctx: any) => {
     const last = textOf(event?.message);
     if (!last || (event?.toolResults?.length ?? 0) > 0) return undefined; // not a final answer yet
     const v = await runCC("stop", { session_id: sessionID, last_assistant_message: last });
@@ -161,6 +161,13 @@ export default function aiddCommonControl(pi: any) {
       : v.would_block ? (v.note ?? "[H17] evidence unverified (max-blocks released)")
       : (v.note ?? null); // ADR-009: Status: partial / unverified passes with its note shown (Codex r2 P2)
     if (!note) return undefined;
+    // `pi -p` prints only the last session message when it is an assistant message (modes/print-mode.js), so a final
+    // custom_message hid the whole answer (owner live run 2026-10-19: empty output). Without a UI the note goes to
+    // stderr and the answer stays last; the TUI keeps the in-session note.
+    if (ctx?.hasUI === false) {
+      process.stderr.write(`${note} — ${v.reason ?? ""}\n`);
+      return undefined;
+    }
     return {
       entries: [{ type: "custom_message", customType: "aidd-cc", display: true, content: `${note} — ${v.reason ?? ""}` }],
     };

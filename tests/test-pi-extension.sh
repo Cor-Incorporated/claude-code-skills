@@ -50,9 +50,17 @@ const fab = "実装完了しました。\n\nEvidence: `write(path='test_file.txt
 const t7 = await call("turn_end", { message: { content: [{ type: "text", text: fab }] }, toolResults: [] });
 out.released_continue = !!(t7 && t7.continue);
 out.released_note = t7?.entries?.[0]?.content ?? null;
+// owner live run 2026-10-19: `pi -p` prints only a final *assistant* message, so a trailing note entry hid the answer.
+// Without a UI the release note goes to stderr and no entry is appended.
+await call("session_start", {}, { sessionManager: { getSessionId: () => "pi-test-3" } });
+await call("before_agent_start", { messageType: "user", prompt: "実装して" });
+for (let i = 0; i < 2; i++) await call("turn_end", { message: { content: [{ type: "text", text: "実装完了しました。" }] }, toolResults: [] }, { hasUI: false });
+const t8 = await call("turn_end", { message: { content: [{ type: "text", text: fab }] }, toolResults: [] }, { hasUI: false });
+out.headless_entries = t8?.entries?.length ?? 0;
 console.log(JSON.stringify(out));
 JS
 res="$("$NODE" --experimental-strip-types --no-warnings "$SB/drive.mts" 2>"$SB/err.log")" || { echo "FAIL: node run"; cat "$SB/err.log"; exit 1; }
+if grep -q 'max-blocks released' "$SB/err.log"; then echo "PASS: pi -p (no UI): the release note goes to stderr"; else echo "FAIL: headless release note missing from stderr"; cat "$SB/err.log"; exit 1; fi
 echo "$res"
 pass=0; fail=0
 python3 -I - "$res" <<'PY' && pass=3 || fail=1
@@ -71,6 +79,8 @@ r = json.loads(sys.argv[1])
 assert r["exhausted_continue"] is False and r["exhausted_note"] and "evidence unverified" in r["exhausted_note"], r
 assert r["released_continue"] is False and r["released_note"] and "max-blocks released" in r["released_note"], r
 print("PASS: T69-pi continuation budget exhausted / python max-blocks release -> visible [H17] evidence unverified note")
+assert r["headless_entries"] == 0, r
+print("PASS: pi -p (no UI): the release note is not appended after the answer")
 PY
 if grep -q '"rule": "evidence.max-blocks.would-block"' "$SB/ledger.jsonl"; then pass=$((pass + 1)); echo "PASS: T69-pi would-block row in the H6 ledger"; else fail=$((fail + 1)); echo "FAIL: T69-pi no would-block row"; fi
 # aidd-governance#186 P2-2: an oracle that cannot be spawned leaves an H6 error row (decision unavailable), never a silent allow
