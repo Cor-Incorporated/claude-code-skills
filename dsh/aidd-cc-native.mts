@@ -11,8 +11,10 @@
 // Extension points used (same as the bridge, lib/index.js of dsh-hooks-claude-code@0.0.1-rc.5):
 //   agent/pre-step        -> prompt            (user decisions / deadline)
 //   tools/pre-execute     -> pre               (C-ITER; PreToolDecision.deny)
-//   tools/post-execute    -> post              (rc / output for evidence binding; `[exit code: N]` marker)
-//   agent/turn-stopping   -> stop              (C-EVIDENCE; agent.steer() with the gate reason, max 2 per turn)
+//   tools/post-execute    -> post              (rc from `result.value.exitCode`, marker fallback; output for evidence)
+//   agent/turn-stopping   -> stop              (C-EVIDENCE; agent.steer() with the gate reason, max 2 per turn;
+//                                               a released claim's note goes to stderr, never into the inbox)
+// tests/test-dsh-native-driver.sh drives these handlers with a fake agent (no dsh, no API key).
 //
 // Install (experiment profile only, never the default one):
 //   copy next to cordis.patch.yml and add to the patch layer:
@@ -123,9 +125,18 @@ function lastAssistantText(agent: any): string {
   return blocksToText(msg?.data?.message?.content);
 }
 
-/** `[exit code: N]` marker that dsh appends to every bash result (system prompt of the headless profile). */
-function exitCodeOf(text: string): number | undefined {
-  const m = /\[exit code: (-?\d{1,3})\]\s*$/.exec(text.trim());
+/**
+ * Exit status of a dsh tool result (ccs#421). dsh-tool-bash@0.2.0-rc.1 `renderResult` appends `[exit code: N]` only
+ * when N != 0, so a clean run had no marker and every success was recorded `rc: null` (owner live run 2026-10-19:
+ * the gate answered "exit status unavailable is UNKNOWN" to an honest Evidence trailer). The structured value of a
+ * finished foreground run carries it: `result.value = { kind: "foreground", exitCode: number | null, … }`.
+ * The text markers stay as the fallback (dsh-tool-bash-persistent writes `[Command finished with exit code N]`).
+ * A background / promoted call has no exit status yet → undefined (UNKNOWN, never assumed 0).
+ */
+export function exitCodeOf(result: any, text: string): number | undefined {
+  const code = result?.value?.exitCode;
+  if (Number.isInteger(code)) return code;
+  const m = /\[(?:exit code:|Command finished with exit code) (-?\d{1,3})\]\s*$/.exec(text.trim());
   return m ? Number(m[1]) : undefined;
 }
 
@@ -163,7 +174,7 @@ export function apply(ctx: any, config: Config = {}): void {
     const text = blocksToText(result?.content).slice(0, 4000);
     await runCC(oracle, "post", {
       session_id: sid, tool_name: exec?.name, tool_input: exec?.arguments ?? {},
-      tool_response: { exit_code: exitCodeOf(text), output: text }, cwd: exec?.agent?.session?.header?.cwd,
+      tool_response: { exit_code: exitCodeOf(result, text), output: text }, cwd: exec?.agent?.session?.header?.cwd,
     });
     return next();
   });
@@ -188,12 +199,14 @@ export function apply(ctx: any, config: Config = {}): void {
       agent.steer(createUserMessage({ content: [{ type: "text", text: note }], source: AIDD_SOURCE }));
       return;
     }
-    // Budget spent or python released: the claim passes WITH the visible note (never silently, #186 P1-4).
-    try {
-      agent.inject?.(createUserMessage({ content: [{ type: "text", text: note }], source: AIDD_SOURCE }));
-    } catch {
-      /* the would-block row written by aidd_cc.py is the durable record */
-    }
+    // Budget spent or python released: the claim passes WITH a visible note (never silently, #186 P1-4) — but the
+    // note must not start a model turn. `agent.inject()` queues model-facing context that the running driver claims
+    // at the next step boundary, so at turn-stopping it re-opened the turn: the owner's live run of 2026-10-19
+    // 12:49:53Z-12:50:10Z answered the same note 4 times (4 `evidence.max-blocks.would-block` rows for agent dsh).
+    // dsh 0.2.0-rc.1 has no display-only message (its own Claude Code bridge drops `systemMessage`: "not yet
+    // surfaced"), so the note goes to stderr like the Pi headless entry; the would-block row written by aidd_cc.py
+    // is the durable H6 record. Never route it through steer / inject / followup / send.
+    process.stderr.write(`${note}\n`);
   });
 }
 
