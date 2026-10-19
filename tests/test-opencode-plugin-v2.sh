@@ -70,6 +70,10 @@ for (let i = 0; i < 5; i++) {
   } catch (e) { patchDenied = i + 1; out.patch_deny_message = String((e as Error).message).slice(0, 80); break; }
 }
 out.patch_denied_at = patchDenied;
+// review #426 M1: a two-file patch records a post row for each file
+const two = "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-1\n+2\n*** Update File: src/b.ts\n@@\n-3\n+4\n*** End Patch\n";
+await hooks["tool.execute.before"]({ tool: "patch", sessionID: "ses_v2test4", agent: "build", messageID: "m4", id: "q1", input: { patchText: two } });
+await hooks["tool.execute.after"]({ tool: "patch", sessionID: "ses_v2test4", agent: "build", messageID: "m4", id: "q1", input: { patchText: two }, status: "completed", result: { content: "Success" } });
 console.log(JSON.stringify(out));
 process.exit(0);
 JS
@@ -87,6 +91,7 @@ assert r["partial_resume"] is False, r            # Codex #426 P1-a: a display-o
 assert r["patch_denied_at"] == 4 and "edit" in r["patch_deny_message"].lower(), r  # Codex #426 P1-b: native patch counts as an edit
 print("PASS: v2 plugin — prompt/tool hooks registered, 4th identical call denied, final answer without Status re-prompted, Status: partial passes with a synthetic note (resume:false), native patch normalized to an edit")
 PY
+if grep -rqs 'edit:[^"]*src/a.ts' "$AIDD_CC_STATE_DIR" && grep -rqs 'edit:[^"]*src/b.ts' "$AIDD_CC_STATE_DIR"; then echo "PASS: two-file patch -> a post row per touched file"; else echo "FAIL: per-file post rows missing"; grep -rho 'edit:[^"]*' "$AIDD_CC_STATE_DIR" | sort -u | head; exit 1; fi
 grep -q '"component": "H17"' "$AIDD_LEDGER_PATH" && echo "PASS: H6 ledger rows written by the v2 entry" || { echo "FAIL: no ledger rows"; exit 1; }
 : >"$SB/err-ledger.jsonl"
 (cd "$SB" && AIDD_CC_PY=/nonexistent/aidd_cc.py AIDD_LEDGER_PATH="$SB/err-ledger.jsonl" timeout 30 bun run drive.ts >/dev/null 2>&1) || true

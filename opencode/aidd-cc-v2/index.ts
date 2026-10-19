@@ -147,6 +147,8 @@ function eventData(ev: unknown): Record<string, any> {
 export default {
   id: "aidd-cc",
   setup: async (ctx: any) => {
+    // review #426 M1: patch paths are relative; the oracle resolves them against the payload cwd, not the server's
+    const cwd = String(ctx?.location?.directory ?? process.cwd())
     const reprompts = new Map<string, number>()
     // per session: the assistant message currently being written and its text parts in ordinal order
     const texts = new Map<string, { messageID: string; parts: Map<number, string> }>()
@@ -170,7 +172,7 @@ export default {
       const sid = String(e?.sessionID ?? "unset")
       texts.delete(sid) // a tool call follows: whatever text came before was intermediate
       const call = normalizeCall(String(e?.tool ?? ""), e?.input)
-      const v = await cc("pre", { sessionID: sid, tool_name: call.tool, tool_input: call.input })
+      const v = await cc("pre", { sessionID: sid, cwd, tool_name: call.tool, tool_input: call.input })
       if (v.decision === "block") throw new Error(`[H17] ${v.reason ?? v.rule}`) // -> Tool.Error, the call is denied
     })
 
@@ -178,12 +180,21 @@ export default {
       const sid = String(e?.sessionID ?? "unset")
       const text = e?.status === "completed" ? resultText(e?.result) : String(e?.error?.message ?? "")
       const call = normalizeCall(String(e?.tool ?? ""), e?.input)
-      await cc("post", {
-        sessionID: sid,
-        tool_name: call.tool,
-        tool_input: call.input,
-        tool_response: { exit_code: e?.status === "completed" ? exitCodeOf(e?.result, text) : undefined, output: text.slice(0, 4000) },
-      })
+      // review #426 L1: a failed call carries a non-zero rc so a rejected patch is not recorded as a successful write
+      const rc = e?.status === "completed" ? exitCodeOf(e?.result, text) : 1
+      // review #426 M1: a patch touching several files records one post row per file, so every touched path is a
+      // written path for Readback binding (the oracle reads the path from the edit key); paths resolve against cwd
+      const files = Array.isArray(call.input.edits) ? (call.input.edits as { path?: string }[]).map((x) => String(x.path ?? "")).filter(Boolean) : []
+      const targets = files.length > 1 ? [...new Set(files)] : [String(call.input.file_path ?? "")]
+      for (const file of targets) {
+        await cc("post", {
+          sessionID: sid,
+          cwd,
+          tool_name: call.tool,
+          tool_input: files.length > 1 ? { ...call.input, file_path: file } : call.input,
+          tool_response: { exit_code: rc, output: text.slice(0, 4000) },
+        })
+      }
     })
 
     const judge = async (sid: string) => {
