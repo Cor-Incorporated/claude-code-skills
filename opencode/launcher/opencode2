@@ -84,6 +84,12 @@ else
 fi
 rc=$?
 [ "$is_run" = 1 ] || exit $rc
+# The stop judgment of the final answer starts on the event `run` returns on, so it is still running here (its
+# oracle runs in its own process group and outlives the private server). Wait for it before reading the ledger.
+for _ in $(seq 1 "${AIDD_CC_STOP_WAIT_S:-20}"); do
+  pgrep -f "aidd_cc.py stop --agent opencode" >/dev/null 2>&1 || break
+  sleep 1
+done
 [ -f "$LEDGER" ] && python3 -I - "$LEDGER" "$start" <<'PY' >&2
 import json, sys
 path, start = sys.argv[1], sys.argv[2]
