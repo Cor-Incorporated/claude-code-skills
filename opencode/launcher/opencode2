@@ -5,7 +5,7 @@
 #   opencode2 --standalone run …   private server instead of the service
 # State: XDG dirs under ~/.opencode-2 (config / data / state / cache), fully separate from the 1.x fork's `opencode`.
 # Plugin: ~/.config/opencode/plugins/aidd-cc-v2 (installed by setup.sh from opencode/aidd-cc-v2). It is loaded either
-#   by the Cor fork's 2.x guardrails launcher (OPENCODE_GUARDRAILS_BIN, default: the fork checkout's 2.x branch), which
+#   by the Cor fork's 2.x guardrails launcher (OPENCODE_GUARDRAILS_BIN, default: the fork's main checkout ~/Developer/opencode on dev), which
 #   receives it through OPENCODE_GUARDRAILS_EXTRA_PLUGINS, or — without that launcher — from the `plugins` list of
 #   ~/.opencode-2/config/opencode/opencode.json, which setup.sh maintains. If neither path can load it, the launcher
 #   refuses to start (H17 must never be silently off); AIDD_CC_ALLOW_UNCONTROLLED=1 overrides with a warning.
@@ -23,7 +23,8 @@ export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.opencode-2/state}" XDG_CACHE_HOM
 BIN="${OPENCODE_BIN_PATH:-$HOME/.opencode-2/pkg/node_modules/.bin/opencode}"
 [ -x "$BIN" ] || { echo "opencode2: $BIN missing — cd ~/.opencode-2/pkg && npm i @opencode/cli@2.0.32" >&2; exit 1; }
 PLUGIN="${AIDD_CC_V2_PLUGIN:-$HOME/.config/opencode/plugins/aidd-cc-v2}"
-GUARD="${OPENCODE_GUARDRAILS_BIN:-$HOME/Developer/opencode/.worktrees/claude/sync-upstream-dev/packages/guardrails/bin/opencode-guardrails}"
+# the main checkout of the Cor fork, on `dev` since the 2.x re-platform (Cor-Incorporated/opencode#343 merged 2026-10-19)
+GUARD="${OPENCODE_GUARDRAILS_BIN:-$HOME/Developer/opencode/packages/guardrails/bin/opencode-guardrails}"
 CONFIG="$XDG_CONFIG_HOME/opencode/opencode.json"
 LEDGER="${AIDD_LEDGER_PATH:-$HOME/.claude/hooks/ledger/guard-ledger.jsonl}"
 
