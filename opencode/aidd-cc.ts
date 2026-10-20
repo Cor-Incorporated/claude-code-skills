@@ -18,6 +18,9 @@ import { appendFileSync, mkdirSync } from "fs"
 
 const CC_PY = process.env.AIDD_CC_PY ?? path.join(os.homedir(), ".claude", "hooks", "lib", "aidd_cc.py")
 const AGENT = "opencode"
+// Head + tail, never the head alone: the status line (`X; echo exit=$?`) and test summaries are the LAST lines, and
+// a head-only cut let a failing X's early `exit=0` stand in for the echo's `exit=1` (ADR-011, Codex review P2).
+const clipOut = (s: string, n = 4000): string => (s.length <= n ? s : `${s.slice(0, n / 2)}\n…\n${s.slice(-n / 2)}`)
 const MAX_REPROMPTS = 2
 
 type Verdict = { decision?: string; reason?: string; rule?: string; problems?: string[] }
@@ -133,7 +136,7 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
         sessionID: item.sessionID ?? "unset",
         tool_name: item.tool,
         tool_input: item.args ?? {},
-        tool_response: { exit_code: rc, stdout: String(out.output ?? "").slice(0, 4000) },
+        tool_response: { exit_code: rc, stdout: clipOut(String(out.output ?? "")) },
       })
     },
     // Headless `opencode run` exits on session.idle before an async re-prompt can land,

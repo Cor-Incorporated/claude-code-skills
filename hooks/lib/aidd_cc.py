@@ -259,17 +259,25 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
             out,
             "harness",
         )
-    if is_exit_echo_line(cmd):
-        # ADR-011: a harness code for `X; echo exit=$?` is echo's (always 0) and says nothing about X; the echo's
-        # line is X's status. Owner live run 2026-10-20 A-1: dsh reported 0 for the line, the judge refused it as
-        # masked, and the honest trailer the gate itself had asked for was blocked as UNKNOWN twice.
-        marker = trailing_exit_marker(out)
+    # The echo writes to stdout: when the streams come separately, a failing X's stderr `exit=0` must not be read
+    # after the echo's stdout `exit=1` (ADR-011, Codex review P2); a merged stream is in write order.
+    status_text = (
+        str(resp["stdout"])
+        if isinstance(resp, dict) and str(resp.get("stdout") or "").strip()
+        else out
+    )
+    if is_exit_echo_line(cmd) and rc in (None, 0):
+        # ADR-011: a harness code 0 for `X; echo exit=$?` is echo's and says nothing about X; the echo's line is X's
+        # status. Owner live run 2026-10-20 A-1: dsh reported 0 for the line, the judge refused it as masked, and the
+        # honest trailer the gate itself had asked for was blocked as UNKNOWN twice. A NON-zero line code means the
+        # echo never ran normally (`exec`, a kill) and is kept: no printed `exit=0` overrides it (Codex review P1).
+        marker = trailing_exit_marker(status_text)
         if marker is not None:
             return marker, out, "marker"
     if rc is None:
         # status lines only, at the end (reviewer-e N4); the last one wins (ADR-011: X may print its own first)
         marker = trailing_exit_marker(
-            out, r"(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})"
+            status_text, r"(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})"
         )
         if marker is not None:
             return marker, out, "marker"  # the command's own trailing status line

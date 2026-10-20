@@ -795,6 +795,25 @@ if [ -z "$o84" ] && printf '%s' "$o84f" | grep -q 'rc=1' && printf '%s' "$o84s" 
   ok "T84 \`<cmd>; echo exit=\$?\` is accepted on all 6 entries with and without a harness rc; exit=1 / a spoofed earlier exit=0 still block; a harness footer after the marker is tolerated"
 else bad "T84:$o84 | fail=[${o84f:0:200}] | spoof=[${o84s:0:200}] | footer=[${o84p:0:200}]"; fi
 
+# (84c) Codex review of b277c92 — three ways the first cut accepted a failure as rc 0, each red on b277c92:
+#   P1 a non-zero line code (`exec X; echo exit=$?` never reaches the echo) is kept; a printed `exit=0` cannot override it
+#   P2 separate streams: the echo's `exit=1` is on stdout, a failing X's `exit=0` on stderr must not be read after it
+#      (with and without a harness code — the Claude Code shape has none)
+#   P2 adapters cut the output to the HEAD (`.slice(0, 4000)`), dropping the echo's line: no adapter may cut head-only
+o84x="$(t84 dsh neg84x $'45\nexit=0\n' 1)"
+p84() {  # session json-tool_response -> stop verdict
+  printf '%s' "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bash tests/x.sh; echo exit=\$?\"},\"tool_response\":$2}" | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent "$3" >/dev/null
+  printf '%s' "{\"hook_event_name\":\"Stop\",\"session_id\":\"$1\",\"last_assistant_message\":\"ok.\\nEvidence: bash tests/x.sh; echo exit=\$? | ok exit=0 | 10:00\\nStatus: complete\"}" | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent "$3"
+}
+o84e="$(p84 neg84e '{"exit_code":0,"stdout":"ok\nexit=1\n","stderr":"exit=0\n"}' dsh)"
+o84c="$(p84 neg84c '{"stdout":"ok\nexit=1\n","stderr":"exit=0\n"}' claude-code)"
+o84k="$(p84 neg84k '{"exit_code":0,"stdout":"ok\nexit=0\n","stderr":"warning\n"}' dsh)"   # honest, stderr noise
+heads="$(grep -n 'slice(0, *4000)' "$ROOT"/dsh/*.mts "$ROOT"/pi/*.ts "$ROOT"/opencode/*.ts "$ROOT"/opencode/*/index.ts 2>/dev/null)"
+if printf '%s' "$o84x" | grep -q '"decision": "block"' && printf '%s' "$o84e" | grep -q 'rc=1' \
+   && printf '%s' "$o84c" | grep -q 'rc=1' && ! printf '%s' "$o84k" | grep -q '"decision": "block"' && [ -z "$heads" ]; then
+  ok "T84c non-zero line code kept; stdout marker read before stderr (dsh / Claude shapes); stderr noise does not block an honest run; no adapter cuts output head-only"
+else bad "T84c: exec=[${o84x:0:160}] streams=[${o84e:0:160}] claude=[${o84c:0:160}] honest=[${o84k:0:160}] heads=[$heads]"; fi
+
 # (84b) the UNKNOWN reason names its cause: a harness that reported nothing vs a recorded rc that `;` can mask
 # (A-2 2026-10-20: `date …; cat a.txt` got "this harness reported no exit status", which was false — dsh had reported 0)
 printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg84m","tool_name":"Bash","tool_input":{"command":"date -u; bash tests/ok.sh"},"tool_response":{"exit_code":0,"output":"Tue\nok"}}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent dsh >/dev/null

@@ -18,6 +18,9 @@ type Verdict = { decision?: string; reason?: string; rule?: string; would_block?
 
 const CC_PY = process.env.AIDD_CC_PY ?? join(homedir(), ".claude", "hooks", "lib", "aidd_cc.py");
 const AGENT = "pi";
+// Head + tail, never the head alone: the status line (`X; echo exit=$?`) and test summaries are the LAST lines, and
+// a head-only cut let a failing X's early `exit=0` stand in for the echo's `exit=1` (ADR-011, Codex review P2).
+const clipOut = (s: string, n = 4000): string => (s.length <= n ? s : `${s.slice(0, n / 2)}\n…\n${s.slice(-n / 2)}`);
 const MAX_CONTINUATIONS = 2;
 
 // aidd-governance#186 P2-2: a spawn / parse failure of the oracle leaves an H6 error row (same shape as
@@ -130,7 +133,7 @@ export default function aiddCommonControl(pi: any) {
       // One copy only: the oracle concatenates stdout + stderr + output, so sending the text twice doubled
       // every recorded out_sample ("okok", pi-live/tools.jsonl 2026-10-15) and made honest output fields fail
       // the #186 R1 comparison (found by the Pi replay arm, aidd-governance#186 P2-6).
-      tool_response: { exit_code: rc, output: textOf(event).slice(0, 4000) },
+      tool_response: { exit_code: rc, output: clipOut(textOf(event)) },
     });
     return undefined;
   });

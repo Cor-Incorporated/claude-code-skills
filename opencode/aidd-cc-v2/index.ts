@@ -24,6 +24,9 @@ import { spawn } from "node:child_process"
 
 const CC_PY = process.env.AIDD_CC_PY ?? path.join(os.homedir(), ".claude", "hooks", "lib", "aidd_cc.py")
 const AGENT = "opencode"
+// Head + tail, never the head alone: the status line (`X; echo exit=$?`) and test summaries are the LAST lines, and
+// a head-only cut let a failing X's early `exit=0` stand in for the echo's `exit=1` (ADR-011, Codex review P2).
+const clipOut = (s: string, n = 4000): string => (s.length <= n ? s : `${s.slice(0, n / 2)}\n…\n${s.slice(-n / 2)}`)
 const MAX_REPROMPTS = 2
 
 type Verdict = { decision?: string; reason?: string; rule?: string; problems?: string[]; note?: string; would_block?: boolean; status?: string }
@@ -197,7 +200,7 @@ export default {
           cwd,
           tool_name: call.tool,
           tool_input: files.length > 1 ? { ...call.input, file_path: file } : call.input,
-          tool_response: { exit_code: rc, output: text.slice(0, 4000) },
+          tool_response: { exit_code: rc, output: clipOut(text) },
         })
       }
     })

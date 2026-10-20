@@ -5,6 +5,8 @@
 #       enter the agent inbox (inject / steer / followup / send wake another model turn) — it goes to stderr.
 #   (2) exit status (ccs#421): dsh-tool-bash writes `[exit code: N]` only for N != 0, so the post row must take
 #       `result.value.exitCode`; an honest `Status: complete` + Evidence trailer then passes the gate.
+#   (3) ADR-011 (Codex review of b277c92): `X; echo exit=$?` with an output longer than the 4000-char cut and a stderr
+#       `exit=0` from the failing X — the post row must hold the echo's rc 1 (head + tail cut; stdout apart from stderr).
 # PLUGIN_SRC overrides the plugin under test (mutation check against the pre-fix file).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -59,6 +61,20 @@ await handlers.get("tools/post-execute")(exec, {
 await stop(mkAgent(sid, "テストを実行しました。\nStatus: complete\nEvidence: pytest -q | 3 passed | 2026-10-19T13:00:00Z"));
 out.evidence = count(sid);
 out.evidence_note = inbox.find((e) => e.id === sid)?.msg?.content?.[0]?.text?.slice(0, 160) ?? null;
+// (3) ADR-011: long failing output whose head and stderr both say exit=0; the echo's stdout tail says exit=1
+const sid3 = "dsh-adr011";
+const cmd3 = "bash tests/x.sh; echo exit=\$?";
+const exec3 = { name: "bash", arguments: { command: cmd3 }, agent: mkAgent(sid3, "") };
+const so3 = "exit=0\n" + "x".repeat(5000) + "\nexit=1\n";
+await handlers.get("tools/pre-execute")(exec3, next);
+await handlers.get("tools/post-execute")(exec3, {
+  content: [{ type: "text", text: so3 + "[stderr]\nexit=0\n" }],
+  value: { kind: "foreground", exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 120000,
+    stdout: { text: so3, truncated: false }, stderr: { text: "exit=0\n", truncated: false } },
+}, next);
+await stop(mkAgent(sid3, "ok.\nStatus: complete\nEvidence: " + cmd3 + " | exit=0 | 2026-10-20T04:00:00Z"));
+out.adr011 = count(sid3);
+out.adr011_note = inbox.find((e) => e.id === sid3)?.msg?.content?.[0]?.text?.slice(0, 300) ?? null;
 console.log(JSON.stringify(out));
 JS
 res="$(cd "$SB" && "$NODE" --experimental-strip-types --no-warnings drive.mts 2>"$SB/err.log")" || { echo "FAIL: node run"; cat "$SB/err.log"; exit 1; }
@@ -79,6 +95,12 @@ import json, sys
 r = json.loads(sys.argv[1])
 assert r["evidence"] == [], f"honest Status: complete + Evidence was gated: {r['evidence']} {r['evidence_note']}"
 print("PASS: rc from result.value.exitCode -> honest Evidence trailer passes the gate")
+PY
+python3 -I - "$res" <<'PY' || fail=1
+import json, sys
+r = json.loads(sys.argv[1])
+assert r["adr011"] == ["steer"] and "rc=1" in (r["adr011_note"] or ""), f"failing X accepted or misread: {r['adr011']} {r['adr011_note']}"
+print("PASS: ADR-011 long output + stderr exit=0 -> the echo's rc 1 is recorded and the claim is gated")
 PY
 if grep -rqs '"rc": 0' "$SB/state" || grep -rqs '"rc":0' "$SB/state"; then
   echo "PASS: post row recorded rc 0"
