@@ -711,6 +711,29 @@ def shell_segments_with_separators(cmd: str) -> list[tuple[str, str]]:
     return [(re.sub(r"\s+", " ", seg.strip()), s) for seg, s in out if seg.strip()]
 
 
+def is_exit_echo_line(line: str) -> bool:
+    """`X; echo exit=$?` — exactly one command and the status echo (ADR-011). One predicate for the recorder
+    (aidd_cc._exit_status) and the judge (aidd_cc_controls._rc_for), so they cannot disagree on the shape."""
+    parts = shell_segments_with_separators(line)
+    return (
+        len(parts) == 2
+        and parts[1][1] in (";", "\n")
+        and re.fullmatch(r"echo exit=\$\?", parts[1][0]) is not None
+    )
+
+
+def trailing_exit_marker(out: str, pattern: str = r"exit=(-?\d{1,3})") -> int | None:
+    """The LAST status line among the final 3 non-empty output lines (ADR-011). Last, not first: X can print a status
+    line of its own before the echo (`exit=0` then the echo's `exit=1`); the final 3 tolerate a harness footer after
+    the echo (dsh persistent bash appends `[Command finished with exit code N]`)."""
+    tail = [ln.strip() for ln in out.splitlines() if ln.strip()][-3:]
+    for ln in reversed(tail):
+        m = re.fullmatch(pattern, ln, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 REDIRECT_RE = re.compile(r"(\d?>>?\s*\S+|<\s*\S+|\d?>&\d|&>\s*\S+)")
 
 

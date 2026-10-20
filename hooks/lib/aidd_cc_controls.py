@@ -28,6 +28,7 @@ from aidd_cc_text import (
     segment_runs,
     shell_segments_with_separators,
     is_confirmation_question,
+    is_exit_echo_line,
     is_trivial_cmd,
     denominator_mismatch,
     evidence_trailers,
@@ -520,9 +521,7 @@ def _rc_for(rows: list[dict], cited: str):
     parts = shell_segments_with_separators(line)
     if (
         r.get("rc_src") == "marker"
-        and len(parts) == 2
-        and parts[1][1] in (";", "\n")
-        and re.fullmatch(r"echo exit=\$\?", parts[1][0])
+        and is_exit_echo_line(line)  # the same predicate the recorder used (ADR-011)
         and (whole or segment_runs(parts[0][0], norm))
     ):
         return r.get("rc"), r.get(
@@ -819,9 +818,15 @@ def stop_check(
         if rc is None and mutated("evidence.executed"):
             rc = 0  # the old behaviour: a typed command is trusted as if it ran and passed
         if rc in (None, 124, 126, 127) and not mutated("evidence.rc-unknown"):
+            line = str((row or {}).get("cmd", ""))
+            masked = rc is None and row is not None and row.get("rc") is not None
             how = (
                 ""
                 if rc is not None
+                # ADR-011: say which cause it is — 2026-10-20 A-2 got "reported no exit status" for a line dsh had
+                # reported 0 for, which sent the agent after the wrong fix
+                else f" — the recorded exit status {row.get('rc')} belongs to the whole line `{line[:60]}`, where `;` / `|` / `||` / `&` can mask a failure; run the command on its own or as `<cmd>; echo exit=$?`"
+                if masked
                 else " — this harness reported no exit status; run it as `<cmd>; echo exit=$?` so the status is in the output"
             )
             problems.append(

@@ -761,6 +761,51 @@ PY2
 )"
 if printf '%s' "$o83" | grep -q '"missing_pins": \[\]' && printf '%s' "$o83" | grep -q '"control_sha": true' && printf '%s' "$o83" | grep -q '"control_set_sha": true' && printf '%s' "$o83" | grep -q '"opencode"' && printf '%s' "$o83" | grep -q '"pi"'; then ok "T83 replay pins the whole control set and records the opencode / pi arms ($o83)"; else bad "T83: $o83"; fi
 
+# ---- (84) owner live run 2026-10-20 A-1 (dsh): since #429 dsh reports the bash exit code, and for `X; echo exit=$?`
+#      that code is echo's. The line rc was refused as masking and the trailing `exit=0` was never read, so the gate
+#      answered "UNKNOWN … run it as `<cmd>; echo exit=$?`" to an agent that had done exactly that, twice.
+#      PAIR (ADR-011): the remediation the gate prints (declaration) must be what the gate accepts (enforcement) on
+#      every entry, with or without a harness exit code. Committed red before the repair.
+t84() {  # agent session output [harness_rc] -> stop verdict for an honest trailer citing `<cmd>; echo exit=$?`
+  local cmd="python3 -c 'print(sum(range(10)))'; echo exit=\$?"
+  python3 -I - "$2" "$cmd" "$3" "${4-}" <<'PY84' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent "$1" >/dev/null
+import json, sys
+sid, cmd, out, rc = sys.argv[1:5]
+resp = {"output": out} if rc == "" else {"exit_code": int(rc), "output": out}
+print(json.dumps({"hook_event_name": "PostToolUse", "session_id": sid, "tool_name": "Bash", "tool_input": {"command": cmd}, "tool_response": resp}))
+PY84
+  python3 -I - "$2" "$cmd" <<'PY84b' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent "$1"
+import json, sys
+sid, cmd = sys.argv[1:3]
+print(json.dumps({"hook_event_name": "Stop", "session_id": sid, "last_assistant_message": f"結果は 45。\nEvidence: {cmd} | 45 exit=0 | 2026-10-20T03:28:56Z\nStatus: complete"}))
+PY84b
+}
+o84=""
+for a in dsh opencode pi codex cursor claude-code; do
+  for rc in 0 ""; do
+    v="$(t84 "$a" "neg84-$a-${rc:-none}" $'45\nexit=0\n' "$rc")"
+    if printf '%s' "$v" | grep -q '"decision": "block"'; then o84="$o84 [$a rc=${rc:-none}: ${v:0:220}]"; fi
+  done
+done
+o84f="$(t84 dsh neg84f $'45\nexit=1\n' 0)"                       # X failed: the line rc 0 is echo's, not X's
+o84s="$(t84 dsh neg84s $'exit=0\nexit=1\n' 0)"                   # X printed `exit=0` itself; the echo's line is last
+o84p="$(t84 dsh neg84p $'45\nexit=0\n[Command finished with exit code 0]\n' 0)"  # dsh persistent-bash footer
+if [ -z "$o84" ] && printf '%s' "$o84f" | grep -q 'rc=1' && printf '%s' "$o84s" | grep -q 'rc=1' \
+   && ! printf '%s' "$o84p" | grep -q '"decision": "block"'; then
+  ok "T84 \`<cmd>; echo exit=\$?\` is accepted on all 6 entries with and without a harness rc; exit=1 / a spoofed earlier exit=0 still block; a harness footer after the marker is tolerated"
+else bad "T84:$o84 | fail=[${o84f:0:200}] | spoof=[${o84s:0:200}] | footer=[${o84p:0:200}]"; fi
+
+# (84b) the UNKNOWN reason names its cause: a harness that reported nothing vs a recorded rc that `;` can mask
+# (A-2 2026-10-20: `date …; cat a.txt` got "this harness reported no exit status", which was false — dsh had reported 0)
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg84m","tool_name":"Bash","tool_input":{"command":"date -u; bash tests/ok.sh"},"tool_response":{"exit_code":0,"output":"Tue\nok"}}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent dsh >/dev/null
+o84m="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg84m","last_assistant_message":"ok.\nEvidence: bash tests/ok.sh | ok | 10:00\nStatus: complete"}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent dsh)"
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg84n","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"},"tool_response":{"output":"ok"}}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent cursor >/dev/null
+o84n="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg84n","last_assistant_message":"ok.\nEvidence: bash tests/ok.sh | ok | 10:00\nStatus: complete"}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent cursor)"
+if printf '%s' "$o84m" | grep -q 'can mask' && ! printf '%s' "$o84m" | grep -q 'reported no exit status' \
+   && printf '%s' "$o84n" | grep -q 'reported no exit status'; then
+  ok "T84b UNKNOWN names its cause: masked line rc (\`;\`) vs a harness that reported none"
+else bad "T84b: masked=[${o84m:0:260}] none=[${o84n:0:260}]"; fi
+
 
 # ---- repair-family breaker v2 (2026-10-17, this harness's own loop on claude-code-skills#418: 12 fix(h17) commits and
 #      6 STRATEGY notes — 4 of them HOLD — on one branch across 8 independent-review rounds; the breaker fired and was
