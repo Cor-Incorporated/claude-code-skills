@@ -750,7 +750,7 @@ o83="$(python3 -I - "$SB/replay/replay-results.json" <<'PY2'
 import json, sys
 s = json.load(open(sys.argv[1], encoding="utf-8"))
 pins = s["control_source_sha256"]
-need = ["aidd_cc_controls.py", "aidd_cc_text.py", "aidd_cc_eval.py", "aidd_cc_session.py", "aidd-cc-adapter.sh", "opencode", "pi"]
+need = ["aidd_cc_controls.py", "aidd_cc_text.py", "aidd_cc_eval.py", "aidd_cc_session.py", "aidd-cc-adapter.sh", "opencode", "opencode2", "pi"]
 missing = [n for n in need if not pins.get(n)]
 arms = set()
 for r in s["results"]:
@@ -759,7 +759,7 @@ print(json.dumps({"missing_pins": missing, "control_sha": bool(s.get("control_sh
                   "arms": sorted(arms), "skipped": s.get("arm_runtime_skipped")}))
 PY2
 )"
-if printf '%s' "$o83" | grep -q '"missing_pins": \[\]' && printf '%s' "$o83" | grep -q '"control_sha": true' && printf '%s' "$o83" | grep -q '"control_set_sha": true' && printf '%s' "$o83" | grep -q '"opencode"' && printf '%s' "$o83" | grep -q '"pi"'; then ok "T83 replay pins the whole control set and records the opencode / pi arms ($o83)"; else bad "T83: $o83"; fi
+if printf '%s' "$o83" | grep -q '"missing_pins": \[\]' && printf '%s' "$o83" | grep -q '"control_sha": true' && printf '%s' "$o83" | grep -q '"control_set_sha": true' && printf '%s' "$o83" | grep -q '"opencode"' && printf '%s' "$o83" | grep -q '"opencode2"' && printf '%s' "$o83" | grep -q '"pi"'; then ok "T83 replay pins the whole control set and records the opencode / opencode2 / pi arms ($o83)"; else bad "T83: $o83"; fi
 
 # ---- (84) owner live run 2026-10-20 A-1 (dsh): since #429 dsh reports the bash exit code, and for `X; echo exit=$?`
 #      that code is echo's. The line rc was refused as masking and the trailing `exit=0` was never read, so the gate
