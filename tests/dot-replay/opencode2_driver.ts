@@ -50,7 +50,7 @@ await plugin.setup({
   event: { subscribe: () => events() },
 })
 
-const TOOL: Record<string, string> = { bash: "shell", edit: "edit", write: "write", read: "read", multiedit: "edit" }
+const TOOL: Record<string, string> = { bash: "shell", edit: "edit", write: "write", read: "read" }
 function toV2(toolName: string, input: Record<string, unknown>) {
   const tool = TOOL[toolName.toLowerCase()] ?? toolName.toLowerCase()
   const i: Record<string, unknown> = { ...input }
@@ -80,7 +80,9 @@ if (ev === "PreToolUse") {
   try {
     await hooks["tool.execute.before"]({ tool: call.tool, sessionID, agent: "build", messageID: "m", id: "c", input: call.input })
   } catch (e) {
-    out = { decision: "block", reason: String((e as Error).message ?? e), event: ev }
+    const msg = String((e as Error).message ?? e)
+    // only the plugin's own deny is a block; any other exception is a driver/plugin error (review #432 LOW)
+    out = msg.startsWith("[H17]") ? { decision: "block", reason: msg, event: ev } : { decision: "error", reason: msg, event: ev }
   }
 } else if (ev === "PostToolUse" || ev === "PostToolUseFailure") {
   const r = p.tool_response ?? {}
@@ -96,7 +98,7 @@ if (ev === "PreToolUse") {
     input: call.input,
     ...(failed
       ? { status: "error", error: { message: text || "tool failed" } }
-      : { status: "completed", result: { content: text, metadata: rc === undefined ? {} : { exit: rc } } }),
+      : { status: "completed", result: { content: [{ type: "text", text }], metadata: rc === undefined ? {} : { exit: rc } } }),
   })
 } else if (ev === "UserPromptSubmit") {
   await hooks["session.prompt"]({ sessionID, messageID: "u", prompt: { text: String(p.prompt ?? ""), files: [] }, delivery: "steer" })
@@ -105,12 +107,14 @@ if (ev === "PreToolUse") {
   queue.push({ type: "session.execution.succeeded", data: { sessionID } })
   pushedAll = true
   wake?.()
-  await Promise.race([drainedP, new Promise((r) => setTimeout(r, 60_000))])
+  const drainedInTime = await Promise.race([drainedP.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), Number(process.env.AIDD_OC2_STOP_TIMEOUT_MS ?? 60_000)))])
   const gate = prompts.find((x) => x.text.includes("[H17 evidence gate]"))
-  if (gate) out = { decision: "block", reason: gate.text.split("[H17 evidence gate]").pop()?.trim(), event: ev }
+  // a judgment that never finished is an error, never a silent allow (review #432 MEDIUM)
+  if (!drainedInTime) out = { decision: "error", reason: "stop judgment did not finish in time", event: ev }
+  else if (gate) out = { decision: "block", reason: gate.text.split("[H17 evidence gate]").pop()?.trim(), event: ev }
   else if (notes.length) out = { decision: "allow", event: ev, note: notes.map((n) => n.text).join(" / ") }
 } else {
   out = { decision: "allow", event: ev, note: "unmapped event" }
 }
 console.log(JSON.stringify(out, null, 1))
-process.exit(0)
+process.exit(out.decision === "error" ? 2 : 0)

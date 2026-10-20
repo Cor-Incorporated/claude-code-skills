@@ -145,8 +145,9 @@ class Ctx:
             )
         if agent == "opencode2":
             # 2026-10-20: the 2.x directory plugin the local `opencode` (= opencode2) runs, driven on a fake
-            # @opencode/plugin ctx with 2.x tool names (shell / edit / path / oldString) — opencode2_driver.ts
-            return self.run(
+            # @opencode/plugin ctx with 2.x tool names (shell / edit / path / oldString) — opencode2_driver.ts.
+            # rc 2 = the driver could not get a verdict (timeout, non-H17 exception): an arm error, never a pass.
+            rec = self.run(
                 [BUN, "run", str(HERE / "opencode2_driver.ts")],
                 payload,
                 {
@@ -155,6 +156,9 @@ class Ctx:
                     **(extra_env or {}),
                 },
             )
+            if rec["rc"] != 0:
+                raise RuntimeError(f"opencode2 driver error rc={rec['rc']}: {rec['stdout'][-300:]} {rec['stderr'][-200:]}")
+            return rec
         if agent == "pi":
             return self.run(
                 [
