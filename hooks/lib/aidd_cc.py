@@ -228,8 +228,8 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
     parsed for `exit code N`; otherwise it is UNKNOWN (None) — never assumed 0
     (Codex r2 P1-d).  Claude Code is the one harness whose PostToolUse fires
     only on success (failures go to PostToolUseFailure), so its success event is
-    rc 0 by construction.  `X; echo exit=$?` is read from its own status line
-    even when the harness reported a code (ADR-011)."""
+    rc 0 by construction.  ADR-011: the in-band `X; echo exit=$?` status line is
+    read only when the harness reported no code; a reported code is recorded as-is."""
     rc = None
     if isinstance(resp, dict):
         rc = resp.get("exit_code", resp.get("exitCode", resp.get("rc")))
@@ -261,7 +261,7 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
             "harness",
         )
     # The echo writes to stdout: when the streams come separately, a failing X's stderr `exit=0` must not be read
-    # after the echo's stdout `exit=1` (ADR-011, Codex review P2); a merged stream is in write order.
+    # after the echo's stdout `exit=1` (Codex review r1 P2); a merged stream is in write order.
     status_text = (
         str(resp["stdout"])
         if isinstance(resp, dict) and str(resp.get("stdout") or "").strip()
@@ -269,12 +269,13 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
     )
     echo_shape = is_exit_echo_line(cmd)
     truncated = isinstance(resp, dict) and resp.get("truncated") is True
-    if echo_shape and rc in (None, 0) and not truncated:
-        # ADR-011: a harness code 0 for `X; echo exit=$?` is echo's and says nothing about X; the echo's line is X's
-        # status. Owner live run 2026-10-20 A-1: dsh reported 0 for the line, the judge refused it as masked, and the
-        # honest trailer the gate itself had asked for was blocked as UNKNOWN twice. A NON-zero line code means the
-        # echo never ran normally (`exec`, a kill) and is kept: no printed `exit=0` overrides it (Codex review P1).
-        # the echo's line must be last (only harness footers after it); a cut output can end on X's own `exit=0`
+    if rc is None and echo_shape and not truncated:
+        # ADR-011 (owner PIVOT 2026-10-20): the in-band `exit=N` is read ONLY when the harness reported no code
+        # (Cursor, Codex string responses, Claude Code). An entry that reports one (dsh, OpenCode 2.x, Pi) records it
+        # as-is; for `X; echo exit=$?` that code is echo's, so the judge refuses the line as masked and tells the
+        # agent to run X on its own. Trusting the output there kept opening accept-a-failure holes (Codex r1-r4: a
+        # printed exit=0, stderr order, head-only and clipped outputs, a background child printing after the echo).
+        # The echo's line must be the last one (harness footers only); a cut output can end on X's own `exit=0`.
         marker = echo_exit_marker(status_text)
         if marker is not None:
             return marker, out, "marker"

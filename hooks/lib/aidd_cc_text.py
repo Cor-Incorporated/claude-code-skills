@@ -715,11 +715,17 @@ def is_exit_echo_line(line: str) -> bool:
     """`X; echo exit=$?` — exactly one command and the status echo (ADR-011). One predicate for the recorder
     (aidd_cc._exit_status) and the judge (aidd_cc_controls._rc_for), so they cannot disagree on the shape."""
     parts = shell_segments_with_separators(line)
-    return (
+    if not (
         len(parts) == 2
         and parts[1][1] in (";", "\n")
         and re.fullmatch(r"echo exit=\$\?", parts[1][0]) is not None
-    )
+    ):
+        return False
+    # the tokenizer lets a newline overwrite the separator before it: `X |` / `X &` / `X \` + newline + the echo is a
+    # pipe, a background job or a continuation, never "X, then its status" (Codex review r4 P2)
+    head = re.sub(r"echo exit=\$\?\s*$", "", line.rstrip()).rstrip()
+    head = head[:-1].rstrip() if head.endswith(";") else head
+    return not head.endswith(("|", "&", "\\"))
 
 
 # Footers a harness appends AFTER the command's own output (dsh persistent bash / dsh-tool-bash); nothing else may
