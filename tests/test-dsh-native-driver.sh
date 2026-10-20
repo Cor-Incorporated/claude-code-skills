@@ -7,6 +7,7 @@
 #       `result.value.exitCode`; an honest `Status: complete` + Evidence trailer then passes the gate.
 #   (3) ADR-011 (Codex review of b277c92): `X; echo exit=$?` with an output longer than the 4000-char cut and a stderr
 #       `exit=0` from the failing X — the post row must hold the echo's rc 1 (head + tail cut; stdout apart from stderr).
+#   (4) Codex review r3: only stderr was cut (stdout intact, ends `exit=0`) — the honest claim must pass.
 # PLUGIN_SRC overrides the plugin under test (mutation check against the pre-fix file).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -75,6 +76,18 @@ await handlers.get("tools/post-execute")(exec3, {
 await stop(mkAgent(sid3, "ok.\nStatus: complete\nEvidence: " + cmd3 + " | exit=0 | 2026-10-20T04:00:00Z"));
 out.adr011 = count(sid3);
 out.adr011_note = inbox.find((e) => e.id === sid3)?.msg?.content?.[0]?.text?.slice(0, 300) ?? null;
+// (4) a cut stderr says nothing about the echo's stdout line
+const sid4 = "dsh-adr011-stderr-cut";
+const exec4 = { name: "bash", arguments: { command: cmd3 }, agent: mkAgent(sid4, "") };
+await handlers.get("tools/pre-execute")(exec4, next);
+await handlers.get("tools/post-execute")(exec4, {
+  content: [{ type: "text", text: "ok\nexit=0\n[stderr]\n" + "w".repeat(100) }],
+  value: { kind: "foreground", exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 120000,
+    stdout: { text: "ok\nexit=0\n", truncated: false }, stderr: { text: "w".repeat(100), truncated: true } },
+}, next);
+await stop(mkAgent(sid4, "ok.\nStatus: complete\nEvidence: " + cmd3 + " | ok exit=0 | 2026-10-20T04:00:00Z"));
+out.adr011_stderr_cut = count(sid4);
+out.adr011_stderr_cut_note = inbox.find((e) => e.id === sid4)?.msg?.content?.[0]?.text?.slice(0, 300) ?? null;
 console.log(JSON.stringify(out));
 JS
 res="$(cd "$SB" && "$NODE" --experimental-strip-types --no-warnings drive.mts 2>"$SB/err.log")" || { echo "FAIL: node run"; cat "$SB/err.log"; exit 1; }
@@ -101,6 +114,8 @@ import json, sys
 r = json.loads(sys.argv[1])
 assert r["adr011"] == ["steer"] and "rc=1" in (r["adr011_note"] or ""), f"failing X accepted or misread: {r['adr011']} {r['adr011_note']}"
 print("PASS: ADR-011 long output + stderr exit=0 -> the echo's rc 1 is recorded and the claim is gated")
+assert r["adr011_stderr_cut"] == [], f"a cut stderr gated an honest run: {r['adr011_stderr_cut']} {r['adr011_stderr_cut_note']}"
+print("PASS: ADR-011 a truncated stderr does not hide the echo's stdout status")
 PY
 if grep -rqs '"rc": 0' "$SB/state" || grep -rqs '"rc":0' "$SB/state"; then
   echo "PASS: post row recorded rc 0"

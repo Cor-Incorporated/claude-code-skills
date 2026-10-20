@@ -727,6 +727,11 @@ def is_exit_echo_line(line: str) -> bool:
 HARNESS_FOOTER_RE = re.compile(
     r"\[(?:Command finished with exit code|exit code:) -?\d{1,3}\]"
 )
+# Pi 1.2.0 bash keeps the TAIL of a long output and appends `[Showing lines S-E of T(…). Full output: path]`; the
+# echo's line survives only when the shown range ends at the last line (E == T) — Codex review r3 P2
+PI_TAIL_FOOTER_RE = re.compile(
+    r"\[Showing lines \d+-(\d+) of (\d+)(?: \([^)]*\))?\. Full output: [^\]]*\]"
+)
 
 
 def echo_exit_marker(out: str) -> int | None:
@@ -735,6 +740,9 @@ def echo_exit_marker(out: str) -> int | None:
     line may be gone, so the status is UNKNOWN (None), never an earlier `exit=` that X printed (Codex review r2)."""
     for ln in reversed([x.strip() for x in out.splitlines() if x.strip()]):
         if HARNESS_FOOTER_RE.fullmatch(ln):
+            continue
+        pi = PI_TAIL_FOOTER_RE.fullmatch(ln)
+        if pi and pi.group(1) == pi.group(2):
             continue
         m = re.fullmatch(r"exit=(-?\d{1,3})", ln)
         return int(m.group(1)) if m else None

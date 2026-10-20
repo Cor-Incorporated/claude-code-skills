@@ -829,6 +829,17 @@ if printf '%s' "$o84t" | grep -q 'UNKNOWN' && printf '%s' "$o84f2" | grep -q 'UN
   ok "T84d a cut output or a truncated stream keeps the echo line UNKNOWN; stdout/stderr keep a boundary (honest PASS passes)"
 else bad "T84d: clipped=[${o84t:0:160}] truncated=[${o84f2:0:160}] boundary=[${o84w:0:200}] boundary-echo=[${o84b:0:120}]"; fi
 
+# (84e) Codex review r3 of d567ad0 (red there): Pi 1.2.0 keeps the TAIL of a long bash output and appends
+#   `[Showing lines S-E of T. Full output: …]`; with E == T the echo's line is still last and an honest run passes,
+#   with E < T (never emitted by Pi today, but a head cut) it stays UNKNOWN
+o84pt="$(p84 neg84pt '{"exit_code":0,"output":"ok\nexit=0\n\n[Showing lines 3-2002 of 2002. Full output: /tmp/pi-bash-1.log]"}' pi)"
+o84pk="$(p84 neg84pk '{"exit_code":0,"output":"ok\nexit=0\n\n[Showing lines 3-2002 of 2002 (50KB limit). Full output: /tmp/pi-bash-1.log]"}' pi)"
+o84ph="$(p84 neg84ph '{"exit_code":0,"output":"ok\nexit=0\n\n[Showing lines 1-2000 of 5000. Full output: /tmp/pi-bash-1.log]"}' pi)"
+if ! printf '%s' "$o84pt" | grep -q '"decision": "block"' && ! printf '%s' "$o84pk" | grep -q '"decision": "block"' \
+   && printf '%s' "$o84ph" | grep -q 'UNKNOWN'; then
+  ok "T84e Pi tail footer (E == T, with and without the byte-limit note) keeps an honest run; a head range stays UNKNOWN"
+else bad "T84e: tail=[${o84pt:0:200}] tail-kb=[${o84pk:0:160}] head=[${o84ph:0:160}]"; fi
+
 # (84b) the UNKNOWN reason names its cause: a harness that reported nothing vs a recorded rc that `;` can mask
 # (A-2 2026-10-20: `date …; cat a.txt` got "this harness reported no exit status", which was false — dsh had reported 0)
 printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg84m","tool_name":"Bash","tool_input":{"command":"date -u; bash tests/ok.sh"},"tool_response":{"exit_code":0,"output":"Tue\nok"}}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent dsh >/dev/null
