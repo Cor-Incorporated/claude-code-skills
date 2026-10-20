@@ -883,6 +883,20 @@ if printf '%s' "$o84se" | grep -q 'rc=1'; then
   ok "T84f a non-echo command's stderr status line is still read (Claude Code shape: rc 1, not the success-event 0)"
 else bad "T84f: [${o84se:0:220}]"; fi
 
+# (84g) Codex review r6 of 47f3203 (red there):
+#   P2 disagreeing status lines across joined streams (stdout `FAIL\nexit=1`, stderr `exit=0`) are UNKNOWN — not the
+#      last one, and not Claude Code's success-event 0
+#   P2 on an entry without codes, a status read from the output (rc_src=marker) over a maskable line is told how its
+#      in-band form is accepted (`<cmd>; echo exit=$?`), not "this harness reports exit codes"; following it passes
+o84cf="$(p84 neg84cf '{"stdout":"FAIL\nexit=1\n","stderr":"exit=0\n"}' claude-code 'bash tests/x.sh')"
+o84mm="$(p84 neg84mm '{"output":"Tue\nok\nexit=0\n"}' cursor 'date -u; bash tests/ok.sh; echo exit=$?' 'bash tests/ok.sh')"
+o84mf="$(p84 neg84mf '{"output":"ok\nexit=0\n"}' cursor 'bash tests/ok.sh; echo exit=$?')"
+if printf '%s' "$o84cf" | grep -q '"decision": "block"' \
+   && printf '%s' "$o84mm" | grep -q 'run the cited command alone as' && ! printf '%s' "$o84mm" | grep -q 'this harness reports exit codes' \
+   && ! printf '%s' "$o84mf" | grep -q '"decision": "block"'; then
+  ok "T84g disagreeing status lines are UNKNOWN (no success-event 0); an output-read status is told the in-band form, which then passes"
+else bad "T84g: conflict=[${o84cf:0:200}] marker-masked=[${o84mm:0:260}] followed=[${o84mf:0:160}]"; fi
+
 # ---- repair-family breaker v2 (2026-10-17, this harness's own loop on claude-code-skills#418: 12 fix(h17) commits and
 #      6 STRATEGY notes — 4 of them HOLD — on one branch across 8 independent-review rounds; the breaker fired and was
 #      "satisfied" by a note each time). Red at develop e58c6e6 before the repair.

@@ -820,12 +820,17 @@ def stop_check(
         if rc in (None, 124, 126, 127) and not mutated("evidence.rc-unknown"):
             line = str((row or {}).get("cmd", ""))
             masked = rc is None and row is not None and row.get("rc") is not None
+            # a code read from the output (rc_src=marker, an entry without codes) is not the harness's: that entry
+            # is told how its in-band form is accepted, not to run alone (Codex review r6 P2)
+            by_marker = masked and row.get("rc_src") == "marker"
             how = (
                 ""
                 if rc is not None
                 # ADR-011: say which cause it is — 2026-10-20 A-2 got "reported no exit status" for a line dsh had
                 # reported 0 for, which sent the agent after the wrong fix. An entry that reports exit codes is told
                 # to run the command alone: its in-band `exit=N` is not read (owner PIVOT 2026-10-20)
+                else f" — the status line `exit={row.get('rc')}` in the output belongs to the whole line `{line[:60]}`, where `;` / `|` / `||` / `&` can mask a failure; run the cited command alone as `<cmd>; echo exit=$?` so the status is its own"
+                if by_marker
                 else f" — this harness reports exit codes, and the recorded status {row.get('rc')} belongs to the whole line `{line[:60]}`, where `;` / `|` / `||` / `&` can mask a failure (an in-band `exit=N` is not read here); run the command on its own, not chained, and cite it"
                 if masked
                 else " — this harness reported no exit status; run it as `<cmd>; echo exit=$?` so the status is in the output"

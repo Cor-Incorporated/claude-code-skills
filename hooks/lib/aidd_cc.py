@@ -48,7 +48,7 @@ from aidd_cc_text import (
     is_short_affirmative,
     parse_deadline_hours,
     parse_denominator,
-    trailing_exit_marker,
+    trailing_exit_markers,
 )  # noqa: E402
 
 COMPONENT = "H17"
@@ -283,12 +283,15 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
     if (
         rc is None and not echo_shape
     ):  # an echo line whose marker is missing or cut stays UNKNOWN
-        # status lines only, at the end (reviewer-e N4); the last one wins (ADR-011: X may print its own first)
-        marker = trailing_exit_marker(
+        # status lines only, at the end (reviewer-e N4); several that disagree are UNKNOWN with no success-event
+        # fallback — stdout + stderr joined is not write order (ADR-011, Codex review r6 P2)
+        found = trailing_exit_markers(
             out, r"(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})"
         )
-        if marker is not None:
-            return marker, out, "marker"  # the command's own trailing status line
+        if len(set(found)) == 1:
+            return found[0], out, "marker"  # the command's own trailing status line
+        if found:
+            return None, out, "marker-conflict"
         if agent == "claude-code" and isinstance(resp, dict):
             rc = 0
     return rc, out, "harness"

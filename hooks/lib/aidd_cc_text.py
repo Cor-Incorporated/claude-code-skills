@@ -755,16 +755,18 @@ def echo_exit_marker(out: str) -> int | None:
     return None
 
 
-def trailing_exit_marker(out: str, pattern: str = r"exit=(-?\d{1,3})") -> int | None:
-    """A harness's own status line when it reported no code (reviewer-e N4): the LAST match among the final 3
-    non-empty output lines — last, not first, so an earlier line the command printed cannot stand in for it (ADR-011).
-    The `X; echo exit=$?` shape uses the stricter echo_exit_marker instead."""
+def trailing_exit_markers(out: str, pattern: str) -> list[int]:
+    """Every status line among the final 3 non-empty output lines (reviewer-e N4), in order. The caller accepts them
+    only when they agree: stdout + stderr joined is not write order, so neither the first nor the last of two
+    disagreeing lines is the command's status (ADR-011, Codex review r6 P2). The `X; echo exit=$?` shape uses the
+    stricter echo_exit_marker instead."""
     tail = [ln.strip() for ln in out.splitlines() if ln.strip()][-3:]
-    for ln in reversed(tail):
+    found = []
+    for ln in tail:
         m = re.fullmatch(pattern, ln, re.IGNORECASE)
         if m:
-            return int(m.group(1))
-    return None
+            found.append(int(m.group(1)))
+    return found
 
 
 REDIRECT_RE = re.compile(r"(\d?>>?\s*\S+|<\s*\S+|\d?>&\d|&>\s*\S+)")
