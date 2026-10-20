@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import oracles as O
 
-ALL = ["claude", "codex", "cursor", "opencode", "pi"]  # opencode / pi arms: aidd-governance#186 P2-6
+ALL = ["claude", "codex", "cursor", "opencode", "opencode2", "pi"]  # opencode / pi arms: aidd-governance#186 P2-6; opencode2 = the 2.x plugin (2026-10-20)
 CC = [
     "claude"
 ]  # evaluator-side oracles run once through aidd_cc.py (agent-independent)

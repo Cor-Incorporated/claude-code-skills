@@ -62,6 +62,7 @@ def registered_entries() -> dict:
             out["cursor"] = Path(os.path.expanduser(h["command"]))
     out["cc"] = home / ".claude" / "hooks" / "lib" / "aidd_cc.py"
     out["opencode"] = home / ".config" / "opencode" / "plugins" / "aidd-cc.ts"
+    out["opencode2"] = home / ".config" / "opencode" / "plugins" / "aidd-cc-v2" / "index.ts"
     out["pi"] = home / ".pi" / "agent" / "extensions" / "aidd-cc.ts"
     return {**out, **_control_set(home / ".claude" / "hooks" / "lib")}
 
@@ -107,6 +108,7 @@ def repo_entries() -> dict:
         "cursor": ROOT / "hooks" / "cursor" / "aidd-cc-cursor.sh",
         "cc": ROOT / "hooks" / "lib" / "aidd_cc.py",
         "opencode": ROOT / "opencode" / "aidd-cc.ts",
+        "opencode2": ROOT / "opencode" / "aidd-cc-v2" / "index.ts",
         "pi": ROOT / "pi" / "aidd-cc.ts",
         **_control_set(ROOT / "hooks" / "lib"),
     }
