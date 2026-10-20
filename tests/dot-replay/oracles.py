@@ -67,6 +67,7 @@ NODE = (
 )
 RUNTIME_OK = {
     "opencode": _runtime("bun", [BUN], ["--version"]) is not None,
+    "opencode2": _runtime("bun", [BUN], ["--version"]) is not None,
     "pi": _runtime(
         "node", [NODE], ["-e", "process.exit(parseInt(process.versions.node)>=22?0:1)"]
     )
@@ -125,6 +126,7 @@ class Ctx:
             "codex": "session_id",
             "cursor": "conversation_id",
             "opencode": "session_id",
+            "opencode2": "session_id",
             "pi": "session_id",
         }[agent]
         payload.setdefault(key, self.sid)
@@ -137,6 +139,18 @@ class Ctx:
                 payload,
                 {
                     "AIDD_OC_PLUGIN": str(self.entry["opencode"]),
+                    "AIDD_CC_PY": str(self.entry["cc"]),
+                    **(extra_env or {}),
+                },
+            )
+        if agent == "opencode2":
+            # 2026-10-20: the 2.x directory plugin the local `opencode` (= opencode2) runs, driven on a fake
+            # @opencode/plugin ctx with 2.x tool names (shell / edit / path / oldString) — opencode2_driver.ts
+            return self.run(
+                [BUN, "run", str(HERE / "opencode2_driver.ts")],
+                payload,
+                {
+                    "AIDD_OC2_PLUGIN": str(self.entry["opencode2"]),
                     "AIDD_CC_PY": str(self.entry["cc"]),
                     **(extra_env or {}),
                 },
@@ -182,7 +196,7 @@ class Ctx:
 
 def _blocked(rec: dict, agent: str) -> bool:
     out = rec["stdout"]
-    if agent in ("opencode", "pi"):
+    if agent in ("opencode", "opencode2", "pi"):
         return '"decision": "block"' in out
     if agent == "cursor":
         return (
@@ -416,7 +430,7 @@ def o_iteration(ctx: Ctx, agent: str) -> dict:
 
 
 def o_reask(ctx: Ctx, agent: str) -> dict:
-    if agent in ("cursor", "opencode", "pi"):
+    if agent in ("cursor", "opencode", "opencode2", "pi"):
         return {
             "incident_blocked": False,
             "benign_allowed": True,
@@ -487,6 +501,7 @@ def _cc_agent(agent: str) -> str:
         "codex": "codex",
         "cursor": "cursor",
         "opencode": "opencode",
+        "opencode2": "opencode",
         "pi": "pi",
     }[agent]
 

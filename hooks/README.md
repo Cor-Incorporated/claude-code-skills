@@ -53,7 +53,7 @@ row — never a silent pass. Entry files: `aidd-cc-claude.sh`,
 `../opencode/aidd-cc-v2/index.ts` (upstream 2.x directory plugin, launcher `../opencode/launcher/opencode2`),
 `../pi/aidd-cc.ts`, `../dsh/aidd-cc.patch.yml` (+ `aidd-cc-native.mts`, unverified);
 replay of the 47 dot incidents: `tests/dot-replay/run_replay.py` (arms: claude /
-codex / cursor / opencode / pi).
+codex / cursor / opencode (1.x plugin) / opencode2 (2.x plugin, `opencode2_driver.ts`) / pi).
 
 ---
 
