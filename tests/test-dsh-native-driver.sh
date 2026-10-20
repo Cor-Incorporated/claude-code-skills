@@ -8,6 +8,8 @@
 #   (3) ADR-011 (owner PIVOT 2026-10-20): dsh reports exit codes, so `X; echo exit=$?` is not judged from its output
 #       (here a long failing X whose head and stderr say exit=0): the claim is gated and told to run X on its own.
 #   (4) following that advice — X alone, exitCode 0, only stderr cut — the honest claim passes.
+#   (5) Codex review r5: stdout ~2500 chars ending `3 passed` + a 5000-char stderr — the summary must survive the
+#       adapter's cut and the oracle's out_sample, so an honest `pytest -q | 3 passed` passes.
 # PLUGIN_SRC overrides the plugin under test (mutation check against the pre-fix file).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -89,6 +91,19 @@ await handlers.get("tools/post-execute")(exec4, {
 await stop(mkAgent(sid4, "ok.\nStatus: complete\nEvidence: " + cmd4 + " | ok | 2026-10-20T04:00:00Z"));
 out.adr011_alone = count(sid4);
 out.adr011_alone_note = inbox.find((e) => e.id === sid4)?.msg?.content?.[0]?.text?.slice(0, 300) ?? null;
+// (5) a long stderr must not push stdout's last line out of the recorded sample
+const sid5 = "dsh-adr011-sample";
+const exec5 = { name: "bash", arguments: { command: "pytest -q" }, agent: mkAgent(sid5, "") };
+const so5 = "y".repeat(2500) + "\n3 passed\n";
+await handlers.get("tools/pre-execute")(exec5, next);
+await handlers.get("tools/post-execute")(exec5, {
+  content: [{ type: "text", text: so5 + "[stderr]\n" + "w".repeat(5000) }],
+  value: { kind: "foreground", exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 120000,
+    stdout: { text: so5, truncated: false }, stderr: { text: "w".repeat(5000), truncated: false } },
+}, next);
+await stop(mkAgent(sid5, "ok.\nStatus: complete\nEvidence: pytest -q | 3 passed | 2026-10-20T04:00:00Z"));
+out.adr011_sample = count(sid5);
+out.adr011_sample_note = inbox.find((e) => e.id === sid5)?.msg?.content?.[0]?.text?.slice(0, 300) ?? null;
 console.log(JSON.stringify(out));
 JS
 res="$(cd "$SB" && "$NODE" --experimental-strip-types --no-warnings drive.mts 2>"$SB/err.log")" || { echo "FAIL: node run"; cat "$SB/err.log"; exit 1; }
@@ -117,6 +132,8 @@ assert r["adr011"] == ["steer"] and "run the command on its own" in (r["adr011_n
 print("PASS: ADR-011 dsh reports exit codes -> the echo line is gated and told to run the command on its own")
 assert r["adr011_alone"] == [], f"the advice followed (X alone, rc 0) was gated: {r['adr011_alone']} {r['adr011_alone_note']}"
 print("PASS: ADR-011 the advice followed (X alone, exitCode 0, stderr cut) passes")
+assert r["adr011_sample"] == [], f"stdout summary lost to a long stderr: {r['adr011_sample']} {r['adr011_sample_note']}"
+print("PASS: ADR-011 a long stderr keeps stdout's last line in the recorded sample")
 PY
 if grep -rqs '"rc": 0' "$SB/state" || grep -rqs '"rc":0' "$SB/state"; then
   echo "PASS: post row recorded rc 0"

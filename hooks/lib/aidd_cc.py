@@ -260,8 +260,9 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
             out,
             "harness",
         )
-    # The echo writes to stdout: when the streams come separately, a failing X's stderr `exit=0` must not be read
-    # after the echo's stdout `exit=1` (Codex review r1 P2); a merged stream is in write order.
+    # The echo writes to stdout: for the echo shape, when the streams come separately, a failing X's stderr `exit=0`
+    # must not be read after the echo's stdout `exit=1` (Codex review r1 P2); a merged stream is in write order. Any
+    # other command keeps reading stdout + stderr, where a harness may print its status (Codex review r5 P2).
     status_text = (
         str(resp["stdout"])
         if isinstance(resp, dict) and str(resp.get("stdout") or "").strip()
@@ -284,7 +285,7 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
     ):  # an echo line whose marker is missing or cut stays UNKNOWN
         # status lines only, at the end (reviewer-e N4); the last one wins (ADR-011: X may print its own first)
         marker = trailing_exit_marker(
-            status_text, r"(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})"
+            out, r"(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})"
         )
         if marker is not None:
             return marker, out, "marker"  # the command's own trailing status line

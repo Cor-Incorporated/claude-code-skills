@@ -181,8 +181,10 @@ export function apply(ctx: any, config: Config = {}): void {
     const v = result?.value;
     // `truncated`: the executor cut STDOUT (where the echo writes), so the echo's line may be gone — the oracle then
     // keeps UNKNOWN; a cut stderr says nothing about it (Codex review r3 P2)
+    // Budgets 3000 + 900 keep the joined text under the oracle's 4000-char out_sample, so it is not cut a second time
+    // and stdout's last lines (test summaries) survive a long stderr (Codex review r5 P2).
     const streams = typeof v?.stdout?.text === "string"
-      ? { stdout: clipOut(v.stdout.text), stderr: clipOut(String(v?.stderr?.text ?? "")),
+      ? { stdout: clipOut(v.stdout.text, 3000), stderr: clipOut(String(v?.stderr?.text ?? ""), 900),
           truncated: v.stdout.truncated === true }
       : { output: text };
     await runCC(oracle, "post", {

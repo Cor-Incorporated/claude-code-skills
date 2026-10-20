@@ -876,6 +876,13 @@ if ! printf '%s' "$o84pt" | grep -q '"decision": "block"' && ! printf '%s' "$o84
   ok "T84e Pi tail footer (E == T, with and without the byte-limit note) keeps an honest run; a head range stays UNKNOWN"
 else bad "T84e: tail=[${o84pt:0:200}] tail-kb=[${o84pk:0:160}] head=[${o84ph:0:160}]"; fi
 
+# (84f) Codex review r5 of 8ee4790 (red there): reading stdout apart from stderr is for the echo shape only; any other
+#   command on an entry without codes keeps reading both, so a status line on stderr (`exit=1`) is not dropped
+o84se="$(p84 neg84se '{"stdout":"ok\n","stderr":"exit=1\n"}' claude-code 'bash tests/x.sh')"
+if printf '%s' "$o84se" | grep -q 'rc=1'; then
+  ok "T84f a non-echo command's stderr status line is still read (Claude Code shape: rc 1, not the success-event 0)"
+else bad "T84f: [${o84se:0:220}]"; fi
+
 # ---- repair-family breaker v2 (2026-10-17, this harness's own loop on claude-code-skills#418: 12 fix(h17) commits and
 #      6 STRATEGY notes — 4 of them HOLD — on one branch across 8 independent-review rounds; the breaker fired and was
 #      "satisfied" by a note each time). Red at develop e58c6e6 before the repair.
