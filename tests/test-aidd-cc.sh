@@ -761,6 +761,141 @@ PY2
 )"
 if printf '%s' "$o83" | grep -q '"missing_pins": \[\]' && printf '%s' "$o83" | grep -q '"control_sha": true' && printf '%s' "$o83" | grep -q '"control_set_sha": true' && printf '%s' "$o83" | grep -q '"opencode"' && printf '%s' "$o83" | grep -q '"opencode2"' && printf '%s' "$o83" | grep -q '"pi"'; then ok "T83 replay pins the whole control set and records the opencode / opencode2 / pi arms ($o83)"; else bad "T83: $o83"; fi
 
+# ---- (84) owner live run 2026-10-20 A-1 (dsh): since #429 dsh reports the bash exit code, and for `X; echo exit=$?`
+#      that code is echo's. The gate answered "UNKNOWN … this harness reported no exit status; run it as
+#      `<cmd>; echo exit=$?`" — false, and an instruction the agent had already followed, twice.
+#      ADR-011 (owner PIVOT 2026-10-20): an entry that reports exit codes records them as-is and is told to run the
+#      command on its own; only an entry without codes reads the in-band `exit=N`. PAIR: on every entry, the
+#      remediation the gate prints (declaration) is what the gate accepts (enforcement). Red before the repair.
+t84post() {  # agent session command output [harness_rc]
+  python3 -I - "$2" "$3" "$4" "${5-}" <<'PY84' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent "$1" >/dev/null
+import json, sys
+sid, cmd, out, rc = sys.argv[1:5]
+resp = {"output": out} if rc == "" else {"exit_code": int(rc), "output": out}
+print(json.dumps({"hook_event_name": "PostToolUse", "session_id": sid, "tool_name": "Bash", "tool_input": {"command": cmd}, "tool_response": resp}))
+PY84
+}
+t84stop() {  # agent session cited-command claimed-output -> stop verdict
+  python3 -I - "$2" "$3" "$4" <<'PY84b' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent "$1"
+import json, sys
+sid, cmd, claimed = sys.argv[1:4]
+print(json.dumps({"hook_event_name": "Stop", "session_id": sid, "last_assistant_message": f"結果は 45。\nEvidence: {cmd} | {claimed} | 2026-10-20T03:28:56Z\nStatus: complete"}))
+PY84b
+}
+X84="python3 -c 'print(sum(range(10)))'"
+E84="$X84; echo exit=\$?"
+o84=""
+for a in dsh opencode pi codex cursor claude-code; do
+  # (a) the entry reports a code: the echo line stays UNKNOWN and the reason says to run the command alone ...
+  t84post "$a" "neg84r-$a" "$E84" $'45\nexit=0\n' 0
+  v="$(t84stop "$a" "neg84r-$a" "$E84" '45 exit=0')"
+  printf '%s' "$v" | grep -q 'run the command on its own' || o84="$o84 [$a rc=0 echo: ${v:0:200}]"
+  # ... and following that advice is accepted
+  t84post "$a" "neg84a-$a" "$X84" $'45\n' 0
+  v="$(t84stop "$a" "neg84a-$a" "$X84" '45')"
+  printf '%s' "$v" | grep -q '"decision": "block"' && o84="$o84 [$a rc=0 alone: ${v:0:200}]"
+  # (b) the entry reports no code: the reason says `<cmd>; echo exit=$?`, and that is accepted
+  t84post "$a" "neg84n-$a" "$E84" $'45\nexit=0\n'
+  v="$(t84stop "$a" "neg84n-$a" "$E84" '45 exit=0')"
+  printf '%s' "$v" | grep -q '"decision": "block"' && o84="$o84 [$a no-rc echo: ${v:0:200}]"
+done
+t84post dsh neg84f "$E84" $'45\nexit=1\n'; o84f="$(t84stop dsh neg84f "$E84" '45 exit=0')"          # X failed
+t84post dsh neg84s "$E84" $'exit=0\nexit=1\n'; o84s="$(t84stop dsh neg84s "$E84" '45 exit=0')"      # X printed exit=0 first
+t84post dsh neg84p "$E84" $'45\nexit=0\n[Command finished with exit code 0]\n'; o84p="$(t84stop dsh neg84p "$E84" '45 exit=0')"  # footer
+if [ -z "$o84" ] && printf '%s' "$o84f" | grep -q 'rc=1' && printf '%s' "$o84s" | grep -q 'rc=1' \
+   && ! printf '%s' "$o84p" | grep -q '"decision": "block"'; then
+  ok "T84 the gate's remediation is what it accepts on all 6 entries: with a harness code, run alone (the echo line stays UNKNOWN); without one, \`<cmd>; echo exit=\$?\` (exit=1 / an earlier spoofed exit=0 block, a footer is tolerated)"
+else bad "T84:$o84 | fail=[${o84f:0:200}] | spoof=[${o84s:0:200}] | footer=[${o84p:0:200}]"; fi
+
+# (84b) the UNKNOWN reason names its cause: a recorded code that `;` can mask (A-2 2026-10-20: `date …; cat a.txt` got
+# "this harness reported no exit status", which was false — dsh had reported 0) vs a harness that reported none
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg84m","tool_name":"Bash","tool_input":{"command":"date -u; bash tests/ok.sh"},"tool_response":{"exit_code":0,"output":"Tue\nok"}}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent dsh >/dev/null
+o84m="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg84m","last_assistant_message":"ok.\nEvidence: bash tests/ok.sh | ok | 10:00\nStatus: complete"}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent dsh)"
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg84n","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"},"tool_response":{"output":"ok"}}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent cursor >/dev/null
+o84n="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg84n","last_assistant_message":"ok.\nEvidence: bash tests/ok.sh | ok | 10:00\nStatus: complete"}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent cursor)"
+if printf '%s' "$o84m" | grep -q 'can mask' && printf '%s' "$o84m" | grep -q 'run the command on its own' \
+   && ! printf '%s' "$o84m" | grep -q 'reported no exit status' && printf '%s' "$o84n" | grep -q 'reported no exit status'; then
+  ok "T84b UNKNOWN names its cause: a recorded code that \`;\` can mask (run alone) vs a harness that reported none (echo exit)"
+else bad "T84b: masked=[${o84m:0:260}] none=[${o84n:0:260}]"; fi
+
+# (84c) Codex review rounds 1-4 — each input below was accepted as rc 0 by some earlier cut of this change:
+#   r1 P1 a non-zero line code (`exec X; echo exit=$?` never reaches the echo) with a printed exit=0
+#   r1 P2 separate streams: a failing X's stderr `exit=0` after the echo's stdout `exit=1` (Claude Code shape, no code)
+#   r1 P2 adapters cut the output to the HEAD (`.slice(0, 4000)`), dropping the echo's line
+#   r2 P2 a clipped output (`<response clipped>` + footer) ending on X's own exit=0; a stream flagged `truncated`
+#   r4 P2 `X |` / `X &` + newline + the echo read as the echo shape; a background child printing exit=0 after the echo
+#   (with a harness code the PIVOT never reads the output, so the child case is UNKNOWN; without one it is the
+#   residual limit recorded in ADR-011)
+p84() {  # session json-tool_response agent [command] [cited] -> stop verdict
+  local cmd="${4:-bash tests/x.sh; echo exit=\$?}" cited="${5:-${4:-bash tests/x.sh; echo exit=\$?}}"
+  python3 -I - "$1" "$cmd" "$2" <<'PY84c' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent "$3" >/dev/null
+import json, sys
+sid, cmd, resp = sys.argv[1:4]
+print(json.dumps({"hook_event_name": "PostToolUse", "session_id": sid, "tool_name": "Bash", "tool_input": {"command": cmd}, "tool_response": json.loads(resp)}))
+PY84c
+  python3 -I - "$1" "$cited" <<'PY84d' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent "$3"
+import json, sys
+sid, cmd = sys.argv[1:3]
+print(json.dumps({"hook_event_name": "Stop", "session_id": sid, "last_assistant_message": f"ok.\nEvidence: {cmd} | ok exit=0 | 10:00\nStatus: complete"}))
+PY84d
+}
+o84x="$(t84post dsh neg84x "$E84" $'45\nexit=0\n' 1; t84stop dsh neg84x "$E84" '45 exit=0')"
+o84c="$(p84 neg84c '{"stdout":"ok\nexit=1\n","stderr":"exit=0\n"}' claude-code)"
+o84k="$(p84 neg84k '{"stdout":"ok\nexit=0\n","stderr":"warning\n"}' claude-code)"   # honest, stderr noise
+heads="$(grep -n 'slice(0, *4000)' "$ROOT"/dsh/*.mts "$ROOT"/pi/*.ts "$ROOT"/opencode/*.ts "$ROOT"/opencode/*/index.ts 2>/dev/null)"
+o84t="$(p84 neg84t "{\"output\":\"exit=0\\n$(printf 'a%.0s' $(seq 1 50))\\nexit=0\\n<response clipped><NOTE>To save on context only part of this file has been shown to you.</NOTE>\\n[Command finished with exit code 0]\\n\"}" dsh)"
+o84f2="$(p84 neg84f2 '{"stdout":"ok\nexit=0\n","stderr":"","truncated":true}' dsh)"
+o84pipe="$(p84 neg84pipe '{"output":"exit=0\n"}' cursor $'python3 -c "import sys; sys.exit(1)" |\necho exit=$?' 'python3 -c "import sys; sys.exit(1)"')"
+o84amp="$(p84 neg84amp '{"output":"exit=0\n"}' cursor $'bash tests/fail.sh &\necho exit=$?' 'bash tests/fail.sh')"
+o84bg="$(p84 neg84bg '{"exit_code":0,"output":"exit=1\nexit=0\n"}' pi "bash -c '(sleep 0.02; echo exit=0) & exit 1'; echo exit=\$?")"
+if printf '%s' "$o84x" | grep -q '"decision": "block"' && printf '%s' "$o84c" | grep -q 'rc=1' \
+   && ! printf '%s' "$o84k" | grep -q '"decision": "block"' && [ -z "$heads" ] \
+   && printf '%s' "$o84t" | grep -q 'UNKNOWN' && printf '%s' "$o84f2" | grep -q 'UNKNOWN' \
+   && printf '%s' "$o84pipe" | grep -q 'UNKNOWN' && printf '%s' "$o84amp" | grep -q 'UNKNOWN' \
+   && printf '%s' "$o84bg" | grep -q 'UNKNOWN'; then
+  ok "T84c review inputs r1-r4 never become rc 0: non-zero line code, stderr exit=0, head-only cut, clipped / truncated output, pipe / & before the newline, a background child after the echo"
+else bad "T84c: exec=[${o84x:0:120}] streams=[${o84c:0:120}] honest=[${o84k:0:120}] heads=[$heads] clipped=[${o84t:0:120}] truncated=[${o84f2:0:120}] pipe=[${o84pipe:0:120}] amp=[${o84amp:0:120}] bg=[${o84bg:0:120}]"; fi
+
+# (84d) Codex review r2 P2: stdout `PASS` + stderr `warning` (no newline) was recorded as `PASSwarning`, so an honest
+# output field failed; and an echo line whose marker is missing stays UNKNOWN
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg84w","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"},"tool_response":{"exit_code":0,"stdout":"PASS","stderr":"warning"}}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent dsh >/dev/null
+o84w="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg84w","last_assistant_message":"ok.\nEvidence: bash tests/ok.sh | PASS | 10:00\nStatus: complete"}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent dsh)"
+o84b="$(p84 neg84b '{"stdout":"PASS","stderr":"warning"}' claude-code)"
+if ! printf '%s' "$o84w" | grep -q '"decision": "block"' && printf '%s' "$o84b" | grep -q 'UNKNOWN'; then
+  ok "T84d stdout/stderr keep a boundary (an honest PASS passes); an echo line with no marker stays UNKNOWN"
+else bad "T84d: boundary=[${o84w:0:200}] no-marker=[${o84b:0:160}]"; fi
+
+# (84e) Codex review r3 P2: Pi 1.2.0 keeps the TAIL of a long bash output and appends `[Showing lines S-E of T. Full
+#   output: …]`; on a Pi call without a structured code, E == T keeps the echo's line last (honest run passes) and
+#   E < T (a head range) stays UNKNOWN
+o84pt="$(p84 neg84pt '{"output":"ok\nexit=0\n\n[Showing lines 3-2002 of 2002. Full output: /tmp/pi-bash-1.log]"}' pi)"
+o84pk="$(p84 neg84pk '{"output":"ok\nexit=0\n\n[Showing lines 3-2002 of 2002 (50KB limit). Full output: /tmp/pi-bash-1.log]"}' pi)"
+o84ph="$(p84 neg84ph '{"output":"ok\nexit=0\n\n[Showing lines 1-2000 of 5000. Full output: /tmp/pi-bash-1.log]"}' pi)"
+if ! printf '%s' "$o84pt" | grep -q '"decision": "block"' && ! printf '%s' "$o84pk" | grep -q '"decision": "block"' \
+   && printf '%s' "$o84ph" | grep -q 'UNKNOWN'; then
+  ok "T84e Pi tail footer (E == T, with and without the byte-limit note) keeps an honest run; a head range stays UNKNOWN"
+else bad "T84e: tail=[${o84pt:0:200}] tail-kb=[${o84pk:0:160}] head=[${o84ph:0:160}]"; fi
+
+# (84f) Codex review r5 of 8ee4790 (red there): reading stdout apart from stderr is for the echo shape only; any other
+#   command on an entry without codes keeps reading both, so a status line on stderr (`exit=1`) is not dropped
+o84se="$(p84 neg84se '{"stdout":"ok\n","stderr":"exit=1\n"}' claude-code 'bash tests/x.sh')"
+if printf '%s' "$o84se" | grep -q 'rc=1'; then
+  ok "T84f a non-echo command's stderr status line is still read (Claude Code shape: rc 1, not the success-event 0)"
+else bad "T84f: [${o84se:0:220}]"; fi
+
+# (84g) Codex review r6 of 47f3203 (red there):
+#   P2 disagreeing status lines across joined streams (stdout `FAIL\nexit=1`, stderr `exit=0`) are UNKNOWN — not the
+#      last one, and not Claude Code's success-event 0
+#   P2 on an entry without codes, a status read from the output (rc_src=marker) over a maskable line is told how its
+#      in-band form is accepted (`<cmd>; echo exit=$?`), not "this harness reports exit codes"; following it passes
+o84cf="$(p84 neg84cf '{"stdout":"FAIL\nexit=1\n","stderr":"exit=0\n"}' claude-code 'bash tests/x.sh')"
+o84mm="$(p84 neg84mm '{"output":"Tue\nok\nexit=0\n"}' cursor 'date -u; bash tests/ok.sh; echo exit=$?' 'bash tests/ok.sh')"
+o84mf="$(p84 neg84mf '{"output":"ok\nexit=0\n"}' cursor 'bash tests/ok.sh; echo exit=$?')"
+if printf '%s' "$o84cf" | grep -q '"decision": "block"' \
+   && printf '%s' "$o84mm" | grep -q 'run the cited command alone as' && ! printf '%s' "$o84mm" | grep -q 'this harness reports exit codes' \
+   && ! printf '%s' "$o84mf" | grep -q '"decision": "block"'; then
+  ok "T84g disagreeing status lines are UNKNOWN (no success-event 0); an output-read status is told the in-band form, which then passes"
+else bad "T84g: conflict=[${o84cf:0:200}] marker-masked=[${o84mm:0:260}] followed=[${o84mf:0:160}]"; fi
 
 # ---- repair-family breaker v2 (2026-10-17, this harness's own loop on claude-code-skills#418: 12 fix(h17) commits and
 #      6 STRATEGY notes — 4 of them HOLD — on one branch across 8 independent-review rounds; the breaker fired and was

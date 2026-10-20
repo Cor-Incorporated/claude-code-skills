@@ -711,6 +711,64 @@ def shell_segments_with_separators(cmd: str) -> list[tuple[str, str]]:
     return [(re.sub(r"\s+", " ", seg.strip()), s) for seg, s in out if seg.strip()]
 
 
+def is_exit_echo_line(line: str) -> bool:
+    """`X; echo exit=$?` — exactly one command and the status echo (ADR-011). One predicate for the recorder
+    (aidd_cc._exit_status) and the judge (aidd_cc_controls._rc_for), so they cannot disagree on the shape."""
+    parts = shell_segments_with_separators(line)
+    if not (
+        len(parts) == 2
+        and parts[1][1] in (";", "\n")
+        and re.fullmatch(r"echo exit=\$\?", parts[1][0]) is not None
+    ):
+        return False
+    # the tokenizer lets a newline overwrite the separator before it: `X |` / `X &` / `X \` + newline + the echo is a
+    # pipe, a background job or a continuation, never "X, then its status" (Codex review r4 P2)
+    head = re.sub(r"echo exit=\$\?\s*$", "", line.rstrip()).rstrip()
+    head = head[:-1].rstrip() if head.endswith(";") else head
+    return not head.endswith(("|", "&", "\\"))
+
+
+# Footers a harness appends AFTER the command's own output (dsh persistent bash / dsh-tool-bash); nothing else may
+# stand between the echo's line and the end of the output.
+HARNESS_FOOTER_RE = re.compile(
+    r"\[(?:Command finished with exit code|exit code:) -?\d{1,3}\]"
+)
+# Pi 1.2.0 bash keeps the TAIL of a long output and appends `[Showing lines S-E of T(…). Full output: path]`; the
+# echo's line survives only when the shown range ends at the last line (E == T) — Codex review r3 P2
+PI_TAIL_FOOTER_RE = re.compile(
+    r"\[Showing lines \d+-(\d+) of (\d+)(?: \([^)]*\))?\. Full output: [^\]]*\]"
+)
+
+
+def echo_exit_marker(out: str) -> int | None:
+    """Status printed by the echo of `X; echo exit=$?` (ADR-011): the last non-empty line once known harness footers
+    are skipped. Any other last line — a truncation notice (`<response clipped>`), X's own output — means the echo's
+    line may be gone, so the status is UNKNOWN (None), never an earlier `exit=` that X printed (Codex review r2)."""
+    for ln in reversed([x.strip() for x in out.splitlines() if x.strip()]):
+        if HARNESS_FOOTER_RE.fullmatch(ln):
+            continue
+        pi = PI_TAIL_FOOTER_RE.fullmatch(ln)
+        if pi and pi.group(1) == pi.group(2):
+            continue
+        m = re.fullmatch(r"exit=(-?\d{1,3})", ln)
+        return int(m.group(1)) if m else None
+    return None
+
+
+def trailing_exit_markers(out: str, pattern: str) -> list[int]:
+    """Every status line among the final 3 non-empty output lines (reviewer-e N4), in order. The caller accepts them
+    only when they agree: stdout + stderr joined is not write order, so neither the first nor the last of two
+    disagreeing lines is the command's status (ADR-011, Codex review r6 P2). The `X; echo exit=$?` shape uses the
+    stricter echo_exit_marker instead."""
+    tail = [ln.strip() for ln in out.splitlines() if ln.strip()][-3:]
+    found = []
+    for ln in tail:
+        m = re.fullmatch(pattern, ln, re.IGNORECASE)
+        if m:
+            found.append(int(m.group(1)))
+    return found
+
+
 REDIRECT_RE = re.compile(r"(\d?>>?\s*\S+|<\s*\S+|\d?>&\d|&>\s*\S+)")
 
 

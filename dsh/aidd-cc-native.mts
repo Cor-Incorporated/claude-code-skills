@@ -140,6 +140,10 @@ export function exitCodeOf(result: any, text: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+// Head + tail, never the head alone: the status line (`X; echo exit=$?`) and test summaries are the LAST lines, and
+// a head-only cut let a failing X's early `exit=0` stand in for the echo's `exit=1` (ADR-011, Codex review P2).
+const clipOut = (s: string, n = 4000): string => (s.length <= n ? s : `${s.slice(0, n / 2)}\n…\n${s.slice(-n / 2)}`);
+
 // Session format v4 wants a producer-owned source kind (the generic "plugin" is rejected: `format v4 message requires
 // a producer-owned source kind`, live 2026-10-18 20:11 JST); dsh's own bridges use `{ kind: "hooks-codex" }`.
 const AIDD_SOURCE = { kind: "aidd-cc" };
@@ -171,10 +175,21 @@ export function apply(ctx: any, config: Config = {}): void {
 
   ctx.on("tools/post-execute", async (exec: any, result: any, next: () => Promise<any>) => {
     const sid = String(exec?.agent?.session?.header?.id ?? "unset");
-    const text = blocksToText(result?.content).slice(0, 4000);
+    const text = clipOut(blocksToText(result?.content));
+    // dsh renders stdout, then `[stderr]`, then markers: a failing X's stderr `exit=0` would land after the echo's
+    // stdout `exit=1`. The structured streams go separately so the oracle reads the status from stdout (ADR-011).
+    const v = result?.value;
+    // `truncated`: the executor cut STDOUT (where the echo writes), so the echo's line may be gone — the oracle then
+    // keeps UNKNOWN; a cut stderr says nothing about it (Codex review r3 P2)
+    // Budgets 3000 + 900 keep the joined text under the oracle's 4000-char out_sample, so it is not cut a second time
+    // and stdout's last lines (test summaries) survive a long stderr (Codex review r5 P2).
+    const streams = typeof v?.stdout?.text === "string"
+      ? { stdout: clipOut(v.stdout.text, 3000), stderr: clipOut(String(v?.stderr?.text ?? ""), 900),
+          truncated: v.stdout.truncated === true }
+      : { output: text };
     await runCC(oracle, "post", {
       session_id: sid, tool_name: exec?.name, tool_input: exec?.arguments ?? {},
-      tool_response: { exit_code: exitCodeOf(result, text), output: text }, cwd: exec?.agent?.session?.header?.cwd,
+      tool_response: { exit_code: exitCodeOf(result, text), ...streams }, cwd: exec?.agent?.session?.header?.cwd,
     });
     return next();
   });

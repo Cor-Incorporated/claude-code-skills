@@ -43,9 +43,12 @@ from aidd_cc_session import guard_ledger, load_meta, load_tools, record_tool, sa
 from aidd_cc_text import (
     NEGATION_RE,
     is_approval_text,
+    echo_exit_marker,
+    is_exit_echo_line,
     is_short_affirmative,
     parse_deadline_hours,
     parse_denominator,
+    trailing_exit_markers,
 )  # noqa: E402
 
 COMPONENT = "H17"
@@ -220,20 +223,21 @@ def cmd_pre(args, payload):
     _emit(verdict)
 
 
-def _exit_status(payload: dict, resp, agent: str):
+def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
     """Exit status for the ledger.  Dict responses carry it; string responses are
     parsed for `exit code N`; otherwise it is UNKNOWN (None) — never assumed 0
     (Codex r2 P1-d).  Claude Code is the one harness whose PostToolUse fires
     only on success (failures go to PostToolUseFailure), so its success event is
-    rc 0 by construction."""
+    rc 0 by construction.  ADR-011: the in-band `X; echo exit=$?` status line is
+    read only when the harness reported no code; a reported code is recorded as-is."""
     rc = None
     if isinstance(resp, dict):
         rc = resp.get("exit_code", resp.get("exitCode", resp.get("rc")))
-        out = (
-            str(resp.get("stdout", ""))
-            + str(resp.get("stderr", ""))
-            + str(resp.get("output", ""))
-        )
+        # stream boundary kept: stdout `PASS` + stderr `warning` must not record `PASSwarning` (Codex review r2)
+        out = ""
+        for part in (str(resp.get(k) or "") for k in ("stdout", "stderr", "output")):
+            if part:
+                out += ("\n" if out and not out.endswith("\n") else "") + part
     else:
         out = str(resp)
     if rc is None and payload.get("exit_code") is not None:
@@ -256,24 +260,39 @@ def _exit_status(payload: dict, resp, agent: str):
             out,
             "harness",
         )
-    if rc is None:
-        tail = "\n".join(
-            out.rstrip().splitlines()[-3:]
-        )  # status lines only, at the end (reviewer-e N4)
-        m = re.search(
-            r"^\s*(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})\s*$",
-            tail,
-            re.IGNORECASE | re.MULTILINE,
+    # The echo writes to stdout: for the echo shape, when the streams come separately, a failing X's stderr `exit=0`
+    # must not be read after the echo's stdout `exit=1` (Codex review r1 P2); a merged stream is in write order. Any
+    # other command keeps reading stdout + stderr, where a harness may print its status (Codex review r5 P2).
+    status_text = (
+        str(resp["stdout"])
+        if isinstance(resp, dict) and str(resp.get("stdout") or "").strip()
+        else out
+    )
+    echo_shape = is_exit_echo_line(cmd)
+    truncated = isinstance(resp, dict) and resp.get("truncated") is True
+    if rc is None and echo_shape and not truncated:
+        # ADR-011 (owner PIVOT 2026-10-20): the in-band `exit=N` is read ONLY when the harness reported no code
+        # (Cursor, Codex string responses, Claude Code). An entry that reports one (dsh, OpenCode 2.x, Pi) records it
+        # as-is; for `X; echo exit=$?` that code is echo's, so the judge refuses the line as masked and tells the
+        # agent to run X on its own. Trusting the output there kept opening accept-a-failure holes (Codex r1-r4: a
+        # printed exit=0, stderr order, head-only and clipped outputs, a background child printing after the echo).
+        # The echo's line must be the last one (harness footers only); a cut output can end on X's own `exit=0`.
+        marker = echo_exit_marker(status_text)
+        if marker is not None:
+            return marker, out, "marker"
+    if (
+        rc is None and not echo_shape
+    ):  # an echo line whose marker is missing or cut stays UNKNOWN
+        # status lines only, at the end (reviewer-e N4); several that disagree are UNKNOWN with no success-event
+        # fallback — stdout + stderr joined is not write order (ADR-011, Codex review r6 P2)
+        found = trailing_exit_markers(
+            out, r"(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})"
         )
-        if not m:
-            m = re.search(r"^\s*exit=(-?\d{1,3})\s*$", tail, re.MULTILINE)
-        if m:
-            return (
-                int(m.group(1)),
-                out,
-                "marker",
-            )  # the command's own trailing status line
-        elif agent == "claude-code" and isinstance(resp, dict):
+        if len(set(found)) == 1:
+            return found[0], out, "marker"  # the command's own trailing status line
+        if found:
+            return None, out, "marker-conflict"
+        if agent == "claude-code" and isinstance(resp, dict):
             rc = 0
     return rc, out, "harness"
 
@@ -323,7 +342,7 @@ def cmd_post(args, payload):
         _emit({"decision": "allow", "rule": "record-answers", "registered": n})
         return
     resp = payload.get("tool_response") or payload.get("output") or {}
-    rc, out, rc_src = _exit_status(payload, resp, agent)
+    rc, out, rc_src = _exit_status(payload, resp, agent, str(ti.get("command") or ""))
     key = _norm_key(tool, ti)
     record_tool(
         agent,
