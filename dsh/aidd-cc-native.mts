@@ -179,8 +179,10 @@ export function apply(ctx: any, config: Config = {}): void {
     // dsh renders stdout, then `[stderr]`, then markers: a failing X's stderr `exit=0` would land after the echo's
     // stdout `exit=1`. The structured streams go separately so the oracle reads the status from stdout (ADR-011).
     const v = result?.value;
+    // `truncated`: the executor cut the stream, so the echo's line may be gone — the oracle then keeps UNKNOWN
     const streams = typeof v?.stdout?.text === "string"
-      ? { stdout: clipOut(v.stdout.text), stderr: clipOut(String(v?.stderr?.text ?? "")) }
+      ? { stdout: clipOut(v.stdout.text), stderr: clipOut(String(v?.stderr?.text ?? "")),
+          truncated: v.stdout.truncated === true || v?.stderr?.truncated === true }
       : { output: text };
     await runCC(oracle, "post", {
       session_id: sid, tool_name: exec?.name, tool_input: exec?.arguments ?? {},

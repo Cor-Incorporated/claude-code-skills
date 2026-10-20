@@ -722,10 +722,29 @@ def is_exit_echo_line(line: str) -> bool:
     )
 
 
+# Footers a harness appends AFTER the command's own output (dsh persistent bash / dsh-tool-bash); nothing else may
+# stand between the echo's line and the end of the output.
+HARNESS_FOOTER_RE = re.compile(
+    r"\[(?:Command finished with exit code|exit code:) -?\d{1,3}\]"
+)
+
+
+def echo_exit_marker(out: str) -> int | None:
+    """Status printed by the echo of `X; echo exit=$?` (ADR-011): the last non-empty line once known harness footers
+    are skipped. Any other last line — a truncation notice (`<response clipped>`), X's own output — means the echo's
+    line may be gone, so the status is UNKNOWN (None), never an earlier `exit=` that X printed (Codex review r2)."""
+    for ln in reversed([x.strip() for x in out.splitlines() if x.strip()]):
+        if HARNESS_FOOTER_RE.fullmatch(ln):
+            continue
+        m = re.fullmatch(r"exit=(-?\d{1,3})", ln)
+        return int(m.group(1)) if m else None
+    return None
+
+
 def trailing_exit_marker(out: str, pattern: str = r"exit=(-?\d{1,3})") -> int | None:
-    """The LAST status line among the final 3 non-empty output lines (ADR-011). Last, not first: X can print a status
-    line of its own before the echo (`exit=0` then the echo's `exit=1`); the final 3 tolerate a harness footer after
-    the echo (dsh persistent bash appends `[Command finished with exit code N]`)."""
+    """A harness's own status line when it reported no code (reviewer-e N4): the LAST match among the final 3
+    non-empty output lines — last, not first, so an earlier line the command printed cannot stand in for it (ADR-011).
+    The `X; echo exit=$?` shape uses the stricter echo_exit_marker instead."""
     tail = [ln.strip() for ln in out.splitlines() if ln.strip()][-3:]
     for ln in reversed(tail):
         m = re.fullmatch(pattern, ln, re.IGNORECASE)

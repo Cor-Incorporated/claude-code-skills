@@ -43,6 +43,7 @@ from aidd_cc_session import guard_ledger, load_meta, load_tools, record_tool, sa
 from aidd_cc_text import (
     NEGATION_RE,
     is_approval_text,
+    echo_exit_marker,
     is_exit_echo_line,
     is_short_affirmative,
     parse_deadline_hours,
@@ -232,11 +233,11 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
     rc = None
     if isinstance(resp, dict):
         rc = resp.get("exit_code", resp.get("exitCode", resp.get("rc")))
-        out = (
-            str(resp.get("stdout", ""))
-            + str(resp.get("stderr", ""))
-            + str(resp.get("output", ""))
-        )
+        # stream boundary kept: stdout `PASS` + stderr `warning` must not record `PASSwarning` (Codex review r2)
+        out = ""
+        for part in (str(resp.get(k) or "") for k in ("stdout", "stderr", "output")):
+            if part:
+                out += ("\n" if out and not out.endswith("\n") else "") + part
     else:
         out = str(resp)
     if rc is None and payload.get("exit_code") is not None:
@@ -266,15 +267,20 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
         if isinstance(resp, dict) and str(resp.get("stdout") or "").strip()
         else out
     )
-    if is_exit_echo_line(cmd) and rc in (None, 0):
+    echo_shape = is_exit_echo_line(cmd)
+    truncated = isinstance(resp, dict) and resp.get("truncated") is True
+    if echo_shape and rc in (None, 0) and not truncated:
         # ADR-011: a harness code 0 for `X; echo exit=$?` is echo's and says nothing about X; the echo's line is X's
         # status. Owner live run 2026-10-20 A-1: dsh reported 0 for the line, the judge refused it as masked, and the
         # honest trailer the gate itself had asked for was blocked as UNKNOWN twice. A NON-zero line code means the
         # echo never ran normally (`exec`, a kill) and is kept: no printed `exit=0` overrides it (Codex review P1).
-        marker = trailing_exit_marker(status_text)
+        # the echo's line must be last (only harness footers after it); a cut output can end on X's own `exit=0`
+        marker = echo_exit_marker(status_text)
         if marker is not None:
             return marker, out, "marker"
-    if rc is None:
+    if (
+        rc is None and not echo_shape
+    ):  # an echo line whose marker is missing or cut stays UNKNOWN
         # status lines only, at the end (reviewer-e N4); the last one wins (ADR-011: X may print its own first)
         marker = trailing_exit_marker(
             status_text, r"(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})"

@@ -814,6 +814,21 @@ if printf '%s' "$o84x" | grep -q '"decision": "block"' && printf '%s' "$o84e" | 
   ok "T84c non-zero line code kept; stdout marker read before stderr (dsh / Claude shapes); stderr noise does not block an honest run; no adapter cuts output head-only"
 else bad "T84c: exec=[${o84x:0:160}] streams=[${o84e:0:160}] claude=[${o84c:0:160}] honest=[${o84k:0:160}] heads=[$heads]"; fi
 
+# (84d) Codex review r2 of e47ea74 (red there):
+#   P2 a cut output (dsh persistent bash keeps the first 16000 chars, then `<response clipped>` + footer) can end on
+#      X's own `exit=0` with the echo's `exit=1` gone — the echo's line must be last (footers only), and a stream the
+#      executor flags `truncated` never yields a marker
+#   P2 stdout `PASS` + stderr `warning` (no newline) was recorded as `PASSwarning`, so an honest output field failed
+o84t="$(p84 neg84t "{\"exit_code\":0,\"output\":\"exit=0\\n$(printf 'a%.0s' $(seq 1 50))\\nexit=0\\n<response clipped><NOTE>To save on context only part of this file has been shown to you.</NOTE>\\n[Command finished with exit code 0]\\n\"}" dsh)"
+o84f2="$(p84 neg84f2 '{"exit_code":0,"stdout":"ok\nexit=0\n","stderr":"","truncated":true}' dsh)"
+o84b="$(p84 neg84b '{"exit_code":0,"stdout":"PASS","stderr":"warning"}' claude-code)"
+printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg84w","tool_name":"Bash","tool_input":{"command":"bash tests/ok.sh"},"tool_response":{"exit_code":0,"stdout":"PASS","stderr":"warning"}}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent dsh >/dev/null
+o84w="$(printf '%s' '{"hook_event_name":"Stop","session_id":"neg84w","last_assistant_message":"ok.\nEvidence: bash tests/ok.sh | PASS | 10:00\nStatus: complete"}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent dsh)"
+if printf '%s' "$o84t" | grep -q 'UNKNOWN' && printf '%s' "$o84f2" | grep -q 'UNKNOWN' \
+   && ! printf '%s' "$o84w" | grep -q '"decision": "block"' && printf '%s' "$o84b" | grep -q '"decision": "block"'; then
+  ok "T84d a cut output or a truncated stream keeps the echo line UNKNOWN; stdout/stderr keep a boundary (honest PASS passes)"
+else bad "T84d: clipped=[${o84t:0:160}] truncated=[${o84f2:0:160}] boundary=[${o84w:0:200}] boundary-echo=[${o84b:0:120}]"; fi
+
 # (84b) the UNKNOWN reason names its cause: a harness that reported nothing vs a recorded rc that `;` can mask
 # (A-2 2026-10-20: `date …; cat a.txt` got "this harness reported no exit status", which was false — dsh had reported 0)
 printf '%s' '{"hook_event_name":"PostToolUse","session_id":"neg84m","tool_name":"Bash","tool_input":{"command":"date -u; bash tests/ok.sh"},"tool_response":{"exit_code":0,"output":"Tue\nok"}}' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent dsh >/dev/null

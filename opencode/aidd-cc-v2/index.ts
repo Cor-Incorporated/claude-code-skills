@@ -200,7 +200,8 @@ export default {
           cwd,
           tool_name: call.tool,
           tool_input: files.length > 1 ? { ...call.input, file_path: file } : call.input,
-          tool_response: { exit_code: rc, output: clipOut(text) },
+          // metadata.truncated: the 2.x shell cut its capture, so the echo's line may be gone (ADR-011, Codex review r2)
+          tool_response: { exit_code: rc, output: clipOut(text), truncated: e?.result?.metadata?.truncated === true },
         })
       }
     })
