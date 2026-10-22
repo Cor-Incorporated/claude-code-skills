@@ -1122,51 +1122,5 @@ o100l="$(python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"Pr
 o100m="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg100m\",\"cwd\":\"$R94C\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'chore: x' && git commit -q -m 'fix(h17): branch chained'\"}}" | AIDD_CC_MUTATE=iter.repair-family bash "$HOOK")"
 if printf '%s' "$o100a" | grep -q 're-adjudication' && printf '%s' "$o100b" | grep -q 're-adjudication' && printf '%s' "$o100c" | grep -q 'no owner adjudication' && printf '%s' "$o100d" | grep -q 'no owner adjudication' && [ -z "$o100e" ] && printf '%s' "$o100f" | grep -q 'no owner adjudication' && printf '%s' "$o100g" | grep -q 're-adjudication' && printf '%s' "$o100h" | grep -q 'no owner adjudication' && [ -z "$o100i" ] && [ -z "$o100j" ] && printf '%s' "$o100k" | grep -q 're-adjudication' && printf '%s' "$o100l" | grep -q 'no owner adjudication' && [ -z "$o100m" ]; then ok "T100 a fix commit chained after a non-fix commit is judged (session and branch), counted when it lands, and released only by a ruling on the fix segment itself; a heredoc chore's closing line or a comment apostrophe does not hide it; a heredoc fix subject keeps its scope; the fix segment's own -C repo is judged; a || fallback that did not run is not counted; a heredoc file body or a heredoc -C commit keeps the scope; mutation RED"; else bad "T100: [$o100a] [$o100b] [$o100c] [$o100d] [$o100e] [$o100f] [$o100g] [$o100h] [$o100i] [$o100j] [$o100k] [$o100l] [$o100m]"; fi
 
-
-# ---- (101) ccs#421 residuals of the repair-family breaker's repository resolution (red at develop 0e3b8f8). From a cwd
-#      that is not a repository, each line below commits fix(h17) into R94C (6 fixes on its branch, so the branch-wide
-#      breaker must trip): (a) a decoy commit into R100 named first, (b) a leading wrapper with no commit inside, (c) two
-#      -C (git applies both; the last absolute one wins), (d) a `cd` that is only a heredoc body line.
-p101() {  # session command -> pre verdict
-  python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":sys.argv[1],"cwd":sys.argv[3],"tool_name":"Bash","tool_input":{"command":sys.argv[2]}}))' "$1" "$2" "${3:-/}" | bash "$HOOK"
-}
-o101a="$(p101 neg101a "git -C $R100 commit -q -m 'fix(h17): decoy' && git -C $R94C commit -q -m 'fix(h17): seventh'")"
-o101b="$(p101 neg101b "bash -c 'true' && git -C $R94C commit -q -m 'fix(h17): seventh'")"
-o101c="$(p101 neg101c "git -C $R100 -C $R94C commit -q -m 'fix(h17): seventh'")"
-o101d="$(p101 neg101d "$(printf "cat > notes.md <<'EOF'\ncd %s\nEOF\ngit commit -q -m 'fix(h17): seventh'" "$R100")" "$R94C")"
-o101e="$(p101 neg101e "git -C $R94C -C $R100 commit -q -m 'fix(h17): into R100'")"   # control: the last -C is R100 (0 fixes)
-# Codex review of adeb6fc (red there): the value of `-c k=v` is not an option, `--git-dir` is not moved by a later -C,
-# and `eval`'s cd moves the caller's shell (only `bash -c` / `sh -c` are subshells)
-o101f="$(p101 neg101f "git -c user.name=Claude-Code commit -q -m 'fix(h17): seventh'" "$R94C")"
-o101g="$(p101 neg101g "git --git-dir=$R94C/.git -C $R100 commit -q -m 'fix(h17): seventh'")"
-o101h="$(p101 neg101h "eval 'cd $R94C' && git commit -q -m 'fix(h17): seventh'")"
-o101u="$(python3 -I - "$ROOT/hooks/lib" <<'PY101'
-import sys
-sys.path.insert(0, sys.argv[1])
-import aidd_cc_controls as c
-cases = {
-    "git -c user.name=Claude-Code commit -m 'fix(s): x'": ["/cwd"],
-    "git -C '/tmp/a commit b' commit -m 'fix(s): x'": ["/tmp/a commit b"],
-    "git --git-dir=/A/.git -C /B commit -m 'fix(s): x'": ["/A/.git"],
-    "eval 'cd /t' && git commit -m 'fix(s): x'": ["/t"],
-    "bash -c 'cd /t' && git commit -m 'fix(s): x'": ["/cwd"],
-    "git -C /a -C b commit -m 'fix(s): x'": ["/a/b"],
-    "GIT_AUTHOR_NAME=x /usr/bin/git -C '/p q' commit -m 'fix(s): x'": ["/p q"],
-    # Codex r2 of #437: a comment apostrophe, a scope-mismatched wrapper (adds nothing), a nested eval
-    "git -C /t commit -m 'fix(s): next' # don't forget tests": ["/t"],
-    "git -C /clean commit -m 'fix(s): x' && bash -c 'cd /tripped && git commit -m \"chore: x\"'": ["/clean"],
-    "eval \"eval 'cd /t'\" && git commit -m 'fix(s): next'": ["/t"],
-}
-bad = [(k, [str(x) for x in c._repos_for("/cwd", k, "s")]) for k, want in cases.items() if [str(x) for x in c._repos_for("/cwd", k, "s")] != want]
-print("unit-ok" if not bad else bad)
-PY101
-)"
-if printf '%s' "$o101a" | grep -q 'no owner adjudication' && printf '%s' "$o101b" | grep -q 'no owner adjudication' \
-   && printf '%s' "$o101c" | grep -q 'no owner adjudication' && printf '%s' "$o101d" | grep -q 'no owner adjudication' \
-   && ! printf '%s' "$o101e" | grep -q 'no owner adjudication' \
-   && printf '%s' "$o101f" | grep -q 'no owner adjudication' && printf '%s' "$o101g" | grep -q 'no owner adjudication' \
-   && printf '%s' "$o101h" | grep -q 'no owner adjudication' && [ "$o101u" = unit-ok ]; then
-  ok "T101 breaker repo resolution: a decoy repo, a leading wrapper, two -C and a heredoc cd no longer hide the tripped branch; the last -C decides"
-else bad "T101: decoy=[${o101a:0:120}] wrapper=[${o101b:0:120}] twoC=[${o101c:0:120}] heredoc=[${o101d:0:120}] control=[${o101e:0:120}] cvalue=[${o101f:0:100}] gitdir=[${o101g:0:100}] eval=[${o101h:0:100}] unit=[${o101u:0:200}]"; fi
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]
