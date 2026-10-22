@@ -122,6 +122,8 @@ await handlers.get("tools/post-execute")(exec7, { content: [{ type: "text", text
 await stop(mkAgent(sid7, "ok.\nStatus: complete\nEvidence: pytest -q | 3 passed | 2026-10-22T01:00:00Z"));
 out.persistent = count(sid7);
 out.persistent_note = inbox.find((e) => e.id === sid7)?.msg?.content?.[0]?.text?.slice(0, 300) ?? null;
+// (7) ccs#421 P3-c: a stop with no assistant text writes an H6 error row that carries the session id
+await stop(mkAgent("dsh-empty-text", ""));
 console.log(JSON.stringify(out));
 JS
 res="$(cd "$SB" && "$NODE" --experimental-strip-types --no-warnings drive.mts 2>"$SB/err.log")" || { echo "FAIL: node run"; cat "$SB/err.log"; exit 1; }
@@ -160,4 +162,7 @@ PY
 if grep -rqs '"rc": 0' "$SB/state" || grep -rqs '"rc":0' "$SB/state"; then
   echo "PASS: post row recorded rc 0"
 else echo "FAIL: post row has no rc 0"; grep -rh '"post"' "$SB/state" | head -3; fail=1; fi
+if grep -qs '"rule": *"stop-no-assistant-text"' "$SB/ledger.jsonl" && grep -s '"rule": *"stop-no-assistant-text"' "$SB/ledger.jsonl" | grep -q '"session": *"dsh-empty-text"'; then
+  echo "PASS: ccs#421 P3-c the stop-no-assistant-text error row carries the session id"
+else echo "FAIL: error row has no session id"; grep -s 'stop-no-assistant-text' "$SB/ledger.jsonl" | head -2; fail=1; fi
 exit "$fail"

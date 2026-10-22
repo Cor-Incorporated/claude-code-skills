@@ -59,12 +59,13 @@ export interface Config {
 type Verdict = { decision?: string; reason?: string; rule?: string; would_block?: boolean; note?: string };
 const AGENT = "dsh";
 
-function ledgerError(rule: string, detail: string): void {
+// ccs#421 P3-c: the row carries the dsh session id (it used to sit only inside cmd_head as `session=…`)
+function ledgerError(rule: string, detail: string, session = "unset"): void {
   const ledger = process.env.AIDD_LEDGER_PATH ?? join(homedir(), ".claude", "hooks", "ledger", "guard-ledger.jsonl");
   const row = {
     ts: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
     component: "H17", hook: "aidd-cc", event: "error", decision: "unavailable", rule,
-    cmd_head: detail.slice(0, 120), source: process.env.AIDD_LEDGER_SOURCE ?? "real", session: "unset", agent: AGENT,
+    cmd_head: detail.slice(0, 120), source: process.env.AIDD_LEDGER_SOURCE ?? "real", session, agent: AGENT,
   };
   try {
     mkdirSync(dirname(ledger), { recursive: true });
@@ -84,20 +85,20 @@ export function runCC(oracle: string, cmd: string, payload: Record<string, unkno
     let out = "";
     child.stdout.on("data", (d) => (out += String(d)));
     child.on("error", (e) => {
-      ledgerError(`spawn-error:${cmd}`, String(e));
+      ledgerError(`spawn-error:${cmd}`, String(e), String(payload?.session_id ?? "unset"));
       resolve({ decision: "allow", rule: "spawn-error" });
     });
     child.on("close", (code) => {
       const line = out.trim().split("\n").pop() ?? "";
       if (!line) {
-        ledgerError(`python-exit-${code}:${cmd}`, "");
+        ledgerError(`python-exit-${code}:${cmd}`, "", String(payload?.session_id ?? "unset"));
         resolve({ decision: "allow", rule: "empty" });
         return;
       }
       try {
         resolve(JSON.parse(line) as Verdict);
       } catch (e) {
-        ledgerError(`parse-error:${cmd}`, String(e));
+        ledgerError(`parse-error:${cmd}`, String(e), String(payload?.session_id ?? "unset"));
         resolve({ decision: "allow", rule: "parse-error" });
       }
     });
@@ -204,7 +205,7 @@ export function apply(ctx: any, config: Config = {}): void {
     const text = lastAssistantText(agent);
     if (!text.trim()) {
       // never a silent pass (#186 P2-2): the stop ran but found no assistant text — visible as an H6 error row
-      ledgerError("stop-no-assistant-text", `session=${sid} log=${(agent?.session?.log ?? []).length}`);
+      ledgerError("stop-no-assistant-text", `session=${sid} log=${(agent?.session?.log ?? []).length}`, sid);
       return;
     }
     const n = steers.get(sid) ?? 0;
