@@ -10,6 +10,8 @@
 #   (4) following that advice — X alone, exitCode 0, only stderr cut — the honest claim passes.
 #   (5) Codex review r5: stdout ~2500 chars ending `3 passed` + a 5000-char stderr — the summary must survive the
 #       adapter's cut and the oracle's out_sample, so an honest `pytest -q | 3 passed` passes.
+#   (6) a call without result.value.exitCode (background / promoted / persistent): the text marker may prove a
+#       failure (`[exit code: 2]` -> rc 2) but a `[exit code: 0]` the command printed is not a success (rc null).
 # PLUGIN_SRC overrides the plugin under test (mutation check against the pre-fix file).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -104,6 +106,12 @@ await handlers.get("tools/post-execute")(exec5, {
 await stop(mkAgent(sid5, "ok.\nStatus: complete\nEvidence: pytest -q | 3 passed | 2026-10-20T04:00:00Z"));
 out.adr011_sample = count(sid5);
 out.adr011_sample_note = inbox.find((e) => e.id === sid5)?.msg?.content?.[0]?.text?.slice(0, 300) ?? null;
+// (6) no structured exit code: the text marker proves failure only
+for (const [id, tail] of [["dsh-fb-0", "[exit code: 0]"], ["dsh-fb-2", "[exit code: 2]"]]) {
+  const e6 = { name: "bash", arguments: { command: "bash tests/x.sh" }, agent: mkAgent(id, "") };
+  await handlers.get("tools/pre-execute")(e6, next);
+  await handlers.get("tools/post-execute")(e6, { content: [{ type: "text", text: "output\n" + tail }], value: { kind: "promoted" } }, next);
+}
 console.log(JSON.stringify(out));
 JS
 res="$(cd "$SB" && "$NODE" --experimental-strip-types --no-warnings drive.mts 2>"$SB/err.log")" || { echo "FAIL: node run"; cat "$SB/err.log"; exit 1; }
@@ -134,6 +142,17 @@ assert r["adr011_alone"] == [], f"the advice followed (X alone, rc 0) was gated:
 print("PASS: ADR-011 the advice followed (X alone, exitCode 0, stderr cut) passes")
 assert r["adr011_sample"] == [], f"stdout summary lost to a long stderr: {r['adr011_sample']} {r['adr011_sample_note']}"
 print("PASS: ADR-011 a long stderr keeps stdout's last line in the recorded sample")
+PY
+python3 -I - "$SB/state" <<'PY' || fail=1
+import glob, json, sys
+rc = {}
+for f in glob.glob(sys.argv[1] + "/sessions/dsh__dsh-fb-*.jsonl"):
+    for line in open(f, encoding="utf-8"):
+        r = json.loads(line)
+        if r.get("event") == "post":
+            rc[f.split("dsh__")[1].split(".")[0]] = r.get("rc")
+assert rc == {"dsh-fb-0": None, "dsh-fb-2": 2}, f"text fallback: {rc}"
+print("PASS: ADR-011 the dsh text fallback proves failure only ([exit code: 0] -> rc null, [exit code: 2] -> rc 2)")
 PY
 if grep -rqs '"rc": 0' "$SB/state" || grep -rqs '"rc":0' "$SB/state"; then
   echo "PASS: post row recorded rc 0"

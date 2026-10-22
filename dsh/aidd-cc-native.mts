@@ -136,8 +136,12 @@ function lastAssistantText(agent: any): string {
 export function exitCodeOf(result: any, text: string): number | undefined {
   const code = result?.value?.exitCode;
   if (Number.isInteger(code)) return code;
+  // The text marker is the fallback for a call without `result.value.exitCode` (background, promoted, persistent
+  // bash). The command's own output can end with the same text, so it may prove a failure but never a success:
+  // a 0 there stays undefined, and the oracle then names the missing code (ADR-011, acceptance 2026-10-21 residual).
   const m = /\[(?:exit code:|Command finished with exit code) (-?\d{1,3})\]\s*$/.exec(text.trim());
-  return m ? Number(m[1]) : undefined;
+  const n = m ? Number(m[1]) : undefined;
+  return n !== undefined && n !== 0 ? n : undefined;
 }
 
 // Head + tail, never the head alone: the status line (`X; echo exit=$?`) and test summaries are the LAST lines, and
