@@ -794,17 +794,22 @@ for a in dsh opencode pi codex cursor claude-code; do
   t84post "$a" "neg84a-$a" "$X84" $'45\n' 0
   v="$(t84stop "$a" "neg84a-$a" "$X84" '45')"
   printf '%s' "$v" | grep -q '"decision": "block"' && o84="$o84 [$a rc=0 alone: ${v:0:200}]"
-  # (b) the entry reports no code: the reason says `<cmd>; echo exit=$?`, and that is accepted
+  # (b) the call carries no code: on an entry without codes the reason says `<cmd>; echo exit=$?`, and that is
+  #     accepted; on an entry that reports codes the output is not read (decision 1, T84h) — UNKNOWN, cause named
   t84post "$a" "neg84n-$a" "$E84" $'45\nexit=0\n'
   v="$(t84stop "$a" "neg84n-$a" "$E84" '45 exit=0')"
-  printf '%s' "$v" | grep -q '"decision": "block"' && o84="$o84 [$a no-rc echo: ${v:0:200}]"
+  case "$a" in
+    dsh|opencode|pi) printf '%s' "$v" | grep -q 'reported none for this call' || o84="$o84 [$a no-rc echo: ${v:0:200}]" ;;
+    *) printf '%s' "$v" | grep -q '"decision": "block"' && o84="$o84 [$a no-rc echo: ${v:0:200}]" ;;
+  esac
 done
-t84post dsh neg84f "$E84" $'45\nexit=1\n'; o84f="$(t84stop dsh neg84f "$E84" '45 exit=0')"          # X failed
-t84post dsh neg84s "$E84" $'exit=0\nexit=1\n'; o84s="$(t84stop dsh neg84s "$E84" '45 exit=0')"      # X printed exit=0 first
-t84post dsh neg84p "$E84" $'45\nexit=0\n[Command finished with exit code 0]\n'; o84p="$(t84stop dsh neg84p "$E84" '45 exit=0')"  # footer
+# the in-band reader itself (entries without codes only since T84h; a dsh footer stays tolerated after the echo line)
+t84post cursor neg84f "$E84" $'45\nexit=1\n'; o84f="$(t84stop cursor neg84f "$E84" '45 exit=0')"          # X failed
+t84post cursor neg84s "$E84" $'exit=0\nexit=1\n'; o84s="$(t84stop cursor neg84s "$E84" '45 exit=0')"      # X printed exit=0 first
+t84post cursor neg84p "$E84" $'45\nexit=0\n[Command finished with exit code 0]\n'; o84p="$(t84stop cursor neg84p "$E84" '45 exit=0')"  # footer
 if [ -z "$o84" ] && printf '%s' "$o84f" | grep -q 'rc=1' && printf '%s' "$o84s" | grep -q 'rc=1' \
    && ! printf '%s' "$o84p" | grep -q '"decision": "block"'; then
-  ok "T84 the gate's remediation is what it accepts on all 6 entries: with a harness code, run alone (the echo line stays UNKNOWN); without one, \`<cmd>; echo exit=\$?\` (exit=1 / an earlier spoofed exit=0 block, a footer is tolerated)"
+  ok "T84 the gate's remediation is what it accepts on all 6 entries: with a harness code, run alone (the echo line stays UNKNOWN); a call without one: \`<cmd>; echo exit=\$?\` on an entry without codes, UNKNOWN with the cause named on an entry with codes (exit=1 / an earlier spoofed exit=0 block, a footer is tolerated)"
 else bad "T84:$o84 | fail=[${o84f:0:200}] | spoof=[${o84s:0:200}] | footer=[${o84p:0:200}]"; fi
 
 # (84b) the UNKNOWN reason names its cause: a recorded code that `;` can mask (A-2 2026-10-20: `date …; cat a.txt` got
@@ -825,7 +830,8 @@ else bad "T84b: masked=[${o84m:0:260}] none=[${o84n:0:260}]"; fi
 #   r2 P2 a clipped output (`<response clipped>` + footer) ending on X's own exit=0; a stream flagged `truncated`
 #   r4 P2 `X |` / `X &` + newline + the echo read as the echo shape; a background child printing exit=0 after the echo
 #   (with a harness code the PIVOT never reads the output, so the child case is UNKNOWN; without one it is the
-#   residual limit recorded in ADR-011)
+#   residual limit recorded in ADR-011). The clipped / truncated rows exercise the in-band reader, so they run on an
+#   entry without codes: since T84h dsh never reads the output, so a dsh row here would pass for the wrong reason.
 p84() {  # session json-tool_response agent [command] [cited] -> stop verdict
   local cmd="${4:-bash tests/x.sh; echo exit=\$?}" cited="${5:-${4:-bash tests/x.sh; echo exit=\$?}}"
   python3 -I - "$1" "$cmd" "$2" <<'PY84c' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent "$3" >/dev/null
@@ -843,8 +849,8 @@ o84x="$(t84post dsh neg84x "$E84" $'45\nexit=0\n' 1; t84stop dsh neg84x "$E84" '
 o84c="$(p84 neg84c '{"stdout":"ok\nexit=1\n","stderr":"exit=0\n"}' claude-code)"
 o84k="$(p84 neg84k '{"stdout":"ok\nexit=0\n","stderr":"warning\n"}' claude-code)"   # honest, stderr noise
 heads="$(grep -n 'slice(0, *4000)' "$ROOT"/dsh/*.mts "$ROOT"/pi/*.ts "$ROOT"/opencode/*.ts "$ROOT"/opencode/*/index.ts 2>/dev/null)"
-o84t="$(p84 neg84t "{\"output\":\"exit=0\\n$(printf 'a%.0s' $(seq 1 50))\\nexit=0\\n<response clipped><NOTE>To save on context only part of this file has been shown to you.</NOTE>\\n[Command finished with exit code 0]\\n\"}" dsh)"
-o84f2="$(p84 neg84f2 '{"stdout":"ok\nexit=0\n","stderr":"","truncated":true}' dsh)"
+o84t="$(p84 neg84t "{\"output\":\"exit=0\\n$(printf 'a%.0s' $(seq 1 50))\\nexit=0\\n<response clipped><NOTE>To save on context only part of this file has been shown to you.</NOTE>\\n[Command finished with exit code 0]\\n\"}" cursor)"
+o84f2="$(p84 neg84f2 '{"stdout":"ok\nexit=0\n","stderr":"","truncated":true}' cursor)"
 o84pipe="$(p84 neg84pipe '{"output":"exit=0\n"}' cursor $'python3 -c "import sys; sys.exit(1)" |\necho exit=$?' 'python3 -c "import sys; sys.exit(1)"')"
 o84amp="$(p84 neg84amp '{"output":"exit=0\n"}' cursor $'bash tests/fail.sh &\necho exit=$?' 'bash tests/fail.sh')"
 o84bg="$(p84 neg84bg '{"exit_code":0,"output":"exit=1\nexit=0\n"}' pi "bash -c '(sleep 0.02; echo exit=0) & exit 1'; echo exit=\$?")"
@@ -866,11 +872,12 @@ if ! printf '%s' "$o84w" | grep -q '"decision": "block"' && printf '%s' "$o84b" 
 else bad "T84d: boundary=[${o84w:0:200}] no-marker=[${o84b:0:160}]"; fi
 
 # (84e) Codex review r3 P2: Pi 1.2.0 keeps the TAIL of a long bash output and appends `[Showing lines S-E of T. Full
-#   output: …]`; on a Pi call without a structured code, E == T keeps the echo's line last (honest run passes) and
-#   E < T (a head range) stays UNKNOWN
-o84pt="$(p84 neg84pt '{"output":"ok\nexit=0\n\n[Showing lines 3-2002 of 2002. Full output: /tmp/pi-bash-1.log]"}' pi)"
-o84pk="$(p84 neg84pk '{"output":"ok\nexit=0\n\n[Showing lines 3-2002 of 2002 (50KB limit). Full output: /tmp/pi-bash-1.log]"}' pi)"
-o84ph="$(p84 neg84ph '{"output":"ok\nexit=0\n\n[Showing lines 1-2000 of 5000. Full output: /tmp/pi-bash-1.log]"}' pi)"
+#   output: …]`; after the echo's line, E == T keeps it last (honest run passes) and E < T (a head range) stays UNKNOWN.
+#   The reader is pinned through an entry without codes: Pi itself reports one on every bash call (1.2.0
+#   dist/core/tools/bash.js: structuredContent.exit_code, isError on a throw), and a Pi call without one is UNKNOWN (T84h)
+o84pt="$(p84 neg84pt '{"output":"ok\nexit=0\n\n[Showing lines 3-2002 of 2002. Full output: /tmp/pi-bash-1.log]"}' cursor)"
+o84pk="$(p84 neg84pk '{"output":"ok\nexit=0\n\n[Showing lines 3-2002 of 2002 (50KB limit). Full output: /tmp/pi-bash-1.log]"}' cursor)"
+o84ph="$(p84 neg84ph '{"output":"ok\nexit=0\n\n[Showing lines 1-2000 of 5000. Full output: /tmp/pi-bash-1.log]"}' cursor)"
 if ! printf '%s' "$o84pt" | grep -q '"decision": "block"' && ! printf '%s' "$o84pk" | grep -q '"decision": "block"' \
    && printf '%s' "$o84ph" | grep -q 'UNKNOWN'; then
   ok "T84e Pi tail footer (E == T, with and without the byte-limit note) keeps an honest run; a head range stays UNKNOWN"
@@ -896,6 +903,31 @@ if printf '%s' "$o84cf" | grep -q '"decision": "block"' \
    && ! printf '%s' "$o84mf" | grep -q '"decision": "block"'; then
   ok "T84g disagreeing status lines are UNKNOWN (no success-event 0); an output-read status is told the in-band form, which then passes"
 else bad "T84g: conflict=[${o84cf:0:200}] marker-masked=[${o84mm:0:260}] followed=[${o84mf:0:160}]"; fi
+
+# (84h) independent acceptance 2026-10-21 ADR011-P1-1 (aidd-governance#210, adr011-falsify/oc2-timeout.sh; red at
+#   5a0e454): an entry that reports exit codes can still send a call WITHOUT one — the OpenCode 2.x shell drops `exit`
+#   on a timeout / signal (core shell/result.ts), a dsh background call has exitCode null. The oracle branched on the
+#   call (`rc is None`), not the entry, and read X's own trailing `exit code: 0` as rc 0: a timed-out suite passed.
+#   ADR-011 decision 1: on these entries the output is never read for a status — the call stays UNKNOWN, and the reason
+#   names the cause (timeout / kill / background) instead of `<cmd>; echo exit=$?`, which cannot help there (P3-1).
+#   Entries without codes keep the bounded trailing read (T84f / T84g) — the control half of this pair.
+O84H=$'suite-a ... ok\nsuite-b ... FAILED (1 of 12)\nexit code: 0\nTimed out before completion'
+o84h=""
+for a in opencode dsh pi; do
+  v="$(p84 "neg84h-$a" "$(python3 -I -c 'import json,sys; print(json.dumps({"output": sys.argv[1], "truncated": False}))' "$O84H")" "$a" 'bash tests/run-suites.sh')"
+  { printf '%s' "$v" | grep -q 'UNKNOWN' && printf '%s' "$v" | grep -q 'timed out' \
+    && ! printf '%s' "$v" | grep -q 'echo exit='; } || o84h="$o84h [$a timeout: ${v:0:240}]"
+  # the in-band echo form is not read either on these entries (decision 1): a missing code is not echo's to fill
+  v="$(p84 "neg84he-$a" '{"output":"45\nexit=0\n"}' "$a")"
+  printf '%s' "$v" | grep -q 'UNKNOWN' || o84h="$o84h [$a echo: ${v:0:200}]"
+done
+o84hc="$(p84 neg84hc "$(python3 -I -c 'import json,sys; print(json.dumps({"output": sys.argv[1]}))' "$O84H")" cursor 'bash tests/run-suites.sh')"
+# the 2.x plugin now maps `metadata.timeout` to 124: that UNKNOWN names the timeout too
+o84ht="$(p84 neg84ht "$(python3 -I -c 'import json,sys; print(json.dumps({"exit_code": 124, "output": sys.argv[1]}))' "$O84H")" opencode 'bash tests/run-suites.sh')"
+printf '%s' "$o84ht" | grep -q '124 is a timeout' || o84h="$o84h [opencode rc=124: ${o84ht:0:200}]"
+if [ -z "$o84h" ] && ! printf '%s' "$o84hc" | grep -q 'harness reports exit codes'; then
+  ok "T84h an entry that reports exit codes never reads the output when a call has none (2.x timeout payload, dsh, Pi): UNKNOWN naming timeout / kill / background, not \`; echo exit=\$?\`"
+else bad "T84h:$o84h | control-cursor=[${o84hc:0:200}]"; fi
 
 # ---- repair-family breaker v2 (2026-10-17, this harness's own loop on claude-code-skills#418: 12 fix(h17) commits and
 #      6 STRATEGY notes — 4 of them HOLD — on one branch across 8 independent-review rounds; the breaker fired and was

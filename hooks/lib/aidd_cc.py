@@ -223,13 +223,22 @@ def cmd_pre(args, payload):
     _emit(verdict)
 
 
+# ADR-011 decision 1: entries whose harness reports exit codes (dsh `result.value.exitCode`, OpenCode `metadata.exit`
+# in 1.x and 2.x, Pi `structuredContent.exit_code`). The rule is per ENTRY, not per call: these harnesses still send
+# calls without a code — a 2.x shell that timed out or was killed (core shell/result.ts drops `exit`), a dsh call moved
+# to the background — and reading X's own trailing `exit code: 0` there accepted a timed-out suite as rc 0
+# (independent acceptance 2026-10-21, ADR011-P1-1). T84h pairs this set with the reason that names the cause.
+CODE_REPORTING_AGENTS = frozenset({"dsh", "opencode", "pi"})
+
+
 def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
     """Exit status for the ledger.  Dict responses carry it; string responses are
     parsed for `exit code N`; otherwise it is UNKNOWN (None) — never assumed 0
     (Codex r2 P1-d).  Claude Code is the one harness whose PostToolUse fires
     only on success (failures go to PostToolUseFailure), so its success event is
     rc 0 by construction.  ADR-011: the in-band `X; echo exit=$?` status line is
-    read only when the harness reported no code; a reported code is recorded as-is."""
+    read only on an entry without codes; a reported code is recorded as-is, and a
+    call that lacks one on an entry with codes stays UNKNOWN (rc_src harness-missing)."""
     rc = None
     if isinstance(resp, dict):
         rc = resp.get("exit_code", resp.get("exitCode", resp.get("rc")))
@@ -260,6 +269,12 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
             out,
             "harness",
         )
+    if rc is None and agent in CODE_REPORTING_AGENTS:
+        return (
+            None,
+            out,
+            "harness-missing",
+        )  # UNKNOWN; neither the echo line nor a trailing status line is read
     # The echo writes to stdout: for the echo shape, when the streams come separately, a failing X's stderr `exit=0`
     # must not be read after the echo's stdout `exit=1` (Codex review r1 P2); a merged stream is in write order. Any
     # other command keeps reading stdout + stderr, where a harness may print its status (Codex review r5 P2).

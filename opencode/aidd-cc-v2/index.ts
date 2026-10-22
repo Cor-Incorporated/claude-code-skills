@@ -112,15 +112,26 @@ function resultText(result: unknown): string {
   return ""
 }
 
-/** Exit code of a shell-like tool result: metadata keys seen across tools, else the `[exit code: N]` trailer. */
-function exitCodeOf(result: unknown, text: string): number | undefined {
+/**
+ * Exit code of a shell-like tool result, from metadata only. The 2.x shell drops `exit` when the command did not exit
+ * on its own (core shell/result.ts): a timeout sets `timeout: true` (-> 124, as coreutils `timeout`), a kill sets
+ * `signal: "SIGKILL"` (-> 128 + N, as a shell reports it). A call with none of these (moved to the background, or no
+ * status) sends no code, and the oracle keeps it UNKNOWN. Never a code read from the output text: an `[exit code: N]`
+ * trailer there is X's own output — reading it let a timed-out run pass as rc 0 (ADR-011 decision 1, ADR011-P1-1).
+ */
+function exitCodeOf(result: unknown): number | undefined {
   const m = (result && typeof result === "object" ? (result as { metadata?: Record<string, unknown> }).metadata : undefined) ?? {}
   for (const k of ["exit", "exitCode", "exit_code", "code", "status"]) {
     const v = m[k]
     if (typeof v === "number") return v
   }
-  const t = /\[exit code: (-?\d{1,3})\]\s*$/.exec(text.trim())
-  return t ? Number(t[1]) : undefined
+  if (m.timeout === true) return 124
+  if (typeof m.signal === "number") return 128 + m.signal
+  if (typeof m.signal === "string" && m.signal) {
+    const n = (os.constants.signals as Record<string, number | undefined>)[m.signal]
+    return typeof n === "number" ? 128 + n : 1 // an unknown signal name is still a kill: a failure, not UNKNOWN
+  }
+  return undefined
 }
 
 /**
@@ -189,7 +200,7 @@ export default {
       const text = e?.status === "completed" ? resultText(e?.result) : String(e?.error?.message ?? "")
       const call = normalizeCall(String(e?.tool ?? ""), e?.input)
       // review #426 L1: a failed call carries a non-zero rc so a rejected patch is not recorded as a successful write
-      const rc = e?.status === "completed" ? exitCodeOf(e?.result, text) : 1
+      const rc = e?.status === "completed" ? exitCodeOf(e?.result) : 1
       // review #426 M1: a patch touching several files records one post row per file, so every touched path is a
       // written path for Readback binding (the oracle reads the path from the edit key); paths resolve against cwd
       const files = Array.isArray(call.input.edits) ? (call.input.edits as { path?: string }[]).map((x) => String(x.path ?? "")).filter(Boolean) : []

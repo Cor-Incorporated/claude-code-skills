@@ -74,6 +74,23 @@ out.patch_denied_at = patchDenied;
 const two = "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-1\n+2\n*** Update File: src/b.ts\n@@\n-3\n+4\n*** End Patch\n";
 await hooks["tool.execute.before"]({ tool: "patch", sessionID: "ses_v2test4", agent: "build", messageID: "m4", id: "q1", input: { patchText: two } });
 await hooks["tool.execute.after"]({ tool: "patch", sessionID: "ses_v2test4", agent: "build", messageID: "m4", id: "q1", input: { patchText: two }, status: "completed", result: { content: "Success" } });
+// ADR011-P1-1 (independent acceptance 2026-10-21, adr011-falsify/oc2-timeout.sh): the 2.x shell drops `exit` on a
+// timeout / signal / background call (core shell/result.ts, tool/plugin/shell.ts). Timeout and signal carry a code
+// (124 / 128+N); a call with none sends none — never one read from the output text (X can print `[exit code: 0]`)
+const runOut = "suite-a ... ok\nsuite-b ... FAILED (1 of 12)\nexit code: 0";
+const shellCases: [string, Record<string, unknown>, string[]][] = [
+  ["ses_v2rc_timeout", { status: "completed", truncated: false, timeout: true }, [runOut, "Timed out before completion"]],
+  ["ses_v2rc_signal", { status: "completed", truncated: false, signal: "SIGKILL" }, [runOut, "Killed by SIGKILL"]],
+  ["ses_v2rc_exit1", { status: "completed", truncated: false, exit: 1 }, [runOut, "Exited with code 1"]],
+  ["ses_v2rc_nocode", { status: "completed", truncated: false }, ["suite-a ... ok\n[exit code: 0]"]],
+  ["ses_v2rc_bg", { status: "running", truncated: false, shellID: "sh_1" }, ["Command moved to the background (shell ID: sh_1).\nOutput is streaming to: /tmp/sh_1.log", "Read it with the shell tools."]],
+];
+for (const [sid, metadata, parts] of shellCases) {
+  const input = { command: "bash tests/run-suites.sh" };
+  await hooks["tool.execute.before"]({ tool: "shell", sessionID: sid, agent: "build", messageID: "r1", id: "r1c", input });
+  await hooks["tool.execute.after"]({ tool: "shell", sessionID: sid, agent: "build", messageID: "r1", id: "r1c", input, status: "completed",
+    result: { content: parts.map((text) => ({ type: "text", text })), metadata } });
+}
 console.log(JSON.stringify(out));
 process.exit(0);
 JS
@@ -90,6 +107,18 @@ assert r["partial_prompts"] == 0 and r["partial_note"] and "Status: partial" in 
 assert r["partial_resume"] is False, r            # Codex #426 P1-a: a display-only note must not resume the session
 assert r["patch_denied_at"] == 4 and "edit" in r["patch_deny_message"].lower(), r  # Codex #426 P1-b: native patch counts as an edit
 print("PASS: v2 plugin — prompt/tool hooks registered, 4th identical call denied, final answer without Status re-prompted, Status: partial passes with a synthetic note (resume:false), native patch normalized to an edit")
+PY
+python3 -I - "$AIDD_CC_STATE_DIR" <<'PY' || exit 1
+import glob, json, os, sys
+rc = {}
+for p in glob.glob(os.path.join(sys.argv[1], "**", "*.jsonl"), recursive=True):
+    for line in open(p, encoding="utf-8"):
+        r = json.loads(line)
+        if r.get("event") == "post" and "ses_v2rc_" in os.path.basename(p):
+            rc[os.path.basename(p).split("ses_v2rc_")[1].split(".")[0]] = r.get("rc")
+want = {"timeout": 124, "signal": 137, "exit1": 1, "nocode": None, "bg": None}
+assert rc == want, f"post rc per 2.x shell outcome: got {rc}, want {want}"
+print("PASS: 2.x shell outcomes -> rc (timeout 124, SIGKILL 137, exit 1); a call without a code sends none, never one read from the output")
 PY
 if grep -rqs 'edit:[^"]*src/a.ts' "$AIDD_CC_STATE_DIR" && grep -rqs 'edit:[^"]*src/b.ts' "$AIDD_CC_STATE_DIR"; then echo "PASS: two-file patch -> a post row per touched file"; else echo "FAIL: per-file post rows missing"; grep -rho 'edit:[^"]*' "$AIDD_CC_STATE_DIR" | sort -u | head; exit 1; fi
 grep -q '"component": "H17"' "$AIDD_LEDGER_PATH" && echo "PASS: H6 ledger rows written by the v2 entry" || { echo "FAIL: no ledger rows"; exit 1; }
