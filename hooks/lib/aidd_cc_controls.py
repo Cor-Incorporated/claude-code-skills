@@ -824,7 +824,9 @@ def stop_check(
             # is told how its in-band form is accepted, not to run alone (Codex review r6 P2)
             by_marker = masked and row.get("rc_src") == "marker"
             how = (
-                ""
+                " — 124 is a timeout: the command did not finish; rerun it so it completes (a longer timeout or a smaller scope) and cite that run"
+                if rc == 124
+                else ""
                 if rc is not None
                 # ADR-011: say which cause it is — 2026-10-20 A-2 got "reported no exit status" for a line dsh had
                 # reported 0 for, which sent the agent after the wrong fix. An entry that reports exit codes is told
@@ -833,6 +835,10 @@ def stop_check(
                 if by_marker
                 else f" — this harness reports exit codes, and the recorded status {row.get('rc')} belongs to the whole line `{line[:60]}`, where `;` / `|` / `||` / `&` can mask a failure (an in-band `exit=N` is not read here); run the command on its own, not chained, and cite it"
                 if masked
+                # ADR011-P1-1 / P3-1: an entry with codes that sent none for this call — `; echo exit=$?` cannot help
+                # there (its output is not read, and the echo's own code would be recorded), so name the causes
+                else " — this harness reports exit codes, but it reported none for this call: the command timed out, was killed by a signal, or is still running in the background (an in-band `exit=N` is not read here); run it on its own so it finishes in the foreground, and cite that run"
+                if row is not None and row.get("rc_src") == "harness-missing"
                 else " — this harness reported no exit status; run it as `<cmd>; echo exit=$?` so the status is in the output"
             )
             problems.append(
