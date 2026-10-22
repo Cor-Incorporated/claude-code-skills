@@ -303,10 +303,17 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
         found = trailing_exit_markers(
             out, r"(?:exit(?: code| status)?|rc)[:= ]+(-?\d{1,3})"
         )
-        if len(set(found)) == 1:
-            return found[0], out, "marker"  # the command's own trailing status line
-        if found:
+        if len(set(found)) == 1 and found[0] != 0:
+            return (
+                found[0],
+                out,
+                "marker",
+            )  # the command's own trailing status line proves a failure
+        if len(set(found)) > 1:
             return None, out, "marker-conflict"
+        # ADR011-P2-1 (independent acceptance 2026-10-21): a trailing `exit code: 0` that a non-echo command printed
+        # itself cannot prove its own success on an entry without codes; only the strict `X; echo exit=$?` form can.
+        # It still proves nothing against Claude Code's success event below.
         if agent == "claude-code" and isinstance(resp, dict):
             rc = 0
     return rc, out, "harness"

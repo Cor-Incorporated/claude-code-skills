@@ -898,12 +898,16 @@ else bad "T84f: [${o84se:0:220}]"; fi
 #      in-band form is accepted (`<cmd>; echo exit=$?`), not "this harness reports exit codes"; following it passes
 o84cf="$(p84 neg84cf '{"stdout":"FAIL\nexit=1\n","stderr":"exit=0\n"}' claude-code 'bash tests/x.sh')"
 o84mm="$(p84 neg84mm '{"output":"Tue\nok\nexit=0\n"}' cursor 'date -u; bash tests/ok.sh; echo exit=$?' 'bash tests/ok.sh')"
+# since ADR011-P2-1 an output `exit=0` on a non-echo line proves nothing (generic no-code advice); a failing status
+# line is still recorded (rc_src=marker) and gets the in-band advice for its masked line
+o84m1="$(p84 neg84m1 '{"output":"Tue\nFAIL\nexit=1\n"}' cursor 'date -u; bash tests/fail.sh; echo exit=$?' 'bash tests/fail.sh')"
 o84mf="$(p84 neg84mf '{"output":"ok\nexit=0\n"}' cursor 'bash tests/ok.sh; echo exit=$?')"
 if printf '%s' "$o84cf" | grep -q '"decision": "block"' \
-   && printf '%s' "$o84mm" | grep -q 'run the cited command alone as' && ! printf '%s' "$o84mm" | grep -q 'this harness reports exit codes' \
+   && printf '%s' "$o84mm" | grep -q 'echo exit=' && ! printf '%s' "$o84mm" | grep -q 'this harness reports exit codes' \
+   && printf '%s' "$o84m1" | grep -q 'run the cited command alone as' && ! printf '%s' "$o84m1" | grep -q 'this harness reports exit codes' \
    && ! printf '%s' "$o84mf" | grep -q '"decision": "block"'; then
   ok "T84g disagreeing status lines are UNKNOWN (no success-event 0); an output-read status is told the in-band form, which then passes"
-else bad "T84g: conflict=[${o84cf:0:200}] marker-masked=[${o84mm:0:260}] followed=[${o84mf:0:160}]"; fi
+else bad "T84g: conflict=[${o84cf:0:200}] marker-masked=[${o84mm:0:260}] masked-fail=[${o84m1:0:260}] followed=[${o84mf:0:160}]"; fi
 
 # (84h) independent acceptance 2026-10-21 ADR011-P1-1 (aidd-governance#210, adr011-falsify/oc2-timeout.sh; red at
 #   5a0e454): an entry that reports exit codes can still send a call WITHOUT one — the OpenCode 2.x shell drops `exit`
@@ -926,9 +930,9 @@ o84hc="$(p84 neg84hc "$(python3 -I -c 'import json,sys; print(json.dumps({"outpu
 # the 2.x plugin now maps `metadata.timeout` to 124: that UNKNOWN names the timeout too
 o84ht="$(p84 neg84ht "$(python3 -I -c 'import json,sys; print(json.dumps({"exit_code": 124, "output": sys.argv[1]}))' "$O84H")" opencode 'bash tests/run-suites.sh')"
 printf '%s' "$o84ht" | grep -q '124 is a timeout' || o84h="$o84h [opencode rc=124: ${o84ht:0:200}]"
-# the control pins the RECORDER, not cursor's verdict: on an entry without codes the bounded trailing read is still
-# active (rc_src marker), so cursor accepts this timed-out output as rc 0 — that is ADR011-P2-1, open for the owner's
-# decision (fix vs ADR-011 residual); when it is decided this row changes with it
+# the control pins the RECORDER on an entry without codes: since ADR011-P2-1 (ADR-011 rev1 decision 7, #436) a status
+# line the command printed proves failure only, so cursor records this output's trailing `exit code: 0` as nothing
+# (rc None, rc_src harness) and the gate says the harness reported no status — not the code-reporting reason
 src84h="$(python3 -I - "$SB/state" <<'PY84h'
 import glob, json, os, sys
 src = {}
@@ -941,10 +945,25 @@ print(json.dumps(src, sort_keys=True))
 PY84h
 )"
 for k in opencode dsh pi; do printf '%s' "$src84h" | grep -q "\"neg84h-$k\": \"harness-missing\"" || o84h="$o84h [rc_src $k: $src84h]"; done
-printf '%s' "$src84h" | grep -q '"neg84hc": "marker"' || o84h="$o84h [rc_src cursor: $src84h]"
-if [ -z "$o84h" ] && ! printf '%s' "$o84hc" | grep -q 'harness reports exit codes'; then
+printf '%s' "$src84h" | grep -q '"neg84hc": "harness"' || o84h="$o84h [rc_src cursor: $src84h]"
+if [ -z "$o84h" ] && ! printf '%s' "$o84hc" | grep -q 'harness reports exit codes' && printf '%s' "$o84hc" | grep -q 'reported no exit status'; then
   ok "T84h an entry that reports exit codes never reads the output when a call has none (2.x timeout payload, dsh, Pi): UNKNOWN naming timeout / kill / background, not \`; echo exit=\$?\`"
 else bad "T84h:$o84h | control-cursor=[${o84hc:0:200}]"; fi
+
+# (84i) ADR011-P2-1 (independent acceptance 2026-10-21, aidd-governance#210): on an entry without codes, a non-echo
+#   command whose own last lines say `exit code: 0` was recorded rc 0 and a failing single command passed. A status
+#   line the command printed proves a failure, never a success; success there needs the strict echo form (or, on
+#   Claude Code, the success event). Red on develop 67ad22b.
+o84ia="$(p84 neg84ia '{"output":"FAIL: test_x\nexit code: 0\n"}' cursor 'bash tests/fail.sh')"
+o84ib="$(p84 neg84ib '"suite-b ... FAILED\nexit code: 0"' codex 'bash tests/fail.sh')"
+o84ic="$(p84 neg84ic '{"output":"FAIL\nexit code: 1\n"}' cursor 'bash tests/fail.sh')"
+o84id="$(p84 neg84id '{"stdout":"ok\nexit code: 0\n","stderr":""}' claude-code 'bash tests/x.sh')"
+o84ie="$(p84 neg84ie '{"output":"ok\nexit=0\n"}' cursor 'bash tests/x.sh; echo exit=$?')"
+if printf '%s' "$o84ia" | grep -q 'reported no exit status' && printf '%s' "$o84ib" | grep -q 'reported no exit status' \
+   && printf '%s' "$o84ic" | grep -q 'rc=1' && ! printf '%s' "$o84id" | grep -q '"decision": "block"' \
+   && ! printf '%s' "$o84ie" | grep -q '"decision": "block"'; then
+  ok "T84i a status line the command printed proves failure only (Cursor / Codex: trailing exit code 0 is UNKNOWN, exit code 1 fails); Claude Code's success event and the echo form still pass"
+else bad "T84i: cursor0=[${o84ia:0:160}] codex0=[${o84ib:0:160}] cursor1=[${o84ic:0:160}] claude=[${o84id:0:160}] echo=[${o84ie:0:160}]"; fi
 
 # ---- repair-family breaker v2 (2026-10-17, this harness's own loop on claude-code-skills#418: 12 fix(h17) commits and
 #      6 STRATEGY notes — 4 of them HOLD — on one branch across 8 independent-review rounds; the breaker fired and was
