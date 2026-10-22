@@ -1135,10 +1135,34 @@ o101b="$(p101 neg101b "bash -c 'true' && git -C $R94C commit -q -m 'fix(h17): se
 o101c="$(p101 neg101c "git -C $R100 -C $R94C commit -q -m 'fix(h17): seventh'")"
 o101d="$(p101 neg101d "$(printf "cat > notes.md <<'EOF'\ncd %s\nEOF\ngit commit -q -m 'fix(h17): seventh'" "$R100")" "$R94C")"
 o101e="$(p101 neg101e "git -C $R94C -C $R100 commit -q -m 'fix(h17): into R100'")"   # control: the last -C is R100 (0 fixes)
+# Codex review of adeb6fc (red there): the value of `-c k=v` is not an option, `--git-dir` is not moved by a later -C,
+# and `eval`'s cd moves the caller's shell (only `bash -c` / `sh -c` are subshells)
+o101f="$(p101 neg101f "git -c user.name=Claude-Code commit -q -m 'fix(h17): seventh'" "$R94C")"
+o101g="$(p101 neg101g "git --git-dir=$R94C/.git -C $R100 commit -q -m 'fix(h17): seventh'")"
+o101h="$(p101 neg101h "eval 'cd $R94C' && git commit -q -m 'fix(h17): seventh'")"
+o101u="$(python3 -I - "$ROOT/hooks/lib" <<'PY101'
+import sys
+sys.path.insert(0, sys.argv[1])
+import aidd_cc_controls as c
+cases = {
+    "git -c user.name=Claude-Code commit -m 'fix(s): x'": ["/cwd"],
+    "git -C '/tmp/a commit b' commit -m 'fix(s): x'": ["/tmp/a commit b"],
+    "git --git-dir=/A/.git -C /B commit -m 'fix(s): x'": ["/A/.git"],
+    "eval 'cd /t' && git commit -m 'fix(s): x'": ["/t"],
+    "bash -c 'cd /t' && git commit -m 'fix(s): x'": ["/cwd"],
+    "git -C /a -C b commit -m 'fix(s): x'": ["/a/b"],
+    "GIT_AUTHOR_NAME=x /usr/bin/git -C '/p q' commit -m 'fix(s): x'": ["/p q"],
+}
+bad = [(k, [str(x) for x in c._repos_for("/cwd", k, "s")]) for k, want in cases.items() if [str(x) for x in c._repos_for("/cwd", k, "s")] != want]
+print("unit-ok" if not bad else bad)
+PY101
+)"
 if printf '%s' "$o101a" | grep -q 'no owner adjudication' && printf '%s' "$o101b" | grep -q 'no owner adjudication' \
    && printf '%s' "$o101c" | grep -q 'no owner adjudication' && printf '%s' "$o101d" | grep -q 'no owner adjudication' \
-   && ! printf '%s' "$o101e" | grep -q 'no owner adjudication'; then
+   && ! printf '%s' "$o101e" | grep -q 'no owner adjudication' \
+   && printf '%s' "$o101f" | grep -q 'no owner adjudication' && printf '%s' "$o101g" | grep -q 'no owner adjudication' \
+   && printf '%s' "$o101h" | grep -q 'no owner adjudication' && [ "$o101u" = unit-ok ]; then
   ok "T101 breaker repo resolution: a decoy repo, a leading wrapper, two -C and a heredoc cd no longer hide the tripped branch; the last -C decides"
-else bad "T101: decoy=[${o101a:0:120}] wrapper=[${o101b:0:120}] twoC=[${o101c:0:120}] heredoc=[${o101d:0:120}] control=[${o101e:0:120}]"; fi
+else bad "T101: decoy=[${o101a:0:120}] wrapper=[${o101b:0:120}] twoC=[${o101c:0:120}] heredoc=[${o101d:0:120}] control=[${o101e:0:120}] cvalue=[${o101f:0:100}] gitdir=[${o101g:0:100}] eval=[${o101h:0:100}] unit=[${o101u:0:200}]"; fi
 echo "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

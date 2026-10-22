@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shlex
 import time
 from pathlib import Path
 
@@ -247,17 +248,63 @@ def _first_group(m) -> str | None:
     return next((g for g in m.groups() if g), None) if m else None
 
 
-GIT_C_ALL_RE = re.compile(r"""(?:-C\s*|--git-dir=\s*)(?:'([^']+)'|"([^"]+)"|(\S+))""")
+# git's global options that take a separate value (`git -c k=v commit`): the value is not an option of its own
+GIT_VALUE_OPTS = frozenset(
+    {
+        "-c",
+        "--work-tree",
+        "--namespace",
+        "--exec-path",
+        "--config-env",
+        "--super-prefix",
+    }
+)
 
 
 def _commit_repo(cur: Path, seg: str) -> Path:
-    """The directory a `git … commit` segment acts on: every `-C <dir>` / `--git-dir=` before `commit`, in order —
-    git applies them cumulatively (a relative one is taken against the previous one), so the last absolute one and
-    the relative ones after it decide (ccs#421: `git -C /a -C /b commit` acts on /b, not /a)."""
-    head = re.split(r"\scommit\b", seg, maxsplit=1)[0]
-    for m in GIT_C_ALL_RE.finditer(head):
-        q = Path(_first_group(m) or ".").expanduser()
-        cur = q if q.is_absolute() else cur / q
+    """The repository a `git … commit` segment commits into, from git's own global options in order (ccs#421;
+    Codex review of adeb6fc): every `-C <dir>` token moves the working directory as git does (a relative one is
+    taken against the previous one); `--git-dir` names the repository itself and is not moved by a later `-C`;
+    the value of `-c k=v` is never read as an option (`-c user.name=Claude-Code` has no `-C`); arguments are
+    split quote-aware, so a quoted path that contains ` commit` stays whole. Unparsable → the working directory."""
+    try:
+        toks = shlex.split(seg, posix=True)
+    except ValueError:
+        return cur
+    i = next((k for k, t in enumerate(toks) if t == "git" or t.endswith("/git")), None)
+    if i is None:
+        return cur
+    i += 1
+    git_dir: str | None = None
+    while i < len(toks):
+        t = toks[i]
+        if t == "-C" and i + 1 < len(toks):
+            q = Path(toks[i + 1]).expanduser()
+            cur = q if q.is_absolute() else cur / q
+            i += 2
+        elif t == "--git-dir" and i + 1 < len(toks):
+            git_dir, i = toks[i + 1], i + 2
+        elif t.startswith("--git-dir="):
+            git_dir, i = t.split("=", 1)[1], i + 1
+        elif t in GIT_VALUE_OPTS:
+            i += 2
+        elif t.startswith("-"):
+            i += 1
+        else:
+            break  # the subcommand
+    if git_dir:
+        g = Path(git_dir).expanduser()
+        return g if g.is_absolute() else cur / g
+    return cur
+
+
+def _cd_after(cur: Path, cmd: str) -> Path:
+    """The working directory after the `cd <dir>` segments of `cmd` (an `eval` body runs in the caller's shell)."""
+    for seg in shell_segments(cmd or ""):
+        cd = CD_SEG_RE.match(seg)
+        if cd:
+            q = Path(_first_group(cd) or ".").expanduser()
+            cur = q if q.is_absolute() else cur / q
     return cur
 
 
@@ -283,7 +330,11 @@ def _repos_for(cwd: str, cmd: str, scope: str | None = None) -> list[Path]:
                     found += [
                         r for r in _repos_for(str(cur), inner, scope) if r not in found
                     ]
-                continue  # a subshell's cd does not move the outer line
+                if seg.lstrip().startswith("eval"):
+                    cur = _cd_after(
+                        cur, inner
+                    )  # eval runs in this shell: its cd moves the rest of the line
+                continue  # a `bash -c` / `sh -c` subshell's cd does not move the outer line
             cd = CD_SEG_RE.match(seg)
             if cd:
                 q = Path(_first_group(cd) or ".").expanduser()
