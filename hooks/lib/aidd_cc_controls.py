@@ -45,6 +45,8 @@ from aidd_cc_text import (
     readback_claims,
     GIT_COMMIT_SEG_RE,
     shell_segments,
+    _join_quoted_newlines,
+    _logical_lines,
     commit_messages,
     WRAPPER_SEG_RE,
     fix_scopes,
@@ -245,37 +247,65 @@ def _first_group(m) -> str | None:
     return next((g for g in m.groups() if g), None) if m else None
 
 
-def _repo_for(cwd: str, cmd: str, scope: str | None = None) -> Path:
-    """The repository the `git … commit` segment acts on: its own `-C <dir>` / `--git-dir=` (quoted paths allowed),
-    resolved against the `cd <dir>` segments that precede it (chained cds apply in order), else that directory;
-    no commit segment → cwd.  A `-C` on another git call in the same line is not it (Codex r2 P2: `git -C /other
-    status && git -C /target commit`).  Unexpandable shell variables stay literal → not a repository → count 0."""
-    cur = Path(cwd or ".")
-    for seg in shell_segments(cmd or ""):
-        wrapped = WRAPPER_SEG_RE.match(
-            seg
-        )  # bash -c 'cd /target && git commit …' (Codex r3 P2)
-        if wrapped:
-            return _repo_for(str(cur), wrapped.group("inner"), scope)
-        cd = CD_SEG_RE.match(seg)
-        if cd:
-            p = Path(_first_group(cd) or ".").expanduser()
-            cur = p if p.is_absolute() else cur / p
-            continue
-        if GIT_COMMIT_SEG_RE.match(seg):
-            if (
-                scope
-                and scope not in fix_scopes(seg)
-                and commit_subject(seg) is not None
-            ):
-                continue  # another commit of the line (chore / other scope); a heredoc commit, whose subject is
-                # not inline here, stays a candidate (Codex re-review of #422)
-            pick = _first_group(GIT_C_RE.search(seg))
-            if not pick:
-                return cur
-            p = Path(pick).expanduser()
-            return p if p.is_absolute() else cur / p
+GIT_C_ALL_RE = re.compile(r"""(?:-C\s*|--git-dir=\s*)(?:'([^']+)'|"([^"]+)"|(\S+))""")
+
+
+def _commit_repo(cur: Path, seg: str) -> Path:
+    """The directory a `git … commit` segment acts on: every `-C <dir>` / `--git-dir=` before `commit`, in order —
+    git applies them cumulatively (a relative one is taken against the previous one), so the last absolute one and
+    the relative ones after it decide (ccs#421: `git -C /a -C /b commit` acts on /b, not /a)."""
+    head = re.split(r"\scommit\b", seg, maxsplit=1)[0]
+    for m in GIT_C_ALL_RE.finditer(head):
+        q = Path(_first_group(m) or ".").expanduser()
+        cur = q if q.is_absolute() else cur / q
     return cur
+
+
+def _repos_for(cwd: str, cmd: str, scope: str | None = None) -> list[Path]:
+    """Every repository a `git … commit` of the scope may act on: each such commit segment's own `-C` / `--git-dir=`
+    chain (quoted paths allowed), resolved against the `cd <dir>` segments before it (chained cds apply in order);
+    no such commit → [cwd].  A `-C` on another git call in the same line is not it (Codex r2 P2: `git -C /other
+    status && git -C /target commit`).  Unexpandable shell variables stay literal → not a repository → count 0.
+    ccs#421: heredoc bodies are data, not commands (a `cd` written into a file moves nothing); a wrapper with no
+    commit inside (`bash -c 'true' && git -C /t commit`) no longer ends the scan; every commit of the scope is a
+    candidate, so a decoy repo named first (`git -C /other commit -m 'fix(s): x' && git -C /t commit -m
+    'fix(s): y'`) cannot hide the tripped one — the caller takes the largest streak."""
+    cur = Path(cwd or ".")
+    found: list[Path] = []
+    for line, _body in _logical_lines(_join_quoted_newlines(cmd or "")):
+        for seg in shell_segments(line):
+            wrapped = WRAPPER_SEG_RE.match(
+                seg
+            )  # bash -c 'cd /target && git commit …' (Codex r3 P2)
+            if wrapped:
+                inner = wrapped.group("inner")
+                if any(GIT_COMMIT_SEG_RE.match(x) for x in shell_segments(inner)):
+                    found += [
+                        r for r in _repos_for(str(cur), inner, scope) if r not in found
+                    ]
+                continue  # a subshell's cd does not move the outer line
+            cd = CD_SEG_RE.match(seg)
+            if cd:
+                q = Path(_first_group(cd) or ".").expanduser()
+                cur = q if q.is_absolute() else cur / q
+                continue
+            if GIT_COMMIT_SEG_RE.match(seg):
+                if (
+                    scope
+                    and scope not in fix_scopes(seg)
+                    and commit_subject(seg) is not None
+                ):
+                    continue  # another commit of the line (chore / other scope); a heredoc commit, whose subject is
+                    # not inline here, stays a candidate (Codex re-review of #422)
+                repo = _commit_repo(cur, seg)
+                if repo not in found:
+                    found.append(repo)
+    return found or [cur]
+
+
+def _repo_for(cwd: str, cmd: str, scope: str | None = None) -> Path:
+    """The first candidate of _repos_for (kept for callers that need one directory)."""
+    return _repos_for(cwd, cmd, scope)[0]
 
 
 def branch_fix_streak(
@@ -289,10 +319,23 @@ def branch_fix_streak(
     in-session breaker).  The whole check runs under GIT_BUDGET_SEC; a timeout writes an H6 error row instead
     of passing silently.  Known surface-form limits: `git commit -F file` has no subject here; a scope variant
     (`fix(h17-gate)`) is another scope; a fabricated ADJUDICATION url is accepted as written (auditable in the PR)."""
+    deadline = time.monotonic() + GIT_BUDGET_SEC
+    best = {"count": 0, "base": "?", "adjudicated_ts": 0.0}
+    for repo in _repos_for(
+        cwd, cmd, scope
+    ):  # ccs#421 decoy: the largest streak among the candidates decides
+        r = _branch_streak_one(repo, scope, deadline, agent, session)
+        if r["count"] > best["count"] or best["base"] == "?":
+            best = r
+    return best
+
+
+def _branch_streak_one(
+    repo: Path, scope: str, deadline: float, agent: str, session: str
+) -> dict:
+    """branch_fix_streak for one candidate repository, under the caller's shared deadline."""
     import subprocess
 
-    repo = _repo_for(cwd, cmd, scope)
-    deadline = time.monotonic() + GIT_BUDGET_SEC
     none = {"count": 0, "base": "?", "adjudicated_ts": 0.0}
 
     def git(*args: str) -> str | None:
