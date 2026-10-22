@@ -803,7 +803,8 @@ for a in dsh opencode pi codex cursor claude-code; do
     *) printf '%s' "$v" | grep -q '"decision": "block"' && o84="$o84 [$a no-rc echo: ${v:0:200}]" ;;
   esac
 done
-# the in-band reader itself (entries without codes only since T84h; a dsh footer stays tolerated after the echo line)
+# the in-band reader itself, pinned as a grammar through an entry without codes (since T84h dsh / Pi never reach it, so
+# the dsh footer tolerance below is not exercised by dsh in production; it stays tolerated after the echo line)
 t84post cursor neg84f "$E84" $'45\nexit=1\n'; o84f="$(t84stop cursor neg84f "$E84" '45 exit=0')"          # X failed
 t84post cursor neg84s "$E84" $'exit=0\nexit=1\n'; o84s="$(t84stop cursor neg84s "$E84" '45 exit=0')"      # X printed exit=0 first
 t84post cursor neg84p "$E84" $'45\nexit=0\n[Command finished with exit code 0]\n'; o84p="$(t84stop cursor neg84p "$E84" '45 exit=0')"  # footer
@@ -925,6 +926,22 @@ o84hc="$(p84 neg84hc "$(python3 -I -c 'import json,sys; print(json.dumps({"outpu
 # the 2.x plugin now maps `metadata.timeout` to 124: that UNKNOWN names the timeout too
 o84ht="$(p84 neg84ht "$(python3 -I -c 'import json,sys; print(json.dumps({"exit_code": 124, "output": sys.argv[1]}))' "$O84H")" opencode 'bash tests/run-suites.sh')"
 printf '%s' "$o84ht" | grep -q '124 is a timeout' || o84h="$o84h [opencode rc=124: ${o84ht:0:200}]"
+# the control pins the RECORDER, not cursor's verdict: on an entry without codes the bounded trailing read is still
+# active (rc_src marker), so cursor accepts this timed-out output as rc 0 — that is ADR011-P2-1, open for the owner's
+# decision (fix vs ADR-011 residual); when it is decided this row changes with it
+src84h="$(python3 -I - "$SB/state" <<'PY84h'
+import glob, json, os, sys
+src = {}
+for p in glob.glob(os.path.join(sys.argv[1], "**", "*neg84h*.jsonl"), recursive=True):
+    for line in open(p, encoding="utf-8"):
+        r = json.loads(line)
+        if r.get("event") == "post":
+            src[os.path.basename(p).split("__")[-1].removesuffix(".jsonl")] = r.get("rc_src")
+print(json.dumps(src, sort_keys=True))
+PY84h
+)"
+for k in opencode dsh pi; do printf '%s' "$src84h" | grep -q "\"neg84h-$k\": \"harness-missing\"" || o84h="$o84h [rc_src $k: $src84h]"; done
+printf '%s' "$src84h" | grep -q '"neg84hc": "marker"' || o84h="$o84h [rc_src cursor: $src84h]"
 if [ -z "$o84h" ] && ! printf '%s' "$o84hc" | grep -q 'harness reports exit codes'; then
   ok "T84h an entry that reports exit codes never reads the output when a call has none (2.x timeout payload, dsh, Pi): UNKNOWN naming timeout / kill / background, not \`; echo exit=\$?\`"
 else bad "T84h:$o84h | control-cursor=[${o84hc:0:200}]"; fi
