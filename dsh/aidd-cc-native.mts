@@ -130,13 +130,18 @@ function lastAssistantText(agent: any): string {
  * when N != 0, so a clean run had no marker and every success was recorded `rc: null` (owner live run 2026-10-19:
  * the gate answered "exit status unavailable is UNKNOWN" to an honest Evidence trailer). The structured value of a
  * finished foreground run carries it: `result.value = { kind: "foreground", exitCode: number | null, … }`.
- * The text markers stay as the fallback (dsh-tool-bash-persistent writes `[Command finished with exit code N]`).
  * A background / promoted call has no exit status yet → undefined (UNKNOWN, never assumed 0).
+ * The one text fallback is dsh-tool-bash-persistent, whose value is a plain string and whose code is only its footer
+ * `[Command finished with exit code N]`. dsh-tool-bash's `[exit code: N]` is NOT read: it is printed only beside
+ * value.exitCode, so a trailing one without a code is X's own output (ADR011-P1-1 review). Residual: when the
+ * persistent tool stops at a stdin read it returns X's output with no footer, so X can still print a fake one there;
+ * the deployed profile (dsh-base) loads dsh-tool-bash, not the persistent tool.
  */
 export function exitCodeOf(result: any, text: string): number | undefined {
   const code = result?.value?.exitCode;
   if (Number.isInteger(code)) return code;
-  const m = /\[(?:exit code:|Command finished with exit code) (-?\d{1,3})\]\s*$/.exec(text.trim());
+  if (typeof result?.value !== "string") return undefined;
+  const m = /\[Command finished with exit code (-?\d{1,3})\]\s*$/.exec(text.trim());
   return m ? Number(m[1]) : undefined;
 }
 
