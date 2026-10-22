@@ -268,7 +268,12 @@ def _commit_repo(cur: Path, seg: str) -> Path:
     the value of `-c k=v` is never read as an option (`-c user.name=Claude-Code` has no `-C`); arguments are
     split quote-aware, so a quoted path that contains ` commit` stays whole. Unparsable → the working directory."""
     try:
-        toks = shlex.split(seg, posix=True)
+        lex = shlex.shlex(seg, posix=True)
+        lex.whitespace_split, lex.commenters = (
+            True,
+            "#",
+        )  # `… # don't forget` is a comment (Codex r2 of #437)
+        toks = list(lex)
     except ValueError:
         return cur
     i = next((k for k, t in enumerate(toks) if t == "git" or t.endswith("/git")), None)
@@ -301,6 +306,12 @@ def _commit_repo(cur: Path, seg: str) -> Path:
 def _cd_after(cur: Path, cmd: str) -> Path:
     """The working directory after the `cd <dir>` segments of `cmd` (an `eval` body runs in the caller's shell)."""
     for seg in shell_segments(cmd or ""):
+        wrapped = WRAPPER_SEG_RE.match(seg)
+        if wrapped and seg.lstrip().startswith("eval"):
+            cur = _cd_after(
+                cur, wrapped.group("inner")
+            )  # `eval "eval 'cd /t'"` (Codex r2 of #437)
+            continue
         cd = CD_SEG_RE.match(seg)
         if cd:
             q = Path(_first_group(cd) or ".").expanduser()
@@ -308,7 +319,9 @@ def _cd_after(cur: Path, cmd: str) -> Path:
     return cur
 
 
-def _repos_for(cwd: str, cmd: str, scope: str | None = None) -> list[Path]:
+def _repos_for(
+    cwd: str, cmd: str, scope: str | None = None, top: bool = True
+) -> list[Path]:
     """Every repository a `git … commit` of the scope may act on: each such commit segment's own `-C` / `--git-dir=`
     chain (quoted paths allowed), resolved against the `cd <dir>` segments before it (chained cds apply in order);
     no such commit → [cwd].  A `-C` on another git call in the same line is not it (Codex r2 P2: `git -C /other
@@ -327,8 +340,11 @@ def _repos_for(cwd: str, cmd: str, scope: str | None = None) -> list[Path]:
             if wrapped:
                 inner = wrapped.group("inner")
                 if any(GIT_COMMIT_SEG_RE.match(x) for x in shell_segments(inner)):
+                    # a wrapper whose commit is another scope adds nothing (Codex r2 of #437: it used to add its cwd)
                     found += [
-                        r for r in _repos_for(str(cur), inner, scope) if r not in found
+                        r
+                        for r in _repos_for(str(cur), inner, scope, top=False)
+                        if r not in found
                     ]
                 if seg.lstrip().startswith("eval"):
                     cur = _cd_after(
@@ -351,7 +367,7 @@ def _repos_for(cwd: str, cmd: str, scope: str | None = None) -> list[Path]:
                 repo = _commit_repo(cur, seg)
                 if repo not in found:
                     found.append(repo)
-    return found or [cur]
+    return found if (found or not top) else [cur]
 
 
 def _repo_for(cwd: str, cmd: str, scope: str | None = None) -> Path:

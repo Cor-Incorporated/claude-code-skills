@@ -1152,6 +1152,10 @@ cases = {
     "bash -c 'cd /t' && git commit -m 'fix(s): x'": ["/cwd"],
     "git -C /a -C b commit -m 'fix(s): x'": ["/a/b"],
     "GIT_AUTHOR_NAME=x /usr/bin/git -C '/p q' commit -m 'fix(s): x'": ["/p q"],
+    # Codex r2 of #437: a comment apostrophe, a scope-mismatched wrapper (adds nothing), a nested eval
+    "git -C /t commit -m 'fix(s): next' # don't forget tests": ["/t"],
+    "git -C /clean commit -m 'fix(s): x' && bash -c 'cd /tripped && git commit -m \"chore: x\"'": ["/clean"],
+    "eval \"eval 'cd /t'\" && git commit -m 'fix(s): next'": ["/t"],
 }
 bad = [(k, [str(x) for x in c._repos_for("/cwd", k, "s")]) for k, want in cases.items() if [str(x) for x in c._repos_for("/cwd", k, "s")] != want]
 print("unit-ok" if not bad else bad)

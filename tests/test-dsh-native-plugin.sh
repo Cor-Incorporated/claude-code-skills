@@ -9,6 +9,7 @@ NODE24="${NODE24_BIN:-$HOME/.local/share/mise/installs/node/24.21.0/bin}"
 DSH="${DSH_BIN:-${DSH_PKG_DIR:-}/node_modules/.bin/dsh}"
 [ -x "$DSH" ] || { echo "SKIP: dsh not installed (set DSH_BIN or DSH_PKG_DIR)"; exit 0; }
 [ -x "$NODE24/node" ] || { echo "SKIP: node 24 not installed"; exit 0; }
+DSH="$(cd "$(dirname "$DSH")" && pwd)/$(basename "$DSH")"  # absolute before the probe moves into an empty dir (Codex r2 of #437)
 PKG="$(cd "$(dirname "$DSH")/../.." && pwd)"           # the install prefix: imports resolve against its node_modules
 [ -d "$PKG/node_modules/@deepseek-ai" ] || { echo "SKIP: $PKG has no @deepseek-ai node_modules (DSH_BIN must be a prefix install)"; exit 0; }
 TMO=""; command -v timeout >/dev/null 2>&1 && TMO="timeout 120"; command -v gtimeout >/dev/null 2>&1 && TMO="gtimeout 120"
