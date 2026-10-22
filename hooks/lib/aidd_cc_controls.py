@@ -805,8 +805,15 @@ def stop_check(
     substantive = False
     for c, claimed_out, _when in trailers:
         if not cmd_in_ledger(c, executed) and not mutated("evidence.executed"):
+            # #214 P3-2: a cited chain is never one recorded command when it ran with `; echo exit=$?` after it — say how
+            # to cite it, not only that it was not found
+            chain = (
+                " — a chain is never one recorded command: cite ONE command (pass a directory as an argument: `pytest -q sub/`, `git -C sub …`)"
+                if len(shell_segments(c)) > 1
+                else ""
+            )
             problems.append(
-                f"cited evidence command was not executed in this session: {c[:80]} (DOT-INC-017)"
+                f"cited evidence command was not executed in this session: {c[:80]}{chain} (DOT-INC-017)"
             )
             continue
         row = _evidence_row(rows, c)
