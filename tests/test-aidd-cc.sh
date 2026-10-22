@@ -965,6 +965,35 @@ if printf '%s' "$o84ia" | grep -q 'reported no exit status' && printf '%s' "$o84
   ok "T84i a status line the command printed proves failure only (Cursor / Codex: trailing exit code 0 is UNKNOWN, exit code 1 fails); Claude Code's success event and the echo form still pass"
 else bad "T84i: cursor0=[${o84ia:0:160}] codex0=[${o84ib:0:160}] cursor1=[${o84ic:0:160}] claude=[${o84id:0:160}] echo=[${o84ie:0:160}]"; fi
 
+# (84j) independent acceptance 2026-10-22 (aidd-governance#212, red on develop f08c98e):
+#   P1 Claude Code fires PostToolUse when a Bash call is sent to the background (`run_in_background`, or a foreground
+#      call past its timeout: `backgroundTaskId` / `timedOutAfterMs`, empty stdout) — that is not a success event, so a
+#      suite that later fails must not pass on its launch row; a normal foreground success still passes
+#   P2 on an entry without codes the advice for a cited chain (`cd sub && pytest -q`) must be satisfiable: it asks for
+#      one command, and following it passes
+j84() {  # agent session command tool_response_json cited claimed -> stop verdict
+  python3 -I - "$2" "$3" "$4" <<'PY84j' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" post --agent "$1" >/dev/null
+import json, sys
+sid, cmd, resp = sys.argv[1:4]
+print(json.dumps({"hook_event_name": "PostToolUse", "session_id": sid, "tool_name": "Bash", "tool_input": {"command": cmd}, "tool_response": json.loads(resp)}))
+PY84j
+  python3 -I - "$2" "$5" "$6" <<'PY84k' | python3 -I "$ROOT/hooks/lib/aidd_cc.py" stop --agent "$1"
+import json, sys
+sid, cited, claimed = sys.argv[1:4]
+print(json.dumps({"hook_event_name": "Stop", "session_id": sid, "last_assistant_message": f"done.\nEvidence: {cited} | {claimed} | 2026-10-22T08:00:00Z\nStatus: complete"}))
+PY84k
+}
+o84jb="$(j84 claude-code neg84jb 'bash tests/run-suite.sh' '{"stdout":"","stderr":"","interrupted":false,"backgroundTaskId":"bg1"}' 'bash tests/run-suite.sh' '100 passed, 0 failed')"
+o84jt="$(j84 claude-code neg84jt 'bash tests/run-suite.sh' '{"stdout":"","stderr":"","interrupted":false,"backgroundTaskId":"bg2","timedOutAfterMs":120000}' 'bash tests/run-suite.sh' '100 passed, 0 failed')"
+o84jf="$(j84 claude-code neg84jf 'bash tests/run-suite.sh' '{"stdout":"100 passed, 0 failed","stderr":"","interrupted":false}' 'bash tests/run-suite.sh' '100 passed, 0 failed')"   # control
+o84jc="$(j84 cursor neg84jc 'cd sub && pytest -q' '{"output":"3 passed"}' 'cd sub && pytest -q' '3 passed')"
+o84jd="$(j84 cursor neg84jd 'pytest -q sub/; echo exit=$?' '{"output":"3 passed\nexit=0\n"}' 'pytest -q sub/' '3 passed')"   # the advice followed
+if printf '%s' "$o84jb" | grep -q 'reported none for this call' && printf '%s' "$o84jt" | grep -q 'reported none for this call' \
+   && ! printf '%s' "$o84jf" | grep -q '"decision": "block"' \
+   && printf '%s' "$o84jc" | grep -q 'cite ONE command' && ! printf '%s' "$o84jd" | grep -q '"decision": "block"'; then
+  ok "T84j Claude Code background / timed-out launch rows are UNKNOWN (a foreground success still passes); a cited chain on an entry without codes gets satisfiable advice, which passes"
+else bad "T84j: bg=[${o84jb:0:160}] timeout=[${o84jt:0:160}] fg=[${o84jf:0:120}] chain=[${o84jc:0:200}] followed=[${o84jd:0:120}]"; fi
+
 # ---- repair-family breaker v2 (2026-10-17, this harness's own loop on claude-code-skills#418: 12 fix(h17) commits and
 #      6 STRATEGY notes — 4 of them HOLD — on one branch across 8 independent-review rounds; the breaker fired and was
 #      "satisfied" by a note each time). Red at develop e58c6e6 before the repair.

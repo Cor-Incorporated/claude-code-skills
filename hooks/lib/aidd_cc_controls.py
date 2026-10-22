@@ -837,8 +837,14 @@ def stop_check(
                 if masked
                 # ADR011-P1-1 / P3-1: an entry with codes that sent none for this call — `; echo exit=$?` cannot help
                 # there (its output is not read, and the echo's own code would be recorded), so name the causes
-                else " — this harness reports exit codes, but it reported none for this call: the command timed out, was killed by a signal, or is still running in the background (an in-band `exit=N` is not read here); run it on its own so it finishes in the foreground, and cite that run"
+                # (#212 P3: when no single run can finish in the foreground, a shorter command that proves the claim
+                # — one test file, one package — is the way out)
+                else " — the harness reported none for this call: the command timed out, was killed by a signal, was interrupted, or is still running in the background (an in-band `exit=N` is not read here); run it on its own so it finishes in the foreground (if it cannot, cite a shorter command that proves the claim, e.g. one test file), and cite that run"
                 if row is not None and row.get("rc_src") == "harness-missing"
+                # #212 P2: a chain cannot carry its own status on an entry without codes (`cd sub && pytest -q; echo
+                # exit=$?` is not the echo shape, and the chain is never one recorded command) — ask for ONE command
+                else " — this harness reported no exit status; cite ONE command, not a chain (pass a directory as an argument: `pytest -q sub/`, `git -C sub …`), and run it as `<cmd>; echo exit=$?` so the status is in the output"
+                if len(shell_segments(c)) > 1
                 else " — this harness reported no exit status; run it as `<cmd>; echo exit=$?` so the status is in the output"
             )
             problems.append(
