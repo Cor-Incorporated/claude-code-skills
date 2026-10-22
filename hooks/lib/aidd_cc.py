@@ -234,9 +234,11 @@ CODE_REPORTING_AGENTS = frozenset({"dsh", "opencode", "pi"})
 def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
     """Exit status for the ledger.  Dict responses carry it; string responses are
     parsed for `exit code N`; otherwise it is UNKNOWN (None) — never assumed 0
-    (Codex r2 P1-d).  Claude Code is the one harness whose PostToolUse fires
-    only on success (failures go to PostToolUseFailure), so its success event is
-    rc 0 by construction.  ADR-011: the in-band `X; echo exit=$?` status line is
+    (Codex r2 P1-d).  Claude Code's PostToolUse is a success event (rc 0) only for a
+    call that completed in the foreground AND that Claude Code did not reinterpret:
+    a background / timed-out / interrupted launch is UNKNOWN, and a response with
+    `returnCodeInterpretation` (grep / test / diff … exiting 1) is rc 1 (ADR-011
+    rev2 / rev3).  ADR-011: the in-band `X; echo exit=$?` status line is
     read only on an entry without codes; a reported code is recorded as-is, and a
     call that lacks one on an entry with codes stays UNKNOWN (rc_src harness-missing)."""
     rc = None
@@ -283,6 +285,17 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
         # call is sent to the background (`run_in_background`, or a foreground call past its timeout) or interrupted;
         # the command has not finished, so the success-event 0 does not apply — UNKNOWN, named as harness-missing
         return None, out, "harness-missing"
+    if (
+        agent == "claude-code"
+        and isinstance(resp, dict)
+        and resp.get("returnCodeInterpretation")
+    ):
+        # ADR011R2-P1-1 (independent acceptance 2026-10-23, aidd-governance#214): Claude Code keeps a command that exits
+        # 1 out of PostToolUseFailure when the line's last command is grep / rg / find / diff / test / `[` / git diff …
+        # (exit 1 = "no match" / "differs"), and says so in `returnCodeInterpretation`. The call exited non-zero: the
+        # table sets that message only for exit 1, so it is recorded as rc 1 — `./run-suite.sh && grep -q ok out.txt`
+        # with a failing suite no longer passes as a success event for the suite
+        return 1, out, "harness"
     if rc is None and agent in CODE_REPORTING_AGENTS:
         return (
             None,

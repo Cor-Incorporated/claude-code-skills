@@ -959,4 +959,8 @@ def parse_denominator(text: str) -> int | None:
 
 
 def is_trivial_cmd(cmd: str) -> bool:
+    """A chain is trivial only when every segment is (#214 P3-1: `cd sub && pytest -q` is not a trivial citation)."""
+    segs = shell_segments(cmd or "")
+    if len(segs) > 1:
+        return all(TRIVIAL_CMD_RE.match(s) for s in segs)
     return bool(TRIVIAL_CMD_RE.match(cmd or ""))

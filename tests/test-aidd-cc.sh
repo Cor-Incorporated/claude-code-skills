@@ -994,6 +994,23 @@ if printf '%s' "$o84jb" | grep -q 'reported none for this call' && printf '%s' "
   ok "T84j Claude Code background / timed-out launch rows are UNKNOWN (a foreground success still passes); a cited chain on an entry without codes gets satisfiable advice, which passes"
 else bad "T84j: bg=[${o84jb:0:160}] timeout=[${o84jt:0:160}] fg=[${o84jf:0:120}] chain=[${o84jc:0:200}] followed=[${o84jd:0:120}]"; fi
 
+# (84k) independent acceptance 2026-10-23 (aidd-governance#214, red on develop f8a0e8a):
+#   P1 Claude Code fires PostToolUse, not PostToolUseFailure, when a line ends in grep / test / diff / git diff … that
+#      exits 1, and marks it `returnCodeInterpretation`; that is rc 1, so a failing `./run-suite.sh` chained with
+#      `&& grep -q` is no longer a success event for the suite (control: the same chain without the mark passes)
+#   P3 a cited chain starting with `cd` is not "trivial"; a cited chain that ran with `; echo exit=$?` after it is told
+#      how to cite one command
+o84ka="$(j84 claude-code neg84ka './run-suite.sh && grep -q ok out.txt' '{"stdout":"","stderr":"","interrupted":false,"returnCodeInterpretation":"No matches found"}' './run-suite.sh' '3 passed')"
+o84kb="$(j84 claude-code neg84kb 'grep -q ok out.txt' '{"stdout":"","stderr":"","interrupted":false,"returnCodeInterpretation":"No matches found"}' 'grep -q ok out.txt' 'ok')"
+o84kc="$(j84 claude-code neg84kc './run-suite.sh && grep -q ok out.txt' '{"stdout":"3 passed","stderr":"","interrupted":false}' './run-suite.sh' '3 passed')"   # control
+o84kd="$(j84 cursor neg84kd 'cd sub && pytest -q' '{"output":"3 passed"}' 'cd sub && pytest -q' '3 passed')"
+o84ke="$(j84 cursor neg84ke 'cd sub && pytest -q; echo exit=$?' '{"output":"3 passed\nexit=0\n"}' 'cd sub && pytest -q' '3 passed')"
+if printf '%s' "$o84ka" | grep -q 'rc=1' && printf '%s' "$o84kb" | grep -q 'rc=1' && ! printf '%s' "$o84kc" | grep -q '"decision": "block"' \
+   && printf '%s' "$o84kd" | grep -q 'cite ONE command' && ! printf '%s' "$o84kd" | grep -q 'is trivial' \
+   && printf '%s' "$o84ke" | grep -q 'not executed' && printf '%s' "$o84ke" | grep -q 'cite ONE command'; then
+  ok "T84k Claude Code returnCodeInterpretation is rc 1 (a chained failing suite no longer passes; the unmarked chain still does); a cd-chain is not trivial and a not-executed chain is told to cite one command"
+else bad "T84k: chain=[${o84ka:0:160}] single=[${o84kb:0:160}] control=[${o84kc:0:120}] trivial=[${o84kd:0:200}] notexec=[${o84ke:0:200}]"; fi
+
 # ---- repair-family breaker v2 (2026-10-17, this harness's own loop on claude-code-skills#418: 12 fix(h17) commits and
 #      6 STRATEGY notes — 4 of them HOLD — on one branch across 8 independent-review rounds; the breaker fired and was
 #      "satisfied" by a note each time). Red at develop e58c6e6 before the repair.
