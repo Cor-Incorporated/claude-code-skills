@@ -156,16 +156,7 @@ export const AiddCommonControl = async ({ client }: { client: any }) => {
       // ADR-009: a text part is not necessarily the final answer, so the Status line is demanded only at
       // session.idle / process exit; here a declared `Status: complete` / a trailer / the vocabulary backstop still bind.
       const v = await cc("stop", { sessionID: input.sessionID, last_assistant_message: whole }, ["--max-blocks", "99", "--no-count", "--no-status-required"])
-      // ccs#421: `Status: complete` in part 1 and the `Evidence:` trailer in a later part — a block whose ONLY problem is
-      // the missing trailer may still be answered by the next part of this message, so it is not annotated here; the
-      // final text is judged at session.idle / process exit (Status required), which reports it if it stays missing
-      const problems = ((v as { problems?: string[] }).problems ?? []).map(String)
-      // only a DECLARED `Status: complete` waits for its trailer; a vocabulary claim in a session without tool rows
-      // ("実装完了しました。") is still annotated at once (the 2026-10-14 regression anchor)
-      const declared = /^\s*Status:\s*complete\s*$/m.test(whole)
-      const trailerOnly =
-        declared && problems.length > 0 && problems.every((x) => x.startsWith("completion claim without `Evidence"))
-      if (v.decision === "block" && !trailerOnly) output.text = `${text}\n\n[H17 evidence gate] ${v.reason ?? ""}`
+      if (v.decision === "block") output.text = `${text}\n\n[H17 evidence gate] ${v.reason ?? ""}`
       else if ((v as { note?: string }).note) output.text = `${text}\n\n${(v as { note?: string }).note}` // Status: partial is visible (Codex r2 P2)
     },
     event: async ({ event }: { event: { type?: string; properties?: Record<string, unknown> } }) => {
