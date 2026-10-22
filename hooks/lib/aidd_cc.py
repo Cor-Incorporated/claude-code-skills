@@ -269,6 +269,20 @@ def _exit_status(payload: dict, resp, agent: str, cmd: str = ""):
             out,
             "harness",
         )
+    if (
+        agent == "claude-code"
+        and isinstance(resp, dict)
+        and (
+            resp.get("backgroundTaskId")
+            or resp.get("background_task_id")
+            or resp.get("timedOutAfterMs")
+            or resp.get("interrupted") is True
+        )
+    ):
+        # ADR011R1-P1-1 (independent acceptance 2026-10-22, aidd-governance#212): Claude Code fires PostToolUse when a
+        # call is sent to the background (`run_in_background`, or a foreground call past its timeout) or interrupted;
+        # the command has not finished, so the success-event 0 does not apply — UNKNOWN, named as harness-missing
+        return None, out, "harness-missing"
     if rc is None and agent in CODE_REPORTING_AGENTS:
         return (
             None,
