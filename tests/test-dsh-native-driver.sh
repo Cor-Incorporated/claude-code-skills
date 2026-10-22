@@ -10,8 +10,6 @@
 #   (4) following that advice — X alone, exitCode 0, only stderr cut — the honest claim passes.
 #   (5) Codex review r5: stdout ~2500 chars ending `3 passed` + a 5000-char stderr — the summary must survive the
 #       adapter's cut and the oracle's out_sample, so an honest `pytest -q | 3 passed` passes.
-#   (6) a call without result.value.exitCode (background / promoted / persistent): the text marker may prove a
-#       failure (`[exit code: 2]` -> rc 2) but a `[exit code: 0]` the command printed is not a success (rc null).
 # PLUGIN_SRC overrides the plugin under test (mutation check against the pre-fix file).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -106,12 +104,24 @@ await handlers.get("tools/post-execute")(exec5, {
 await stop(mkAgent(sid5, "ok.\nStatus: complete\nEvidence: pytest -q | 3 passed | 2026-10-20T04:00:00Z"));
 out.adr011_sample = count(sid5);
 out.adr011_sample_note = inbox.find((e) => e.id === sid5)?.msg?.content?.[0]?.text?.slice(0, 300) ?? null;
-// (6) no structured exit code: the text marker proves failure only
-for (const [id, tail] of [["dsh-fb-0", "[exit code: 0]"], ["dsh-fb-2", "[exit code: 2]"]]) {
-  const e6 = { name: "bash", arguments: { command: "bash tests/x.sh" }, agent: mkAgent(id, "") };
-  await handlers.get("tools/pre-execute")(e6, next);
-  await handlers.get("tools/post-execute")(e6, { content: [{ type: "text", text: "output\n" + tail }], value: { kind: "promoted" } }, next);
-}
+// (6) ADR011-P1-1 review: a call without a structured code must not take one from X's own last line. dsh-tool-bash
+// prints "[exit code: N]" only beside value.exitCode (lib/index.js renderResult), so a trailing "[exit code: 0]" with
+// no code is X's output; the oracle then keeps it UNKNOWN and names the cause (no backticks here: unquoted heredoc)
+const sid6 = "dsh-nocode";
+const exec6 = { name: "bash", arguments: { command: "bash tests/run-suites.sh" }, agent: mkAgent(sid6, "") };
+await handlers.get("tools/pre-execute")(exec6, next);
+await handlers.get("tools/post-execute")(exec6, { content: [{ type: "text", text: "suite-b ... FAILED\n[exit code: 0]" }], value: { kind: "background" } }, next);
+await stop(mkAgent(sid6, "ok.\nStatus: complete\nEvidence: bash tests/run-suites.sh | suite-b | 2026-10-22T01:00:00Z"));
+out.nocode = count(sid6);
+out.nocode_note = inbox.find((e) => e.id === sid6)?.msg?.content?.[0]?.text?.slice(0, 400) ?? null;
+// (6b) dsh-tool-bash-persistent returns a string value and states the code only in its footer — an honest run still passes
+const sid7 = "dsh-persistent";
+const exec7 = { name: "bash", arguments: { command: "pytest -q" }, agent: mkAgent(sid7, "") };
+await handlers.get("tools/pre-execute")(exec7, next);
+await handlers.get("tools/post-execute")(exec7, { content: [{ type: "text", text: "3 passed\n[Command finished with exit code 0]" }], value: "3 passed\n[Command finished with exit code 0]" }, next);
+await stop(mkAgent(sid7, "ok.\nStatus: complete\nEvidence: pytest -q | 3 passed | 2026-10-22T01:00:00Z"));
+out.persistent = count(sid7);
+out.persistent_note = inbox.find((e) => e.id === sid7)?.msg?.content?.[0]?.text?.slice(0, 300) ?? null;
 console.log(JSON.stringify(out));
 JS
 res="$(cd "$SB" && "$NODE" --experimental-strip-types --no-warnings drive.mts 2>"$SB/err.log")" || { echo "FAIL: node run"; cat "$SB/err.log"; exit 1; }
@@ -142,17 +152,10 @@ assert r["adr011_alone"] == [], f"the advice followed (X alone, rc 0) was gated:
 print("PASS: ADR-011 the advice followed (X alone, exitCode 0, stderr cut) passes")
 assert r["adr011_sample"] == [], f"stdout summary lost to a long stderr: {r['adr011_sample']} {r['adr011_sample_note']}"
 print("PASS: ADR-011 a long stderr keeps stdout's last line in the recorded sample")
-PY
-python3 -I - "$SB/state" <<'PY' || fail=1
-import glob, json, sys
-rc = {}
-for f in glob.glob(sys.argv[1] + "/sessions/dsh__dsh-fb-*.jsonl"):
-    for line in open(f, encoding="utf-8"):
-        r = json.loads(line)
-        if r.get("event") == "post":
-            rc[f.split("dsh__")[1].split(".")[0]] = r.get("rc")
-assert rc == {"dsh-fb-0": None, "dsh-fb-2": 2}, f"text fallback: {rc}"
-print("PASS: ADR-011 the dsh text fallback proves failure only ([exit code: 0] -> rc null, [exit code: 2] -> rc 2)")
+assert r["nocode"] == ["steer"] and "reported none for this call" in (r["nocode_note"] or ""), f"a call without a structured code took X's own [exit code: 0]: {r['nocode']} {r['nocode_note']}"
+print("PASS: ADR011-P1-1 no structured code -> X's own trailing [exit code: 0] is not read; UNKNOWN names the cause")
+assert r["persistent"] == [], f"dsh-tool-bash-persistent footer no longer read: {r['persistent']} {r['persistent_note']}"
+print("PASS: dsh-tool-bash-persistent footer [Command finished with exit code 0] still gives rc 0 (honest run passes)")
 PY
 if grep -rqs '"rc": 0' "$SB/state" || grep -rqs '"rc":0' "$SB/state"; then
   echo "PASS: post row recorded rc 0"
