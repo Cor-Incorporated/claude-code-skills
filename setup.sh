@@ -227,14 +227,14 @@ if [ -d "$SKILLS_DIR" ]; then
       [ -d "$d" ] || continue
       base=$(basename "$d")
       if [ -d "$SKILLS_DIR/$base" ]; then
-        rm -rf "$SKILLS_DIR/$base"
+        rm -rf "${SKILLS_DIR:?}/${base:?}"
         echo "  - pruned skill (manifest): $base"
       fi
     done
   fi
   for base in "${RETIRED_SKILLS[@]}"; do
     if [ -d "$SKILLS_DIR/$base" ]; then
-      rm -rf "$SKILLS_DIR/$base"
+      rm -rf "${SKILLS_DIR:?}/${base:?}"
       echo "  - pruned skill (R-I list): $base"
     fi
   done
