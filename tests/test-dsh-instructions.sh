@@ -24,7 +24,12 @@ DSH="${DSH_BIN:-${DSH_PKG_DIR:-$HOME/.dsh-aidd/pkg}/node_modules/.bin/dsh}"
 PROFILE="${DSH_HOME:-$HOME/.dsh-aidd}/profiles/headless"
 if [ ! -x "$DSH" ] || [ ! -x "$NODE24/node" ] || [ ! -d "$PROFILE" ]; then
   echo "SKIP: part 2 needs dsh, node 24 and a headless profile (DSH_BIN / NODE24_BIN / DSH_HOME)"
+# Codex review P2: a profile that pins its own endpoint or key variable would send the probe there, with whatever
+# credential it names, instead of to the stub. Such a profile is never run here.
+elif grep -rqsE 'baseURL|apiKeyEnv' "$PROFILE"; then
+  echo "SKIP: part 2: $PROFILE pins baseURL / apiKeyEnv, so the probe would not stay on the local stub"
 else
+  DSH="$(cd "$(dirname "$DSH")" && pwd)/$(basename "$DSH")"  # absolute before probe() changes directory (Codex P2)
   TMO=""; command -v timeout >/dev/null 2>&1 && TMO="timeout 120"; command -v gtimeout >/dev/null 2>&1 && TMO="gtimeout 120"
   SB="$(mktemp -d)"; trap 'kill "${STUB:-0}" 2>/dev/null; rm -rf "$SB"' EXIT
   cat >"$SB/stub.py" <<'PY'
