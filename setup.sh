@@ -141,15 +141,20 @@ fi
 if [ -d "$HOME/.dsh-aidd/pkg" ]; then
   cp "$REPO_DIR/dsh/aidd-cc-native.mts" "$HOME/.dsh-aidd/pkg/aidd-cc-native.mts"
   echo "  Copied H17 dsh native plugin (~/.dsh-aidd/pkg/aidd-cc-native.mts)"
-  # #181 B' (owner decision (a), 2026-10-23): dsh's instruction loader (dsh-agent-instructions, in dsh-base) puts
-  # $DSH_HOME/AGENTS.md into each session's first request, so the run-alone-then-cite guidance reaches the model there.
-  # A file without the marker line is the owner's own and is left alone.
-  if [ ! -e "$HOME/.dsh-aidd/AGENTS.md" ] || head -1 "$HOME/.dsh-aidd/AGENTS.md" | grep -q 'Deployed by claude-code-skills setup.sh'; then
-    cp "$REPO_DIR/dsh/AGENTS.md" "$HOME/.dsh-aidd/AGENTS.md"
-    echo "  Copied H17 dsh instructions (~/.dsh-aidd/AGENTS.md)"
-  else
-    echo "  Kept your own ~/.dsh-aidd/AGENTS.md (no setup.sh marker line); add the lines of dsh/AGENTS.md by hand" >&2
-  fi
+fi
+# H17 report contract (owner decision 2026-10-23): every non-Claude entry gets hooks/lib/aidd_cc_contract.md in the
+# instructions it always loads, as a managed block that leaves the owner's own lines alone. Each path is the tool's
+# documented global file: Codex $CODEX_HOME/AGENTS.md; OpenCode 2.x <global config>/AGENTS.md (the opencode2 launcher's
+# XDG config); Pi <agent-dir>/AGENTS.md; dsh $DSH_HOME/AGENTS.md (dsh-agent-instructions, in dsh-base; #440 put the
+# run-alone guidance there first). Cursor has no global rules file, so its sessionStart hook returns the same text.
+contract_targets=()
+[ -d "$HOME/.codex" ] && contract_targets+=("$HOME/.codex/AGENTS.md")
+[ -d "$HOME/.opencode-2/config/opencode" ] && contract_targets+=("$HOME/.opencode-2/config/opencode/AGENTS.md")
+[ -d "$HOME/.pi/agent" ] && contract_targets+=("$HOME/.pi/agent/AGENTS.md")
+[ -d "$HOME/.dsh-aidd" ] && contract_targets+=("$HOME/.dsh-aidd/AGENTS.md")
+if [ ${#contract_targets[@]} -gt 0 ]; then
+  python3 -I "$REPO_DIR/hooks/lib/aidd_cc_contract.py" install "${contract_targets[@]}" | sed 's/^/  H17 report contract /' \
+    || echo "  H17 report contract: a file above was refused (its BEGIN/END markers are unbalanced); fix it and rerun" >&2
 fi
 # Entry launchers (2026-10-18): `pi` and `dsh` start the agents with the H17 control the way `opencode` does
 # (pi/launcher/pi, dsh/launcher/dsh). ~/.local/bin precedes the mise shims on PATH; the old names pi-h17 / dsh-h17

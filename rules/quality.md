@@ -29,6 +29,7 @@ merge前確認: env var/secret記載、CORS/domain、Mixed Content、IAM権限�
 ## 証跡トレーラーと Status 宣言（ADR-009 = aidd-governance `docs/adr/009-status-declaration-protocol.md`）
 ツールを使ったターンの最終応答は末尾に 1 行 `Status: complete | partial | unverified` を書く。
 その行は値だけで終える（`Status: complete means …` のような文は宣言ではない）。コードフェンス内や末尾 6 非空行より上の `Status:` も宣言と見ない。
+Claude Code 以外の入口（Codex / OpenCode 2.x / Pi / Cursor / dsh）には、同じ契約の英語版 `hooks/lib/aidd_cc_contract.md` を setup.sh が各ツールの常時読み込み指示へ配る。判定器との一致は `tests/test-h17-contract.sh` が照合する。
 `complete` のときは証跡トレーラーが必須:
 `Evidence: <実行コマンド> | <生出力の要点 or ログパス> | <実行時刻>`
 （コマンドは実行済み・最後の書込より新しい・出力欄が実出力と一致・rc 0。保存を伴うなら `Readback: <path> sha256=<hex>`）。

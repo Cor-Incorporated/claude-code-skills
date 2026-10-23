@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# dsh run-alone-then-cite guidance (dsh/AGENTS.md, #181 B' owner decision (a), 2026-10-23).
-# Part 1 (always): the guidance and the gate's own advice say the same thing, and setup.sh deploys the file.
+# dsh delivery of the H17 report contract (hooks/lib/aidd_cc_contract.md; #440 started it as dsh/AGENTS.md, and the
+# owner's decision of 2026-10-23 made it one contract for every non-Claude entry). tests/test-h17-contract.sh checks
+# the wording against the oracle; this file checks that dsh actually sends it.
+# Part 1 (always): setup.sh installs the contract into $DSH_HOME/AGENTS.md.
 # Part 2 (needs a dsh install + node 24, SKIP otherwise): dsh puts $DSH_HOME/AGENTS.md into the first model request.
 #   A local stub stands in for the DeepSeek Messages endpoint (DEEPSEEK_BASE_URL), so no real key or network call is
 #   used; the same run without the file must not carry the text, or the check proves nothing.
@@ -10,14 +12,10 @@ pass=0; fail=0
 ok() { echo "PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
 
-GUIDE="$ROOT/dsh/AGENTS.md"
-ADVICE="$(grep -o 'run the command on its own[^"]*' "$ROOT/hooks/lib/aidd_cc_controls.py" | head -1)"
-if grep -q 'on its own' "$GUIDE" && [ -n "$ADVICE" ]; then ok "guidance and gate advice both say 'on its own'"
-else bad "guidance=$(grep -c 'on its own' "$GUIDE") line(s) with 'on its own'; gate advice='${ADVICE:-missing}'"; fi
-if grep -q 'Evidence:' "$GUIDE"; then ok "guidance names the Evidence line"; else bad "dsh/AGENTS.md does not name the Evidence line"; fi
-if grep -q 'dsh/AGENTS.md' "$ROOT/setup.sh" && head -1 "$GUIDE" | grep -q 'Deployed by claude-code-skills setup.sh'; then
-  ok "setup.sh deploys dsh/AGENTS.md and the file carries the marker line setup.sh checks"
-else bad "setup.sh deploy line or the marker line of dsh/AGENTS.md is missing"; fi
+INSTALL="$ROOT/hooks/lib/aidd_cc_contract.py"
+if grep -q '\.dsh-aidd/AGENTS.md' "$ROOT/setup.sh" && grep -q 'aidd_cc_contract.py" install' "$ROOT/setup.sh"; then
+  ok "setup.sh installs the H17 report contract into ~/.dsh-aidd/AGENTS.md"
+else bad "setup.sh has no contract install for ~/.dsh-aidd/AGENTS.md"; fi
 
 NODE24="${NODE24_BIN:-$HOME/.local/share/mise/installs/node/24.21.0/bin}"
 DSH="${DSH_BIN:-${DSH_PKG_DIR:-$HOME/.dsh-aidd/pkg}/node_modules/.bin/dsh}"
@@ -61,14 +59,14 @@ PY
   }
   probe "$SB/without"
   : >"$SB/without.log"; [ -f "$SB/requests.log" ] && mv "$SB/requests.log" "$SB/without.log"
-  mkdir -p "$SB/with" && cp "$GUIDE" "$SB/with/AGENTS.md"
+  python3 -I "$INSTALL" install "$SB/with/AGENTS.md" >/dev/null
   probe "$SB/with"
   if [ ! -s "$SB/requests.log" ] || [ ! -s "$SB/without.log" ]; then
     bad "dsh sent no request to the stub (with file: $(wc -l <"$SB/requests.log" 2>/dev/null || echo 0) request(s), without: $(wc -l <"$SB/without.log") request(s); DEEPSEEK_BASE_URL not used?)"
-  elif grep -q 'AIDD H17 evidence (dsh)' "$SB/requests.log" && ! grep -q 'AIDD H17 evidence (dsh)' "$SB/without.log"; then
+  elif grep -q 'AIDD H17 report contract' "$SB/requests.log" && ! grep -q 'AIDD H17 report contract' "$SB/without.log"; then
     ok "the first model request carries \$DSH_HOME/AGENTS.md, and the run without the file does not"
   else
-    bad "with-file request has the guidance: $(grep -c 'AIDD H17 evidence (dsh)' "$SB/requests.log"); without-file: $(grep -c 'AIDD H17 evidence (dsh)' "$SB/without.log")"
+    bad "with-file request has the guidance: $(grep -c 'AIDD H17 report contract' "$SB/requests.log"); without-file: $(grep -c 'AIDD H17 report contract' "$SB/without.log")"
   fi
 fi
 echo "dsh instructions: $pass passed, $fail failed"
