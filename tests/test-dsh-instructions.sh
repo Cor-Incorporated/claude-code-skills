@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# dsh run-alone-then-cite guidance (dsh/AGENTS.md, #181 B' owner decision (a), 2026-10-23).
+# Part 1 (always): the guidance and the gate's own advice say the same thing, and setup.sh deploys the file.
+# Part 2 (needs a dsh install + node 24, SKIP otherwise): dsh puts $DSH_HOME/AGENTS.md into the first model request.
+#   A local stub stands in for the DeepSeek Messages endpoint (DEEPSEEK_BASE_URL), so no real key or network call is
+#   used; the same run without the file must not carry the text, or the check proves nothing.
+set -uo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+pass=0; fail=0
+ok() { echo "PASS: $1"; pass=$((pass + 1)); }
+bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
+
+GUIDE="$ROOT/dsh/AGENTS.md"
+ADVICE="$(grep -o 'run the command on its own[^"]*' "$ROOT/hooks/lib/aidd_cc_controls.py" | head -1)"
+if grep -q 'on its own' "$GUIDE" && [ -n "$ADVICE" ]; then ok "guidance and gate advice both say 'on its own'"
+else bad "guidance=$(grep -c 'on its own' "$GUIDE") line(s) with 'on its own'; gate advice='${ADVICE:-missing}'"; fi
+if grep -q 'Evidence:' "$GUIDE"; then ok "guidance names the Evidence line"; else bad "dsh/AGENTS.md does not name the Evidence line"; fi
+if grep -q 'dsh/AGENTS.md' "$ROOT/setup.sh" && head -1 "$GUIDE" | grep -q 'Deployed by claude-code-skills setup.sh'; then
+  ok "setup.sh deploys dsh/AGENTS.md and the file carries the marker line setup.sh checks"
+else bad "setup.sh deploy line or the marker line of dsh/AGENTS.md is missing"; fi
+
+NODE24="${NODE24_BIN:-$HOME/.local/share/mise/installs/node/24.21.0/bin}"
+DSH="${DSH_BIN:-${DSH_PKG_DIR:-$HOME/.dsh-aidd/pkg}/node_modules/.bin/dsh}"
+PROFILE="${DSH_HOME:-$HOME/.dsh-aidd}/profiles/headless"
+if [ ! -x "$DSH" ] || [ ! -x "$NODE24/node" ] || [ ! -d "$PROFILE" ]; then
+  echo "SKIP: part 2 needs dsh, node 24 and a headless profile (DSH_BIN / NODE24_BIN / DSH_HOME)"
+else
+  TMO=""; command -v timeout >/dev/null 2>&1 && TMO="timeout 120"; command -v gtimeout >/dev/null 2>&1 && TMO="gtimeout 120"
+  SB="$(mktemp -d)"; trap 'kill "${STUB:-0}" 2>/dev/null; rm -rf "$SB"' EXIT
+  cat >"$SB/stub.py" <<'PY'
+import http.server, sys
+out = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("content-length") or 0))
+        with open(out, "ab") as f:
+            f.write(body + b"\n")
+        msg = b'{"type":"error","error":{"type":"invalid_request_error","message":"test stub"}}'
+        self.send_response(400); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(msg))); self.end_headers(); self.wfile.write(msg)
+    def log_message(self, *a):
+        pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[2], "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY
+  python3 -I "$SB/stub.py" "$SB/requests.log" "$SB/port" & STUB=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$SB/port" ] && break; sleep 0.3; done
+  printf -- '- id: session-log-deepseek\n  disabled: true\n- id: session-telemetry-otel\n  disabled: true\n' >"$SB/patch.yml"
+  probe() { # $1 = DSH_HOME; prints nothing, appends the requests dsh made to the stub
+    mkdir -p "$1/profiles" "$SB/cwd" && cp -R "$PROFILE" "$1/profiles/" && find "$1" -name '.env*' -type f -delete
+    # shellcheck disable=SC2086  # $TMO is intentionally word-split ("timeout 120" or empty)
+    (cd "$SB/cwd" && env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY PATH="$NODE24:$PATH" DSH_HOME="$1" \
+      DEEPSEEK_API_KEY=test-not-a-key DEEPSEEK_BASE_URL="http://127.0.0.1:$(cat "$SB/port")" \
+      $TMO "$DSH" --profile headless --patch "$SB/patch.yml" "probe" >/dev/null 2>&1)
+  }
+  probe "$SB/without"
+  : >"$SB/without.log"; [ -f "$SB/requests.log" ] && mv "$SB/requests.log" "$SB/without.log"
+  mkdir -p "$SB/with" && cp "$GUIDE" "$SB/with/AGENTS.md"
+  probe "$SB/with"
+  if [ ! -s "$SB/requests.log" ] || [ ! -s "$SB/without.log" ]; then
+    bad "dsh sent no request to the stub (with file: $(wc -l <"$SB/requests.log" 2>/dev/null || echo 0) request(s), without: $(wc -l <"$SB/without.log") request(s); DEEPSEEK_BASE_URL not used?)"
+  elif grep -q 'AIDD H17 evidence (dsh)' "$SB/requests.log" && ! grep -q 'AIDD H17 evidence (dsh)' "$SB/without.log"; then
+    ok "the first model request carries \$DSH_HOME/AGENTS.md, and the run without the file does not"
+  else
+    bad "with-file request has the guidance: $(grep -c 'AIDD H17 evidence (dsh)' "$SB/requests.log"); without-file: $(grep -c 'AIDD H17 evidence (dsh)' "$SB/without.log")"
+  fi
+fi
+echo "dsh instructions: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]
