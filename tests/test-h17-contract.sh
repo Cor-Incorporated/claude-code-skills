@@ -81,7 +81,19 @@ check("unbalanced markers are refused and the file is left as it was",
 
 # deploy wiring
 setup = (root / "setup.sh").read_text(encoding="utf-8")
-targets = [".codex/AGENTS.md", ".opencode-2/config/opencode/AGENTS.md", ".pi/agent/AGENTS.md", ".dsh-aidd/AGENTS.md"]
+targets = [".codex/AGENTS.md", ".opencode-2/config/opencode/aidd-h17-contract.md", ".pi/agent/AGENTS.md", ".dsh-aidd/AGENTS.md"]
+# OpenCode 2.x: the guardrails launcher replaces the global config dir (OPENCODE_CONFIG_DIR), so the contract must be
+# listed in `instructions` of the 2.x user config that guardrails hands back through OPENCODE_CONFIG
+snippet = setup[setup.index("<<'PY_OC2'\n") + len("<<'PY_OC2'\n") : setup.index("\nPY_OC2\n")]
+oc2 = sb / "oc2" / "opencode.json"; oc2.parent.mkdir(parents=True)
+oc2.write_text(json.dumps({"model": "deepseek/deepseek-flash", "plugins": ["/p/aidd-cc-v2"]}), encoding="utf-8")
+contract_file = str(sb / "oc2" / "aidd-h17-contract.md")
+for _ in (1, 2):
+    subprocess.run([sys.executable, "-I", "-", str(oc2), "/p/aidd-cc-v2", contract_file], input=snippet, text=True, check=True)
+cfg = json.loads(oc2.read_text(encoding="utf-8"))
+check("setup.sh lists the 2.x contract file in `instructions` once and keeps the other keys",
+      cfg.get("instructions") == [contract_file] and cfg.get("plugins") == ["/p/aidd-cc-v2"] and cfg.get("model") == "deepseek/deepseek-flash",
+      f"config={cfg}")
 check("setup.sh installs into the four documented files", all(t in setup for t in targets) and "aidd_cc_contract.py\" install" in setup,
       f"missing {[t for t in targets if t not in setup]}")
 reg = (root / "scripts/register-aidd-cc-hooks.py").read_text(encoding="utf-8")

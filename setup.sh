@@ -111,24 +111,29 @@ cp "$REPO_DIR/opencode/aidd-cc-v2/index.ts" "$(dirname "$OPENCODE_CONFIG")/plugi
 echo "  Copied H17 OpenCode 2.x plugin (plugins/aidd-cc-v2/index.ts)"
 # Register the plugin directory in the 2.x CLI's own config (~/.opencode-2) so a bare `opencode2` (no guardrails
 # launcher) still loads it; review #426 M2. Idempotent: the path is added once, other keys are kept.
+# The H17 report contract rides on `instructions` here, not on <global config>/AGENTS.md: the guardrails launcher sets
+# OPENCODE_CONFIG_DIR to its profile, which REPLACES the 2.x global config dir, but hands this file back through
+# OPENCODE_CONFIG (packages/guardrails/bin/opencode-guardrails), so a listed file loads with and without guardrails.
 OC2_CONFIG="$HOME/.opencode-2/config/opencode/opencode.json"
 mkdir -p "$(dirname "$OC2_CONFIG")"
-python3 -I - "$OC2_CONFIG" "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-cc-v2" <<'PY_OC2'
+python3 -I - "$OC2_CONFIG" "$(dirname "$OPENCODE_CONFIG")/plugins/aidd-cc-v2" "$(dirname "$OC2_CONFIG")/aidd-h17-contract.md" <<'PY_OC2'
 import json, os, sys
-path, plugin = sys.argv[1], sys.argv[2]
+path, plugin, contract = sys.argv[1], sys.argv[2], sys.argv[3]
 cfg = {}
 if os.path.exists(path):
     with open(path, encoding="utf-8") as fh:
         cfg = json.load(fh)
 plugins = cfg.get("plugins") if isinstance(cfg.get("plugins"), list) else []
-if plugin not in plugins:
-    cfg["plugins"] = [*plugins, plugin]
+instructions = cfg.get("instructions") if isinstance(cfg.get("instructions"), list) else []
+if plugin not in plugins or contract not in instructions:
+    cfg = {**cfg, "plugins": [*plugins, *([] if plugin in plugins else [plugin])],
+           "instructions": [*instructions, *([] if contract in instructions else [contract])]}
     cfg.setdefault("$schema", "https://opencode.ai/config.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh, indent=2)
         fh.write("\n")
 PY_OC2
-echo "  Registered aidd-cc-v2 in $OC2_CONFIG plugins"
+echo "  Registered aidd-cc-v2 (plugins) and the H17 report contract (instructions) in $OC2_CONFIG"
 # Pi (@earendil-works/pi-coding-agent) loads extensions from ~/.pi/agent/extensions. The extension is
 # deployed only where Pi is already set up (the directory exists); Pi itself is not installed here.
 if [ -d "$HOME/.pi/agent/extensions" ]; then
@@ -144,12 +149,12 @@ if [ -d "$HOME/.dsh-aidd/pkg" ]; then
 fi
 # H17 report contract (owner decision 2026-10-23): every non-Claude entry gets hooks/lib/aidd_cc_contract.md in the
 # instructions it always loads, as a managed block that leaves the owner's own lines alone. Each path is the tool's
-# documented global file: Codex $CODEX_HOME/AGENTS.md; OpenCode 2.x <global config>/AGENTS.md (the opencode2 launcher's
-# XDG config); Pi <agent-dir>/AGENTS.md; dsh $DSH_HOME/AGENTS.md (dsh-agent-instructions, in dsh-base; #440 put the
+# documented global file: Codex $CODEX_HOME/AGENTS.md; OpenCode 2.x a file listed in `instructions` above (the guardrails
+# launcher replaces its global config dir, so <global config>/AGENTS.md would not load there); Pi <agent-dir>/AGENTS.md; dsh $DSH_HOME/AGENTS.md (dsh-agent-instructions, in dsh-base; #440 put the
 # run-alone guidance there first). Cursor has no global rules file, so its sessionStart hook returns the same text.
 contract_targets=()
 [ -d "$HOME/.codex" ] && contract_targets+=("$HOME/.codex/AGENTS.md")
-[ -d "$HOME/.opencode-2/config/opencode" ] && contract_targets+=("$HOME/.opencode-2/config/opencode/AGENTS.md")
+[ -d "$HOME/.opencode-2/config/opencode" ] && contract_targets+=("$HOME/.opencode-2/config/opencode/aidd-h17-contract.md")
 [ -d "$HOME/.pi/agent" ] && contract_targets+=("$HOME/.pi/agent/AGENTS.md")
 [ -d "$HOME/.dsh-aidd" ] && contract_targets+=("$HOME/.dsh-aidd/AGENTS.md")
 if [ ${#contract_targets[@]} -gt 0 ]; then
