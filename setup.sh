@@ -141,6 +141,15 @@ fi
 if [ -d "$HOME/.dsh-aidd/pkg" ]; then
   cp "$REPO_DIR/dsh/aidd-cc-native.mts" "$HOME/.dsh-aidd/pkg/aidd-cc-native.mts"
   echo "  Copied H17 dsh native plugin (~/.dsh-aidd/pkg/aidd-cc-native.mts)"
+  # #181 B' (owner decision (a), 2026-10-23): dsh's instruction loader (dsh-agent-instructions, in dsh-base) puts
+  # $DSH_HOME/AGENTS.md into each session's first request, so the run-alone-then-cite guidance reaches the model there.
+  # A file without the marker line is the owner's own and is left alone.
+  if [ ! -e "$HOME/.dsh-aidd/AGENTS.md" ] || head -1 "$HOME/.dsh-aidd/AGENTS.md" | grep -q 'Deployed by claude-code-skills setup.sh'; then
+    cp "$REPO_DIR/dsh/AGENTS.md" "$HOME/.dsh-aidd/AGENTS.md"
+    echo "  Copied H17 dsh instructions (~/.dsh-aidd/AGENTS.md)"
+  else
+    echo "  Kept your own ~/.dsh-aidd/AGENTS.md (no setup.sh marker line); add the lines of dsh/AGENTS.md by hand" >&2
+  fi
 fi
 # Entry launchers (2026-10-18): `pi` and `dsh` start the agents with the H17 control the way `opencode` does
 # (pi/launcher/pi, dsh/launcher/dsh). ~/.local/bin precedes the mise shims on PATH; the old names pi-h17 / dsh-h17
@@ -227,14 +236,14 @@ if [ -d "$SKILLS_DIR" ]; then
       [ -d "$d" ] || continue
       base=$(basename "$d")
       if [ -d "$SKILLS_DIR/$base" ]; then
-        rm -rf "$SKILLS_DIR/$base"
+        rm -rf "${SKILLS_DIR:?}/${base:?}"
         echo "  - pruned skill (manifest): $base"
       fi
     done
   fi
   for base in "${RETIRED_SKILLS[@]}"; do
     if [ -d "$SKILLS_DIR/$base" ]; then
-      rm -rf "$SKILLS_DIR/$base"
+      rm -rf "${SKILLS_DIR:?}/${base:?}"
       echo "  - pruned skill (R-I list): $base"
     fi
   done
