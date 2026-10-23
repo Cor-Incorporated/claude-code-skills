@@ -59,7 +59,7 @@ PY
   }
   probe "$SB/without"
   : >"$SB/without.log"; [ -f "$SB/requests.log" ] && mv "$SB/requests.log" "$SB/without.log"
-  python3 -I "$INSTALL" install "$SB/with/AGENTS.md" >/dev/null
+  python3 -I "$INSTALL" install --agent dsh "$SB/with/AGENTS.md" >/dev/null
   probe "$SB/with"
   if [ ! -s "$SB/requests.log" ] || [ ! -s "$SB/without.log" ]; then
     bad "dsh sent no request to the stub (with file: $(wc -l <"$SB/requests.log" 2>/dev/null || echo 0) request(s), without: $(wc -l <"$SB/without.log") request(s); DEEPSEEK_BASE_URL not used?)"

@@ -54,7 +54,7 @@ print(json.dumps({"permission":"deny","user_message":m,"agent_message":m},ensure
   afterFileEdit) py post --tool Edit >/dev/null; printf '{}' ;;
   beforeSubmitPrompt) py prompt >/dev/null; printf '{"continue":true}' ;;
   sessionStart)
-    ctx="$(python3 -I "$(dirname "$CC_PY")/aidd_cc_contract.py" text 2>/dev/null)"
+    ctx="$(python3 -I "$(dirname "$CC_PY")/aidd_cc_contract.py" text --agent cursor 2>/dev/null)"
     if [ -z "$ctx" ]; then  # never a silent pass: the session would start without the contract
       ledger="${AIDD_LEDGER_PATH:-$HOME/.claude/hooks/ledger/guard-ledger.jsonl}"; mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
       printf '{"ts":"%s","component":"H17","hook":"aidd-cc","event":"error","decision":"unavailable","rule":"contract-missing","cmd_head":"","source":"%s","session":"unset","agent":"cursor"}\n' \
