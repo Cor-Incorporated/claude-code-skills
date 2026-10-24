@@ -110,6 +110,7 @@ def register_opencode(config: Path, file: Path) -> str:
     config.parent.mkdir(parents=True, exist_ok=True)
     tmp = config.with_suffix(config.suffix + ".tmp")
     tmp.write_text(json.dumps({**data, "instructions": [*listed, str(file)]}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.chmod(config.stat().st_mode & 0o7777 if existed else 0o600)  # keep the config's own permissions (Codex review r4 P2)
     tmp.replace(config)
     return "updated" if existed else "created"
 

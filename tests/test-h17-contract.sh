@@ -142,6 +142,10 @@ r1, r2 = C.register_opencode(cfg, inst), C.register_opencode(cfg, inst)
 data = json.loads(cfg.read_text())
 check("OpenCode: the contract file is listed in `instructions` once and other keys are kept",
       (r1, r2) == ("updated", "unchanged") and data["instructions"] == [str(inst)] and data["plugins"] == ["x"], f"{r1},{r2},{data}")
+private = sb / "private.json"; private.write_text("{}", encoding="utf-8"); private.chmod(0o600)
+C.register_opencode(private, inst)
+check("OpenCode: the config keeps its own permissions (0600 stays 0600)", oct(private.stat().st_mode & 0o777) == "0o600",
+      f"mode={oct(private.stat().st_mode & 0o777)}")
 bad = sb / "bad.json"; bad.write_text('{"instructions": "x"}', encoding="utf-8")
 p = subprocess.run([sys.executable, "-I", str(root / "hooks/lib/aidd_cc_contract.py"), "register-opencode", str(bad), str(inst)], capture_output=True, text=True)
 check("OpenCode: a config whose `instructions` is not a list is refused and left alone",
@@ -167,6 +171,10 @@ check("setup.sh's block puts each entry's text where its tool and launcher look"
       r.returncode == 0 and not wrong and not (home / ".pi/agent/AGENTS.md").exists(), f"rc={r.returncode} missing={wrong} stderr={r.stderr.strip()[:120]}")
 check("OpenCode: with opencode.jsonc present, the instructions go into the .jsonc that guardrails selects",
       jsonc.get("instructions") == [str(oc / "aidd-h17-contract.md")] and "instructions" not in plain, f"jsonc={jsonc} json={plain}")
+explicit = sb / "explicit.json"; explicit.write_text("{}", encoding="utf-8")
+r2 = subprocess.run(["bash", "-euo", "pipefail", "-c", snippet], capture_output=True, text=True, env={**run_env, "OPENCODE_CONFIG": str(explicit)})
+check("OpenCode: an explicit OPENCODE_CONFIG receives the instructions",
+      r2.returncode == 0 and json.loads(explicit.read_text()).get("instructions") == [str(oc / "aidd-h17-contract.md")], f"rc={r2.returncode} {explicit.read_text()[:80]}")
 reg = (root / "scripts/register-aidd-cc-hooks.py").read_text(encoding="utf-8")
 check("Cursor's sessionStart is registered", '"sessionStart"' in reg[reg.index("CURSOR_EVENTS"):reg.index(")", reg.index("CURSOR_EVENTS"))])
 out = hook("hooks/cursor/aidd-cc-cursor.sh", {"hook_event_name": "sessionStart", "conversation_id": "t"}, "ss")
