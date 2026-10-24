@@ -141,15 +141,36 @@ fi
 if [ -d "$HOME/.dsh-aidd/pkg" ]; then
   cp "$REPO_DIR/dsh/aidd-cc-native.mts" "$HOME/.dsh-aidd/pkg/aidd-cc-native.mts"
   echo "  Copied H17 dsh native plugin (~/.dsh-aidd/pkg/aidd-cc-native.mts)"
-  # #181 B' (owner decision (a), 2026-10-23): dsh's instruction loader (dsh-agent-instructions, in dsh-base) puts
-  # $DSH_HOME/AGENTS.md into each session's first request, so the run-alone-then-cite guidance reaches the model there.
-  # A file without the marker line is the owner's own and is left alone.
-  if [ ! -e "$HOME/.dsh-aidd/AGENTS.md" ] || head -1 "$HOME/.dsh-aidd/AGENTS.md" | grep -q 'Deployed by claude-code-skills setup.sh'; then
-    cp "$REPO_DIR/dsh/AGENTS.md" "$HOME/.dsh-aidd/AGENTS.md"
-    echo "  Copied H17 dsh instructions (~/.dsh-aidd/AGENTS.md)"
-  else
-    echo "  Kept your own ~/.dsh-aidd/AGENTS.md (no setup.sh marker line); add the lines of dsh/AGENTS.md by hand" >&2
-  fi
+fi
+# H17 report contract (owner decision 2026-10-23): every non-Claude entry gets hooks/lib/aidd_cc_contract.md in the
+# instructions it always loads, as a managed block that leaves the owner's own lines alone. Each target is the file the
+# tool documents and its loader actually picks (aidd_cc_contract.py `target`):
+#   Codex  $CODEX_HOME/AGENTS.md, or a non-empty AGENTS.override.md there;
+#   Pi     <agent-dir>: the first existing of AGENTS.override.md / AGENTS.md / AGENTS.MD / CLAUDE.md / CLAUDE.MD;
+#   dsh    $DSH_HOME/AGENTS.md (dsh-agent-instructions, in dsh-base; #440 put the run-alone guidance there first);
+#   OpenCode 2.x  its own file, listed in the global opencode.json `instructions`: through guardrails the global config
+#          DIR is replaced by the profile, but the config FILE is kept via OPENCODE_CONFIG (Codex review r2 P1).
+# Cursor has no global rules file, so its sessionStart hook returns the text (Cursor's own exit-status style).
+contract_lib="$REPO_DIR/hooks/lib/aidd_cc_contract.py"
+contract_install() {
+  python3 -I "$contract_lib" install --agent "$1" "$2" | sed 's/^/  H17 report contract /' \
+    || echo "  H17 report contract: $2 was refused (its BEGIN/END markers are unbalanced); fix it and rerun" >&2
+}
+# The same directories the tools and our launchers resolve (Codex review r3 P2): CODEX_HOME, PI_CODING_AGENT_DIR, and
+# the opencode2 launcher's XDG_CONFIG_HOME default; through guardrails, keepGlobalConfig() picks opencode.jsonc first.
+codex_home="${CODEX_HOME:-$HOME/.codex}"
+pi_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+oc2_dir="${XDG_CONFIG_HOME:-$HOME/.opencode-2/config}/opencode"
+oc2_cfg="$oc2_dir/opencode.json"; [ -f "$oc2_dir/opencode.jsonc" ] && oc2_cfg="$oc2_dir/opencode.jsonc"
+# OPENCODE_CONFIG is NOT consulted here: setup.sh sets it above for the 1.x `opencode`, and the opencode2 launcher
+# starts from the user's shell, where it is normally unset (Codex review r5 P2: r4 read it and always chose the 1.x file).
+[ -d "$codex_home" ] && contract_install codex "$codex_home/AGENTS.md"
+[ -d "$pi_dir" ] && contract_install pi "$pi_dir/AGENTS.md"
+[ -d "$HOME/.dsh-aidd" ] && contract_install dsh "$HOME/.dsh-aidd/AGENTS.md"
+if [ -d "$oc2_dir" ]; then
+  contract_install opencode "$oc2_dir/aidd-h17-contract.md"
+  python3 -I "$contract_lib" register-opencode "$oc2_cfg" "$oc2_dir/aidd-h17-contract.md" | sed 's/^/  H17 report contract /' \
+    || echo "  H17 report contract: $oc2_cfg was refused (not plain JSON with an instructions list; add $oc2_dir/aidd-h17-contract.md to its instructions by hand)" >&2
 fi
 # Entry launchers (2026-10-18): `pi` and `dsh` start the agents with the H17 control the way `opencode` does
 # (pi/launcher/pi, dsh/launcher/dsh). ~/.local/bin precedes the mise shims on PATH; the old names pi-h17 / dsh-h17

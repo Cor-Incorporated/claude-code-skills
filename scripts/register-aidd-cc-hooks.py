@@ -33,6 +33,7 @@ CURSOR_EVENTS = (
     "beforeSubmitPrompt",
     "afterAgentResponse",
     "stop",
+    "sessionStart",  # returns the H17 report contract as additional_context (Cursor has no global rules file)
 )
 
 

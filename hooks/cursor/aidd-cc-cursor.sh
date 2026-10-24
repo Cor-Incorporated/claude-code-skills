@@ -5,6 +5,8 @@
 #   beforeSubmitPrompt   -> prompt         {"continue":true}
 #   afterAgentResponse   -> record-assistant (last text, for the stop check)
 #   stop                 -> stop           {"followup_message": "..."} when a claim lacks evidence
+#   sessionStart         -> (no oracle)    {"additional_context": <H17 report contract>} — Cursor has no global
+#                                          rules file, so the contract (hooks/lib/aidd_cc_contract.md) rides here
 # Session key: conversation_id.  Deployed to ~/.cursor/hooks/aidd-cc-cursor.sh.
 set -uo pipefail
 CC_PY=""
@@ -51,6 +53,17 @@ print(json.dumps({"permission":"deny","user_message":m,"agent_message":m},ensure
   afterShellExecution) py post --tool Bash >/dev/null; printf '{}' ;;
   afterFileEdit) py post --tool Edit >/dev/null; printf '{}' ;;
   beforeSubmitPrompt) py prompt >/dev/null; printf '{"continue":true}' ;;
+  sessionStart)
+    ctx="$(python3 -I "$(dirname "$CC_PY")/aidd_cc_contract.py" text --agent cursor 2>/dev/null)"
+    if [ -z "$ctx" ]; then  # never a silent pass: the session would start without the contract
+      ledger="${AIDD_LEDGER_PATH:-$HOME/.claude/hooks/ledger/guard-ledger.jsonl}"; mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
+      printf '{"ts":"%s","component":"H17","hook":"aidd-cc","event":"error","decision":"unavailable","rule":"contract-missing","cmd_head":"","source":"%s","session":"unset","agent":"cursor"}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${AIDD_LEDGER_SOURCE:-real}" >>"$ledger" 2>/dev/null || true
+      printf '{}'
+    else
+      printf '%s' "$ctx" | python3 -I -c 'import json,sys; print(json.dumps({"additional_context": sys.stdin.read()}, ensure_ascii=False))'
+    fi
+    ;;
   afterAgentResponse) py record-assistant >/dev/null; printf '{}' ;;
   stop)
     v="$(py stop)"
