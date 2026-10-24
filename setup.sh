@@ -156,14 +156,19 @@ contract_install() {
   python3 -I "$contract_lib" install --agent "$1" "$2" | sed 's/^/  H17 report contract /' \
     || echo "  H17 report contract: $2 was refused (its BEGIN/END markers are unbalanced); fix it and rerun" >&2
 }
-oc2_dir="$HOME/.opencode-2/config/opencode"
-[ -d "$HOME/.codex" ] && contract_install codex "$HOME/.codex/AGENTS.md"
-[ -d "$HOME/.pi/agent" ] && contract_install pi "$HOME/.pi/agent/AGENTS.md"
+# The same directories the tools and our launchers resolve (Codex review r3 P2): CODEX_HOME, PI_CODING_AGENT_DIR, and
+# the opencode2 launcher's XDG_CONFIG_HOME default; through guardrails, keepGlobalConfig() picks opencode.jsonc first.
+codex_home="${CODEX_HOME:-$HOME/.codex}"
+pi_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+oc2_dir="${XDG_CONFIG_HOME:-$HOME/.opencode-2/config}/opencode"
+oc2_cfg="$oc2_dir/opencode.json"; [ -f "$oc2_dir/opencode.jsonc" ] && oc2_cfg="$oc2_dir/opencode.jsonc"
+[ -d "$codex_home" ] && contract_install codex "$codex_home/AGENTS.md"
+[ -d "$pi_dir" ] && contract_install pi "$pi_dir/AGENTS.md"
 [ -d "$HOME/.dsh-aidd" ] && contract_install dsh "$HOME/.dsh-aidd/AGENTS.md"
 if [ -d "$oc2_dir" ]; then
   contract_install opencode "$oc2_dir/aidd-h17-contract.md"
-  python3 -I "$contract_lib" register-opencode "$oc2_dir/opencode.json" "$oc2_dir/aidd-h17-contract.md" | sed 's/^/  H17 report contract /' \
-    || echo "  H17 report contract: $oc2_dir/opencode.json was refused (not a JSON object with an instructions list)" >&2
+  python3 -I "$contract_lib" register-opencode "$oc2_cfg" "$oc2_dir/aidd-h17-contract.md" | sed 's/^/  H17 report contract /' \
+    || echo "  H17 report contract: $oc2_cfg was refused (not plain JSON with an instructions list; add $oc2_dir/aidd-h17-contract.md to its instructions by hand)" >&2
 fi
 # Entry launchers (2026-10-18): `pi` and `dsh` start the agents with the H17 control the way `opencode` does
 # (pi/launcher/pi, dsh/launcher/dsh). ~/.local/bin precedes the mise shims on PATH; the old names pi-h17 / dsh-h17

@@ -147,13 +147,26 @@ p = subprocess.run([sys.executable, "-I", str(root / "hooks/lib/aidd_cc_contract
 check("OpenCode: a config whose `instructions` is not a list is refused and left alone",
       p.returncode == 2 and bad.read_text() == '{"instructions": "x"}', f"rc={p.returncode}")
 
-# deploy wiring
+# deploy wiring: run setup.sh's own contract block in a scratch HOME, with a non-default Pi agent dir and an opencode.jsonc
 setup = (root / "setup.sh").read_text(encoding="utf-8")
-wanted = {"codex": r'contract_install codex "\$HOME/\.codex/AGENTS\.md"', "pi": r'contract_install pi "\$HOME/\.pi/agent/AGENTS\.md"',
-          "dsh": r'contract_install dsh "\$HOME/\.dsh-aidd/AGENTS\.md"', "opencode file": r'contract_install opencode "\$oc2_dir/aidd-h17-contract\.md"',
-          "opencode instructions": r'register-opencode "\$oc2_dir/opencode\.json" "\$oc2_dir/aidd-h17-contract\.md"'}
-missing = [k for k, rx in wanted.items() if not re.search(rx, setup)]
-check("setup.sh wires every entry's target", not missing and 'oc2_dir="$HOME/.opencode-2/config/opencode"' in setup, f"missing {missing}")
+snippet = setup[setup.index("# H17 report contract (owner decision"):setup.index("# Entry launchers (2026-10-18)")]
+home = sb / "home"
+for d in (".codex", "pi-custom", ".dsh-aidd", ".opencode-2/config/opencode"):
+    (home / d).mkdir(parents=True, exist_ok=True)
+(home / ".opencode-2/config/opencode/opencode.json").write_text('{"plugins": []}\n', encoding="utf-8")
+(home / ".opencode-2/config/opencode/opencode.jsonc").write_text('{"plugins": ["guardrails"]}\n', encoding="utf-8")
+run_env = {k: v for k, v in os.environ.items() if k not in ("CODEX_HOME", "XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR")}
+run_env.update({"HOME": str(home), "REPO_DIR": str(root), "PI_CODING_AGENT_DIR": str(home / "pi-custom")})
+r = subprocess.run(["bash", "-euo", "pipefail", "-c", snippet], capture_output=True, text=True, env=run_env)
+oc = home / ".opencode-2/config/opencode"
+placed = {"codex": home / ".codex/AGENTS.md", "pi (PI_CODING_AGENT_DIR)": home / "pi-custom/AGENTS.md", "dsh": home / ".dsh-aidd/AGENTS.md",
+          "opencode file": oc / "aidd-h17-contract.md"}
+wrong = [k for k, f in placed.items() if not (f.is_file() and C.BEGIN in f.read_text(encoding="utf-8"))]
+jsonc = json.loads((oc / "opencode.jsonc").read_text()); plain = json.loads((oc / "opencode.json").read_text())
+check("setup.sh's block puts each entry's text where its tool and launcher look",
+      r.returncode == 0 and not wrong and not (home / ".pi/agent/AGENTS.md").exists(), f"rc={r.returncode} missing={wrong} stderr={r.stderr.strip()[:120]}")
+check("OpenCode: with opencode.jsonc present, the instructions go into the .jsonc that guardrails selects",
+      jsonc.get("instructions") == [str(oc / "aidd-h17-contract.md")] and "instructions" not in plain, f"jsonc={jsonc} json={plain}")
 reg = (root / "scripts/register-aidd-cc-hooks.py").read_text(encoding="utf-8")
 check("Cursor's sessionStart is registered", '"sessionStart"' in reg[reg.index("CURSOR_EVENTS"):reg.index(")", reg.index("CURSOR_EVENTS"))])
 out = hook("hooks/cursor/aidd-cc-cursor.sh", {"hook_event_name": "sessionStart", "conversation_id": "t"}, "ss")
