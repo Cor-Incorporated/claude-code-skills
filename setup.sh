@@ -162,7 +162,8 @@ codex_home="${CODEX_HOME:-$HOME/.codex}"
 pi_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 oc2_dir="${XDG_CONFIG_HOME:-$HOME/.opencode-2/config}/opencode"
 oc2_cfg="$oc2_dir/opencode.json"; [ -f "$oc2_dir/opencode.jsonc" ] && oc2_cfg="$oc2_dir/opencode.jsonc"
-oc2_cfg="${OPENCODE_CONFIG:-$oc2_cfg}"  # an explicit OPENCODE_CONFIG wins in keepGlobalConfig() too (Codex review r4 P2)
+# OPENCODE_CONFIG is NOT consulted here: setup.sh sets it above for the 1.x `opencode`, and the opencode2 launcher
+# starts from the user's shell, where it is normally unset (Codex review r5 P2: r4 read it and always chose the 1.x file).
 [ -d "$codex_home" ] && contract_install codex "$codex_home/AGENTS.md"
 [ -d "$pi_dir" ] && contract_install pi "$pi_dir/AGENTS.md"
 [ -d "$HOME/.dsh-aidd" ] && contract_install dsh "$HOME/.dsh-aidd/AGENTS.md"

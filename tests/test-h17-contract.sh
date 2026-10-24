@@ -159,7 +159,8 @@ for d in (".codex", "pi-custom", ".dsh-aidd", ".opencode-2/config/opencode"):
     (home / d).mkdir(parents=True, exist_ok=True)
 (home / ".opencode-2/config/opencode/opencode.json").write_text('{"plugins": []}\n', encoding="utf-8")
 (home / ".opencode-2/config/opencode/opencode.jsonc").write_text('{"plugins": ["guardrails"]}\n', encoding="utf-8")
-run_env = {k: v for k, v in os.environ.items() if k not in ("CODEX_HOME", "XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR")}
+run_env = {k: v for k, v in os.environ.items() if k not in ("CODEX_HOME", "XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR", "OPENCODE_CONFIG")}
+run_env["OPENCODE_CONFIG"] = str(home / ".config/opencode/opencode.jsonc")  # what setup.sh itself sets for the 1.x opencode
 run_env.update({"HOME": str(home), "REPO_DIR": str(root), "PI_CODING_AGENT_DIR": str(home / "pi-custom")})
 r = subprocess.run(["bash", "-euo", "pipefail", "-c", snippet], capture_output=True, text=True, env=run_env)
 oc = home / ".opencode-2/config/opencode"
@@ -171,10 +172,8 @@ check("setup.sh's block puts each entry's text where its tool and launcher look"
       r.returncode == 0 and not wrong and not (home / ".pi/agent/AGENTS.md").exists(), f"rc={r.returncode} missing={wrong} stderr={r.stderr.strip()[:120]}")
 check("OpenCode: with opencode.jsonc present, the instructions go into the .jsonc that guardrails selects",
       jsonc.get("instructions") == [str(oc / "aidd-h17-contract.md")] and "instructions" not in plain, f"jsonc={jsonc} json={plain}")
-explicit = sb / "explicit.json"; explicit.write_text("{}", encoding="utf-8")
-r2 = subprocess.run(["bash", "-euo", "pipefail", "-c", snippet], capture_output=True, text=True, env={**run_env, "OPENCODE_CONFIG": str(explicit)})
-check("OpenCode: an explicit OPENCODE_CONFIG receives the instructions",
-      r2.returncode == 0 and json.loads(explicit.read_text()).get("instructions") == [str(oc / "aidd-h17-contract.md")], f"rc={r2.returncode} {explicit.read_text()[:80]}")
+check("OpenCode: the 1.x OPENCODE_CONFIG that setup.sh exports is not where the 2.x instructions go",
+      not (home / ".config/opencode/opencode.jsonc").exists(), "setup wrote the 1.x config")
 reg = (root / "scripts/register-aidd-cc-hooks.py").read_text(encoding="utf-8")
 check("Cursor's sessionStart is registered", '"sessionStart"' in reg[reg.index("CURSOR_EVENTS"):reg.index(")", reg.index("CURSOR_EVENTS"))])
 out = hook("hooks/cursor/aidd-cc-cursor.sh", {"hook_event_name": "sessionStart", "conversation_id": "t"}, "ss")
