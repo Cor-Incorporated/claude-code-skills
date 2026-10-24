@@ -13,7 +13,7 @@ ok() { echo "PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
 
 INSTALL="$ROOT/hooks/lib/aidd_cc_contract.py"
-if grep -q '\.dsh-aidd/AGENTS.md' "$ROOT/setup.sh" && grep -q 'aidd_cc_contract.py" install' "$ROOT/setup.sh"; then
+if grep -qF 'contract_install dsh "$HOME/.dsh-aidd/AGENTS.md"' "$ROOT/setup.sh"; then
   ok "setup.sh installs the H17 report contract into ~/.dsh-aidd/AGENTS.md"
 else bad "setup.sh has no contract install for ~/.dsh-aidd/AGENTS.md"; fi
 
