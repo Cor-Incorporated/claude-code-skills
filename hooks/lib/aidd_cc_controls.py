@@ -251,8 +251,8 @@ def _ruling_verdict(messages: list[str], branch: dict, scope: str, meta: dict) -
                 "reason": (
                     f"this branch already carries {len(seen)} adjudicated fix({scope}) commits; the cap is "
                     f"{MAX_ADJUDICATIONS_PER_SCOPE} (ADR-013). The branch is closed for fix({scope}), with or without a "
-                    f"ruling: move the work to a new branch whose PR states what changed in the approach, and have it "
-                    f"accepted anew (session {sid})"
+                    f"ruling: move the work to a new branch cut from develop/main (a branch cut from this tip inherits the "
+                    f"closure) whose PR states what changed in the approach, and have it accepted anew (session {sid})"
                 ),
             }
         ruling = ADJUDICATION_RE.search(message)
@@ -334,7 +334,7 @@ def branch_fix_streak(
 ) -> dict:
     """fix(<scope>) commits on the current branch since its merge-base with develop/main (first-parent, so a
     merged-in branch's fixes are not this branch's streak), counted from the newest commit back to the newest
-    one whose body carries `ADJUDICATION: <url>` (the owner's decision — for the branch, every scope); that
+    fix(<scope>) commit whose body carries `ADJUDICATION: <url>` (the owner's decision; ADR-013: a url on a docs / chore / merge commit is not a ruling); that
     commit's time is returned as `adjudicated_ts` so the session counter is cut at the same point.  Surface
     form from `git log`; a directory that is not a repository, or git failing, counts 0 (additive to the
     in-session breaker).  The whole check runs under GIT_BUDGET_SEC; a timeout writes an H6 error row instead
@@ -402,8 +402,11 @@ def branch_fix_streak(
         subject = body.split("\n", 1)[0]
         fm = FIX_SUBJECT_RE.match(subject)
         same = bool(fm) and fm.group(2).strip().lower() == scope
-        ruling = ADJUDICATION_RE.search(body)
-        if ruling and same:
+        # ADR-013 (owner 2026-10-25, acceptance #224 P1): a ruling counts only on a fix(<scope>) commit. A url on a
+        # docs / chore / merge / other-scope commit neither cuts the counter nor spends a ruling — moving the url one
+        # commit over was the remaining way to ride one decision through a repair loop.
+        ruling = ADJUDICATION_RE.search(body) if same else None
+        if ruling:
             adjudications.append(ruling.group(1).rstrip(".,;)"))
         if ruling and not cut:
             # %ct is whole seconds: a session row written in the ruling's own second (before or after it) counts
