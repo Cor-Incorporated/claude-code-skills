@@ -174,6 +174,15 @@ def _repair_family_scope(
     # time per PIVOT/RETIRE cycle; a second HOLD is ignored, so the next trip needs PIVOT / RETIRE or the
     # owner's decision (ADJUDICATION: <url> in a commit body, see branch_fix_streak).
     same_scope = [m for m in commit_messages(cmd or "") if _message_scope(m) == scope]
+    branch = branch_fix_streak(
+        cwd, cmd, scope, meta.get("agent", "claude-code"), meta.get("session", "unset")
+    )
+    # ADR-013: every fix(<scope>) commit of the line is judged against the branch's rulings — the cap holds whether or
+    # not the commit carries a url (Codex: dropping the url re-opened a closed scope), and a line that chains two
+    # commits cannot spend one url twice or push past the cap in one call (Codex: `fix a -m U2 && fix b -m U1`)
+    verdict = _ruling_verdict(same_scope, branch, scope, meta)
+    if verdict:
+        return verdict
     if same_scope and ADJUDICATION_RE.search(same_scope[0]):
         # the FIRST fix(<scope>) commit of the line is the one judged (fix_scope reads it); a ruling on a later
         # commit of the same line is not on this commit (Codex r4 P2: `… && false && git commit -m 'fix(x): b' -m
@@ -185,9 +194,6 @@ def _repair_family_scope(
         return None
     fix_times = _scope_fix_times(rows, scope)
     strat_ts, hold_used = _strategy_cut(meta, fix_times)
-    branch = branch_fix_streak(
-        cwd, cmd, scope, meta.get("agent", "claude-code"), meta.get("session", "unset")
-    )
     strat_ts = max(
         strat_ts, branch["adjudicated_ts"]
     )  # an adjudication commit also cuts the session streak
@@ -228,9 +234,54 @@ def _repair_family_scope(
     return None
 
 
+def _ruling_verdict(messages: list[str], branch: dict, scope: str, meta: dict) -> dict | None:
+    """ADR-013, over every fix(<scope>) commit message of the line in order.  A ruling url releases one commit: the
+    same url on a second fix(<scope>) commit of the branch (or twice in one line) is spent.  After
+    MAX_ADJUDICATIONS_PER_SCOPE rulings on the branch no fix(<scope>) commit is released, with or without a url —
+    the branch is closed for that scope and the work moves to a new branch whose PR states the pivot (opencode#353:
+    7 follow-up fixes rode one url and the breaker never fired again).  Block-side; a fresh url below the cap releases."""
+    sid = meta.get("session", "<session>")
+    seen = list(branch.get("adjudications", []))
+    for message in messages:
+        if len(seen) >= MAX_ADJUDICATIONS_PER_SCOPE:
+            return {
+                "decision": "block",
+                "rule": "iter.repair-family",
+                "streak": branch["count"] + 1,
+                "reason": (
+                    f"this branch already carries {len(seen)} adjudicated fix({scope}) commits; the cap is "
+                    f"{MAX_ADJUDICATIONS_PER_SCOPE} (ADR-013). The branch is closed for fix({scope}), with or without a "
+                    f"ruling: move the work to a new branch cut from develop/main (a branch cut from this tip inherits the "
+                    f"closure) whose PR states what changed in the approach, and have it accepted anew (session {sid})"
+                ),
+            }
+        ruling = ADJUDICATION_RE.search(message)
+        if not ruling:
+            continue
+        url = ruling.group(1).rstrip(".,;)")
+        if url in seen:
+            return {
+                "decision": "block",
+                "rule": "iter.repair-family",
+                "streak": branch["count"] + 1,
+                "reason": (
+                    f"ADJUDICATION {url} was already used by an earlier fix({scope}) commit on this branch; a ruling "
+                    f"releases exactly one commit (ADR-013). Stop: this is the repair loop the breaker exists for. Get a "
+                    f"NEW decision (a new comment url) for THIS commit, or change the approach and start a new branch "
+                    f"(session {sid})"
+                ),
+            }
+        seen.append(url)
+    return None
+
+
 BRANCH_FIX_LIMIT = (
     6  # same-scope fix commits on one branch since its base, across sessions
 )
+# ADR-013 (owner, 2026-10-25, after 7 fix commits rode one adjudication url on opencode#353): a ruling releases exactly
+# ONE commit, and a scope gets at most this many rulings on one branch; after that the branch is closed for fix(<scope>)
+# and the work moves to a new branch whose PR states the pivot.
+MAX_ADJUDICATIONS_PER_SCOPE = 3
 BRANCH_BASES = ("origin/develop", "develop", "origin/main", "main")
 GIT_C_RE = re.compile(  # `git [-c k=v | --opt[=v] | -x] … -C <dir>` / `--git-dir=<dir>` (review r2 P3: global options before -C)
     r"""(?:^|\s)(?:\S*/)?git\s+(?:(?:-c\s+\S+|--[\w-]+(?:=\S*)?|-[a-zA-Z]\S*)\s+)*?(?:-C\s*|--git-dir=\s*)(?:'([^']+)'|"([^"]+)"|(\S+))"""
@@ -283,7 +334,7 @@ def branch_fix_streak(
 ) -> dict:
     """fix(<scope>) commits on the current branch since its merge-base with develop/main (first-parent, so a
     merged-in branch's fixes are not this branch's streak), counted from the newest commit back to the newest
-    one whose body carries `ADJUDICATION: <url>` (the owner's decision — for the branch, every scope); that
+    fix(<scope>) commit whose body carries `ADJUDICATION: <url>` (the owner's decision; ADR-013: a url on a docs / chore / merge commit is not a ruling); that
     commit's time is returned as `adjudicated_ts` so the session counter is cut at the same point.  Surface
     form from `git log`; a directory that is not a repository, or git failing, counts 0 (additive to the
     in-session breaker).  The whole check runs under GIT_BUDGET_SEC; a timeout writes an H6 error row instead
@@ -293,7 +344,7 @@ def branch_fix_streak(
 
     repo = _repo_for(cwd, cmd, scope)
     deadline = time.monotonic() + GIT_BUDGET_SEC
-    none = {"count": 0, "base": "?", "adjudicated_ts": 0.0}
+    none = {"count": 0, "base": "?", "adjudicated_ts": 0.0, "adjudications": []}
 
     def git(*args: str) -> str | None:
         left = deadline - time.monotonic()
@@ -341,13 +392,23 @@ def branch_fix_streak(
             session,
         )
         return none
-    count, adjudicated_ts = 0, 0.0
+    count, adjudicated_ts, cut = 0, 0.0, False
+    adjudications: list[str] = []  # every ruling url on a fix(<scope>) commit of the branch, newest first (ADR-013)
     for entry in log_out.split("\x00"):  # newest first
         ct, _, body = entry.strip().partition("\x1f")
         body = body.strip()
         if not body:
             continue
-        if ADJUDICATION_RE.search(body):
+        subject = body.split("\n", 1)[0]
+        fm = FIX_SUBJECT_RE.match(subject)
+        same = bool(fm) and fm.group(2).strip().lower() == scope
+        # ADR-013 (owner 2026-10-25, acceptance #224 P1): a ruling counts only on a fix(<scope>) commit. A url on a
+        # docs / chore / merge / other-scope commit neither cuts the counter nor spends a ruling — moving the url one
+        # commit over was the remaining way to ride one decision through a repair loop.
+        ruling = ADJUDICATION_RE.search(body) if same else None
+        if ruling:
+            adjudications.append(ruling.group(1).rstrip(".,;)"))
+        if ruling and not cut:
             # %ct is whole seconds: a session row written in the ruling's own second (before or after it) counts
             # toward the streak — errs to block (Codex r2 P2 chose this over +1 s, which dropped fixes made right
             # after the ruling); an unparsable time is no cut at all.
@@ -355,12 +416,10 @@ def branch_fix_streak(
                 adjudicated_ts = float(ct)
             except ValueError:
                 adjudicated_ts = 0.0
-            break
-        subject = body.split("\n", 1)[0]
-        fm = FIX_SUBJECT_RE.match(subject)
-        if fm and fm.group(2).strip().lower() == scope:
+            cut = True
+        elif same and not cut:
             count += 1
-    return {"count": count, "base": base_name, "adjudicated_ts": adjudicated_ts}
+    return {"count": count, "base": base_name, "adjudicated_ts": adjudicated_ts, "adjudications": adjudications}
 
 
 def iteration_check(
