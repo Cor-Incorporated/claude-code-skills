@@ -6,9 +6,12 @@
 #   dsh --raw <dsh args…>           the bare dsh launcher without the plugin patch (profiles, --dump-config, …)
 #   dsh                             this help. dsh 0.2.0-rc.1 ships no terminal TUI (profiles: acp, headless, sdk,
 #                                   sdk-minimal, web), so there is no opencode-style interactive terminal mode.
-# Credentials, in this order: (1) DEEPSEEK_API_KEY in the environment, or dsh's own credentials service (the web
-#   Models page writes it; the owner registers keys there) → run directly; (2) a Bitwarden session in this shell
-#   (BW_SESSION) → inject DEEPSEEK_API_KEY through `bw-secrets run` for the child only.
+# Credentials, in this order: (1) DEEPSEEK_API_KEY in the environment → run directly (dsh's credentials service
+#   ranks the inherited environment first, so the web Models page shows it as configured, source env, read-only);
+#   (2) a Bitwarden session: BW_SESSION in this shell, else the `bw-session` keychain item that `bw-unlock` writes
+#   (the same fallback as ~/.zsh/bitwarden.zsh, so `dsh web` from Finder, Desktop or a non-Developer shell works)
+#   → inject DEEPSEEK_API_KEY through `bw-secrets run` for the child only; (3) neither → run directly and say so
+#   (the web Models page then asks for a key, which it stores in ~/.dsh-aidd/.credentials.yaml).
 # Install (~/.dsh-aidd/pkg): dsh 0.2.0-rc.1 ONLY with npm overrides dsh-tools/dsh-agent=0.2.0-rc.1 — never add the
 # rc.5 Claude-Code bridge (a second dsh-tools copy makes the bash tool die with "reading 'prepare'").
 set -uo pipefail
@@ -18,11 +21,34 @@ DSH_BIN="$PKG/node_modules/.bin/dsh"
 [ -x "$DSH_BIN" ] || { echo "dsh: $PKG has no dsh — see the install note at the top of this script" >&2; exit 1; }
 if [ "$#" -eq 0 ]; then sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0; fi
 case "$1" in
-  --raw) shift; exec env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@" ;;
+  --raw) shift; exec env -u BW_SESSION DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@" ;;
   web)   shift; set -- web --patch "$PKG/aidd.patch.yml" "$@" ;;
   *)     set -- --profile headless --patch "$PKG/aidd.patch.yml" "$@" ;;
 esac
-if [ -n "${DEEPSEEK_API_KEY:-}" ] || [ -z "${BW_SESSION:-}" ]; then
-  exec env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
+# Every bare start drops BW_SESSION: the vault session is the master key (Developer/AGENTS.md) and only bw-secrets may
+# hold it; `bw-secrets run` strips it from its child, and the bare paths must not be the exception (Codex r2 P1).
+[ -n "${DEEPSEEK_API_KEY:-}" ] && exec env -u BW_SESSION DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
+if [ -z "${BW_SESSION:-}" ]; then
+  # keychain fallback (2026-10-25): bw-unlock stores the session as generic password bw-session/$USER. `unset` first:
+  # an exported `s` from the caller would keep its export attribute and ride into the child (Codex r3 P2).
+  unset -v s
+  s="$("${DSH_SECURITY_BIN:-/usr/bin/security}" find-generic-password -s bw-session -a "$USER" -w 2>/dev/null)" || s=""
+  case "$s" in
+    "" | *[!A-Za-z0-9+/=]*) s="" ;;
+  esac
+  [ "${#s}" -ge 16 ] && export BW_SESSION="$s"
+  unset -v s
 fi
-exec bw-secrets run DEEPSEEK_API_KEY=DEEPSEEK_API_KEY -- env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
+if [ -z "${BW_SESSION:-}" ]; then
+  echo "dsh: no DEEPSEEK_API_KEY and no Bitwarden session (run bw-unlock once, or export DEEPSEEK_API_KEY); starting without a key" >&2
+  exec env -u BW_SESSION DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
+fi
+# bw-secrets by its install path too: a GUI launch (Finder, Desktop) has no ~/.local/bin on PATH (Codex r1 P2).
+BWS="$(command -v bw-secrets 2>/dev/null || true)"; [ -x "${BWS:-/nonexistent}" ] || BWS="$HOME/.local/bin/bw-secrets"
+# A session that is present but unusable (vault locked, DEEPSEEK_API_KEY not registered, bw-secrets missing) must not
+# stop dsh: `check` runs the same lookup as `run` and prints only hashes, so fall back to the bare start (Codex r1 P2).
+if ! [ -x "$BWS" ] || ! "$BWS" check DEEPSEEK_API_KEY >/dev/null 2>&1; then
+  echo "dsh: Bitwarden session found but DEEPSEEK_API_KEY could not be read from it (vault locked? run bw-unlock); starting without a key" >&2
+  exec env -u BW_SESSION DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
+fi
+exec "$BWS" run DEEPSEEK_API_KEY=DEEPSEEK_API_KEY -- env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
