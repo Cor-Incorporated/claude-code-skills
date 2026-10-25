@@ -15,6 +15,39 @@ if [ "$rc" -eq 1 ] && printf '%s' "$o" | grep -q 'has no dsh'; then ok "dsh laun
 o="$(HOME="$SB" bash "$ROOT/dsh/launcher/dsh" 2>&1)"
 printf '%s' "$o" | grep -q 'has no dsh' && ok "dsh launcher checks the install before anything else" || bad "dsh help order: $o"
 grep -q 'no terminal TUI' "$ROOT/dsh/launcher/dsh" && grep -q 'dsh web' "$ROOT/dsh/launcher/dsh" && ok "dsh launcher documents one-shot / session / web and the missing TUI" || bad "dsh launcher docs"
+# dsh key injection (2026-10-25): a fake install, a fake bw-secrets and a fake `security` stand in for the real ones.
+DH="$SB/dshhome"; mkdir -p "$DH/.dsh-aidd/pkg/node_modules/.bin" "$SB/dbin"
+cat >"$DH/.dsh-aidd/pkg/node_modules/.bin/dsh" <<'FAKE'
+#!/usr/bin/env bash
+printf 'dsh-bin key=%s bw=%s args=%s\n' "${DEEPSEEK_API_KEY:-unset}" "${BW_SESSION:-unset}" "$*"
+FAKE
+cat >"$SB/dbin/bw-secrets" <<'FAKE'
+#!/usr/bin/env bash
+printf 'bw-secrets %s %s %s bw=%s\n' "$1" "$2" "$3" "${BW_SESSION:-unset}"; shift 4; exec "$@"
+FAKE
+cat >"$SB/dbin/security" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${SEC_LOG:?}"; printf '%s\n' "${FAKE_SESSION:?}"
+FAKE
+chmod +x "$DH/.dsh-aidd/pkg/node_modules/.bin/dsh" "$SB/dbin/"*
+dshrun() { HOME="$DH" PATH="$SB/dbin:$PATH" DSH_SECURITY_BIN="$SB/dbin/security" SEC_LOG="$SB/sec.log" bash "$ROOT/dsh/launcher/dsh" "$@" 2>&1; }
+# (1) a key in the environment: run directly, never touch the keychain
+: >"$SB/sec.log"; o="$(DEEPSEEK_API_KEY=k BW_SESSION= FAKE_SESSION=x dshrun web --no-open)"
+if printf '%s' "$o" | grep -q '^dsh-bin key=k bw=unset args=web --patch' && [ ! -s "$SB/sec.log" ]; then ok "dsh launcher: env key runs directly without a keychain read"; else bad "dsh env key: $o $(cat "$SB/sec.log")"; fi
+# (2a) BW_SESSION in the shell: bw-secrets injects, the keychain is not read
+: >"$SB/sec.log"; o="$(DEEPSEEK_API_KEY= BW_SESSION=shellsess FAKE_SESSION=x dshrun web --no-open)"
+if printf '%s' "$o" | grep -q '^bw-secrets run DEEPSEEK_API_KEY=DEEPSEEK_API_KEY -- bw=shellsess' && [ ! -s "$SB/sec.log" ]; then ok "dsh launcher: shell BW_SESSION injects through bw-secrets"; else bad "dsh shell session: $o"; fi
+# (2b) no BW_SESSION, keychain holds a session: it is exported and bw-secrets injects — the owner's `dsh web` case
+: >"$SB/sec.log"; o="$(DEEPSEEK_API_KEY= BW_SESSION= FAKE_SESSION='AbC123+/=AbC123+/=' dshrun web --no-open)"
+if printf '%s' "$o" | grep -q '^bw-secrets run DEEPSEEK_API_KEY=DEEPSEEK_API_KEY -- bw=AbC123+/=AbC123+/=' && grep -q 'find-generic-password -s bw-session -a .* -w' "$SB/sec.log"; then ok "dsh launcher: keychain bw-session is used when the shell has none"; else bad "dsh keychain session: $o / $(cat "$SB/sec.log")"; fi
+# (2c) a keychain value that is not a session token (spaces, too short) is ignored: start without a key and say so
+for junk in 'not a token at all' 'short'; do
+  o="$(DEEPSEEK_API_KEY= BW_SESSION= FAKE_SESSION="$junk" dshrun web --no-open)"
+  if printf '%s' "$o" | grep -q 'starting without a key' && printf '%s' "$o" | grep -q '^dsh-bin key=unset bw=unset' && ! printf '%s' "$o" | grep -q bw-secrets; then ok "dsh launcher: keychain junk [$junk] is ignored, no bw-secrets, notice printed"; else bad "dsh keychain junk [$junk]: $o"; fi
+done
+# the notice goes to stderr only, so a headless answer on stdout stays clean
+o="$(HOME="$DH" PATH="$SB/dbin:$PATH" DSH_SECURITY_BIN="$SB/dbin/security" SEC_LOG="$SB/sec.log" DEEPSEEK_API_KEY= BW_SESSION= FAKE_SESSION=short bash "$ROOT/dsh/launcher/dsh" "task" 2>/dev/null)"
+printf '%s' "$o" | grep -q 'starting without a key' && bad "dsh launcher notice leaked to stdout" || ok "dsh launcher notice stays on stderr"
 # pi: fail closed without the node-24 binary or the extension
 o="$(HOME="$SB" bash "$ROOT/pi/launcher/pi" --version 2>&1)"; rc=$?
 if [ "$rc" -eq 1 ] && printf '%s' "$o" | grep -q 'missing'; then ok "pi launcher fails closed without the pi binary"; else bad "pi launcher: rc=$rc [$o]"; fi
