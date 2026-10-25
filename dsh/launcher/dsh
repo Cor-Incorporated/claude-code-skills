@@ -29,12 +29,15 @@ esac
 # hold it; `bw-secrets run` strips it from its child, and the bare paths must not be the exception (Codex r2 P1).
 [ -n "${DEEPSEEK_API_KEY:-}" ] && exec env -u BW_SESSION DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
 if [ -z "${BW_SESSION:-}" ]; then
-  # keychain fallback (2026-10-25): bw-unlock stores the session as generic password bw-session/$USER
+  # keychain fallback (2026-10-25): bw-unlock stores the session as generic password bw-session/$USER. `unset` first:
+  # an exported `s` from the caller would keep its export attribute and ride into the child (Codex r3 P2).
+  unset -v s
   s="$("${DSH_SECURITY_BIN:-/usr/bin/security}" find-generic-password -s bw-session -a "$USER" -w 2>/dev/null)" || s=""
   case "$s" in
     "" | *[!A-Za-z0-9+/=]*) s="" ;;
   esac
   [ "${#s}" -ge 16 ] && export BW_SESSION="$s"
+  unset -v s
 fi
 if [ -z "${BW_SESSION:-}" ]; then
   echo "dsh: no DEEPSEEK_API_KEY and no Bitwarden session (run bw-unlock once, or export DEEPSEEK_API_KEY); starting without a key" >&2

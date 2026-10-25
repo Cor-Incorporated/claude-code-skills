@@ -20,6 +20,7 @@ DH="$SB/dshhome"; mkdir -p "$DH/.dsh-aidd/pkg/node_modules/.bin" "$SB/dbin"
 cat >"$DH/.dsh-aidd/pkg/node_modules/.bin/dsh" <<'FAKE'
 #!/usr/bin/env bash
 printf 'dsh-bin key=%s bw=%s args=%s\n' "${DEEPSEEK_API_KEY:-unset}" "${BW_SESSION:-unset}" "$*"
+printf 'dsh-env s=%s\n' "${s:-unset}"
 FAKE
 cat >"$SB/dbin/bw-secrets" <<'FAKE'
 #!/usr/bin/env bash
@@ -58,6 +59,9 @@ for sess in '' shellsess; do
   o="$(DEEPSEEK_API_KEY= BW_SESSION="$sess" FAKE_SESSION='AbC123+/=AbC123+/=' FAKE_BW_CHECK_RC=1 dshrun web --no-open)"; rc=$?
   if [ "$rc" -eq 0 ] && printf '%s' "$o" | grep -q 'could not be read from it' && printf '%s' "$o" | grep -q '^dsh-bin key=unset bw=unset args=web --patch' && ! printf '%s' "$o" | grep -q 'bw-secrets run'; then ok "dsh launcher: unusable session [shell=${sess:-none}] falls back to a bare start without BW_SESSION"; else bad "dsh unusable session [shell=${sess:-none}]: rc=$rc $o"; fi
 done
+# (2d') Codex r3 P2: an exported `s` in the caller must not carry the keychain session into the child
+o="$(export s=caller-exported; DEEPSEEK_API_KEY= BW_SESSION= FAKE_SESSION='AbC123+/=AbC123+/=' FAKE_BW_CHECK_RC=1 dshrun web --no-open)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$o" | grep -q '^dsh-env s=unset$' && printf '%s' "$o" | grep -q '^dsh-bin key=unset bw=unset'; then ok "dsh launcher: an exported caller variable s does not leak the session"; else bad "dsh exported s: rc=$rc $o"; fi
 # (2e) Codex r1 P2: a GUI launch has no ~/.local/bin on PATH; bw-secrets is resolved from its install path
 o="$(HOME="$DH" PATH="/usr/bin:/bin" DSH_SECURITY_BIN="$SB/dbin/security" SEC_LOG="$SB/sec.log" DEEPSEEK_API_KEY= BW_SESSION= FAKE_SESSION='AbC123+/=AbC123+/=' bash "$ROOT/dsh/launcher/dsh" web --no-open 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$o" | grep -q '^bw-secrets run DEEPSEEK_API_KEY=DEEPSEEK_API_KEY -- bw=AbC123+/=AbC123+/=' && printf '%s' "$o" | grep -q "$INJ"; then ok "dsh launcher: bw-secrets found at ~/.local/bin on a minimal PATH"; else bad "dsh minimal PATH: rc=$rc $o"; fi
