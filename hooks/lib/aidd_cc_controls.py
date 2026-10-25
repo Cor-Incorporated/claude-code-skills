@@ -177,8 +177,13 @@ def _repair_family_scope(
     branch = branch_fix_streak(
         cwd, cmd, scope, meta.get("agent", "claude-code"), meta.get("session", "unset")
     )
-    ruling = ADJUDICATION_RE.search(same_scope[0]) if same_scope else None
-    if ruling:
+    # ADR-013: every fix(<scope>) commit of the line is judged against the branch's rulings — the cap holds whether or
+    # not the commit carries a url (Codex: dropping the url re-opened a closed scope), and a line that chains two
+    # commits cannot spend one url twice or push past the cap in one call (Codex: `fix a -m U2 && fix b -m U1`)
+    verdict = _ruling_verdict(same_scope, branch, scope, meta)
+    if verdict:
+        return verdict
+    if same_scope and ADJUDICATION_RE.search(same_scope[0]):
         # the FIRST fix(<scope>) commit of the line is the one judged (fix_scope reads it); a ruling on a later
         # commit of the same line is not on this commit (Codex r4 P2: `… && false && git commit -m 'fix(x): b' -m
         # 'ADJUDICATION: …'`)
@@ -186,9 +191,6 @@ def _repair_family_scope(
         # 'ADJUDICATION: <url>'`, review 2026-10-17 P1): the remedy both breakers ask for.  A ruling in another
         # commit of the same line (`… && git commit -m docs -m 'ADJUDICATION: …'`), a shell comment or another
         # argument never lands on this commit (Codex r2/r3 P2).  Surface form by design — the url is auditable.
-        verdict = _ruling_verdict(ruling.group(1).rstrip(".,;)"), branch, scope, meta)
-        if verdict:
-            return verdict
         return None
     fix_times = _scope_fix_times(rows, scope)
     strat_ts, hold_used = _strategy_cut(meta, fix_times)
@@ -232,35 +234,44 @@ def _repair_family_scope(
     return None
 
 
-def _ruling_verdict(url: str, branch: dict, scope: str, meta: dict) -> dict | None:
-    """ADR-013: a ruling url releases one commit.  The same url on a second fix(<scope>) commit of the branch is spent
-    (opencode#353: 7 follow-up fixes rode one url and the breaker never fired again); after MAX_ADJUDICATIONS_PER_SCOPE
-    rulings on the branch, no fix(<scope>) commit is released at all — the branch is closed for that scope and the
-    work moves to a new branch whose PR states the pivot.  Both are block-side; a fresh url below the cap releases."""
+def _ruling_verdict(messages: list[str], branch: dict, scope: str, meta: dict) -> dict | None:
+    """ADR-013, over every fix(<scope>) commit message of the line in order.  A ruling url releases one commit: the
+    same url on a second fix(<scope>) commit of the branch (or twice in one line) is spent.  After
+    MAX_ADJUDICATIONS_PER_SCOPE rulings on the branch no fix(<scope>) commit is released, with or without a url —
+    the branch is closed for that scope and the work moves to a new branch whose PR states the pivot (opencode#353:
+    7 follow-up fixes rode one url and the breaker never fired again).  Block-side; a fresh url below the cap releases."""
     sid = meta.get("session", "<session>")
-    spent = branch.get("adjudications", [])
-    if url in spent:
-        return {
-            "decision": "block",
-            "rule": "iter.repair-family",
-            "streak": branch["count"] + 1,
-            "reason": (
-                f"ADJUDICATION {url} was already used by an earlier fix({scope}) commit on this branch; a ruling releases "
-                f"exactly one commit (ADR-013). Stop: this is the repair loop the breaker exists for. Get a NEW decision "
-                f"(a new comment url) for THIS commit, or change the approach and start a new branch (session {sid})"
-            ),
-        }
-    if len(spent) >= MAX_ADJUDICATIONS_PER_SCOPE:
-        return {
-            "decision": "block",
-            "rule": "iter.repair-family",
-            "streak": branch["count"] + 1,
-            "reason": (
-                f"this branch already carries {len(spent)} adjudicated fix({scope}) commits; the cap is "
-                f"{MAX_ADJUDICATIONS_PER_SCOPE} (ADR-013). The branch is closed for fix({scope}): move the work to a new "
-                f"branch whose PR states what changed in the approach, and have it accepted anew (session {sid})"
-            ),
-        }
+    seen = list(branch.get("adjudications", []))
+    for message in messages:
+        if len(seen) >= MAX_ADJUDICATIONS_PER_SCOPE:
+            return {
+                "decision": "block",
+                "rule": "iter.repair-family",
+                "streak": branch["count"] + 1,
+                "reason": (
+                    f"this branch already carries {len(seen)} adjudicated fix({scope}) commits; the cap is "
+                    f"{MAX_ADJUDICATIONS_PER_SCOPE} (ADR-013). The branch is closed for fix({scope}), with or without a "
+                    f"ruling: move the work to a new branch whose PR states what changed in the approach, and have it "
+                    f"accepted anew (session {sid})"
+                ),
+            }
+        ruling = ADJUDICATION_RE.search(message)
+        if not ruling:
+            continue
+        url = ruling.group(1).rstrip(".,;)")
+        if url in seen:
+            return {
+                "decision": "block",
+                "rule": "iter.repair-family",
+                "streak": branch["count"] + 1,
+                "reason": (
+                    f"ADJUDICATION {url} was already used by an earlier fix({scope}) commit on this branch; a ruling "
+                    f"releases exactly one commit (ADR-013). Stop: this is the repair loop the breaker exists for. Get a "
+                    f"NEW decision (a new comment url) for THIS commit, or change the approach and start a new branch "
+                    f"(session {sid})"
+                ),
+            }
+        seen.append(url)
     return None
 
 
