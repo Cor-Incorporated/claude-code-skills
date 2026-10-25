@@ -38,4 +38,12 @@ if [ -z "${BW_SESSION:-}" ]; then
   echo "dsh: no DEEPSEEK_API_KEY and no Bitwarden session (run bw-unlock once, or export DEEPSEEK_API_KEY); starting without a key" >&2
   exec env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
 fi
-exec bw-secrets run DEEPSEEK_API_KEY=DEEPSEEK_API_KEY -- env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
+# bw-secrets by its install path too: a GUI launch (Finder, Desktop) has no ~/.local/bin on PATH (Codex r1 P2).
+BWS="$(command -v bw-secrets 2>/dev/null || true)"; [ -x "${BWS:-/nonexistent}" ] || BWS="$HOME/.local/bin/bw-secrets"
+# A session that is present but unusable (vault locked, DEEPSEEK_API_KEY not registered, bw-secrets missing) must not
+# stop dsh: `check` runs the same lookup as `run` and prints only hashes, so fall back to the bare start (Codex r1 P2).
+if ! [ -x "$BWS" ] || ! "$BWS" check DEEPSEEK_API_KEY >/dev/null 2>&1; then
+  echo "dsh: Bitwarden session found but DEEPSEEK_API_KEY could not be read from it (vault locked? run bw-unlock); starting without a key" >&2
+  exec env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"
+fi
+exec "$BWS" run DEEPSEEK_API_KEY=DEEPSEEK_API_KEY -- env DSH_HOME="$HOME/.dsh-aidd" "$DSH_BIN" "$@"

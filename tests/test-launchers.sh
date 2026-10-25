@@ -23,13 +23,15 @@ printf 'dsh-bin key=%s bw=%s args=%s\n' "${DEEPSEEK_API_KEY:-unset}" "${BW_SESSI
 FAKE
 cat >"$SB/dbin/bw-secrets" <<'FAKE'
 #!/usr/bin/env bash
+if [ "$1" = check ]; then printf 'bw-secrets check %s bw=%s\n' "$2" "${BW_SESSION:-unset}"; exit "${FAKE_BW_CHECK_RC:-0}"; fi
 printf 'bw-secrets %s %s %s bw=%s\n' "$1" "$2" "$3" "${BW_SESSION:-unset}"; shift 4; exec "$@"
 FAKE
+mkdir -p "$DH/.local/bin"; cp "$SB/dbin/bw-secrets" "$DH/.local/bin/bw-secrets"
 cat >"$SB/dbin/security" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${SEC_LOG:?}"; printf '%s\n' "${FAKE_SESSION:?}"
 FAKE
-chmod +x "$DH/.dsh-aidd/pkg/node_modules/.bin/dsh" "$SB/dbin/"*
+chmod +x "$DH/.dsh-aidd/pkg/node_modules/.bin/dsh" "$SB/dbin/"* "$DH/.local/bin/bw-secrets"
 dshrun() { HOME="$DH" PATH="$SB/dbin:$PATH" DSH_SECURITY_BIN="$SB/dbin/security" SEC_LOG="$SB/sec.log" bash "$ROOT/dsh/launcher/dsh" "$@" 2>&1; }
 # (1) a key in the environment: run directly, never touch the keychain
 : >"$SB/sec.log"; o="$(DEEPSEEK_API_KEY=k BW_SESSION= FAKE_SESSION=x dshrun web --no-open)"
@@ -45,6 +47,12 @@ for junk in 'not a token at all' 'short'; do
   o="$(DEEPSEEK_API_KEY= BW_SESSION= FAKE_SESSION="$junk" dshrun web --no-open)"
   if printf '%s' "$o" | grep -q 'starting without a key' && printf '%s' "$o" | grep -q '^dsh-bin key=unset bw=unset' && ! printf '%s' "$o" | grep -q bw-secrets; then ok "dsh launcher: keychain junk [$junk] is ignored, no bw-secrets, notice printed"; else bad "dsh keychain junk [$junk]: $o"; fi
 done
+# (2d) Codex r1 P2: a well-formed but unusable session (vault locked / key not registered -> `check` fails) must not stop dsh
+o="$(DEEPSEEK_API_KEY= BW_SESSION= FAKE_SESSION='AbC123+/=AbC123+/=' FAKE_BW_CHECK_RC=1 dshrun web --no-open)"
+if printf '%s' "$o" | grep -q 'could not be read from it' && printf '%s' "$o" | grep -q '^dsh-bin key=unset' && ! printf '%s' "$o" | grep -q 'bw-secrets run'; then ok "dsh launcher: unusable keychain session falls back to the bare start"; else bad "dsh unusable session: $o"; fi
+# (2e) Codex r1 P2: a GUI launch has no ~/.local/bin on PATH; bw-secrets is resolved from its install path
+o="$(HOME="$DH" PATH="/usr/bin:/bin" DSH_SECURITY_BIN="$SB/dbin/security" SEC_LOG="$SB/sec.log" DEEPSEEK_API_KEY= BW_SESSION= FAKE_SESSION='AbC123+/=AbC123+/=' bash "$ROOT/dsh/launcher/dsh" web --no-open 2>&1)"
+if printf '%s' "$o" | grep -q '^bw-secrets run DEEPSEEK_API_KEY=DEEPSEEK_API_KEY -- bw=AbC123+/=AbC123+/='; then ok "dsh launcher: bw-secrets found at ~/.local/bin on a minimal PATH"; else bad "dsh minimal PATH: $o"; fi
 # the notice goes to stderr only, so a headless answer on stdout stays clean
 o="$(HOME="$DH" PATH="$SB/dbin:$PATH" DSH_SECURITY_BIN="$SB/dbin/security" SEC_LOG="$SB/sec.log" DEEPSEEK_API_KEY= BW_SESSION= FAKE_SESSION=short bash "$ROOT/dsh/launcher/dsh" "task" 2>/dev/null)"
 printf '%s' "$o" | grep -q 'starting without a key' && bad "dsh launcher notice leaked to stdout" || ok "dsh launcher notice stays on stderr"
