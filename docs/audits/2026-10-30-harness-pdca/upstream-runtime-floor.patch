@@ -1,0 +1,338 @@
+--- a/go/internal/runtimefloor/runtimefloor.go
++++ b/go/internal/runtimefloor/runtimefloor.go
+@@ -164,20 +164,38 @@
+ 	}
+ 
+ 	if strings.Contains(lower, "scp ") || strings.Contains(lower, "rsync ") {
+-		for _, match := range remoteHostPattern.FindAllStringSubmatch(cmd, -1) {
+-			host := strings.ToLower(match[1])
+-			if !isAllowlistedHost(host) {
+-				return stop(CategoryEgress, match[0],
+-					"remote copy/sync requires human approval")
++		// Precise path: scp/rsync run as a command; only [user@]host:path
++		// (or rsync://host) operands are remote. A local copy such as
++		// "rsync -a ./a/ ./b/ && cp CLAUDE.md x/" names no host.
++		if hosts, found := copyDestinations(strings.Fields(cmd)); found {
++			for _, host := range hosts {
++				if !isAllowlistedHost(host) {
++					return stop(CategoryEgress, host,
++						"remote copy/sync requires human approval")
++				}
+ 			}
+ 		}
++		// Conservative path, unchanged: the words also appear somewhere the
++		// precise path cannot see (quoted, sh -c, ssh '...', a heredoc).
++		if !onlyTopLevelCopies(cmd) {
++			for _, match := range remoteHostPattern.FindAllStringSubmatch(cmd, -1) {
++				host := strings.ToLower(match[1])
++				if !isAllowlistedHost(host) {
++					return stop(CategoryEgress, match[0],
++						"remote copy/sync requires human approval")
++				}
++			}
++		}
+ 	}
+ 
+ 	if strings.Contains(lower, "nc ") {
+ 		fields := strings.Fields(cmd)
+ 		for i, field := range fields {
+ 			if strings.EqualFold(field, "nc") && i+1 < len(fields) {
+-				host := strings.ToLower(fields[i+1])
++				host := strings.ToLower(ncDestination(fields, i))
++				if host == "" {
++					host = strings.ToLower(fields[i+1])
++				}
+ 				if !isAllowlistedHost(host) {
+ 					return stop(CategoryEgress, "nc "+host,
+ 						"network connection to non-allowlisted host requires human approval")
+@@ -313,9 +331,24 @@
+ 	if strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.0.0.1:") {
+ 		return true
+ 	}
+-	return false
++	return loadEgressAllow().allows(bareHost(host))
+ }
+ 
++// onlyTopLevelCopies reports whether every occurrence of the words scp/rsync
++// is a field that is exactly the command name. Anything else (a quoted or
++// nested mention) keeps the conservative remoteHostPattern scan.
++func onlyTopLevelCopies(cmd string) bool {
++	lower := strings.ToLower(cmd)
++	mentions := strings.Count(lower, "scp") + strings.Count(lower, "rsync")
++	exact := 0
++	for _, f := range strings.Fields(lower) {
++		if f == "scp" || f == "rsync" {
++			exact++
++		}
++	}
++	return mentions == exact
++}
++
+ func checkSecretRead(cmd string, ctx Context) Decision {
+ 	// Scan only the executable portion of the command, not heredoc bodies or
+ 	// comments. A secret filename that appears purely as document text (e.g.
+--- /dev/null
++++ b/go/internal/runtimefloor/egress_operands.go
+@@ -0,0 +1,199 @@
++package runtimefloor
++
++import (
++	"net"
++	"os"
++	"strings"
++)
++
++// HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW names destinations the operator treats as
++// internal (comma separated): an IP, a CIDR, an exact host name, or a
++// ".suffix" that matches the suffix and its subdomains. Entries that would
++// open every destination ("*", "0.0.0.0/0", "::/0", a CIDR wider than /8 for
++// IPv4 or /16 for IPv6, "." or an empty string) are discarded, like the
++// secret-read allowlist discards all-open declarations. The variable cannot
++// disable the category; HARNESS_RUNTIME_FLOOR_EGRESS=off remains the only
++// switch for that.
++type egressAllow struct {
++	nets     []*net.IPNet
++	ips      []net.IP
++	hosts    map[string]bool
++	suffixes []string
++}
++
++func loadEgressAllow() egressAllow {
++	a := egressAllow{hosts: map[string]bool{}}
++	for _, raw := range strings.Split(os.Getenv("HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW"), ",") {
++		e := strings.ToLower(strings.TrimSpace(strings.Trim(strings.TrimSpace(raw), `"'`)))
++		switch {
++		case e == "" || e == "*" || e == "." || strings.ContainsAny(e, "*?[]"):
++			continue
++		case strings.Contains(e, "/"):
++			_, n, err := net.ParseCIDR(e)
++			if err != nil {
++				continue
++			}
++			ones, bits := n.Mask.Size()
++			if (bits == 32 && ones < 8) || (bits == 128 && ones < 16) {
++				continue
++			}
++			a.nets = append(a.nets, n)
++		case net.ParseIP(e) != nil:
++			a.ips = append(a.ips, net.ParseIP(e))
++		case strings.HasPrefix(e, "."):
++			if strings.Count(e, ".") < 1 || len(e) < 3 {
++				continue
++			}
++			a.suffixes = append(a.suffixes, e)
++		default:
++			a.hosts[e] = true
++		}
++	}
++	return a
++}
++
++func (a egressAllow) allows(host string) bool {
++	host = strings.ToLower(strings.TrimSuffix(host, "."))
++	if host == "" {
++		return false
++	}
++	if ip := net.ParseIP(host); ip != nil {
++		for _, n := range a.nets {
++			if n.Contains(ip) {
++				return true
++			}
++		}
++		for _, x := range a.ips {
++			if x.Equal(ip) {
++				return true
++			}
++		}
++		return false
++	}
++	if a.hosts[host] {
++		return true
++	}
++	for _, s := range a.suffixes {
++		if strings.HasSuffix(host, s) || host == strings.TrimPrefix(s, ".") {
++			return true
++		}
++	}
++	return false
++}
++
++// bareHost strips userinfo, brackets and a port from a destination token:
++// user@host:22 → host, [fd00::1]:22 → fd00::1, 192.168.11.28:4000 → 192.168.11.28.
++func bareHost(token string) string {
++	h := strings.Trim(token, `"'`)
++	if at := strings.LastIndex(h, "@"); at >= 0 {
++		h = h[at+1:]
++	}
++	if strings.HasPrefix(h, "[") {
++		if end := strings.Index(h, "]"); end > 0 {
++			return h[1:end]
++		}
++	}
++	if strings.Count(h, ":") == 1 {
++		h = h[:strings.Index(h, ":")]
++	}
++	return strings.TrimSuffix(h, ":")
++}
++
++// ncOptionsWithArgument are the netcat options (BSD and OpenBSD nc) whose next
++// token is the option's value, not the destination.
++var ncOptionsWithArgument = map[string]bool{
++	"-G": true, "-I": true, "-i": true, "-M": true, "-m": true, "-O": true,
++	"-P": true, "-p": true, "-q": true, "-s": true, "-T": true, "-V": true,
++	"-W": true, "-w": true, "-X": true, "-x": true,
++}
++
++// ncDestination returns the first operand after nc that is not an option or
++// an option's value. "nc -z -G 3 -w 3 10.0.0.5 445" → "10.0.0.5". The old
++// check read the token right after nc ("-z") as the host, so every nc with an
++// option was denied, including nc to localhost.
++func ncDestination(fields []string, i int) string {
++	for j := i + 1; j < len(fields); j++ {
++		f := fields[j]
++		if isSegmentBreak(f) {
++			return ""
++		}
++		if strings.HasPrefix(f, "-") && len(f) > 1 {
++			if ncOptionsWithArgument[f] {
++				j++
++			}
++			continue
++		}
++		return strings.TrimRight(f, ";&|")
++	}
++	return ""
++}
++
++func isSegmentBreak(f string) bool {
++	switch f {
++	case ";", "&&", "||", "|", "&", "\n":
++		return true
++	}
++	return false
++}
++
++// remoteOperand reports the host of an scp/rsync operand that names a remote
++// side: [user@]host:path, rsync://host/..., scp://host/... A local path
++// ("./dist/", "CLAUDE.md", "/abs/path") is not remote. Unlike the
++// remoteHostPattern scan, an IP destination is recognized, so
++// "scp f deploy@203.0.113.7:/srv/" is no longer allowed by accident.
++func remoteOperand(token string) (string, bool) {
++	t := strings.TrimRight(strings.Trim(token, `"'`), ";&|")
++	lower := strings.ToLower(t)
++	for _, scheme := range []string{"rsync://", "scp://", "sftp://", "ssh://"} {
++		if strings.HasPrefix(lower, scheme) {
++			rest := t[len(scheme):]
++			if slash := strings.Index(rest, "/"); slash >= 0 {
++				rest = rest[:slash]
++			}
++			return bareHost(rest), true
++		}
++	}
++	if strings.HasPrefix(t, "/") || strings.HasPrefix(t, ".") || strings.HasPrefix(t, "~") || strings.HasPrefix(t, "-") {
++		return "", false
++	}
++	if strings.HasPrefix(t, "[") {
++		if end := strings.Index(t, "]:"); end > 0 {
++			return t[1:end], true
++		}
++		return "", false
++	}
++	colon := strings.Index(t, ":")
++	if colon <= 0 {
++		return "", false
++	}
++	if slash := strings.Index(t, "/"); slash >= 0 && slash < colon {
++		return "", false
++	}
++	return bareHost(t[:colon+1]), true
++}
++
++// copyDestinations returns, for every scp/rsync field, the remote hosts named
++// by its operands up to the end of the segment. found is false when the text
++// mentions scp/rsync but no field is exactly the command name (quoted, nested
++// in sh -c, behind a path): the caller then keeps the conservative scan.
++func copyDestinations(fields []string) (hosts []string, found bool) {
++	for i, f := range fields {
++		name := strings.ToLower(f)
++		if name != "scp" && name != "rsync" {
++			continue
++		}
++		found = true
++		for j := i + 1; j < len(fields); j++ {
++			if isSegmentBreak(fields[j]) {
++				break
++			}
++			if h, ok := remoteOperand(fields[j]); ok {
++				hosts = append(hosts, h)
++			}
++			if strings.HasSuffix(fields[j], ";") {
++				break
++			}
++		}
++	}
++	return hosts, found
++}
+--- /dev/null
++++ b/go/internal/runtimefloor/egress_operands_test.go
+@@ -0,0 +1,60 @@
++package runtimefloor
++
++import "testing"
++
++// Commands taken from real denials on 2026-10-30 (cluster operations from a
++// Mac: LAN 192.168.11.0/24, tailnet 100.64.0.0/10, nodes by short name).
++func TestEgress_OperandParsing(t *testing.T) {
++	root := testWorktreeRoot(t)
++	clusterAllow := "192.168.11.0/24,100.64.0.0/10,evo-x2,jetson-thor,.tail1234.ts.net"
++
++	cases := []struct {
++		name  string
++		allow string
++		cmd   string
++		stop  bool
++	}{
++		// false positives in 5.16.0
++		{"local rsync with a .md operand", "", "rsync -a --delete ./snap-before/ ./snap-after/ && cp CLAUDE.md x/", false},
++		{"nc with options to localhost", "", "nc -z -G 3 127.0.0.1 22", false},
++		{"nc options to an allowlisted LAN host", clusterAllow, "nc -z -G 3 -w 3 192.168.11.23 445", false},
++		{"curl to an allowlisted LAN host with port", clusterAllow, "curl -s http://192.168.11.28:4000/health", false},
++		{"curl to an allowlisted node name", clusterAllow, "curl -s http://evo-x2:8080/v1/models", false},
++		{"curl to an allowlisted tailnet suffix", clusterAllow, "curl -s http://evo-x2.tail1234.ts.net:8080/v1/models", false},
++		{"scp to an allowlisted node, module name later", clusterAllow,
++			"scp scripts/e2e/run.sh jetson-thor:ets/ && ssh jetson-thor 'python -m engineai_thor_sidecar.cli run'", false},
++		{"rsync to an allowlisted tailnet IP", clusterAllow, "rsync -av ./models/ 100.76.44.16:/srv/models/", false},
++
++		// still denied
++		{"nc with options to a LAN host, no allowlist", "", "nc -z -G 3 -w 3 192.168.11.23 445", true},
++		{"external curl with the cluster allowlist", clusterAllow, "curl -s https://pypi.org/pypi/awscrt/json", true},
++		{"scp to an external name with the cluster allowlist", clusterAllow, "scp ./build deploy@files.example.com:/srv/", true},
++		{"nested rsync keeps the conservative scan", clusterAllow, `sh -c "rsync -a f deploy@files.example.com:/x"`, true},
++		{"allowlist suffix does not match a look-alike", clusterAllow, "curl -s https://evil-tail1234.ts.net.example.com/", true},
++
++		// false negatives in 5.16.0 (raw IP destinations were never matched)
++		{"scp to an external IP", "", "scp ./build deploy@203.0.113.7:/srv/", true},
++		{"rsync to an external IP", "", "rsync -a ./out/ 198.51.100.4:/srv/out/", true},
++		{"scp to a bracketed IPv6", "", "scp f [2001:db8::7]:/srv/", true},
++
++		// all-open declarations are discarded
++		{"wildcard allow is ignored", "*", "curl https://example.com/", true},
++		{"0.0.0.0/0 is ignored", "0.0.0.0/0", "nc -z 203.0.113.9 22", true},
++		{"::/0 is ignored", "::/0", "curl http://[2001:db8::1]/", true},
++		{"a /4 is ignored", "0.0.0.0/4", "nc -z 10.1.1.1 22", true},
++		{"glob entries are ignored", "*.example.com", "curl https://api.example.com/", true},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Setenv("HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW", tc.allow)
++			d := CheckCommand(tc.cmd, Context{WorktreeRoot: root})
++			if d.Stopped != tc.stop {
++				t.Fatalf("CheckCommand(%q) with allow=%q: stopped=%v (%s), want %v",
++					tc.cmd, tc.allow, d.Stopped, d.Reason, tc.stop)
++			}
++			if d.Stopped && d.Category != CategoryEgress {
++				t.Fatalf("CheckCommand(%q): category=%s, want egress", tc.cmd, d.Category)
++			}
++		})
++	}
++}
