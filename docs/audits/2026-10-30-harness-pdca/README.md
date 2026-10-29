@@ -1,6 +1,6 @@
 # Harness friction inventory — 2026-10-30 night (9 lanes)
 
-- Measured: 2026-10-30 02:15–05:00 JST, MacBook (teradakousuke), session harness-pdca
+- Measured: 2026-10-30 02:15–03:45 JST, MacBook (teradakousuke), session harness-pdca
 - Sources: plugin audit files `<project>/.claude/state/audit/guardrail-fires.jsonl` (ts ≥ 2026-10-29T15:00Z = 00:00 JST),
   Claude Code transcripts under `~/.claude/projects/*/*.jsonl` (tool_result paired with its tool_use command),
   lane reports in `~/Documents/Codex/2026-10-29/desktop-handoffs/completed/`
