@@ -60,8 +60,10 @@ new_repo() { # $1 = dir
   git -C "$1" config user.name t
 }
 
+mkdir -p "$SB/home"
 run_hook() { # $1 = file
-  printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" | bash "$HOOK" >/dev/null 2>&1
+  printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" \
+    | HOME="$SB/home" AIDD_LEDGER_SOURCE=test bash "$HOOK" >/dev/null 2>&1
 }
 
 edit_one_line() { # $1 = file: append one new, unformatted line (the "edit")
@@ -77,6 +79,11 @@ before="$(shasum "$R/test_judge.py")"
 run_hook "$R/test_judge.py"
 [[ "$(shasum "$R/test_judge.py")" == "$before" ]] && ok "no ruff config → the file is left exactly as edited" \
   || bad "no config must not reformat" "$(git -C "$R" diff --stat)"
+if [[ -z "${IN_MUTANT:-}" ]]; then
+  grep -q '"rule":"autofix-skipped:no-project-config"' "$SB/home/.claude/hooks/ledger/guard-ledger.jsonl" 2>/dev/null \
+    && ok "the skipped write is measured in the ledger (no-project-config)" \
+    || bad "skip measurement" "no autofix-skipped row in the sandbox ledger"
+fi
 
 # 2. 設定あり + HEAD 未整形 → 書き換えない (全体整形が無関係な行に及ぶ)
 R="$SB/r2"; new_repo "$R"
@@ -153,9 +160,9 @@ if [[ -z "${IN_MUTANT:-}" ]]; then
   python3 - "$HOOK" "$MUT" <<'PY'
 import sys
 src = open(sys.argv[1]).read()
-old = '  # shellcheck disable=SC2086\n  has_project_config "$file" $configs || return 1\n  head_version_clean "$file" "$mode" "$@"'
+old = '  [[ -z "$why" ]] && return 0'
 assert old in src, "mutation anchor not found"
-open(sys.argv[2], "w").write(src.replace(old, '  return 0', 1))
+open(sys.argv[2], "w").write(src.replace(old, '  return 0  # mutant', 1))
 PY
   if [[ ! -s "$MUT" ]] || cmp -s "$HOOK" "$MUT"; then
     bad "mutation could not be applied" "anchor not found in $HOOK — update the mutant"

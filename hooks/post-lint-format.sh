@@ -10,6 +10,10 @@
 # Performance: 2s timeout per tool. Silent skip if tool not installed.
 # Security: No npx --yes (supply-chain risk). Only pre-installed tools.
 set -uo pipefail
+
+_LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
+# shellcheck source=/dev/null
+[ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
 # Note: -e intentionally omitted — timeout exits non-zero and we handle it
 
 TIMEOUT=2
@@ -135,9 +139,20 @@ head_version_clean() {
 may_autofix() { # $1 = file, $2 = config names (space separated), $3 = mode, rest = stdin command
   local file="$1" configs="$2" mode="$3"
   shift 3
+  local why=""
   # shellcheck disable=SC2086
-  has_project_config "$file" $configs || return 1
-  head_version_clean "$file" "$mode" "$@"
+  if ! has_project_config "$file" $configs; then
+    why="no-project-config"
+  elif ! head_version_clean "$file" "$mode" "$@"; then
+    why="head-not-clean"
+  fi
+  [[ -z "$why" ]] && return 0
+  # One ledger row per skipped write: how often the gate protects unedited
+  # lines is the number that decides whether it stays (ADR-006 rule 6).
+  if declare -F aidd_ledger_append >/dev/null 2>&1; then
+    aidd_ledger_append "post-lint-format" "measure" "allow" "$1 $(basename "$file")" "autofix-skipped:$why"
+  fi
+  return 1
 }
 
 case "$file" in
