@@ -78,9 +78,17 @@ def check(manifest: dict, skill: Path) -> list[str]:
     if not lanes:
         problems.append("lanes: empty")
     seen_worktrees: dict[str, str] = {}
+    seen_reports: dict[str, str] = {}
+    seen_topics: dict[str, int] = {}
     owned: list[tuple[str, Path, str]] = []
-    for lane in lanes:
+    for idx, lane in enumerate(lanes):
+        if not isinstance(lane, dict):
+            problems.append(f"lane #{idx + 1}: must be a mapping, got {type(lane).__name__}")
+            continue
         topic = lane.get("topic", "<no topic>")
+        if topic in seen_topics:
+            problems.append(f"{topic}: topic is used by more than one lane")
+        seen_topics[topic] = idx
         absent = [k for k in REQUIRED if k not in lane or lane[k] in (None, "")]
         if absent:
             problems.append(f"{topic}: missing {absent}")
@@ -118,17 +126,32 @@ def check(manifest: dict, skill: Path) -> list[str]:
             if str(wpath) in seen_worktrees:
                 problems.append(f"{topic}: worktree {wpath} is also used by {seen_worktrees[str(wpath)]}")
             seen_worktrees[str(wpath)] = topic
-        report_dir = expand(lane["report_to"]).parent
-        if not report_dir.is_dir():
-            problems.append(f"{topic}: report_to directory {report_dir} does not exist")
+        report = expand(lane["report_to"])
+        if not report.parent.is_dir():
+            problems.append(f"{topic}: report_to directory {report.parent} does not exist")
+        if str(report) in seen_reports:
+            problems.append(f"{topic}: report_to {report} is also written by {seen_reports[str(report)]}")
+        seen_reports[str(report)] = topic
         for p in lane["owns"]:
-            owned.append((topic, Path(top).resolve(), str(p).rstrip("/")))
+            owned.append((idx, topic, Path(top).resolve(), norm_owned(p)))
 
-    for i, (t1, r1, p1) in enumerate(owned):
-        for t2, r2, p2 in owned[i + 1:]:
-            if t1 != t2 and r1 == r2 and (p1 == p2 or p1.startswith(p2 + "/") or p2.startswith(p1 + "/")):
-                problems.append(f"{t1} owns {p1!r} and {t2} owns {p2!r} in the same repo {r1}")
+    for i, (n1, t1, r1, p1) in enumerate(owned):
+        for n2, t2, r2, p2 in owned[i + 1:]:
+            if n1 != n2 and r1 == r2 and overlaps(p1, p2):
+                problems.append(f"{t1} owns {p1 or '.'!r} and {t2} owns {p2 or '.'!r} in the same repo {r1}")
     return problems
+
+
+def norm_owned(p: str) -> str:
+    """'./src/a/' → 'src/a'; '.', './', '/' and '' → '' (the whole repo)."""
+    parts = [x for x in str(p).replace("\\", "/").split("/") if x not in ("", ".")]
+    return "/".join(parts)
+
+
+def overlaps(a: str, b: str) -> bool:
+    if a == "" or b == "":
+        return True
+    return a == b or a.startswith(b + "/") or b.startswith(a + "/")
 
 
 def main(argv: list[str]) -> int:
@@ -137,7 +160,10 @@ def main(argv: list[str]) -> int:
         return 2
     manifest = load(Path(argv[1]))
     skill = Path(argv[2]) if len(argv) > 2 else HERE / "SKILL.md"
-    problems = check(manifest or {}, skill)
+    if not isinstance(manifest, dict):
+        print(f"lane-manifest: the manifest must be a mapping, got {type(manifest).__name__}")
+        return 1
+    problems = check(manifest, skill)
     for p in problems:
         print(f"lane-manifest: {p}")
     if not problems:

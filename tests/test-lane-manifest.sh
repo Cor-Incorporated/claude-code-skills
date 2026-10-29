@@ -70,6 +70,14 @@ case_red "worktree none but commits allowed" 'm["lanes"][0]["worktree"]="none"' 
 case_red "missing report dir" 'm["lanes"][0]["report_to"]=sb+"/no-such-dir/r.md"' "report_to directory"
 case_red "owns given as a string" 'm["lanes"][0]["owns"]="src/a/"' "owns must be a list"
 case_red "origin with a token is redacted in the message" 'm["lanes"][0]["origin"]="https://bot:ghp_SECRET@github.com/x/y.git"' "***@github.com"
+case_red "owns '.' overlaps every other lane" 'm["lanes"][0]["owns"]=["."]' "in the same repo"
+case_red "owns './src/b' overlaps 'src/b/'" 'm["lanes"][0]["owns"]=["./src/b"]' "in the same repo"
+case_red "two lanes share a topic" 'm["lanes"][1]["topic"]="a"' "topic is used by more than one lane"
+case_red "two lanes write the same report" 'm["lanes"][1]["report_to"]=m["lanes"][0]["report_to"]' "is also written by"
+case_red "a lane that is not a mapping" 'm["lanes"].append("oops")' "must be a mapping"
+a_list() { printf '[1,2]' >"$SB/list.json"; python3 "$V" "$SB/list.json" "$SKILL" 2>&1; }
+out="$(a_list)"; rc=$?
+[[ $rc -eq 1 && "$out" == *"must be a mapping"* ]] && ok "a list-shaped manifest is rejected without a traceback" || bad "list manifest" "rc=$rc $out"
 case_red "a standard prohibition dropped from the manifest" 'm["standard_prohibitions"]=m["standard_prohibitions"][:-1]' "standard_prohibitions: missing"
 
 write_manifest "$SB/none.json" 'm["lanes"][0]["worktree"]="none"; m["lanes"][0]["commit_allowed"]=False'
