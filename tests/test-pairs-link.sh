@@ -673,7 +673,6 @@ else:
         "hooks/dns-self-heal.sh",
         "hooks/enforce-branch-workflow.sh",
         "hooks/enforce-hook-deploy-after-merge.sh",
-        "hooks/post-deploy-verify.sh",
         "hooks/post-lint-format.sh",
         "hooks/pre-compact-context-save.sh",
         "hooks/tool-failure-recovery.sh",
