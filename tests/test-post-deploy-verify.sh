@@ -62,6 +62,9 @@ expect "a heredoc fed to ssh fires" "ssh deploy@host <<'EOF'${NL}docker push img
 expect "a heredoc fed to bash -s fires" "bash -s <<EOF${NL}kubectl apply -f k.yaml${NL}EOF" fire
 expect "a spaced arithmetic shift is not a heredoc" 'x=$(( 1 << shift ))'"${NL}docker push img" fire
 expect "\$( ) inside double quotes still runs" 'echo "pushed: $(docker push img)"' fire
+expect "a heredoc piped into bash fires" "cat <<'EOF' | bash${NL}docker push img${NL}EOF" fire
+expect "a heredoc piped into ssh fires" "cat <<'EOF' | ssh host bash${NL}kubectl apply -f k.yaml${NL}EOF" fire
+expect "a heredoc piped into a non-shell is still text" "cat <<'EOF' | tee notes.md${NL}docker push img${NL}EOF" silent
 
 # --- 変異体: heredoc bodies not skipped ---
 # 同じ表をこの変異体に流し、少なくとも 1 件 red になることを実測する。

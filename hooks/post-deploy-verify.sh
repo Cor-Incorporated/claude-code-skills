@@ -62,7 +62,10 @@ for line in cmd.split("\n"):
     before = line[: m.start()] if m else ""
     in_arith = before.count("$((") > before.count("))")
     # A heredoc fed to a shell or to ssh is run, so its body counts.
-    run_by_shell = re.search(r"(?:^|[\s;&|(])(?:bash|sh|zsh|dash|ssh|sudo)(?:\s|$)", before)
+    after = line[m.end():] if m else ""
+    run_by_shell = re.search(r"(?:^|[\s;&|(])(?:bash|sh|zsh|dash|ssh|sudo)(?:\s|$)", before) or re.search(
+        r"\|\s*(?:\S+\s+)*?(?:bash|sh|zsh|dash|ssh)(?:\s|$)", after
+    )
     if m and not in_arith and not run_by_shell and "<<<" not in line[m.start():m.end() + 1]:
         term = m.group(2)
     out.append(line)
