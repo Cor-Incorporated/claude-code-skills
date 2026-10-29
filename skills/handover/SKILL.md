@@ -87,6 +87,7 @@ Claude → Codex / Cursor / OpenCode / 次セッションへの引き継ぎ文�
    - **次セッション**: TaskList 状態と最初に読むファイルを明記。
 5. **共通条項を機械的に連結する**（下記「共通条項」節）。
 6. テンプレートで文書化し、保存先を確認: 標準は `docs/handover/YYYY-MM-DD-<topic>.md`。
+7. **2 レーン以上なら**レーン台帳を作り、`validate-lane-manifest.py` が exit 0 になるまで直してから撃つ（下記「レーン台帳」節）。
 
 ## 共通条項（`common-clauses.md` が正本）
 
@@ -176,6 +177,37 @@ cat skills/handover/common-clauses.md
 ## 絶対遵守ルール（Codex宛のとき）
 ...
 ```
+
+## レーン台帳（2 レーン以上を撃つとき必須）
+
+複数レーンの引き継ぎ包には `lane-manifest.template.yaml` を写した台帳を **1 本だけ**同梱し、
+発射前に検証する。ブリーフ本文から cwd・base・worktree・報告先を推測させない。
+
+```bash
+cp skills/handover/lane-manifest.template.yaml <包>/lane-manifest.yaml   # 実値で埋める
+python3 skills/handover/validate-lane-manifest.py <包>/lane-manifest.yaml  # exit 0 まで直す
+```
+
+〔2026-10-29〕依頼 46 KB × 7 に「レーン → repo パス」が無く、3 レーンが編集 0 で停止した
+（yomiyasu は skills 配下、grift は正本が 2 つ、m02 は commit 0）。検証器は cwd が git repo か、
+origin が一致するか、base が origin にあるか、worktree が `<cwd>/.worktrees/<agent>/<slug>` か、
+2 レーンが同じ worktree・所有パスを持たないか、報告先があるか、
+下の禁止事項標準枠の ID を全部持つかを見る（`tests/test-lane-manifest.sh`）。
+
+## 禁止事項標準枠（ハーネス由来・全レーン共通）
+
+各ブリーフの「所有範囲 → 禁止事項枠」の前に、この表を ID ごとそのまま載せる。
+台帳の `standard_prohibitions` はこの表の ID を全部持つこと（検証器がこの表を読む）。
+行を足すときはこの表だけを直す。
+
+| ID | 禁止 | 起点 |
+|---|---|---|
+| HP-1 | `RUNTIME_FLOOR:*` に止められた操作を、引用・変数化・別ツールへの書き換えで通さない。許可が要るなら `config/runtime-floor-allowlist.json`（宣言）への追加提案か人間ゲートに書く。`HARNESS_RUNTIME_FLOOR_EGRESS=off` を設定しない（codex 等の子プロセスへ継承され床ごと消える） | 2026-10-30 harness-pdca F1/F2 |
+| HP-2 | 1 回の Bash に「読取動詞（cat/grep/head…）」と「秘密っぽい名前（`.env*`・`credentials`・`*.key`・`~/.ssh`）」を別セグメントで混ぜない。床はセグメントを区別せず deny する。`~/.ssh/*`・本物の `.env` は読まない | 2026-10-30 統括 `ls .env.example; grep …` |
+| HP-3 | formatter・`--fix` を手でファイル全体に掛けない。PostToolUse の formatter は「プロジェクト設定あり + HEAD が clean」のときだけ書く。無関係行の整形差分が出たら commit せず、編集ハンクだけ当て直す | 2026-10-29 ai-cluster `test_judge_f64.py` |
+| HP-4 | クラスタのノード・NAS への `nc`/`curl`/`rsync`/`scp` は 5.16.0 の床に許可リストが無く止まる。ノードから見た LAN を測るなら `ssh <node> '<操作>'` とノード上の操作として書き、宛先と測定点を報告に書く。Mac から直接届かない宛先を Mac から届いたと書かない | 2026-10-30 NAS レーン `nc -z 192.168.11.23 445` |
+| HP-5 | `setup.sh` を develop 以外で走らせない。配る前に `bash tests/test-runtime-floor-allowlist.sh`（L4: `enabledPlugins` ↔ インストール実体）を通す。id がずれた settings.json を配ると plugin（床と R01〜R13）が丸ごと無効になる | 2026-10-30 `claude-code-harness@` → `harness@` |
+| HP-6 | Codex への委任に codex MCP（`codex mcp-server`）を使わない。codex-cli 0.165.0 で subcommand が無くなり CONNECTION_CLOSED になる。委任は `codex exec` 経路（delegation.md 経路 A/C） | 2026-10-30 F6 |
 
 ## 注意・禁止事項
 
