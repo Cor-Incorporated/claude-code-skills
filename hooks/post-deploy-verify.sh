@@ -68,7 +68,8 @@ for line in cmd.split("\n"):
     after = line[m.end():] if m else ""
     # A << inside quotes on this line is text, not a heredoc start.
     # $( opens a new quoting context: `-m "$(cat <<'EOF'` is a real heredoc.
-    ctx = before.rsplit("$(", 1)[-1]
+    # Only a $( that is still open resets the count; a closed $(date) does not.
+    ctx = before.rsplit("$(", 1)[-1] if before.count("$(") > before.count(")") else before
     in_quotes = m is not None and (ctx.count('"') % 2 == 1 or ctx.count("'") % 2 == 1)
     run_by_shell = re.search(r"(?:^|[\s;&|(])(?:\S*/)?(?:bash|sh|zsh|dash|ssh|sudo)(?:\s|$)", before) or re.search(
         r"\|\s*(?:\S+\s+)*?(?:\S*/)?(?:bash|sh|zsh|dash|ssh)(?:\s|$)", after

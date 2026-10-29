@@ -69,6 +69,7 @@ expect "a heredoc piped into a non-shell is still text" "cat <<'EOF' | tee notes
 expect "a quoted << is not a heredoc start" 'git commit -m "explain <<EOF usage"'"${NL}docker push x" fire
 expect "a heredoc fed to /bin/bash fires" "/bin/bash <<'EOF'${NL}docker push img${NL}EOF" fire
 expect "a commit message written through \"\$(cat <<'EOF'\" is text" 'git commit -m "$(cat <<'"'"'EOF'"'"''"${NL}docs: explain docker push${NL}EOF${NL}"')"' silent
+expect "a closed \$( ) before a quoted << does not hide the next line" 'git commit -m "v$(date +%F): explain <<EOF usage"'"${NL}docker push img" fire
 expect "a PR body written through \"\$(cat <<'EOF'\" is text" 'gh pr create --title t --body "$(cat <<'"'"'EOF'"'"''"${NL}after gcloud run deploy, verify${NL}EOF${NL}"')"' silent
 expect "echo text piped into bash fires" 'echo "docker push $IMG" | bash' fire
 expect "echo text piped into /bin/sh fires" "echo 'kubectl apply -f k.yaml' | /bin/sh" fire
