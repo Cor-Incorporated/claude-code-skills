@@ -89,17 +89,33 @@ def missing_command():
                 return hit.group(1)
     return None
 
+def safe(v, limit=80):
+    """Only path- or name-like text reaches the model: the output is untrusted
+    (a file name or log line can carry instructions)."""
+    v = v.strip()
+    if len(v) > limit or not re.fullmatch(r"[\w./~@%+=:,#\-]+", v):
+        return None
+    return v
+
+
+tail = body[-5:]
 missing_paths = []
 for line in body:
-    hit = re.match(r"^(?:rg|grep|egrep|fgrep|ag|cat|ls|head|tail|wc|cp|mv|sed|awk|cd): (?:cannot access ')?(.+?)'?: No such file or directory", line.strip()) \
-        or re.match(r"^\S+: can.t open file '?(.+?)'?: \[Errno 2\] No such file or directory", line.strip())
+    hit = re.match(r"^(?:rg|grep|egrep|fgrep|ag|cat|ls|head|tail|wc|cp|mv|sed|awk|cd|chmod|chown|rm|mkdir|touch|stat|du|tar): (?:cannot (?:access|stat) ')?(.+?)'?: No such file or directory", line.strip()) \
+        or re.match(r"^\S+: can.t open file '?(.+?)'?: \[Errno 2\] No such file or directory", line.strip()) \
+        or re.match(r"^(?:zsh|\(eval\)):(?:\w+:)?\d+: no such file or directory: (.+)$", line.strip()) \
+        or re.match(r"^(?:bash|sh)(?:: line \d+)?: \S+: (.+?): No such file or directory$", line.strip()) \
+        or re.match(r"^fatal: cannot change to '(.+?)'", line.strip())
     if hit:
         missing_paths.append(hit.group(1))
 
 # A logged "bash: foo: command not found" in the output is not the error of
 # this command unless it exited 127. (No apostrophes in this block: bash 3.2
 # cannot parse an odd quote count in a heredoc inside $( ).)
+missing_paths = [p for p in (safe(x) for x in missing_paths) if p]
 name = missing_command() if code in (127, None) else None
+if name is not None and safe(name, 40) is None:
+    name = ""
 if name:
     print(f"コマンド '{name}' が見つかりません (exit {code})。brew install / npm install -g / pip install で導入するか、代替コマンドを使用してください。")
 elif code == 127:
@@ -120,11 +136,11 @@ elif any(re.match(r"^[\w./-]+: (?:cannot \w+ )?.+: Permission denied$", l.strip(
     print("権限エラー。対象パスの所有者と権限を ls -la で確認してください (sudo や chmod は対象を確かめてから)。")
 elif missing_paths:
     print(f"ファイル/ディレクトリが存在しません: {', '.join(missing_paths[:3])}。ls -la で親ディレクトリを確認してください。")
-elif any(re.search(r"ENOSPC|No space left on device", l) for l in body):
+elif any(re.search(r"ENOSPC|No space left on device", l) for l in tail):
     print("ディスク容量不足。不要ファイルを削除してください: docker system prune, npm cache clean --force")
-elif any(re.search(r"ECONNREFUSED|Connection refused", l) for l in body):
+elif any(re.search(r"ECONNREFUSED|Connection refused", l) for l in tail):
     print("接続拒否。サービスが起動しているか確認: lsof -i :<port>, docker ps")
-elif any(re.search(r"(?:Connection|Operation|Read|connect\(\)).{0,40}timed out|ETIMEDOUT", l, re.I) for l in body):
+elif any(re.search(r"(?:Connection|Operation|Read|connect\(\)).{0,40}timed out|ETIMEDOUT", l, re.I) for l in tail):
     print("ネットワークのタイムアウト。接続先と経路を確認するか、タイムアウト値を増やしてください。")
 PY
     GUIDANCE="$(python3 -c "$_guidance_py" "$ERROR_MSG" "$CMD" 2>/dev/null || true)"

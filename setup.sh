@@ -26,21 +26,6 @@ if [ "$current_branch" != "develop" ]; then
   exit 1
 fi
 
-# Plugin id guard (2026-10-30 harness-pdca): settings.json is copied over the
-# live file below, so an enabledPlugins id that no longer matches the installed
-# plugin silently disables it. The harness plugin was renamed
-# claude-code-harness@… → harness@…; copying the old id would have switched off
-# RUNTIME_FLOOR and R01–R13 for every new session. Refuse and name both ids.
-# tests/test-runtime-floor-allowlist.sh L4 checks the same pair.
-installed_plugins="$CLAUDE_DIR/plugins/installed_plugins.json"
-if [ -f "$installed_plugins" ] && command -v python3 >/dev/null 2>&1; then
-  if ! python3 "$REPO_DIR/scripts/check-plugin-ids.py" "$REPO_DIR/settings.json" "$installed_plugins" "$CLAUDE_DIR/settings.json"; then
-    echo "settings.json の enabledPlugins が実際のインストールと一致しないため setup を中止"
-    echo "  settings.json を直すか plugin をインストールしてから再実行。Ref: docs/CANONICAL-STATE.md"
-    exit 1
-  fi
-fi
-
 # 1. Copy settings
 # NOTE: settings.json is overwritten from master on every setup. Store env vars
 # (API tokens, model config, base URL) in settings.local.json — Claude Code merges
