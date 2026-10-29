@@ -59,12 +59,23 @@ def main(argv: list[str]) -> int:
 
     missing = [p for p in repo if p not in installed]
     turned_off = [p for p in live if p in installed and p not in repo]
+    per_market: dict[str, int] = {}
+    for p in installed:
+        per_market[split(p)[1]] = per_market.get(split(p)[1], 0) + 1
+
+    def related(off: str, name: str, market: str) -> bool:
+        # Same plugin name anywhere is a marketplace rename. Same marketplace is
+        # a rename only when that marketplace ships one plugin here; a catalog
+        # such as claude-plugins-official holds unrelated plugins.
+        o_name, o_market = split(off)
+        return o_name == name or (
+            o_market == market and per_market.get(o_market, 0) == 1
+        )
+
     refused = False
     for pid in missing:
         name, market = split(pid)
-        hit = sorted(
-            p for p in turned_off if split(p)[1] == market or split(p)[0] == name
-        )
+        hit = sorted(p for p in turned_off if related(p, name, market))
         if hit:
             refused = True
             print(
@@ -76,10 +87,7 @@ def main(argv: list[str]) -> int:
                 f"plugin-ids: warning: {pid} is enabled in settings.json but not installed here"
             )
     for pid in turned_off:
-        if not any(
-            split(pid)[1] == split(m)[1] or split(pid)[0] == split(m)[0]
-            for m in missing
-        ):
+        if not any(related(pid, *split(m)) for m in missing):
             print(
                 f"plugin-ids: warning: the copy turns off {pid} (enabled live, not in settings.json)"
             )

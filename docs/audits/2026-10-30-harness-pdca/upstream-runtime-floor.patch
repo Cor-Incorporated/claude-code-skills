@@ -45,14 +45,14 @@
  				if !isAllowlistedHost(host) {
  					return stop(CategoryEgress, "nc "+host,
  						"network connection to non-allowlisted host requires human approval")
-@@ -313,9 +331,24 @@
+@@ -313,7 +331,22 @@
  	if strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.0.0.1:") {
  		return true
  	}
 -	return false
 +	return loadEgressAllow().allows(bareHost(host))
- }
- 
++}
++
 +// onlyTopLevelCopies reports whether every occurrence of the words scp/rsync
 +// is a field that is exactly the command name. Anything else (a quoted or
 +// nested mention) keeps the conservative remoteHostPattern scan.
@@ -66,11 +66,27 @@
 +		}
 +	}
 +	return mentions == exact
-+}
-+
+ }
+ 
  func checkSecretRead(cmd string, ctx Context) Decision {
- 	// Scan only the executable portion of the command, not heredoc bodies or
- 	// comments. A secret filename that appears purely as document text (e.g.
+@@ -681,7 +714,16 @@
+ 	if idx < 0 || idx >= len(s) {
+ 		return ""
+ 	}
+-	isSep := func(b byte) bool { return b == ' ' || b == '\t' || b == '\n' || b == '=' }
++	// Shell control and redirection characters end a word too. Without them an
++	// allowlisted name glued to a real secret ("cat ~/.aws/credentials;x.template")
++	// is one token whose basename matches the allowlist, and the secret is read.
++	isSep := func(b byte) bool {
++		switch b {
++		case ' ', '\t', '\n', '=', ';', '|', '&', '<', '>', '(', ')', '`':
++			return true
++		}
++		return false
++	}
+ 	start := idx
+ 	for start > 0 && !isSep(s[start-1]) {
+ 		start--
 --- /dev/null
 +++ b/go/internal/runtimefloor/egress_operands.go
 @@ -0,0 +1,199 @@
@@ -334,5 +350,37 @@
 +				t.Fatalf("CheckCommand(%q): category=%s, want egress", tc.cmd, d.Category)
 +			}
 +		})
++	}
++}
+--- /dev/null
++++ b/go/internal/runtimefloor/secret_allow_glued_test.go
+@@ -0,0 +1,29 @@
++package runtimefloor
++
++import "testing"
++
++// An allowlisted name glued to a real secret without whitespace must not
++// carry the secret through (2026-10-30, claude-code-skills #446 review).
++func TestSecretAllow_DoesNotCoverGluedSecrets(t *testing.T) {
++	root := testWorktreeRoot(t)
++	t.Setenv("HARNESS_RUNTIME_FLOOR_SECRET_ALLOW", "*.template,.env.example")
++	for _, cmd := range []string{
++		"cat ~/.aws/credentials;x.template",
++		"cat ~/.aws/credentials>x.template",
++		"cat x/.env;y/z.template",
++		"cat x/.env|y/.env.example",
++		"cat x/.env&&y/.env.example",
++	} {
++		if d := CheckCommand(cmd, Context{WorktreeRoot: root}); !d.Stopped || d.Category != CategorySecretRead {
++			t.Fatalf("CheckCommand(%q) = %+v, want secret-read deny", cmd, d)
++		}
++	}
++	for _, cmd := range []string{
++		"cat docs/templates/nas-mounts/smb-credentials.cred.template",
++		"head -20 app/.env.example",
++	} {
++		if d := CheckCommand(cmd, Context{WorktreeRoot: root}); d.Stopped {
++			t.Fatalf("CheckCommand(%q) = %+v, want allowed by the declared allowlist", cmd, d)
++		}
 +	}
 +}

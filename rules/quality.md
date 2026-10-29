@@ -46,4 +46,5 @@ grep 結果を同じ報告に貼る。同じ事実が 2 箇所にあればリン
 （現在値 0 — harness H12 がアラート化）。
 third-party の強制点（plugin の床など）の教訓では、(c) のリンクテストは宣言ファイルだけでなく実 enforcer も叩く。
 例（2026-10-30）: 床の許可は `config/runtime-floor-allowlist.json` ↔ settings ↔ plugin binary を
-`tests/test-runtime-floor-allowlist.sh` が結び、(b) は handover SKILL.md の禁止事項標準枠（HP-n）に置く。
+`tests/test-runtime-floor-allowlist.sh` が結ぶ。実 enforcer を叩いたことで、宣言だけでは見えない穴
+（許可した名前に秘密を空白なしで連結すると通る）が見つかり、配備を止めた。

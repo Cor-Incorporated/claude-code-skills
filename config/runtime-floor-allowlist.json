@@ -8,10 +8,30 @@
     "verified_version": "5.16.0"
   },
   "secret_read": {
-    "enforced": true,
+    "enforced": false,
     "env": "HARNESS_RUNTIME_FLOOR_SECRET_ALLOW",
-    "rendered_into": "settings.json env.HARNESS_RUNTIME_FLOOR_SECRET_ALLOW (comma-joined, same order)",
-    "allow": [
+    "rendered_into": "nothing while enforced=false (settings.json must not carry the env)",
+    "must_deny": [
+      "cat ~/.ssh/config",
+      "grep -nE '^Host ' ~/.ssh/config",
+      "cat .env",
+      "cat app/.env.local",
+      "head -3 .env.production",
+      "cat certs/server.pem",
+      "cat deploy.key",
+      "cp ~/.aws/credentials /tmp/x",
+      "cat config/credentials"
+    ],
+    "known_upstream_limits": {
+      "why": "the plugin takes the token around an indicator match that starts at the preceding whitespace, so a bare name with no directory part is read as the previous word and never reaches the allowlist. Measured 2026-10-30 (#445 review M4). Use ./.env.example.",
+      "still_denied": [
+        "cat .env.example",
+        "head -20 .env.example",
+        "grep -n API_ .env.sample"
+      ]
+    },
+    "why_not_enforced": "The plugin takes the whitespace-delimited token around an indicator, so any allowlist entry also allows a real secret glued to an allowed name without whitespace: with *.template allowed, 'cat ~/.aws/credentials;x.template' is allowed (measured 2026-10-30, #446 review). An exact basename or a path prefix composes the same way. Ship only after the upstream tokenizer splits on ; | & < > ( ) (added to the upstream patch).",
+    "proposed_allow": [
       {
         "pattern": "*.template",
         "why": "values-free templates. 2026-10-30 orchestrator: cat docs/templates/nas-mounts/smb-credentials.cred.template was denied by the 'credentials' indicator"
@@ -25,41 +45,17 @@
         "why": "committed, values-free env template (dotenv convention)"
       }
     ],
-    "must_allow": [
+    "observed_false_positives": [
       "cat docs/templates/nas-mounts/smb-credentials.cred.template",
       "head -20 app/.env.example",
       "grep -n API_ app/.env.sample",
       "cat ./.env.example"
     ],
-    "must_deny": [
-      "cat ~/.ssh/config",
-      "grep -nE '^Host ' ~/.ssh/config",
-      "cat .env",
-      "cat app/.env.local",
-      "head -3 .env.production",
-      "cat certs/server.pem",
-      "cat deploy.key",
-      "cp ~/.aws/credentials /tmp/x",
-      "cat config/credentials"
-    ],
-    "residual": [
-      "The floor is lexical. The plugin takes the whitespace-delimited token around an indicator, so 'cat .env;x.template' is one token whose basename matches *.template. The same class already exists without any allowlist ('cat${IFS}.env' is not matched). Upstream fix proposed: split tokens on ; | & < > ( ) as well.",
-      "A verb in one segment and an indicator in another still deny ('ls .env.example; grep x y' gives the token '.env.example;'). That is the upstream verb/operand association bug, not an allowlist gap."
-    ],
-    "known_upstream_limits": {
-      "why": "the plugin takes the token around an indicator match that starts at the preceding whitespace, so a bare name with no directory part is read as the previous word and never reaches the allowlist. Measured 2026-10-30 (#445 review M4). Use ./.env.example.",
-      "still_denied": [
-        "cat .env.example",
-        "head -20 .env.example",
-        "grep -n API_ .env.sample"
-      ]
-    },
-    "known_residual_allowed": {
-      "why": "one whitespace token can carry a real secret and an allowlisted basename; the floor is lexical and cat${IFS}.env already passes without any allowlist. Tracked so a change in either direction is visible.",
-      "allowed": [
-        "cat x/.env;y/z.template"
-      ]
-    }
+    "composition_opened_by_proposal": [
+      "cat ~/.aws/credentials;x.template",
+      "cat ~/.aws/credentials>x.template",
+      "cat x/.env;y/z.template"
+    ]
   },
   "egress": {
     "enforced": false,
