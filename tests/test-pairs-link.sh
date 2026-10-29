@@ -676,7 +676,6 @@ else:
         "hooks/post-deploy-verify.sh",
         "hooks/post-lint-format.sh",
         "hooks/pre-compact-context-save.sh",
-        "hooks/tool-failure-recovery.sh",
         "hooks/validate-provider-env.sh",
         "hooks/verify-agent-output.sh",
     }
