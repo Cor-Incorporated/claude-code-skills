@@ -54,19 +54,73 @@ GUIDANCE=""
 case "$TOOL_NAME" in
   Bash)
     CMD=$(echo "$TOOL_INPUT" | jq -r '.command // ""' 2>/dev/null || echo "")
-    if echo "$ERROR_MSG" | grep -qi "command not found"; then
-      MISSING_CMD=$(echo "$ERROR_MSG" | grep -oE '[a-z_-]+: command not found' | head -1 | cut -d: -f1)
-      GUIDANCE="コマンド '${MISSING_CMD}' が見つかりません。brew install / npm install -g / pip install で導入するか、代替コマンドを使用してください。"
-    elif echo "$ERROR_MSG" | grep -qi "permission denied"; then
-      GUIDANCE="権限エラー。ファイル権限を確認してください: ls -la <path>。実行権限が必要なら chmod +x を検討。"
-    elif echo "$ERROR_MSG" | grep -qi "No such file or directory"; then
-      GUIDANCE="ファイル/ディレクトリが存在しません。パスを確認してください: ls -la で親ディレクトリを確認。"
-    elif echo "$ERROR_MSG" | grep -qi "ENOSPC\|No space left"; then
-      GUIDANCE="ディスク容量不足。不要ファイルを削除してください: docker system prune, npm cache clean --force"
-    elif echo "$ERROR_MSG" | grep -qi "ECONNREFUSED\|Connection refused"; then
-      GUIDANCE="接続拒否。サービスが起動しているか確認: lsof -i :<port>, docker ps"
-    elif echo "$ERROR_MSG" | grep -qi "timeout\|timed out"; then
-      GUIDANCE="タイムアウト。ネットワーク接続を確認するか、タイムアウト値を増やしてください。"
+    # 2026-10-30 harness-pdca F4: the error field is "Exit code N" followed by
+    # the command's combined stdout+stderr. Matching a phrase anywhere in it
+    # misread grep output as errors ("command not found" inside a log being
+    # searched), picked "zsh" out of zsh's "zsh: command not found: foo", and
+    # called ssh's "Permission denied (publickey)" a file-permission problem.
+    # Classify by exit code first, then only by lines shaped like an error
+    # from the shell or the tool itself. tests/test-tool-failure-recovery.sh
+    GUIDANCE="$(python3 - "$ERROR_MSG" "$CMD" <<'PY' 2>/dev/null || true
+import re
+import sys
+
+err, cmd = sys.argv[1], sys.argv[2]
+lines = err.splitlines()
+m = re.match(r"Exit code (\d+)", lines[0] if lines else "")
+code = int(m.group(1)) if m else None
+body = lines[1:] if m else lines
+SEARCH = {"grep", "egrep", "fgrep", "rg", "ag", "git-grep"}
+first = ""
+for seg in re.split(r"&&|\|\||;", cmd)[-1:]:
+    words = [w for w in seg.strip().split() if "=" not in w.split("/")[0]]
+    first = words[0].rsplit("/", 1)[-1] if words else ""
+
+def missing_command():
+    for line in body:
+        for pat in (r"^(?:zsh|\(eval\):\d+): command not found: (\S+)$",
+                    r"^(?:bash|sh)(?:: line \d+)?: (\S+): command not found$",
+                    r"^/\S+: line \d+: (\S+): command not found$"):
+            hit = re.match(pat, line.strip())
+            if hit:
+                return hit.group(1)
+    return None
+
+missing_paths = []
+for line in body:
+    hit = re.match(r"^(?:rg|grep|egrep|fgrep|ag|cat|ls|head|tail|wc|cp|mv|sed|awk|cd): (?:cannot access ')?(.+?)'?: No such file or directory", line.strip())
+    if hit:
+        missing_paths.append(hit.group(1))
+
+name = missing_command()
+if name:
+    print(f"コマンド '{name}' が見つかりません (exit {code})。brew install / npm install -g / pip install で導入するか、代替コマンドを使用してください。")
+elif code == 127:
+    print("exit 127 = コマンドが見つかりません。PATH と綴りを確認してください (which <cmd>)。")
+elif any(re.match(r"^\(eval\):\d+: =+ not found$", l.strip()) for l in body):
+    print("zsh の = 展開です (行頭の = はコマンド名展開になる)。'=====' のように引用してください。コマンド不足ではありません。")
+elif code == 126 or any(re.match(r"^(?:zsh|bash|sh)(?:: line \d+)?: permission denied: ", l.strip(), re.I) for l in body):
+    print("実行権限がありません (exit 126)。ls -la で確認し、必要なら chmod +x か bash <script> で実行してください。")
+elif any(re.search(r"Permission denied \((?:publickey|password|keyboard-interactive)", l) for l in body):
+    print("SSH 認証の失敗です (ファイル権限ではありません)。ssh -v で使われた鍵と接続先ユーザーを確認してください。秘密鍵の中身は読まないこと。")
+elif first in SEARCH and code == 1:
+    pass  # 一致なし。エラーではない
+elif first in SEARCH and code == 2 and missing_paths:
+    others = [l for l in body if l.strip() and not any(p in l for p in missing_paths)]
+    done = "検索自体は実行済みで、他のパスの結果は有効です。" if others else ""
+    print(f"存在しないパスを検索対象に含めています: {', '.join(missing_paths[:3])}。{done}")
+elif missing_paths:
+    print(f"ファイル/ディレクトリが存在しません: {', '.join(missing_paths[:3])}。ls -la で親ディレクトリを確認してください。")
+elif any(re.search(r"ENOSPC|No space left on device", l) for l in body):
+    print("ディスク容量不足。不要ファイルを削除してください: docker system prune, npm cache clean --force")
+elif any(re.search(r"ECONNREFUSED|Connection refused", l) for l in body):
+    print("接続拒否。サービスが起動しているか確認: lsof -i :<port>, docker ps")
+elif any(re.search(r"(?:Connection|Operation|Read|connect\(\)).{0,40}timed out|ETIMEDOUT", l, re.I) for l in body):
+    print("ネットワークのタイムアウト。接続先と経路を確認するか、タイムアウト値を増やしてください。")
+PY
+)"
+    if [[ -n "$GUIDANCE" ]]; then
+      :
     elif echo "$CMD" | grep -qE '^(npm|pnpm|yarn)'; then
       GUIDANCE="パッケージマネージャエラー。lockfile削除と再インストールを試してください: rm -rf node_modules && npm install"
     elif echo "$CMD" | grep -qE '^pip'; then
