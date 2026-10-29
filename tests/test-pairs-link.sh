@@ -674,7 +674,6 @@ else:
         "hooks/enforce-branch-workflow.sh",
         "hooks/enforce-hook-deploy-after-merge.sh",
         "hooks/post-deploy-verify.sh",
-        "hooks/post-lint-format.sh",
         "hooks/pre-compact-context-save.sh",
         "hooks/validate-provider-env.sh",
         "hooks/verify-agent-output.sh",
