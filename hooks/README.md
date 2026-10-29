@@ -120,7 +120,7 @@ is the H17 common control, listed under PreToolUse.)
 
 | Hook | Purpose |
 |---|---|
-| `post-lint-format.sh` | Post-write Quality Loop: auto-fix phase → residual check (ADR-001/003) |
+| `post-lint-format.sh` | Post-write Quality Loop: auto-fix phase → residual check (ADR-001/003). Write-mode fixers run only when the project declares the tool and the committed version is already clean, so they never restyle lines the edit did not touch. A new file that is staged but not yet committed is not auto-formatted (git cannot show a committed version to compare with) |
 
 ### PostToolUseFailure
 
@@ -129,7 +129,7 @@ is the H17 common control, listed under PreToolUse.)
 | Hook | Matcher | Purpose |
 |---|---|---|
 | `notify-agent-failure.sh` | `Agent` | Inject concise failure summary into parent session; persist failure metadata |
-| `tool-failure-recovery.sh` | `Bash\|Edit\|Write\|Grep\|WebFetch\|WebSearch` | Inject error-recovery guidance on tool failure (#66 Fix #6) |
+| `tool-failure-recovery.sh` | `Bash\|Edit\|Write\|Grep\|WebFetch\|WebSearch` | Inject error-recovery guidance on tool failure (#66 Fix #6). Bash failures are classified by exit code (1 from grep/rg = no match, 126, 127) and by anchored error lines, not by phrases anywhere in the output |
 
 ### PreCompact
 
