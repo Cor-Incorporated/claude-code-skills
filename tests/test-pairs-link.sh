@@ -675,7 +675,6 @@ else:
         "hooks/enforce-hook-deploy-after-merge.sh",
         "hooks/post-deploy-verify.sh",
         "hooks/pre-compact-context-save.sh",
-        "hooks/tool-failure-recovery.sh",
         "hooks/validate-provider-env.sh",
         "hooks/verify-agent-output.sh",
     }

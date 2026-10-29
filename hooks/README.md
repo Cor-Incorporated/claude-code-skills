@@ -127,7 +127,7 @@ never a hard block.
 | Hook | Matcher | Purpose |
 |---|---|---|
 | `notify-agent-failure.sh` | `Agent` | Inject concise failure summary into parent session; persist failure metadata |
-| `tool-failure-recovery.sh` | `Bash\|Edit\|Write\|Grep\|WebFetch\|WebSearch` | Inject error-recovery guidance on tool failure (#66 Fix #6) |
+| `tool-failure-recovery.sh` | `Bash\|Edit\|Write\|Grep\|WebFetch\|WebSearch` | Inject error-recovery guidance on tool failure (#66 Fix #6). Bash failures are classified by exit code (1 from grep/rg = no match, 126, 127) and by anchored error lines, not by phrases anywhere in the output |
 
 ### PreCompact
 

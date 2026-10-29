@@ -44,3 +44,7 @@ grep 結果を同じ報告に貼る。同じ事実が 2 箇所にあればリン
 (b) handover の禁止事項標準枠 (c) 可能なら機械照合（リンクテスト・完了条件）
 同型 fix 3 回目は個別修正をやめ ADR 化。裁定（`ADJUDICATION: <url>`）は 1 コミットにしか効かず、同一 scope の裁定は 1 ブランチ 3 回まで。4 回目は branch を閉じ、ピボットを書いた新ブランチへ移す（ADR-013、H17 が全入口で強制）。learned skills 0 本はループ死活の警報
 （現在値 0 — harness H12 がアラート化）。
+third-party の強制点（plugin の床など）の教訓では、(c) のリンクテストは宣言ファイルだけでなく実 enforcer も叩く。
+例（2026-10-30）: 床の許可は `config/runtime-floor-allowlist.json` ↔ settings ↔ plugin binary を
+`tests/test-runtime-floor-allowlist.sh` が結ぶ。実 enforcer を叩いたことで、宣言だけでは見えない穴
+（許可した名前に秘密を空白なしで連結すると通る）が見つかり、配備を止めた。
