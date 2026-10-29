@@ -68,6 +68,8 @@ case_red "two lanes share a worktree" 'm["lanes"][1]["worktree"]=m["lanes"][0]["
 case_red "overlapping ownership" 'm["lanes"][1]["owns"]=["src/a/sub/"]' "in the same repo"
 case_red "worktree none but commits allowed" 'm["lanes"][0]["worktree"]="none"' "requires commit_allowed: false"
 case_red "missing report dir" 'm["lanes"][0]["report_to"]=sb+"/no-such-dir/r.md"' "report_to directory"
+case_red "owns given as a string" 'm["lanes"][0]["owns"]="src/a/"' "owns must be a list"
+case_red "origin with a token is redacted in the message" 'm["lanes"][0]["origin"]="https://bot:ghp_SECRET@github.com/x/y.git"' "***@github.com"
 case_red "a standard prohibition dropped from the manifest" 'm["standard_prohibitions"]=m["standard_prohibitions"][:-1]' "standard_prohibitions: missing"
 
 write_manifest "$SB/none.json" 'm["lanes"][0]["worktree"]="none"; m["lanes"][0]["commit_allowed"]=False'
@@ -80,6 +82,7 @@ grep -q '^| HP-7 |' "$SB/SKILL-plus.md" || printf '| HP-7 | test row | x |\n' >>
 out="$(run "$SB/good.json" "$SB/SKILL-plus.md")"; rc=$?
 [[ $rc -ne 0 && "$out" == *"HP-7"* ]] && ok "a new HP row in SKILL.md turns an old manifest red" || bad "SKILL.md side mutation" "rc=$rc out=$out"
 
+python3 -c 'import yaml' 2>/dev/null || echo "SKIP: PyYAML not installed; the YAML template check did not run"
 python3 -c 'import yaml' 2>/dev/null && {
   out="$(python3 "$V" "$ROOT/skills/handover/lane-manifest.template.yaml" 2>&1)"
   [[ "$out" == *"standard_prohibitions: missing"* ]] && bad "template carries every HP id" "$out" || ok "the template carries every HP id in SKILL.md"

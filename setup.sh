@@ -34,19 +34,8 @@ fi
 # tests/test-runtime-floor-allowlist.sh L4 checks the same pair.
 installed_plugins="$CLAUDE_DIR/plugins/installed_plugins.json"
 if [ -f "$installed_plugins" ] && command -v python3 >/dev/null 2>&1; then
-  plugin_drift="$(python3 - "$REPO_DIR/settings.json" "$installed_plugins" <<'PY'
-import json, sys
-enabled = [k for k, v in json.load(open(sys.argv[1])).get("enabledPlugins", {}).items() if v]
-installed = set(json.load(open(sys.argv[2])).get("plugins", {}))
-missing = [k for k in enabled if k not in installed]
-if missing:
-    near = sorted(i for i in installed if any(m.split("@")[-1] == i.split("@")[-1] for m in missing))
-    print(f"enabled in settings.json but not installed: {missing}; installed from the same marketplace: {near}")
-PY
-)"
-  if [ -n "$plugin_drift" ]; then
+  if ! python3 "$REPO_DIR/scripts/check-plugin-ids.py" "$REPO_DIR/settings.json" "$installed_plugins"; then
     echo "settings.json の enabledPlugins が実際のインストールと一致しないため setup を中止"
-    echo "  $plugin_drift"
     echo "  settings.json を直すか plugin をインストールしてから再実行。Ref: docs/CANONICAL-STATE.md"
     exit 1
   fi

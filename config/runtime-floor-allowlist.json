@@ -28,7 +28,8 @@
     "must_allow": [
       "cat docs/templates/nas-mounts/smb-credentials.cred.template",
       "head -20 app/.env.example",
-      "grep -n API_ app/.env.sample"
+      "grep -n API_ app/.env.sample",
+      "cat ./.env.example"
     ],
     "must_deny": [
       "cat ~/.ssh/config",
@@ -44,7 +45,21 @@
     "residual": [
       "The floor is lexical. The plugin takes the whitespace-delimited token around an indicator, so 'cat .env;x.template' is one token whose basename matches *.template. The same class already exists without any allowlist ('cat${IFS}.env' is not matched). Upstream fix proposed: split tokens on ; | & < > ( ) as well.",
       "A verb in one segment and an indicator in another still deny ('ls .env.example; grep x y' gives the token '.env.example;'). That is the upstream verb/operand association bug, not an allowlist gap."
-    ]
+    ],
+    "known_upstream_limits": {
+      "why": "the plugin takes the token around an indicator match that starts at the preceding whitespace, so a bare name with no directory part is read as the previous word and never reaches the allowlist. Measured 2026-10-30 (#445 review M4). Use ./.env.example.",
+      "still_denied": [
+        "cat .env.example",
+        "head -20 .env.example",
+        "grep -n API_ .env.sample"
+      ]
+    },
+    "known_residual_allowed": {
+      "why": "one whitespace token can carry a real secret and an allowlisted basename; the floor is lexical and cat${IFS}.env already passes without any allowlist. Tracked so a change in either direction is visible.",
+      "allowed": [
+        "cat x/.env;y/z.template"
+      ]
+    }
   },
   "egress": {
     "enforced": false,
@@ -52,8 +67,18 @@
     "proposed_env": "HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW",
     "proposed_patch": "docs/audits/2026-10-30-harness-pdca/upstream-runtime-floor.patch",
     "internal": {
-      "cidrs": ["100.64.0.0/10", "192.168.11.0/24", "192.168.3.0/24"],
-      "hosts": ["evo-x2", "evo-x2-2", "evo-x2-3", "thinkstationpgx-ab59", "jetson-thor"]
+      "cidrs": [
+        "100.64.0.0/10",
+        "192.168.11.0/24",
+        "192.168.3.0/24"
+      ],
+      "hosts": [
+        "evo-x2",
+        "evo-x2-2",
+        "evo-x2-3",
+        "thinkstationpgx-ab59",
+        "jetson-thor"
+      ]
     },
     "must_deny_external": [
       "curl -s https://pypi.org/pypi/awscrt/json",

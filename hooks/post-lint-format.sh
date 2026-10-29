@@ -67,7 +67,10 @@ has_project_config() { # $1 = file, rest = config names
   local file="$1"
   shift
   local dir top
-  dir="$(cd "$(dirname "$file")" 2>/dev/null && pwd)" || return 1
+  # Physical paths on both sides: rev-parse --show-toplevel is physical, so a
+  # logical /var or /tmp path would never equal it and the walk would pass
+  # the repo root.
+  dir="$(cd "$(dirname "$file")" 2>/dev/null && pwd -P)" || return 1
   top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || echo "$dir")"
   while :; do
     local name
@@ -94,22 +97,39 @@ run_stdin() { # rest = command; stdin passes through; keeps the exit status
 # $1 = file, $2 = mode, rest = command reading the committed content on stdin.
 #   mode "fmt":  clean when the formatter prints the content back unchanged
 #   mode "lint": clean when the command exits 0
-# 0 = HEAD version is clean (or the file is untracked); 1 = not clean / unknown.
+# 0 = HEAD version is clean, or the file is new and untracked.
+# 1 = not clean, or anything git cannot answer (not a repo, dubious ownership,
+#     ignored file, staged-only file): when unsure, do not rewrite.
 head_version_clean() {
   local file="$1" mode="$2"
   shift 2
-  local dir rel committed
-  dir="$(cd "$(dirname "$file")" 2>/dev/null && pwd)" || return 1
-  rel="$(git -C "$dir" ls-files --full-name -- "$(basename "$file")" 2>/dev/null)"
-  [[ -z "$rel" ]] && return 0
-  committed="$(git -C "$dir" show "HEAD:$rel" 2>/dev/null)" || return 0
-  if [[ "$mode" == "fmt" ]]; then
-    local formatted
-    formatted="$(printf '%s\n' "$committed" | run_stdin "$@")" || return 1
-    [[ "$formatted" == "$committed" ]]
-  else
-    printf '%s\n' "$committed" | run_stdin "$@" >/dev/null
+  local dir base rel tmp rc
+  dir="$(cd "$(dirname "$file")" 2>/dev/null && pwd -P)" || return 1
+  base="$(basename "$file")"
+  git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  if ! git -C "$dir" ls-files --error-unmatch -- ":(literal)$base" >/dev/null 2>&1; then
+    # Not tracked. New work (untracked, not ignored) may be formatted whole.
+    [[ -n "$(git -C "$dir" ls-files --others --exclude-standard -- ":(literal)$base" 2>/dev/null)" ]]
+    return
   fi
+  rel="$(git -C "$dir" ls-files --full-name -- ":(literal)$base" 2>/dev/null)"
+  [[ -n "$rel" ]] || return 1
+  tmp="$(mktemp -d 2>/dev/null)" || return 1
+  if ! git -C "$dir" show "HEAD:$rel" >"$tmp/committed" 2>/dev/null; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  if [[ "$mode" == "fmt" ]]; then
+    # Compare bytes, not $( ) captures: command substitution drops trailing
+    # newlines, which would hide a formatter's end-of-file change.
+    run_stdin "$@" <"$tmp/committed" >"$tmp/formatted" && cmp -s "$tmp/committed" "$tmp/formatted"
+    rc=$?
+  else
+    run_stdin "$@" <"$tmp/committed" >/dev/null
+    rc=$?
+  fi
+  rm -rf "$tmp"
+  return "$rc"
 }
 
 may_autofix() { # $1 = file, $2 = config names (space separated), $3 = mode, rest = stdin command
@@ -128,10 +148,7 @@ case "$file" in
       run_lint biome format --write "$file" >/dev/null 2>&1
     fi
 
-    if command -v oxlint >/dev/null 2>&1 \
-      && has_project_config "$file" .oxlintrc.json oxlintrc.json; then
-      run_lint oxlint --fix "$file" >/dev/null 2>&1
-    fi
+    # oxlint --fix fixes old violations anywhere in the file; report only.
 
     # Phase 2: Check remaining violations
     if command -v oxlint >/dev/null 2>&1; then
@@ -181,7 +198,9 @@ case "$file" in
     # Phase 1: Auto-fix (silent)
     if command -v biome >/dev/null 2>&1 \
       && may_autofix "$file" "biome.json biome.jsonc" fmt biome format --stdin-file-path="$file"; then
-      run_lint biome check --write "$file" >/dev/null 2>&1
+      # Only the formatter the gate checked; biome check --write would also
+      # apply lint fixes to lines the edit did not touch.
+      run_lint biome format --write "$file" >/dev/null 2>&1
     fi
 
     # Phase 2: Check remaining violations

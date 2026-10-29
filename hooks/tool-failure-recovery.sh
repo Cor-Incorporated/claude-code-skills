@@ -88,11 +88,14 @@ def missing_command():
 
 missing_paths = []
 for line in body:
-    hit = re.match(r"^(?:rg|grep|egrep|fgrep|ag|cat|ls|head|tail|wc|cp|mv|sed|awk|cd): (?:cannot access ')?(.+?)'?: No such file or directory", line.strip())
+    hit = re.match(r"^(?:rg|grep|egrep|fgrep|ag|cat|ls|head|tail|wc|cp|mv|sed|awk|cd): (?:cannot access ')?(.+?)'?: No such file or directory", line.strip()) \
+        or re.match(r"^\S+: can't open file '?(.+?)'?: \[Errno 2\] No such file or directory", line.strip())
     if hit:
         missing_paths.append(hit.group(1))
 
-name = missing_command()
+# A logged "bash: foo: command not found" in output is not this command's
+# error unless the command itself exited 127.
+name = missing_command() if code in (127, None) else None
 if name:
     print(f"コマンド '{name}' が見つかりません (exit {code})。brew install / npm install -g / pip install で導入するか、代替コマンドを使用してください。")
 elif code == 127:
@@ -109,6 +112,8 @@ elif first in SEARCH and code == 2 and missing_paths:
     others = [l for l in body if l.strip() and not any(p in l for p in missing_paths)]
     done = "検索自体は実行済みで、他のパスの結果は有効です。" if others else ""
     print(f"存在しないパスを検索対象に含めています: {', '.join(missing_paths[:3])}。{done}")
+elif any(re.match(r"^[\w./-]+: (?:cannot \w+ )?.+: Permission denied$", l.strip()) for l in body):
+    print("権限エラー。対象パスの所有者と権限を ls -la で確認してください (sudo や chmod は対象を確かめてから)。")
 elif missing_paths:
     print(f"ファイル/ディレクトリが存在しません: {', '.join(missing_paths[:3])}。ls -la で親ディレクトリを確認してください。")
 elif any(re.search(r"ENOSPC|No space left on device", l) for l in body):

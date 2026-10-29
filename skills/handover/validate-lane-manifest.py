@@ -48,6 +48,11 @@ def git(cwd: Path, *args: str) -> tuple[int, str]:
     return r.returncode, r.stdout.strip()
 
 
+def redact(u: str) -> str:
+    """Hide userinfo (a token in https://user:token@host/...) before printing."""
+    return re.sub(r"(://)[^/@\s]+@", r"\1***@", str(u))
+
+
 def norm_url(u: str) -> str:
     u = u.strip().removesuffix(".git").rstrip("/")
     m = re.match(r"^(?:ssh://)?git@([^:/]+)[:/](.+)$", u) or re.match(r"^https?://([^/]+)/(.+)$", u)
@@ -77,6 +82,12 @@ def check(manifest: dict, skill: Path) -> list[str]:
         if absent:
             problems.append(f"{topic}: missing {absent}")
             continue
+        if not isinstance(lane["owns"], list) or not all(isinstance(p, str) and p for p in lane["owns"]):
+            problems.append(f"{topic}: owns must be a list of paths, got {type(lane['owns']).__name__}")
+            continue
+        if not isinstance(lane["commit_allowed"], bool):
+            problems.append(f"{topic}: commit_allowed must be true or false, got {lane['commit_allowed']!r}")
+            continue
         cwd = expand(lane["cwd"])
         rc, top = git(cwd, "rev-parse", "--show-toplevel")
         if rc != 0:
@@ -84,7 +95,7 @@ def check(manifest: dict, skill: Path) -> list[str]:
             continue
         rc, url = git(cwd, "remote", "get-url", "origin")
         if rc != 0 or norm_url(url) != norm_url(lane["origin"]):
-            problems.append(f"{topic}: origin declared {lane['origin']!r}, repo has {url or '<none>'!r}")
+            problems.append(f"{topic}: origin declared {redact(lane['origin'])!r}, repo has {redact(url) or '<none>'!r}")
         rc, _ = git(cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{lane['base']}")
         if rc != 0:
             problems.append(f"{topic}: base origin/{lane['base']} not found in {cwd} (run git fetch origin, or fix base)")

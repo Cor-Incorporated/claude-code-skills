@@ -115,6 +115,35 @@ run_hook "$H" "$P" & run_hook "$H" "$P/sub" & run_hook "$H" "$P/sub/deep" & wait
 n="$(ledger_rows "$H")"
 [[ "$n" == 10 ]] && ok "3 concurrent runs add exactly the 5 new fires" || bad "concurrency" "rows=$n (want 10)"
 
+# --- 同じファイルの別名 (#445 review M1) ------------------------------------
+ln -s "$P" "$H/work/proj-link"
+fire "$A" "2026-10-29T19:00:00Z" "RUNTIME_FLOOR:egress" deny Bash
+run_hook "$H" "$H/work/proj-link/sub"
+run_hook "$H" "$P/"
+n="$(ledger_rows "$H")"
+[[ "$n" == 11 ]] && ok "a symlinked or trailing-slash cwd reuses the same cursor (one row, not three)" \
+  || bad "path aliases" "rows=$n (want 11)"
+
+# --- 差し替えられたファイル (同じ大きさでも inode が変われば読み直す) --------
+cp "$A" "$SB/audit-copy"
+: >"$SB/audit-new"
+fire "$SB/audit-new" "2026-10-29T20:00:00Z" "RUNTIME_FLOOR:secret-read" deny Bash
+mv "$SB/audit-new" "$A"
+run_hook "$H" "$P"
+n="$(ledger_rows "$H")"
+[[ "$n" == 12 ]] && ok "a replaced audit file is read from its start" || bad "replaced file" "rows=$n (want 12)"
+
+# --- git に入っている監査ファイルは clone 由来なので写さない -----------------
+H3="$SB/h3"; mkdir -p "$H3"; install_hook "$HOOK" "$H3"
+R3="$H3/work/cloned"
+mkdir -p "$R3/.claude/state/audit"
+git -C "$R3" init -q -b main
+fire "$R3/.claude/state/audit/guardrail-fires.jsonl" "2026-01-01T00:00:00Z" "RUNTIME_FLOOR:egress" deny Bash
+git -C "$R3" add -f .claude/state/audit/guardrail-fires.jsonl
+git -C "$R3" -c user.email=t@example.invalid -c user.name=t commit -qm seed
+run_hook "$H3" "$R3"
+[[ "$(ledger_rows "$H3")" == 0 ]] && ok "a git-tracked audit file is not copied" || bad "tracked audit" "rows=$(ledger_rows "$H3")"
+
 # --- 監査ファイルが無い / project の外 ---------------------------------------
 H2="$SB/h2"; mkdir -p "$H2/elsewhere"; install_hook "$HOOK" "$H2"
 run_hook "$H2" "$H2/elsewhere"

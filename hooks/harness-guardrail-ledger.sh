@@ -50,10 +50,14 @@ fi
 cwd="$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null || true)"
 [[ -z "$cwd" ]] && cwd="$PWD"
 [[ -d "$cwd" ]] || exit 0
+# One audit file must map to one cursor whatever spelling the cwd has
+# (/tmp vs /private/tmp, a trailing slash, a symlinked checkout).
+cwd="$(cd "$cwd" 2>/dev/null && pwd -P)" || exit 0
 
 # plugin と同じ root 解決 (pre_tool.go ascendToProjectRoot)
 resolve_root() {
-  local dir="$1" home="${HOME%/}"
+  local dir="$1" home
+  home="$(cd "$HOME" 2>/dev/null && pwd -P)" || home="${HOME%/}"
   local d="$dir"
   while [[ -n "$d" && "$d" != "/" && "$d" != "$home" ]]; do
     if [[ -e "$d/.git" || -e "$d/.harness" ]]; then
@@ -68,6 +72,10 @@ resolve_root() {
 root="$(resolve_root "$cwd")"
 audit="$root/.claude/state/audit/guardrail-fires.jsonl"
 [[ -f "$audit" ]] || exit 0
+# A tracked audit file came in with a clone; its rows are not fires here.
+if git -C "$root" ls-files --error-unmatch -- ".claude/state/audit/guardrail-fires.jsonl" >/dev/null 2>&1; then
+  exit 0
+fi
 
 cursor_dir="${AIDD_GUARDRAIL_CURSOR_DIR:-$HOME/.claude/hooks/ledger/harness-cursors}"
 mkdir -p "$cursor_dir" 2>/dev/null || exit 0
@@ -91,25 +99,28 @@ audit, cursor_file, root = sys.argv[1:]
 lock = open(cursor_file + ".lock", "a")
 fcntl.flock(lock, fcntl.LOCK_EX)
 try:
-    offset = 0
+    offset, inode = 0, None
     try:
         with open(cursor_file) as fh:
-            offset = int((fh.read().split() or ["0"])[0])
-    except (OSError, ValueError):
+            parts = fh.read().split()
+        offset = int(parts[0])
+        inode = int(parts[1]) if len(parts) > 2 and parts[1].isdigit() else None
+    except (OSError, ValueError, IndexError):
         offset = 0
-    size = os.path.getsize(audit)
-    if offset > size:  # truncated or rotated
-        offset = 0
+    st = os.stat(audit)
+    size = st.st_size
+    if offset > size or (inode is not None and inode != st.st_ino):
+        offset = 0  # truncated, rotated or replaced
     with open(audit, "rb") as fh:
         fh.seek(offset)
-        chunk = fh.read(size - offset)
+        chunk = fh.read(min(size - offset, 1 << 20))
     end = chunk.rfind(b"\n")
     if end < 0:
         raise SystemExit(0)
     chunk = chunk[: end + 1]
     tmp = cursor_file + ".tmp"
     with open(tmp, "w") as fh:
-        fh.write(f"{offset + len(chunk)} {audit}\n")
+        fh.write(f"{offset + len(chunk)} {st.st_ino} {audit}\n")
     os.replace(tmp, cursor_file)
 finally:
     fcntl.flock(lock, fcntl.LOCK_UN)

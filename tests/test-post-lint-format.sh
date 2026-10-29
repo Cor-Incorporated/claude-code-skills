@@ -28,7 +28,7 @@ bad() { echo "FAIL: $1"; echo "    $2"; fail=$((fail + 1)); }
 RUFF_BIN=""
 for cand in $(type -ap ruff 2>/dev/null) "$HOME"/.local/share/mise/installs/python/*/bin/ruff; do
   [[ -x "$cand" ]] || continue
-  if (cd "${TMPDIR:-/tmp}" && timeout 1 "$cand" --version >/dev/null 2>&1); then
+  if (cd "${TMPDIR:-/tmp}" && if command -v timeout >/dev/null 2>&1; then timeout 3 "$cand" --version; else "$cand" --version; fi) >/dev/null 2>&1; then
     RUFF_BIN="$cand"
     break
   fi
@@ -122,6 +122,30 @@ run_hook "$R/new_mod.py"
 [[ "$(cat "$R/new_mod.py")" == 'z = {  "k":1 }' ]] && ok "pyproject.toml without [tool.ruff] does not count as a ruff config" \
   || bad "pyproject without ruff section" "$(cat "$R/new_mod.py")"
 
+# 6. glob に見える名前 [id].py (隣に i.py)、HEAD 未整形 → 書き換えない
+#    (#445 review M2: pathspec を glob として読むと 2 件返り、git show が失敗して
+#     「untracked」扱いで全体整形していた)
+R="$SB/r6"; new_repo "$R"
+printf '[tool.ruff]\nline-length = 120\n' >"$R/pyproject.toml"
+printf '%s' "$UNFORMATTED" >"$R/[id].py"
+printf 'q = 1\n' >"$R/i.py"
+git -C "$R" add -A && git -C "$R" commit -qm init
+edit_one_line "$R/[id].py"
+before="$(shasum "$R/[id].py")"
+run_hook "$R/[id].py"
+[[ "$(shasum "$R/[id].py")" == "$before" ]] && ok "a glob-like file name is matched literally (dirty HEAD → no rewrite)" \
+  || bad "literal pathspec" "$(git -C "$R" diff --stat)"
+
+# 7. .gitignore された新規ファイル → 書き換えない (new work ではない)
+R="$SB/r7"; new_repo "$R"
+printf '[tool.ruff]\nline-length = 120\n' >"$R/pyproject.toml"
+printf 'gen_*.py\n' >"$R/.gitignore"
+git -C "$R" add -A && git -C "$R" commit -qm init
+printf 'z = {  "k":1 }\n' >"$R/gen_out.py"
+run_hook "$R/gen_out.py"
+[[ "$(cat "$R/gen_out.py")" == 'z = {  "k":1 }' ]] && ok "an ignored new file is not rewritten" \
+  || bad "ignored file" "$(cat "$R/gen_out.py")"
+
 # --- 変異体: may_autofix always allows ---
 # 同じ表をこの変異体に流し、少なくとも 1 件 red になることを実測する。
 if [[ -z "${IN_MUTANT:-}" ]]; then
@@ -133,7 +157,9 @@ old = '  # shellcheck disable=SC2086\n  has_project_config "$file" $configs || r
 assert old in src, "mutation anchor not found"
 open(sys.argv[2], "w").write(src.replace(old, '  return 0', 1))
 PY
-  if IN_MUTANT=1 HOOK="$MUT" bash "$0" >/dev/null 2>&1; then
+  if [[ ! -s "$MUT" ]] || cmp -s "$HOOK" "$MUT"; then
+    bad "mutation could not be applied" "anchor not found in $HOOK — update the mutant"
+  elif IN_MUTANT=1 HOOK="$MUT" bash "$0" >/dev/null 2>&1; then
     bad "mutant (may_autofix always allows) stays green" "the table above does not detect it"
   else
     ok "mutant (may_autofix always allows) goes red"

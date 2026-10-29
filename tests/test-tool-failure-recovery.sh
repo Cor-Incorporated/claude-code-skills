@@ -52,6 +52,8 @@ expect "grep exit 1 with a count is silent" \
   "grep -c xyz README.md" "Exit code 1${NL}0" "(silent)"
 expect "zsh format names the missing command, not zsh" \
   "foo --version" "Exit code 127${NL}zsh: command not found: foo" "'foo'" "'zsh'"
+expect "exit 127 names the shell's own line, not a quoted log line before it" \
+  "cat build.log; foo" "Exit code 127${NL}build.log:12: bash: bar: command not found${NL}zsh: command not found: foo" "'foo'" "'bar'"
 expect "bash format names the missing command" \
   "bash -c foo" "Exit code 127${NL}bash: line 1: foo: command not found" "'foo'"
 expect "zsh = expansion is explained, not called a missing command" \
@@ -70,6 +72,12 @@ expect "a failing test named *timeout* is not a network timeout" \
   "pytest -q" "Exit code 1${NL}FAILED tests/test_net.py::test_timeout_retry - AssertionError${NL}1 failed, 20 passed" "(silent)"
 expect "a real connect timeout still gets guidance" \
   "curl -sS http://127.0.0.1:9/" "Exit code 28${NL}curl: (28) Connection timed out after 3001 milliseconds" "タイムアウト"
+expect "a logged 'command not found' after a non-127 failure is not a missing command" \
+  "tail -5 build.log; false" "Exit code 1${NL}bash: foo: command not found" "(silent)"
+expect "a tool's own Permission denied line gets guidance" \
+  "touch /etc/x" "Exit code 1${NL}touch: /etc/x: Permission denied" "権限エラー"
+expect "python can't open file names the path" \
+  "python3 nope.py" "Exit code 2${NL}python3: can't open file '/w/nope.py': [Errno 2] No such file or directory" "/w/nope.py"
 expect "npm fallback still fires" \
   "npm run build" "Exit code 1${NL}npm ERR! code ELIFECYCLE" "パッケージマネージャ"
 
@@ -84,7 +92,9 @@ old = 'hit = re.match(pat, line.strip())'
 assert old in src, "mutation anchor not found"
 open(sys.argv[2], "w").write(src.replace(old, 'hit = re.search(pat.lstrip("^"), line)', 1))
 PY
-  if IN_MUTANT=1 HOOK="$MUT" bash "$0" >/dev/null 2>&1; then
+  if [[ ! -s "$MUT" ]] || cmp -s "$HOOK" "$MUT"; then
+    bad "mutation could not be applied" "anchor not found in $HOOK — update the mutant"
+  elif IN_MUTANT=1 HOOK="$MUT" bash "$0" >/dev/null 2>&1; then
     bad "mutant (error lines no longer anchored) stays green" "the table above does not detect it"
   else
     ok "mutant (error lines no longer anchored) goes red"

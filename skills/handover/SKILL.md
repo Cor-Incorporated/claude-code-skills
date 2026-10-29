@@ -205,7 +205,7 @@ origin が一致するか、base が origin にあるか、worktree が `<cwd>/.
 | HP-1 | `RUNTIME_FLOOR:*` に止められた操作を、引用・変数化・別ツールへの書き換えで通さない。許可が要るなら `config/runtime-floor-allowlist.json`（宣言）への追加提案か人間ゲートに書く。`HARNESS_RUNTIME_FLOOR_EGRESS=off` を設定しない（codex 等の子プロセスへ継承され床ごと消える） | 2026-10-30 harness-pdca F1/F2 |
 | HP-2 | 1 回の Bash に「読取動詞（cat/grep/head…）」と「秘密っぽい名前（`.env*`・`credentials`・`*.key`・`~/.ssh`）」を別セグメントで混ぜない。床はセグメントを区別せず deny する。`~/.ssh/*`・本物の `.env` は読まない | 2026-10-30 統括 `ls .env.example; grep …` |
 | HP-3 | formatter・`--fix` を手でファイル全体に掛けない。PostToolUse の formatter は「プロジェクト設定あり + HEAD が clean」のときだけ書く。無関係行の整形差分が出たら commit せず、編集ハンクだけ当て直す | 2026-10-29 ai-cluster `test_judge_f64.py` |
-| HP-4 | クラスタのノード・NAS への `nc`/`curl`/`rsync`/`scp` は 5.16.0 の床に許可リストが無く止まる。ノードから見た LAN を測るなら `ssh <node> '<操作>'` とノード上の操作として書き、宛先と測定点を報告に書く。Mac から直接届かない宛先を Mac から届いたと書かない | 2026-10-30 NAS レーン `nc -z 192.168.11.23 445` |
+| HP-4 | Mac からクラスタのノード・NAS への `nc`/`curl`/`rsync`/`scp` は 5.16.0 の床に許可リストが無く止まる。止まったら人間ゲートに書き、同じ宛先への同じ操作を `ssh` や引用で包んで Mac から通さない（HP-1）。ノード自身の作業（そのノードのディスク、ノードの LAN 内の測定）は元々ノードへ ssh して行う運用で、報告には「どのノードで測ったか」を書く。Mac から届かない宛先を届いたと書かない | 2026-10-30 NAS レーン `nc -z 192.168.11.23 445` |
 | HP-5 | `setup.sh` を develop 以外で走らせない。配る前に `bash tests/test-runtime-floor-allowlist.sh`（L4: `enabledPlugins` ↔ インストール実体）を通す。id がずれた settings.json を配ると plugin（床と R01〜R13）が丸ごと無効になる | 2026-10-30 `claude-code-harness@` → `harness@` |
 | HP-6 | Codex への委任に codex MCP（`codex mcp-server`）を使わない。codex-cli 0.165.0 で subcommand が無くなり CONNECTION_CLOSED になる。委任は `codex exec` 経路（delegation.md 経路 A/C） | 2026-10-30 F6 |
 

@@ -27,46 +27,50 @@ IS_CLOUD_RUN_DEPLOY=false
 IS_DOCKER_PUSH=false
 IS_KUBECTL_APPLY=false
 
-# Match only where the words are run as a command, not where they are text.
-# 2026-10-30 harness-pdca: a python heredoc that edited this README (its body
-# mentioned `gcloud run deploy` / `docker push`) printed DEPLOYMENT DETECTED.
-# Heredoc bodies are dropped, and a hit must sit at the start of a command
-# (after ; & | ( or a newline, past env assignments / sudo / time).
-# tests/test-post-deploy-verify.sh
-deploy_hit() { # $1 = command text, $2 = "word word" → exit 0 when run as a command
-  python3 - "$1" "$2" <<'PY' 2>/dev/null
+# Recall first: a missed checklist after a real deploy costs more than an
+# extra one. The phrase counts anywhere in the command (as before) except
+#   - inside a heredoc body (a document being written, not run), and
+#   - as the quoted pattern/text of grep/rg/ag/echo/printf.
+# 2026-10-30 harness-pdca: a python heredoc that edited the README (its body
+# mentioned the deploy words) printed DEPLOYMENT DETECTED. A first fix that
+# demanded command position missed `for … do docker push`, `then gcloud run
+# deploy`, `sudo -E`, `timeout 900`, `bash -c "kubectl apply …"` (review of
+# #445); those stay detected here. tests/test-post-deploy-verify.sh
+case "$command" in
+  *"gcloud run deploy"*|*"docker push"*|*"kubectl apply"*) ;;
+  *) exit 0 ;;
+esac
+
+hits="$(python3 - "$command" <<'PY' 2>/dev/null
 import re
 import sys
 
-cmd, words = sys.argv[1], sys.argv[2].split()
+cmd = sys.argv[1]
+# A heredoc starts at `<<WORD`, `<<-WORD`, `<<'WORD'`, `<<"WORD"` preceded by
+# whitespace or line start. `<<<` (here-string) and `1<<n` (shift) are not.
+start = re.compile(r"(?:^|\s)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1(?![A-Za-z0-9_])")
 out, term = [], None
 for line in cmd.split("\n"):
     if term is not None:
         if line.strip() == term:
             term = None
         continue
-    out.append(line)
-    m = re.search(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", line)
-    if m:
+    m = start.search(line)
+    if m and "<<<" not in line[m.start():m.end() + 1]:
         term = m.group(2)
+    out.append(line)
 text = "\n".join(out)
-pat = (r"(?:^|[;&|(\n]|\$\()\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:sudo\s+|time\s+|command\s+)*"
-       + r"\s+".join(map(re.escape, words)) + r"\b")
-raise SystemExit(0 if re.search(pat, text) else 1)
+text = re.sub(
+    r"\b(?:grep|egrep|fgrep|rg|ag|echo|printf)\b(?:\s+-{1,2}[A-Za-z][\w-]*(?:=\S+)?)*\s+('[^']*'|\"[^\"]*\")",
+    " ", text)
+found = [w for w in ("gcloud run deploy", "docker push", "kubectl apply") if w in text]
+print(" ".join(w.split()[-1] for w in found))
 PY
-}
+)"
 
-if deploy_hit "$command" 'gcloud run deploy'; then
-    IS_CLOUD_RUN_DEPLOY=true
-fi
-
-if deploy_hit "$command" 'docker push'; then
-    IS_DOCKER_PUSH=true
-fi
-
-if deploy_hit "$command" 'kubectl apply'; then
-    IS_KUBECTL_APPLY=true
-fi
+case " $hits " in *" deploy "*) IS_CLOUD_RUN_DEPLOY=true ;; esac
+case " $hits " in *" push "*) IS_DOCKER_PUSH=true ;; esac
+case " $hits " in *" apply "*) IS_KUBECTL_APPLY=true ;; esac
 
 # Only inject context for deployment commands
 if ! $IS_CLOUD_RUN_DEPLOY && ! $IS_DOCKER_PUSH && ! $IS_KUBECTL_APPLY; then

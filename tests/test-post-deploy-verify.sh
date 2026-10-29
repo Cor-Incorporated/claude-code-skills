@@ -46,22 +46,35 @@ expect "grepping docs for the words is silent" "grep -n 'docker push' README.md"
 expect "echoing the words is silent" 'echo "next: kubectl apply -f x"' silent
 expect "a command after the heredoc still fires" \
   "cat > notes.md <<'EOF'${NL}text${NL}EOF${NL}docker push gcr.io/p/i:2" fire
+# #445 review: a command-position rule missed these real deploys
+expect "for … do docker push fires" 'for t in a b; do docker push img:$t; done' fire
+expect "then gcloud run deploy fires" "if true; then gcloud run deploy api --image x; fi" fire
+expect "timeout 900 gcloud run deploy fires" "timeout 900 gcloud run deploy api" fire
+expect "sudo -E docker push fires" "sudo -E docker push img:1" fire
+expect "{ docker push; } fires" "{ docker push x; }" fire
+expect "xargs docker push fires" "xargs -n1 docker push" fire
+expect "bash -c \"kubectl apply\" fires" 'bash -c "kubectl apply -f d.yaml"' fire
+expect "a here-string is not a heredoc" "grep -q x <<< foo${NL}docker push x" fire
+expect "an arithmetic shift is not a heredoc" 'echo $((1<<n))'"${NL}docker push x" fire
+expect "a non-deploy command is silent" "ls -la && git status" silent
 
-# --- 変異体: docker push matched anywhere ---
+# --- 変異体: heredoc bodies not skipped ---
 # 同じ表をこの変異体に流し、少なくとも 1 件 red になることを実測する。
 if [[ -z "${IN_MUTANT:-}" ]]; then
   MUT="$SB/mutant-hook.sh"
   python3 - "$HOOK" "$MUT" <<'PY'
 import sys
 src = open(sys.argv[1]).read()
-old = 'if deploy_hit "$command" \'docker push\'; then'
+old = '    if term is not None:'
 assert old in src, "mutation anchor not found"
-open(sys.argv[2], "w").write(src.replace(old, 'if echo "$command" | grep -q \'docker push\'; then', 1))
+open(sys.argv[2], "w").write(src.replace(old, '    if False:', 1))
 PY
-  if IN_MUTANT=1 HOOK="$MUT" bash "$0" >/dev/null 2>&1; then
-    bad "mutant (docker push matched anywhere) stays green" "the table above does not detect it"
+  if [[ ! -s "$MUT" ]] || cmp -s "$HOOK" "$MUT"; then
+    bad "mutation could not be applied" "anchor not found in $HOOK — update the mutant"
+  elif IN_MUTANT=1 HOOK="$MUT" bash "$0" >/dev/null 2>&1; then
+    bad "mutant (heredoc bodies not skipped) stays green" "the table above does not detect it"
   else
-    ok "mutant (docker push matched anywhere) goes red"
+    ok "mutant (heredoc bodies not skipped) goes red"
   fi
 fi
 

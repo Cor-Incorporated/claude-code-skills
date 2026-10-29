@@ -78,6 +78,19 @@ PY
 )"
 [[ -z "$l3" ]] && ok "L3 egress stays enforced by the plugin; no blanket off, no pretend allowlist" || bad "L3 egress" "$l3"
 
+# --- L4 fixtures: the same script setup.sh runs (scripts/check-plugin-ids.py) ---
+printf '{"plugins":{"harness@m":[{}],"gopls-lsp@o":[{}]}}' >"$SB/installed.json"
+printf '{"enabledPlugins":{"claude-code-harness@m":true,"gopls-lsp@o":true}}' >"$SB/renamed.json"
+printf '{"enabledPlugins":{"harness@m":true,"absent@o":true}}' >"$SB/absent.json"
+out="$(python3 "$ROOT/scripts/check-plugin-ids.py" "$SB/renamed.json" "$SB/installed.json")"; rc=$?
+[[ $rc -eq 1 && "$out" == *"claude-code-harness@m"*"harness@m"* ]] && ok "L4 a renamed plugin id is refused, naming both ids" || bad "L4 rename" "rc=$rc $out"
+out="$(python3 "$ROOT/scripts/check-plugin-ids.py" "$SB/absent.json" "$SB/installed.json")"; rc=$?
+[[ $rc -eq 0 && "$out" == *warning*"absent@o"* ]] && ok "L4 a plugin missing on this machine only warns" || bad "L4 absent" "rc=$rc $out"
+printf 'not json' >"$SB/broken.json"
+out="$(python3 "$ROOT/scripts/check-plugin-ids.py" "$SB/renamed.json" "$SB/broken.json")"; rc=$?
+[[ $rc -eq 0 && "$out" == *warning* ]] && ok "L4 an unreadable installed_plugins.json warns instead of aborting" || bad "L4 broken" "rc=$rc $out"
+grep -q 'scripts/check-plugin-ids.py' "$ROOT/setup.sh" && ok "L4 setup.sh runs scripts/check-plugin-ids.py" || bad "L4 wiring" "setup.sh does not call the check"
+
 # --- L2 / L4: the installed enforcer ------------------------------------------
 PLUGIN_ROOT="$(ls -d "$HOME"/.claude/plugins/cache/claude-code-harness-marketplace/harness/*/ 2>/dev/null | sort -V | tail -1)"
 BIN="${PLUGIN_ROOT%/}/bin/harness"
@@ -114,6 +127,18 @@ print(h.get("permissionDecisionReason","") if h.get("permissionDecision")=="deny
 
   while IFS= read -r cmd; do
     r="$(decide "$ALLOW" "$cmd")"
+    [[ "$r" == RUNTIME_FLOOR:secret-read* ]] && ok "L2 known upstream limit still denied (bare name): $cmd" \
+      || bad "L2 known_upstream_limits changed: the plugin now allows it; move it to must_allow" "$cmd -> '${r}'"
+  done < <(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1]))["secret_read"]["known_upstream_limits"]["still_denied"]))' "$DECL")
+
+  while IFS= read -r cmd; do
+    r="$(decide "$ALLOW" "$cmd")"
+    [[ -z "$r" ]] && ok "L2 known residual (recorded, allowed with the env): $cmd" \
+      || bad "L2 known_residual_allowed changed: now denied; drop it from the residual list" "$cmd -> '${r}'"
+  done < <(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1]))["secret_read"]["known_residual_allowed"]["allowed"]))' "$DECL")
+
+  while IFS= read -r cmd; do
+    r="$(decide "$ALLOW" "$cmd")"
     [[ "$r" == RUNTIME_FLOOR:egress* ]] && ok "L2 external egress still denied: $cmd" || bad "L2 external egress allowed" "$cmd → '${r}'"
   done < <(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1]))["egress"]["must_deny_external"]))' "$DECL")
 
@@ -126,17 +151,8 @@ print(h.get("permissionDecisionReason","") if h.get("permissionDecision")=="deny
 
   INSTALLED="$HOME/.claude/plugins/installed_plugins.json"
   if [[ -f "$INSTALLED" ]]; then
-    l4="$(python3 - "$SETTINGS" "$INSTALLED" <<'PY'
-import json, sys
-enabled = [k for k, v in json.load(open(sys.argv[1])).get("enabledPlugins", {}).items() if v]
-installed = set(json.load(open(sys.argv[2])).get("plugins", {}))
-missing = [k for k in enabled if k not in installed]
-if missing:
-    near = sorted(i for i in installed if any(m.split("@")[-1] == i.split("@")[-1] for m in missing))
-    print(f"enabled in settings.json but not installed: {missing}; installed from the same marketplace: {near}")
-PY
-)"
-    [[ -z "$l4" ]] && ok "L4 every enabledPlugins id in settings.json is installed" || bad "L4 settings.json ↔ installed plugins" "$l4"
+    l4="$(python3 "$ROOT/scripts/check-plugin-ids.py" "$SETTINGS" "$INSTALLED" 2>&1)"; l4rc=$?
+    [[ $l4rc -eq 0 ]] && ok "L4 enabledPlugins ↔ installed ids: no rename drift" || bad "L4 settings.json ↔ installed plugins" "$l4"
   else
     skp "L4 installed_plugins.json not present"
   fi
