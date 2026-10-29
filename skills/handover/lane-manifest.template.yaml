@@ -1,0 +1,37 @@
+# lane-manifest — 複数レーンを撃つ引き継ぎ包に 1 本だけ同梱する機械可読のレーン台帳
+#
+# 起点 (2026-10-29/30): 依頼 1 本 46 KB × 7 に「レーン → repo パス」が無く、
+# 3 レーンが編集 0 で止まった (yomiyasu は skills 配下だった / grift は正本が 2 つ /
+# m02 は commit 0 で worktree が切れない)。自然文のブリーフから cwd を推測させない。
+#
+# 検証: python3 skills/handover/validate-lane-manifest.py <この写し>
+#   - cwd が git repo で、origin の URL が一致する
+#   - base が origin にある (git rev-parse --verify origin/<base>)
+#   - worktree は <cwd>/.worktrees/<agent>/<slug> の形 (Developer/AGENTS.md)。
+#     commit 0 の repo のように worktree を切れないレーンは worktree: none と
+#     commit_allowed: false を両方書く
+#   - 2 レーンが同じ worktree / 同じ所有パスを持たない
+#   - report_to の親ディレクトリがある
+#   - standard_prohibitions が skills/handover/SKILL.md「禁止事項標準枠」の ID を全部含む
+schema: lane-manifest.v1
+created: "2026-10-30T02:15:00+09:00"
+orchestrator: local_00000000-0000-0000-0000-000000000000
+common_clauses: skills/handover/common-clauses.md
+
+standard_prohibitions: [HP-1, HP-2, HP-3, HP-4, HP-5, HP-6]
+
+lanes:
+  - topic: example-lane
+    session: local_00000000-0000-0000-0000-000000000001
+    cwd: ~/Developer/example-repo
+    origin: git@github.com:Example-Org/example-repo.git
+    base: develop
+    worktree: ~/Developer/example-repo/.worktrees/claude/example-lane
+    branch: feat/example-lane
+    commit_allowed: true
+    report_to: ~/Documents/Codex/YYYY-MM-DD/desktop-handoffs/completed/Claude_Code報告_YYYYMMDD_example-lane.md
+    owns:
+      - src/example/
+      - tests/example/
+    forbidden:
+      - merge / main への push / 本番公開
