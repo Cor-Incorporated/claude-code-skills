@@ -86,7 +86,7 @@ l4() { # $1 = name, $2 = repo enabled json, $3 = live enabled json, $4 = want rc
 l4 "rename inside a one-plugin marketplace is refused" '{"claude-code-harness@m":true}' '{"harness@m":true}' 1 "harness@m"
 l4 "rename with unrelated names is refused" '{"claude-code-harness@n":true}' '{"cc-harness@n":true}' 1 "cc-harness@n"
 l4 "marketplace rename is refused" '{"harness@old":true}' '{"harness@new":true}' 1 "harness@new"
-l4 "catalog: gopls-lsp missing while swift-lsp is live only warns" '{"gopls-lsp@x":true}' '{"swift-lsp@o":true}' 0 "warning"
+l4 "catalog: rust-lsp missing while swift-lsp (same catalog) is live only warns" '{"rust-lsp@o":true}' '{"swift-lsp@o":true}' 0 "warning"
 l4 "catalog: same marketplace, unrelated plugin only warns" '{"github@o":true}' '{"swift-lsp@o":true}' 0 "warning"
 l4 "a live plugin the repo leaves off only warns" '{"git@o":true}' '{"git@o":true,"gopls-lsp@o":true}' 0 "turns off gopls-lsp@o"
 j repo '{"enabledPlugins":{"claude-code-harness@m":true}}'
