@@ -97,8 +97,9 @@ none of these block the session from starting.
 
 ### PostToolUse
 
-5 invocations across 3 matchers. Advisory only — informational context,
-never a hard block.
+8 invocations across 4 matchers. Advisory only — informational context,
+never a hard block. (`aidd-cc-claude.sh` on `Bash|Edit|Write|MultiEdit|AskUserQuestion`
+is the H17 common control, listed under PreToolUse.)
 
 #### Matcher: `Agent` (2)
 
@@ -107,18 +108,20 @@ never a hard block.
 | `verify-agent-output.sh` | Detect agent phantom completions (false "done" reports, #173) — informational |
 | `auto-commit-worktree-changes.sh` | Auto-commit worktree agent changes after merge to parent dir (#220) |
 
-#### Matcher: `Bash` (2)
+#### Matcher: `Bash` (4)
 
 | Hook | Purpose |
 |---|---|
 | `post-deploy-verify.sh` | Inject verification checklist after `gcloud run deploy`/`docker push` |
 | `enforce-hook-deploy-after-merge.sh` | Auto-deploy hooks after a PR merge that touched `hooks/` (#183) |
+| `aidd-async-register.sh` | Register background/async work so the turn boundary can reconcile it (aidd-governance#96) |
+| `harness-guardrail-ledger.sh` | Copy claude-code-harness plugin fires (RUNTIME_FLOOR / R01–R13) from `<project>/.claude/state/audit/guardrail-fires.jsonl` into `guard-ledger.jsonl` (ADR-006 req. 4; the floor deny fires no PostToolUseFailure). Rule id + category only, never the command |
 
 #### Matcher: `Edit\|Write` (1)
 
 | Hook | Purpose |
 |---|---|
-| `post-lint-format.sh` | Post-write Quality Loop: auto-fix phase → residual check (ADR-001/003) |
+| `post-lint-format.sh` | Post-write Quality Loop: auto-fix phase → residual check (ADR-001/003). Write-mode fixers run only when the project declares the tool and the committed version is already clean, so they never restyle lines the edit did not touch |
 
 ### PostToolUseFailure
 
@@ -127,7 +130,7 @@ never a hard block.
 | Hook | Matcher | Purpose |
 |---|---|---|
 | `notify-agent-failure.sh` | `Agent` | Inject concise failure summary into parent session; persist failure metadata |
-| `tool-failure-recovery.sh` | `Bash\|Edit\|Write\|Grep\|WebFetch\|WebSearch` | Inject error-recovery guidance on tool failure (#66 Fix #6) |
+| `tool-failure-recovery.sh` | `Bash\|Edit\|Write\|Grep\|WebFetch\|WebSearch` | Inject error-recovery guidance on tool failure (#66 Fix #6). Bash failures are classified by exit code (1 from grep/rg = no match, 126, 127) and by anchored error lines, not by phrases anywhere in the output |
 
 ### PreCompact
 
