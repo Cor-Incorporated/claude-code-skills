@@ -97,8 +97,9 @@ none of these block the session from starting.
 
 ### PostToolUse
 
-5 invocations across 3 matchers. Advisory only — informational context,
-never a hard block.
+7 invocations across 4 matchers. Advisory only — informational context,
+never a hard block. (`aidd-cc-claude.sh` on `Bash|Edit|Write|MultiEdit|AskUserQuestion`
+is the H17 common control, listed under PreToolUse.)
 
 #### Matcher: `Agent` (2)
 
@@ -107,12 +108,13 @@ never a hard block.
 | `verify-agent-output.sh` | Detect agent phantom completions (false "done" reports, #173) — informational |
 | `auto-commit-worktree-changes.sh` | Auto-commit worktree agent changes after merge to parent dir (#220) |
 
-#### Matcher: `Bash` (2)
+#### Matcher: `Bash` (3)
 
 | Hook | Purpose |
 |---|---|
-| `post-deploy-verify.sh` | Inject verification checklist after `gcloud run deploy`/`docker push` |
+| `post-deploy-verify.sh` | Inject verification checklist after `gcloud run deploy`/`docker push`/`kubectl apply`. The words count anywhere except inside a heredoc body that is not run by a shell and the quoted text of grep/rg/echo/printf |
 | `enforce-hook-deploy-after-merge.sh` | Auto-deploy hooks after a PR merge that touched `hooks/` (#183) |
+| `aidd-async-register.sh` | Register background/async work so the turn boundary can reconcile it (aidd-governance#96) |
 
 #### Matcher: `Edit\|Write` (1)
 
