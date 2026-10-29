@@ -36,6 +36,9 @@ IS_KUBECTL_APPLY=false
 # demanded command position missed `for … do docker push`, `then gcloud run
 # deploy`, `sudo -E`, `timeout 900`, `bash -c "kubectl apply …"` (review of
 # #445); those stay detected here. tests/test-post-deploy-verify.sh
+# Known limit: a heredoc fed to python (or another non-shell interpreter) is
+# treated as text, so `python3 - <<PY … os.system("kubectl apply …")` gets no
+# checklist. That body is where the README false positive came from.
 case "$command" in
   *"gcloud run deploy"*|*"docker push"*|*"kubectl apply"*) ;;
   *) exit 0 ;;
@@ -63,16 +66,21 @@ for line in cmd.split("\n"):
     in_arith = before.count("$((") > before.count("))")
     # A heredoc fed to a shell or to ssh is run, so its body counts.
     after = line[m.end():] if m else ""
-    run_by_shell = re.search(r"(?:^|[\s;&|(])(?:bash|sh|zsh|dash|ssh|sudo)(?:\s|$)", before) or re.search(
-        r"\|\s*(?:\S+\s+)*?(?:bash|sh|zsh|dash|ssh)(?:\s|$)", after
+    # A << inside quotes on this line is text, not a heredoc start.
+    in_quotes = m is not None and (before.count('"') % 2 == 1 or before.count("'") % 2 == 1)
+    run_by_shell = re.search(r"(?:^|[\s;&|(])(?:\S*/)?(?:bash|sh|zsh|dash|ssh|sudo)(?:\s|$)", before) or re.search(
+        r"\|\s*(?:\S+\s+)*?(?:\S*/)?(?:bash|sh|zsh|dash|ssh)(?:\s|$)", after
     )
-    if m and not in_arith and not run_by_shell and "<<<" not in line[m.start():m.end() + 1]:
+    if m and not in_arith and not in_quotes and not run_by_shell and "<<<" not in line[m.start():m.end() + 1]:
         term = m.group(2)
     out.append(line)
 text = "\n".join(out)
 def drop_quoted(m):
     quoted = m.group(1)
     # Double quotes still run $( ) and backticks.
+    rest = m.string[m.end():].split("\n", 1)[0]
+    if re.search(r"\|\s*(?:\S*/)?(?:bash|sh|zsh|dash|ssh)\b", rest):
+        return m.group(0)  # the text is piped into a shell and run
     if quoted.startswith('"') and ("$(" in quoted or chr(96) in quoted):  # chr(96): bash 3.2
         return m.group(0)
     return " "
@@ -84,7 +92,8 @@ text = re.sub(
 found = [w for w in ("gcloud run deploy", "docker push", "kubectl apply") if w in text]
 print(" ".join(w.split()[-1] for w in found))
 PY
-hits="$(python3 -c "$_hits_py" "$command" 2>/dev/null)"
+# If python cannot run, fail toward the checklist (recall first).
+hits="$(python3 -c "$_hits_py" "$command" 2>/dev/null)" || hits="deploy push apply"
 
 case " $hits " in *" deploy "*) IS_CLOUD_RUN_DEPLOY=true ;; esac
 case " $hits " in *" push "*) IS_DOCKER_PUSH=true ;; esac

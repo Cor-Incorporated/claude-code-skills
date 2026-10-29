@@ -65,6 +65,16 @@ expect "\$( ) inside double quotes still runs" 'echo "pushed: $(docker push img)
 expect "a heredoc piped into bash fires" "cat <<'EOF' | bash${NL}docker push img${NL}EOF" fire
 expect "a heredoc piped into ssh fires" "cat <<'EOF' | ssh host bash${NL}kubectl apply -f k.yaml${NL}EOF" fire
 expect "a heredoc piped into a non-shell is still text" "cat <<'EOF' | tee notes.md${NL}docker push img${NL}EOF" silent
+# #449 review
+expect "a quoted << is not a heredoc start" 'git commit -m "explain <<EOF usage"'"${NL}docker push x" fire
+expect "a heredoc fed to /bin/bash fires" "/bin/bash <<'EOF'${NL}docker push img${NL}EOF" fire
+expect "echo text piped into bash fires" 'echo "docker push $IMG" | bash' fire
+expect "echo text piped into /bin/sh fires" "echo 'kubectl apply -f k.yaml' | /bin/sh" fire
+mkdir -p "$SB/nopy"
+printf '#!/bin/sh\nexit 1\n' >"$SB/nopy/python3"; chmod +x "$SB/nopy/python3"
+out="$(python3 -c 'import json;print(json.dumps({"tool_name":"Bash","tool_input":{"command":"gcloud run deploy api"}}))' \
+  | PATH="$SB/nopy:$PATH" HOME="$SB" AIDD_LEDGER_SOURCE=test bash "$SB/hooks/post-deploy-verify.sh" 2>/dev/null)"
+[[ "$out" == *"DEPLOYMENT DETECTED"* ]] && ok "a broken python3 fails toward the checklist" || bad "python failure" "no checklist when python3 fails"
 
 # --- 変異体: heredoc bodies not skipped ---
 # 同じ表をこの変異体に流し、少なくとも 1 件 red になることを実測する。
