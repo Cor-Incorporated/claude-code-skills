@@ -1,0 +1,2 @@
+ok  	github.com/Chachamaru127/claude-code-harness/go/internal/runtimefloor	0.243s
+2026-10-30T03:20:37+0900
