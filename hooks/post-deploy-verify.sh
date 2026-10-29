@@ -67,7 +67,9 @@ for line in cmd.split("\n"):
     # A heredoc fed to a shell or to ssh is run, so its body counts.
     after = line[m.end():] if m else ""
     # A << inside quotes on this line is text, not a heredoc start.
-    in_quotes = m is not None and (before.count('"') % 2 == 1 or before.count("'") % 2 == 1)
+    # $( opens a new quoting context: `-m "$(cat <<'EOF'` is a real heredoc.
+    ctx = before.rsplit("$(", 1)[-1]
+    in_quotes = m is not None and (ctx.count('"') % 2 == 1 or ctx.count("'") % 2 == 1)
     run_by_shell = re.search(r"(?:^|[\s;&|(])(?:\S*/)?(?:bash|sh|zsh|dash|ssh|sudo)(?:\s|$)", before) or re.search(
         r"\|\s*(?:\S+\s+)*?(?:\S*/)?(?:bash|sh|zsh|dash|ssh)(?:\s|$)", after
     )
