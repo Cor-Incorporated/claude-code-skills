@@ -57,6 +57,11 @@ expect "bash -c \"kubectl apply\" fires" 'bash -c "kubectl apply -f d.yaml"' fir
 expect "a here-string is not a heredoc" "grep -q x <<< foo${NL}docker push x" fire
 expect "an arithmetic shift is not a heredoc" 'echo $((1<<n))'"${NL}docker push x" fire
 expect "a non-deploy command is silent" "ls -la && git status" silent
+# #445 re-review: heredocs that are run, and text that still executes
+expect "a heredoc fed to ssh fires" "ssh deploy@host <<'EOF'${NL}docker push img${NL}EOF" fire
+expect "a heredoc fed to bash -s fires" "bash -s <<EOF${NL}kubectl apply -f k.yaml${NL}EOF" fire
+expect "a spaced arithmetic shift is not a heredoc" 'x=$(( 1 << shift ))'"${NL}docker push img" fire
+expect "\$( ) inside double quotes still runs" 'echo "pushed: $(docker push img)"' fire
 
 # --- 変異体: heredoc bodies not skipped ---
 # 同じ表をこの変異体に流し、少なくとも 1 件 red になることを実測する。

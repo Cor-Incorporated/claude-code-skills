@@ -41,7 +41,10 @@ case "$command" in
   *) exit 0 ;;
 esac
 
-hits="$(python3 - "$command" <<'PY' 2>/dev/null
+# Python source kept out of $( ): bash 3.2 mis-parses quotes inside a
+# heredoc there (tests/test-hooks-bash32-syntax.sh).
+_hits_py=""
+IFS= read -r -d '' _hits_py <<'PY' || true
 import re
 import sys
 
@@ -56,17 +59,29 @@ for line in cmd.split("\n"):
             term = None
         continue
     m = start.search(line)
-    if m and "<<<" not in line[m.start():m.end() + 1]:
+    before = line[: m.start()] if m else ""
+    in_arith = before.count("$((") > before.count("))")
+    # A heredoc fed to a shell or to ssh is run, so its body counts.
+    run_by_shell = re.search(r"(?:^|[\s;&|(])(?:bash|sh|zsh|dash|ssh|sudo)(?:\s|$)", before)
+    if m and not in_arith and not run_by_shell and "<<<" not in line[m.start():m.end() + 1]:
         term = m.group(2)
     out.append(line)
 text = "\n".join(out)
+def drop_quoted(m):
+    quoted = m.group(1)
+    # Double quotes still run $( ) and backticks.
+    if quoted.startswith('"') and ("$(" in quoted or chr(96) in quoted):  # chr(96): bash 3.2
+        return m.group(0)
+    return " "
+
+
 text = re.sub(
     r"\b(?:grep|egrep|fgrep|rg|ag|echo|printf)\b(?:\s+-{1,2}[A-Za-z][\w-]*(?:=\S+)?)*\s+('[^']*'|\"[^\"]*\")",
-    " ", text)
+    drop_quoted, text)
 found = [w for w in ("gcloud run deploy", "docker push", "kubectl apply") if w in text]
 print(" ".join(w.split()[-1] for w in found))
 PY
-)"
+hits="$(python3 -c "$_hits_py" "$command" 2>/dev/null)"
 
 case " $hits " in *" deploy "*) IS_CLOUD_RUN_DEPLOY=true ;; esac
 case " $hits " in *" push "*) IS_DOCKER_PUSH=true ;; esac

@@ -61,7 +61,10 @@ case "$TOOL_NAME" in
     # called ssh's "Permission denied (publickey)" a file-permission problem.
     # Classify by exit code first, then only by lines shaped like an error
     # from the shell or the tool itself. tests/test-tool-failure-recovery.sh
-    GUIDANCE="$(python3 - "$ERROR_MSG" "$CMD" <<'PY' 2>/dev/null || true
+    # Python source kept out of $( ): bash 3.2 mis-parses quotes inside a
+    # heredoc there (tests/test-hooks-bash32-syntax.sh).
+    _guidance_py=""
+    IFS= read -r -d '' _guidance_py <<'PY' || true
 import re
 import sys
 
@@ -89,12 +92,13 @@ def missing_command():
 missing_paths = []
 for line in body:
     hit = re.match(r"^(?:rg|grep|egrep|fgrep|ag|cat|ls|head|tail|wc|cp|mv|sed|awk|cd): (?:cannot access ')?(.+?)'?: No such file or directory", line.strip()) \
-        or re.match(r"^\S+: can't open file '?(.+?)'?: \[Errno 2\] No such file or directory", line.strip())
+        or re.match(r"^\S+: can.t open file '?(.+?)'?: \[Errno 2\] No such file or directory", line.strip())
     if hit:
         missing_paths.append(hit.group(1))
 
-# A logged "bash: foo: command not found" in output is not this command's
-# error unless the command itself exited 127.
+# A logged "bash: foo: command not found" in the output is not the error of
+# this command unless it exited 127. (No apostrophes in this block: bash 3.2
+# cannot parse an odd quote count in a heredoc inside $( ).)
 name = missing_command() if code in (127, None) else None
 if name:
     print(f"コマンド '{name}' が見つかりません (exit {code})。brew install / npm install -g / pip install で導入するか、代替コマンドを使用してください。")
@@ -123,7 +127,7 @@ elif any(re.search(r"ECONNREFUSED|Connection refused", l) for l in body):
 elif any(re.search(r"(?:Connection|Operation|Read|connect\(\)).{0,40}timed out|ETIMEDOUT", l, re.I) for l in body):
     print("ネットワークのタイムアウト。接続先と経路を確認するか、タイムアウト値を増やしてください。")
 PY
-)"
+    GUIDANCE="$(python3 -c "$_guidance_py" "$ERROR_MSG" "$CMD" 2>/dev/null || true)"
     if [[ -n "$GUIDANCE" ]]; then
       :
     elif echo "$CMD" | grep -qE '^(npm|pnpm|yarn)'; then

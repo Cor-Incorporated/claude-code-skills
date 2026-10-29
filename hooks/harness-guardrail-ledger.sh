@@ -116,7 +116,9 @@ try:
         chunk = fh.read(min(size - offset, 1 << 20))
     end = chunk.rfind(b"\n")
     if end < 0:
-        raise SystemExit(0)
+        if len(chunk) < 1 << 20:
+            raise SystemExit(0)  # a line still being written
+        end = len(chunk) - 1  # one line over 1 MiB: skip it rather than stall
     chunk = chunk[: end + 1]
     tmp = cursor_file + ".tmp"
     with open(tmp, "w") as fh:

@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Compare settings.json enabledPlugins with the installed plugin ids.
+"""Refuse a settings.json copy that would switch an installed plugin off by drift.
 
-Usage: check-plugin-ids.py <settings.json> <installed_plugins.json>
+Usage: check-plugin-ids.py <repo settings.json> <installed_plugins.json> [<live settings.json>]
 
-Exit 1 (refuse) only for a rename: an enabled id is not installed while an id
-from the same marketplace is. Copying that settings.json would switch the
-installed plugin off (2026-10-30: claude-code-harness@… vs harness@… would
-have removed RUNTIME_FLOOR and R01–R13). An enabled plugin that is simply
-not installed on this machine, or an unreadable installed_plugins.json, only
-warns: neither is made worse by the copy.
+setup.sh copies the repo settings.json over the live one. Exit 1 (refuse) when
+the repo enables an id that is not installed AND the copy would turn off a
+plugin that is installed and enabled in the live file, from the same
+marketplace or under the same plugin name. That is the drift of 2026-10-30:
+the repo enabled claude-code-harness@…, the live file enabled the installed
+harness@…; the copy would have removed RUNTIME_FLOOR and R01–R13.
+
+Everything else only warns: an enabled plugin that is simply not installed
+here, a live plugin the repo deliberately leaves off, an unreadable file, or
+no live file yet (a fresh machine has nothing to turn off).
 
 Used by setup.sh and tests/test-runtime-floor-allowlist.sh (L4).
 """
@@ -19,19 +23,22 @@ import json
 import sys
 
 
+def enabled_ids(path: str) -> list[str]:
+    data = json.load(open(path)).get("enabledPlugins", {})
+    return [k for k, v in data.items() if v] if isinstance(data, dict) else []
+
+
+def split(pid: str) -> tuple[str, str]:
+    name, _, market = pid.partition("@")
+    return name, market
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print(
-            "usage: check-plugin-ids.py <settings.json> <installed_plugins.json>",
-            file=sys.stderr,
-        )
+    if len(argv) not in (3, 4):
+        print(__doc__.strip().splitlines()[2], file=sys.stderr)
         return 2
     try:
-        enabled = [
-            k
-            for k, v in json.load(open(argv[1])).get("enabledPlugins", {}).items()
-            if v
-        ]
+        repo = enabled_ids(argv[1])
     except (OSError, ValueError, AttributeError) as exc:
         print(f"plugin-ids: cannot read {argv[1]}: {exc}")
         return 1
@@ -41,34 +48,42 @@ def main(argv: list[str]) -> int:
     except (OSError, ValueError, AttributeError) as exc:
         print(f"plugin-ids: warning: cannot read {argv[2]} ({exc}); skipped")
         return 0
-    renamed, absent = [], []
-    for pid in enabled:
-        if pid in installed:
-            continue
-        name, _, market = pid.partition("@")
-        # A rename keeps the marketplace and one name contains the other
-        # (claude-code-harness → harness). Any other installed plugin from the
-        # same marketplace is unrelated, not a rename.
-        near = sorted(
-            i
-            for i in installed
-            if i not in enabled
-            and i.partition("@")[2] == market
-            and (i.partition("@")[0] in name or name in i.partition("@")[0])
-        )
-        (renamed if near else absent).append((pid, near))
-    for pid, _ in absent:
-        print(
-            f"plugin-ids: warning: {pid} is enabled in settings.json but not installed here"
-        )
-    if renamed:
-        for pid, near in renamed:
+    live: list[str] = []
+    if len(argv) == 4:
+        try:
+            live = enabled_ids(argv[3])
+        except (OSError, ValueError, AttributeError) as exc:
             print(
-                f"plugin-ids: {pid} is enabled in settings.json but not installed; "
-                f"installed from the same marketplace: {near}"
+                f"plugin-ids: warning: cannot read {argv[3]} ({exc}); no live comparison"
             )
-        return 1
-    return 0
+
+    missing = [p for p in repo if p not in installed]
+    turned_off = [p for p in live if p in installed and p not in repo]
+    refused = False
+    for pid in missing:
+        name, market = split(pid)
+        hit = sorted(
+            p for p in turned_off if split(p)[1] == market or split(p)[0] == name
+        )
+        if hit:
+            refused = True
+            print(
+                f"plugin-ids: settings.json enables {pid}, which is not installed, and the copy "
+                f"would turn off the installed, live-enabled {hit}"
+            )
+        else:
+            print(
+                f"plugin-ids: warning: {pid} is enabled in settings.json but not installed here"
+            )
+    for pid in turned_off:
+        if not any(
+            split(pid)[1] == split(m)[1] or split(pid)[0] == split(m)[0]
+            for m in missing
+        ):
+            print(
+                f"plugin-ids: warning: the copy turns off {pid} (enabled live, not in settings.json)"
+            )
+    return 1 if refused else 0
 
 
 if __name__ == "__main__":

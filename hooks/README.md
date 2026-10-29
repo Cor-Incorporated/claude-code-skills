@@ -121,7 +121,7 @@ is the H17 common control, listed under PreToolUse.)
 
 | Hook | Purpose |
 |---|---|
-| `post-lint-format.sh` | Post-write Quality Loop: auto-fix phase → residual check (ADR-001/003). Write-mode fixers run only when the project declares the tool and the committed version is already clean, so they never restyle lines the edit did not touch |
+| `post-lint-format.sh` | Post-write Quality Loop: auto-fix phase → residual check (ADR-001/003). Write-mode fixers run only when the project declares the tool and the committed version is already clean, so they never restyle lines the edit did not touch. A new file that is staged but not yet committed is not auto-formatted (git cannot show a committed version to compare with) |
 
 ### PostToolUseFailure
 

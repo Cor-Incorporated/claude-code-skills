@@ -44,7 +44,10 @@ def expand(p: str) -> Path:
 
 
 def git(cwd: Path, *args: str) -> tuple[int, str]:
-    r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+    try:
+        r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+    except OSError as exc:  # git not on PATH: report, do not traceback
+        return 127, f"<git unavailable: {exc}>"
     return r.returncode, r.stdout.strip()
 
 

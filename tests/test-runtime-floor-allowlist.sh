@@ -79,17 +79,29 @@ PY
 [[ -z "$l3" ]] && ok "L3 egress stays enforced by the plugin; no blanket off, no pretend allowlist" || bad "L3 egress" "$l3"
 
 # --- L4 fixtures: the same script setup.sh runs (scripts/check-plugin-ids.py) ---
-printf '{"plugins":{"harness@m":[{}],"gopls-lsp@o":[{}]}}' >"$SB/installed.json"
-printf '{"enabledPlugins":{"claude-code-harness@m":true,"gopls-lsp@o":true}}' >"$SB/renamed.json"
-printf '{"enabledPlugins":{"harness@m":true,"absent@o":true}}' >"$SB/absent.json"
-out="$(python3 "$ROOT/scripts/check-plugin-ids.py" "$SB/renamed.json" "$SB/installed.json")"; rc=$?
-[[ $rc -eq 1 && "$out" == *"claude-code-harness@m"*"harness@m"* ]] && ok "L4 a renamed plugin id is refused, naming both ids" || bad "L4 rename" "rc=$rc $out"
-out="$(python3 "$ROOT/scripts/check-plugin-ids.py" "$SB/absent.json" "$SB/installed.json")"; rc=$?
-[[ $rc -eq 0 && "$out" == *warning*"absent@o"* ]] && ok "L4 a plugin missing on this machine only warns" || bad "L4 absent" "rc=$rc $out"
+C="$ROOT/scripts/check-plugin-ids.py"
+j() { printf '%s' "$2" >"$SB/$1.json"; }
+j inst '{"plugins":{"harness@m":[{}],"gopls-lsp@o":[{}],"git@o":[{}],"harness@new":[{}],"cc-harness@m":[{}]}}'
+l4() { # $1 = name, $2 = repo enabled json, $3 = live enabled json, $4 = want rc, $5 = must contain
+  j repo "{\"enabledPlugins\":$2}"; j live "{\"enabledPlugins\":$3}"
+  local out rc
+  out="$(python3 "$C" "$SB/repo.json" "$SB/inst.json" "$SB/live.json")"; rc=$?
+  [[ $rc -eq $4 && "$out" == *"$5"* ]] && ok "L4 $1 (rc=$rc)" || bad "L4 $1" "rc=$rc want $4: $out"
+}
+l4 "rename in the same marketplace is refused" '{"claude-code-harness@m":true}' '{"harness@m":true}' 1 "harness@m"
+l4 "rename with unrelated names is refused" '{"claude-code-harness@m":true}' '{"cc-harness@m":true}' 1 "cc-harness@m"
+l4 "marketplace rename is refused" '{"harness@old":true}' '{"harness@new":true}' 1 "harness@new"
+l4 "a missing plugin whose neighbour stays enabled only warns" '{"github@o":true,"git@o":true}' '{"git@o":true}' 0 "warning"
+l4 "go missing while gopls-lsp stays enabled only warns" '{"go@o":true,"gopls-lsp@o":true}' '{"gopls-lsp@o":true}' 0 "warning"
+l4 "a live plugin the repo leaves off only warns" '{"git@o":true}' '{"git@o":true,"gopls-lsp@o":true}' 0 "turns off gopls-lsp@o"
+j repo '{"enabledPlugins":{"claude-code-harness@m":true}}'
+out="$(python3 "$C" "$SB/repo.json" "$SB/inst.json")"; rc=$?
+[[ $rc -eq 0 && "$out" == *warning* ]] && ok "L4 no live settings (fresh machine) only warns" || bad "L4 no live" "rc=$rc $out"
 printf 'not json' >"$SB/broken.json"
-out="$(python3 "$ROOT/scripts/check-plugin-ids.py" "$SB/renamed.json" "$SB/broken.json")"; rc=$?
+out="$(python3 "$C" "$SB/repo.json" "$SB/broken.json" "$SB/live.json")"; rc=$?
 [[ $rc -eq 0 && "$out" == *warning* ]] && ok "L4 an unreadable installed_plugins.json warns instead of aborting" || bad "L4 broken" "rc=$rc $out"
-grep -q 'scripts/check-plugin-ids.py' "$ROOT/setup.sh" && ok "L4 setup.sh runs scripts/check-plugin-ids.py" || bad "L4 wiring" "setup.sh does not call the check"
+grep -q 'scripts/check-plugin-ids.py" "$REPO_DIR/settings.json" "$installed_plugins" "$CLAUDE_DIR/settings.json"' "$ROOT/setup.sh" \
+  && ok "L4 setup.sh runs scripts/check-plugin-ids.py against the live settings.json" || bad "L4 wiring" "setup.sh does not call the check with the live file"
 
 # --- L2 / L4: the installed enforcer ------------------------------------------
 PLUGIN_ROOT="$(ls -d "$HOME"/.claude/plugins/cache/claude-code-harness-marketplace/harness/*/ 2>/dev/null | sort -V | tail -1)"
@@ -151,7 +163,7 @@ print(h.get("permissionDecisionReason","") if h.get("permissionDecision")=="deny
 
   INSTALLED="$HOME/.claude/plugins/installed_plugins.json"
   if [[ -f "$INSTALLED" ]]; then
-    l4="$(python3 "$ROOT/scripts/check-plugin-ids.py" "$SETTINGS" "$INSTALLED" 2>&1)"; l4rc=$?
+    l4="$(python3 "$ROOT/scripts/check-plugin-ids.py" "$SETTINGS" "$INSTALLED" "$HOME/.claude/settings.json" 2>&1)"; l4rc=$?
     [[ $l4rc -eq 0 ]] && ok "L4 enabledPlugins ↔ installed ids: no rename drift" || bad "L4 settings.json ↔ installed plugins" "$l4"
   else
     skp "L4 installed_plugins.json not present"
