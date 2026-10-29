@@ -143,6 +143,16 @@ run_hook "$R/[id].py"
 [[ "$(shasum "$R/[id].py")" == "$before" ]] && ok "a glob-like file name is matched literally (dirty HEAD → no rewrite)" \
   || bad "literal pathspec" "$(git -C "$R" diff --stat)"
 
+# 6b. 非 ASCII の名前 + clean HEAD → 整形する (quotepath で名前が引用符付きになっていた)
+R="$SB/r6b"; new_repo "$R"
+printf '[tool.ruff]\nline-length = 120\n' >"$R/pyproject.toml"
+printf 'a = 1\n' >"$R/テスト.py"
+git -C "$R" add -A && git -C "$R" commit -qm init
+edit_one_line "$R/テスト.py"
+run_hook "$R/テスト.py"
+[[ "$(tail -1 "$R/テスト.py")" == "y = [1, 2, 3]" ]] && ok "a non-ASCII file name with a clean HEAD is formatted" \
+  || bad "non-ASCII name" "$(tail -1 "$R/テスト.py")"
+
 # 7. .gitignore された新規ファイル → 書き換えない (new work ではない)
 R="$SB/r7"; new_repo "$R"
 printf '[tool.ruff]\nline-length = 120\n' >"$R/pyproject.toml"

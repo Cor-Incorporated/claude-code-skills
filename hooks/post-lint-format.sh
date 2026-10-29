@@ -104,36 +104,61 @@ run_stdin() { # rest = command; stdin passes through; keeps the exit status
 # 0 = HEAD version is clean, or the file is new and untracked.
 # 1 = not clean, or anything git cannot answer (not a repo, dubious ownership,
 #     ignored file, staged-only file): when unsure, do not rewrite.
-head_version_clean() {
-  local file="$1" mode="$2"
-  shift 2
-  local dir base rel tmp rc
-  dir="$(cd "$(dirname "$file")" 2>/dev/null && pwd -P)" || return 1
+# The committed copy is looked up once per hook run and reused by every
+# check (ruff check + ruff format would otherwise repeat ~8 git calls).
+#   _HEAD_STATE: "" (not looked up) | untracked | unknown | committed
+_HEAD_STATE=""
+_HEAD_DIR=""
+head_lookup() { # $1 = file
+  [[ -n "$_HEAD_STATE" ]] && return 0
+  local file="$1" dir base rel
+  _HEAD_STATE="unknown"
+  dir="$(cd "$(dirname "$file")" 2>/dev/null && pwd -P)" || return 0
   base="$(basename "$file")"
-  git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
   if ! git -C "$dir" ls-files --error-unmatch -- ":(literal)$base" >/dev/null 2>&1; then
     # Not tracked. New work (untracked, not ignored) may be formatted whole.
-    [[ -n "$(git -C "$dir" ls-files --others --exclude-standard -- ":(literal)$base" 2>/dev/null)" ]]
-    return
+    if [[ -n "$(git -C "$dir" ls-files --others --exclude-standard -- ":(literal)$base" 2>/dev/null)" ]]; then
+      _HEAD_STATE="untracked"
+    fi
+    return 0
   fi
-  rel="$(git -C "$dir" ls-files --full-name -- ":(literal)$base" 2>/dev/null)"
-  [[ -n "$rel" ]] || return 1
-  tmp="$(mktemp -d 2>/dev/null)" || return 1
-  if ! git -C "$dir" show "HEAD:$rel" >"$tmp/committed" 2>/dev/null; then
-    rm -rf "$tmp"
-    return 1
+  # core.quotepath=off: a non-ASCII name would otherwise come back quoted.
+  rel="$(git -c core.quotepath=off -C "$dir" ls-files --full-name -- ":(literal)$base" 2>/dev/null)"
+  [[ -n "$rel" ]] || return 0
+  _HEAD_DIR="$(mktemp -d 2>/dev/null)" || return 0
+  if git -C "$dir" show "HEAD:$rel" >"$_HEAD_DIR/committed" 2>/dev/null; then
+    _HEAD_STATE="committed"
   fi
+}
+trap '[[ -n "$_HEAD_DIR" ]] && rm -rf "$_HEAD_DIR"' EXIT
+
+# 0 = HEAD version is clean, or the file is new and untracked.
+# 1 = not clean, or anything git cannot answer (not a repo, dubious ownership,
+#     ignored file, staged-only file): when unsure, do not rewrite.
+# 2 = the check itself timed out (logged separately from "not clean").
+head_version_clean() { # $1 = file, $2 = mode (fmt|lint), rest = stdin command
+  local file="$1" mode="$2" rc
+  shift 2
+  head_lookup "$file"
+  case "$_HEAD_STATE" in
+    untracked) return 0 ;;
+    committed) ;;
+    *) return 1 ;;
+  esac
   if [[ "$mode" == "fmt" ]]; then
     # Compare bytes, not $( ) captures: command substitution drops trailing
     # newlines, which would hide a formatter's end-of-file change.
-    run_stdin "$@" <"$tmp/committed" >"$tmp/formatted" && cmp -s "$tmp/committed" "$tmp/formatted"
+    run_stdin "$@" <"$_HEAD_DIR/committed" >"$_HEAD_DIR/formatted"
     rc=$?
+    [[ $rc -eq 0 ]] && { cmp -s "$_HEAD_DIR/committed" "$_HEAD_DIR/formatted"; rc=$?; }
   else
-    run_stdin "$@" <"$tmp/committed" >/dev/null
+    run_stdin "$@" <"$_HEAD_DIR/committed" >/dev/null
     rc=$?
   fi
-  rm -rf "$tmp"
-  return "$rc"
+  [[ $rc -eq 124 ]] && return 2
+  [[ $rc -eq 0 ]] && return 0
+  return 1
 }
 
 may_autofix() { # $1 = file, $2 = config names (space separated), $3 = mode, rest = stdin command
@@ -143,8 +168,13 @@ may_autofix() { # $1 = file, $2 = config names (space separated), $3 = mode, res
   # shellcheck disable=SC2086
   if ! has_project_config "$file" $configs; then
     why="no-project-config"
-  elif ! head_version_clean "$file" "$mode" "$@"; then
-    why="head-not-clean"
+  else
+    head_version_clean "$file" "$mode" "$@"
+    case $? in
+      0) ;;
+      2) why="check-timeout" ;;
+      *) why="head-not-clean" ;;
+    esac
   fi
   [[ -z "$why" ]] && return 0
   # One ledger row per skipped write: how often the gate protects unedited
