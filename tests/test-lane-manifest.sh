@@ -74,6 +74,7 @@ case_red "owns '.' overlaps every other lane" 'm["lanes"][0]["owns"]=["."]' "in 
 case_red "owns './src/b' overlaps 'src/b/'" 'm["lanes"][0]["owns"]=["./src/b"]' "in the same repo"
 case_red "two lanes share a topic" 'm["lanes"][1]["topic"]="a"' "topic is used by more than one lane"
 case_red "two lanes write the same report" 'm["lanes"][1]["report_to"]=m["lanes"][0]["report_to"]' "is also written by"
+case_red "a list-valued topic is reported, not a crash" 'm["lanes"][0]["topic"]=["a"]' "topic must be a non-empty string"
 case_red "a lane that is not a mapping" 'm["lanes"].append("oops")' "must be a mapping"
 a_list() { printf '[1,2]' >"$SB/list.json"; python3 "$V" "$SB/list.json" "$SKILL" 2>&1; }
 out="$(a_list)"; rc=$?

@@ -86,6 +86,9 @@ def check(manifest: dict, skill: Path) -> list[str]:
             problems.append(f"lane #{idx + 1}: must be a mapping, got {type(lane).__name__}")
             continue
         topic = lane.get("topic", "<no topic>")
+        if not isinstance(topic, str) or not topic:
+            problems.append(f"lane #{idx + 1}: topic must be a non-empty string, got {topic!r}")
+            continue
         if topic in seen_topics:
             problems.append(f"{topic}: topic is used by more than one lane")
         seen_topics[topic] = idx
