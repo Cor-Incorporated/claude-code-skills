@@ -121,3 +121,76 @@ except OSError as exc:
     raise SystemExit(1)
 PY
 }
+
+# Append many structured measurements read from stdin (one JSON object per
+# line) in a single process.
+#
+# Usage:
+#   printf '%s\n' '{"component":"H6","event":"block",...}' | aidd_ledger_append_records [agent]
+#
+# Same validation and fields as aidd_ledger_append_record. A record that carries
+# its own "agent" keeps it (the bridge from another tool's audit log names the
+# tool that fired, not the one that copied the line). Invalid lines are skipped
+# and counted on stderr; the remaining lines are still written, so one bad line
+# cannot drop a whole batch of fires.
+aidd_ledger_append_records() {
+  local agent="${1:-${AIDD_LEDGER_AGENT:-claude-code}}"
+  local source="${AIDD_LEDGER_SOURCE:-real}"
+  local session="${AIDD_LEDGER_SESSION:-unset}"
+  local ledger="${AIDD_LEDGER_PATH:-${HOME}/.claude/hooks/ledger/guard-ledger.jsonl}"
+  local ledger_dir
+  ledger_dir="$(dirname "$ledger")"
+
+  if ! mkdir -p "$ledger_dir"; then
+    printf 'aidd-ledger: cannot create ledger directory: %s\n' "$ledger_dir" >&2
+    return 1
+  fi
+
+  python3 -c '
+import datetime
+import json
+import os
+import sys
+
+ledger, source, session, agent = sys.argv[1:]
+now = (
+    datetime.datetime.now(datetime.timezone.utc)
+    .replace(microsecond=0)
+    .isoformat()
+    .replace("+00:00", "Z")
+)
+lines = []
+skipped = 0
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
+        continue
+    try:
+        record = json.loads(raw)
+    except json.JSONDecodeError:
+        skipped += 1
+        continue
+    if not isinstance(record, dict) or not all(
+        isinstance(record.get(f), str) and record[f].strip() for f in ("component", "event")
+    ):
+        skipped += 1
+        continue
+    record["source"] = source
+    record["session"] = session
+    record.setdefault("agent", agent)
+    record.setdefault("ts", now)
+    lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+if skipped:
+    print(f"aidd-ledger: skipped {skipped} invalid record(s)", file=sys.stderr)
+if not lines:
+    raise SystemExit(0)
+try:
+    fd = os.open(ledger, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as stream:
+        stream.write("".join(lines))
+        stream.flush()
+except OSError as exc:
+    print(f"aidd-ledger: append failed: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+' "$ledger" "$source" "$session" "$agent"
+}
