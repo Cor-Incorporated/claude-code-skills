@@ -89,6 +89,11 @@ git -C "$RSPEC2" config remote.origin.push refs/heads/feat/rs:refs/heads/develop
 SW="$FIX/sw"
 mkrepo "$SW" develop
 git -C "$SW" checkout -q -b feat/s
+# develop で remote review の push refspec が develop → review-copy（--repo で選ぶ）
+REPO="$FIX/repo"
+mkrepo "$REPO" develop
+git -C "$REPO" remote add review "$FIX/remote.git"
+git -C "$REPO" config remote.review.push refs/heads/develop:refs/heads/review-copy
 # develop だが push.default=upstream で merge=review-copy、remote-tracking ref は未取得
 UPR="$FIX/upr"
 mkrepo "$UPR" develop
@@ -197,6 +202,10 @@ row 2 "$PLAIN" "$FEAT" "B57 xargs が refspec を与える"                     
 row 2 "$PLAIN" "$DEV"  "B58 \$G push（変数の git）"                         'G=git; $G push'
 row 2 "$PLAIN" "$FEAT" "B59 \$'\\x64evelop'（ANSI-C 引用）"                 "git push origin \$'\\x64evelop'"
 row 2 "$PLAIN" "$FEAT" "B60 --prune + ワイルドカード（削除しうる）"         "git push --prune origin 'refs/heads/*:refs/heads/*'"
+row 2 "$PLAIN" "$DEV"  "B61 置換はシェルの cwd（develop）で評価: -C <feature> へ develop" "git -C $SW push origin \"\$(git branch --show-current)\""
+row 2 "$PLAIN" "$FEAT" "B62 サブシェル内の代入は外へ漏れない（外は develop）" 'B=develop; (B=feat/x); git push origin "$B"'
+row 2 "$PLAIN" "$DEV"  "B63 heredoc を tee 経由で bash へ"                  $'cat <<\'EOF\' | tee note.md | bash\ngit push\nEOF'
+row 2 "$PLAIN" "$FEAT" "B64 eval の cd は現在のシェルに残る（develop へ）"   "eval \"cd $DEV\"; git push origin HEAD"
 
 echo ""
 echo "=== A 陰性: 保護ブランチを更新しない push は rc=0 ==="
@@ -249,6 +258,12 @@ row 0 "$PLAIN" "$DEV"  "A39 読めない cd（変数）は不明 = 止めない"
 row 0 "$PLAIN" "$DEV"  "A40 tag を checkout（detached）して HEAD を push"   'git checkout v1 && git push origin HEAD'
 row 0 "$PLAIN" "$SW"   "A41 checkout <branch> -- <path> は HEAD を変えない" 'git checkout develop -- README.md && git commit -m x && git push'
 row 0 "$PLAIN" "$DEV"  "A42 変数に入れた feature"                          'B=feat/q; git push origin "$B"'
+row 0 "$PLAIN" "$FEAT" "A44 置換はシェルの cwd（feature）で評価: -C <develop> へ feature" "git -C $DEV push origin \"\$(git branch --show-current)\""
+row 0 "$PLAIN" "$DEV"  "A45 サブシェル内の代入は外へ漏れない（外は feature）" 'B=feat/x; (B=develop); git push origin "$B"'
+row 0 "$PLAIN" "$REPO" "A46 --repo review の push refspec（develop → review-copy）" 'git push --repo review'
+row 0 "$PLAIN" "$REPO" "A47 --repo=review の push refspec"                 'git push --repo=review'
+row 0 "$PLAIN" "$DEV"  "A48 heredoc を tee へ（データ）"                    $'cat <<\'EOF\' | tee note.md\ngit push origin HEAD\nEOF'
+row 0 "$PLAIN" "$DEV"  "A49 eval の cd は現在のシェルに残る（feature へ）"   "eval \"cd $FEAT\"; git push origin HEAD"
 
 echo ""
 echo "=== P 対: 2 本が同じ lib を呼び、写しを持たない ==="

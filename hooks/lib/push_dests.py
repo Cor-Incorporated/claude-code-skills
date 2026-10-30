@@ -69,6 +69,7 @@ DATA = {"cat", "echo", "printf", "tee", "grep", "egrep", "fgrep", "rg", "ag", "h
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 RUNNERS = {"sudo", "doas", "env", "command", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "setsid", "xargs"}
 SUBST = "__f22_subst__"
+CUR = "__f22_current__"  # a current-branch substitution, resolved in the shell cwd where it runs
 COMPUTED = "*"
 BUILTINS = {
     "add", "am", "apply", "archive", "bisect", "blame", "branch", "bundle", "cat-file", "checkout",
@@ -122,7 +123,9 @@ def heredocs(text):
         if m and not (line[:m.start()].count(Q1) % 2 or line[:m.start()].count(Q2) % 2):
             head = re.split(r"\$\(|[;&|(`]", line[:m.start()])[-1]
             w = [t for t in words(head) if not re.match(r"[A-Za-z_][A-Za-z0-9_]*=", t)]
-            data = bool(w) and os.path.basename(w[0]) in DATA and "|" not in line[m.end():]
+            receivers = [words(x)[:1] for x in line[m.end():].split("|")[1:]]
+            data = (bool(w) and os.path.basename(w[0]) in DATA
+                    and all(r and os.path.basename(r[0]) in DATA for r in receivers))
             delim, keep = m.group(2), not data
     if delim is not None and keep and body:
         code.append("\n".join(body))
@@ -300,6 +303,9 @@ def refspec(ref, d, gopts, how):
         return
     src, dst = split_refspec(ref)
     dst = dst or src
+    if dst == CUR:
+        emit(head(run, []) if run is not None else COMPUTED, run or d, "current" if run is not None else "computed")
+        return
     if SUBST in dst or re.search(UNRESOLVED, dst):
         # A destination the command computes cannot be decided here: fail closed.
         # `$(git rev-parse HEAD):develop` still reads its literal dst.
@@ -352,14 +358,19 @@ def implicit(d, gopts, remote):
 
 
 def push(d, gopts, rest):
-    pos, tags, k = [], False, 0
+    pos, tags, k, repo = [], False, 0, ""
     while k < len(rest):
         t = rest[k]
         if t == "--":
             pos += rest[k + 1:]
             break
         if t.startswith("-") and t != "-":
-            if t in ("-o", "--push-option", "--repo", "--receive-pack", "--exec"):
+            if t == "--repo" and k + 1 < len(rest):
+                repo = rest[k + 1]
+                k += 1
+            elif t.startswith("--repo="):
+                repo = t[len("--repo="):]
+            elif t in ("-o", "--push-option", "--receive-pack", "--exec"):
                 k += 1
             elif t == "--tags":
                 tags = True
@@ -373,17 +384,17 @@ def push(d, gopts, rest):
         k += 1
     if len(pos) < 2:
         if not tags:
-            implicit(d, gopts, pos[0] if pos else "")
+            implicit(d, gopts, pos[0] if pos else repo)
         return
     for ref in pos[1:]:
         refspec(ref, d, gopts, "explicit")
 
 
 def child(text):
-    global run
-    saved = run
+    global run, env
+    saved = run, dict(env)
     process(text)
-    run = saved
+    run, env = saved
 
 
 def segment(w):
@@ -393,7 +404,10 @@ def segment(w):
     if w and all(re.match(r"[A-Za-z_][A-Za-z0-9_]*=", t) for t in w):
         for t in w:
             name, _, val = t.partition("=")
-            env[name] = expand(val)
+            val = expand(val)
+            if CUR in val:  # BRANCH=$(git branch --show-current): evaluated here, in this cwd
+                val = val.replace(CUR, (head(run, []) or SUBST) if run is not None else SUBST)
+            env[name] = val
         return
     if w and w[0] in ("cd", "pushd"):
         k = 1
@@ -418,7 +432,7 @@ def segment(w):
             return
         # `bash -c "<cmd>"` / `eval "<cmd>"` run their argument as a command line in a child.
         if cw == "eval":
-            child(" ".join(w[c + 1:]))
+            process(" ".join(w[c + 1:]))  # eval runs in the current shell: its cd and variables stay
             return
         if cw in SHELLS:
             # `-c`, `-lc`, `-xc`, `-c --`: the first operand after the options is the command.
@@ -484,20 +498,20 @@ def ansi_c(m):
 
 
 def process(text):
-    global run
+    global run, env
     text = text.replace("\\\n", "")  # backslash line continuation
     text = re.sub(r"\$'((?:[^'\\]|\\.)*)'", ansi_c, text)
     text, bodies = heredocs(text)
-    text = re.sub(r"\$\(\s*" + CURRENT + r"\s*\)|`\s*" + CURRENT + r"\s*`", "HEAD", text)
+    text = re.sub(r"\$\(\s*" + CURRENT + r"\s*\)|`\s*" + CURRENT + r"\s*`", CUR, text)
     stack = []
     for seg, subs, delim in split_top(text):
         for s in subs:
             child(s)
         segment(words(seg))
         if delim == "(":
-            stack.append(run)
+            stack.append((run, dict(env)))
         elif delim == ")" and stack:
-            run = stack.pop()
+            run, env = stack.pop()
     for body in bodies:
         child(body)
 
