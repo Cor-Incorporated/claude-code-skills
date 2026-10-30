@@ -26,7 +26,32 @@ from pathlib import Path
 H1_TUNING = re.compile(r"CODEX_H1_MAX_ITERATIONS=[0-9]{1,3} (?=bash )")
 
 
+def is_guard(handler, paths, tuning=False):
+    """True only when the raw command is exactly what this registrar writes for
+    one of `paths`: `bash <shlex.quote(path)>`, plus, for H1, an optional
+    `CODEX_H1_MAX_ITERATIONS=<1-3 digits> ` in front.
+
+    String equality, not a parse. Five review rounds on #451 each found a
+    command that parses as the guard but does not run it (shell code or quoted
+    names in an assignment, `<guard>/.`, `<dir>/../<guard>`, a quoted `~`).
+    Recognising only the written form closes the class (ADR-012).
+    """
+    if not isinstance(handler, dict) or handler.get("type") != "command":
+        return False
+    raw = handler.get("command", "")
+    if not isinstance(raw, str):
+        return False
+    for path in paths:
+        canonical = f"bash {shlex.quote(str(path))}"
+        if raw == canonical:
+            return True
+        if tuning and re.fullmatch(r"CODEX_H1_MAX_ITERATIONS=[0-9]{1,3} " + re.escape(canonical), raw):
+            return True
+    return False
+
+
 def command_path(handler):
+    """Loose parse, used only to refuse look-alikes that point elsewhere."""
     if not isinstance(handler, dict) or handler.get("type") != "command":
         return None
     raw = handler.get("command", "")
@@ -69,6 +94,10 @@ def handlers(groups, event):
 def register(path, hook_dir):
     h1_path = (hook_dir / "h1-stall-runtime.sh").resolve()
     protect_path = (hook_dir / "protect-branches-codex.sh").resolve()
+    # The written form may name the hook dir as given or resolved (macOS /var
+    # vs /private/var); any other spelling, including another symlink, is not it.
+    h1_forms = {hook_dir.absolute() / "h1-stall-runtime.sh", h1_path}
+    protect_forms = {hook_dir.absolute() / "protect-branches-codex.sh", protect_path}
     if not h1_path.is_file() or not protect_path.is_file():
         raise ValueError("both deployed Codex hook scripts must exist")
     existed = path.exists()
@@ -83,8 +112,8 @@ def register(path, hook_dir):
         ]}]}}
     groups = data["hooks"]
     pre = list(handlers(groups, "PreToolUse"))
-    protect = [(g, h) for g, h in pre if command_path(h) == protect_path]
-    h1 = [(g, h) for g, h in pre if command_path(h) == h1_path]
+    protect = [(g, h) for g, h in pre if is_guard(h, protect_forms)]
+    h1 = [(g, h) for g, h in pre if is_guard(h, h1_forms, tuning=True)]
     if len(protect) != 1 or len(h1) != 1:
         raise ValueError("PreToolUse must contain exactly one protect hook and one H1 hook")
     for group, _ in protect + h1:
@@ -96,7 +125,7 @@ def register(path, hook_dir):
         if p and p.name in {"protect-branches-codex.sh", "h1-stall-runtime.sh"} and p not in known:
             raise ValueError("PreToolUse guard points to a different script")
     ups = list(handlers(groups, "UserPromptSubmit"))
-    matches = [(g, h) for g, h in ups if command_path(h) == h1_path]
+    matches = [(g, h) for g, h in ups if is_guard(h, h1_forms, tuning=True)]
     if len(matches) > 1:
         raise ValueError("duplicate UserPromptSubmit H1 hooks")
     for _, handler in ups:

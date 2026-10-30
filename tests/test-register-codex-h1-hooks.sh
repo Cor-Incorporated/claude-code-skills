@@ -5,6 +5,7 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 python3 - "$REPO_DIR/scripts/register-codex-h1-hooks.py" <<'PY'
 import copy
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -195,6 +196,44 @@ with tempfile.TemporaryDirectory(prefix="h1-register-") as temp:
             prior = odd.read_bytes()
             check(invoke(odd).returncode != 0 and odd.read_bytes() == prior,
                   f"a {guard} path ending in {suffix!r} is not recognised (bash would not run it)")
+
+    # #451 review round 5: spellings that parse as the guard but are not the
+    # form this registrar writes. Only the written form counts.
+    link_dir = root / "link"
+    link_dir.symlink_to(hook_dir)
+    home = pathlib.Path.home()
+    for i, (p_cmd, h_cmd, label) in enumerate([
+        (f"bash '{protect}'", f'bash "{h1}"', "double-quoted H1 path"),
+        (f"bash '{link_dir / protect.name}'", f"bash '{h1}'", "protect through a symlinked dir"),
+        (f"bash '{protect}'", f"bash '{link_dir / h1.name}'", "H1 through a symlinked dir"),
+    ]):
+        odd = root / f"spelling-{i}.json"
+        odd.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+            {"type": "command", "command": p_cmd},
+            {"type": "command", "command": h_cmd},
+        ]}]}}))
+        prior = odd.read_bytes()
+        check(invoke(odd).returncode != 0 and odd.read_bytes() == prior,
+              f"{label}: not the written form, not recognised (fails closed)")
+
+    # A quoted ~ is expanded by a parser but never by the shell: with HOME at the
+    # temp root, `bash '~/Codex hooks with spaces/<guard>'` names the real guard
+    # to expanduser() while bash would look for a literal "~" directory.
+    for guard in ("protect", "h1"):
+        tilde = root / f"tilde-{guard}.json"
+        rel_p = f"~/{protect.relative_to(root)}"
+        rel_h = f"~/{h1.relative_to(root)}"
+        p_cmd = f"bash '{rel_p}'" if guard == "protect" else f"bash '{protect}'"
+        h_cmd = f"bash '{rel_h}'" if guard == "h1" else f"bash '{h1}'"
+        tilde.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+            {"type": "command", "command": p_cmd},
+            {"type": "command", "command": h_cmd},
+        ]}]}}))
+        prior = tilde.read_bytes()
+        env = dict(os.environ, HOME=str(root))
+        r = subprocess.run([sys.executable, script, str(tilde), str(hook_dir)], text=True, capture_output=True, env=env)
+        check(r.returncode != 0 and tilde.read_bytes() == prior,
+              f"a quoted ~ in the {guard} path is not recognised (the shell would not expand it)")
 
 print(f"--- {passed} passed, 0 failed ---")
 PY
