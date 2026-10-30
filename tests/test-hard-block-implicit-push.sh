@@ -284,9 +284,9 @@ for hook in "$PB" "$PG"; do
   nc=$(grep -cF "$CALL" "$hook" || true)
   ni=$(grep -c "_push_dests_py" "$hook" || true)
   if [ "$nl" = 1 ] && [ "$nc" = 1 ] && [ "$ni" = 0 ]; then
-    echo "  PASS: [P] [$name] lib/push_dests.py を 1 回呼ぶ（path=$nl call=$nc inline=$ni）"; PASS=$((PASS + 1))
+    echo "  PASS: [P] [$name] lib/push_dests.py を 1 回呼ぶ（path=$nl call=$nc inline=${ni}）"; PASS=$((PASS + 1))
   else
-    echo "  FAIL: [P] [$name] lib の呼び出しが崩れている（path=$nl call=$nc inline=$ni、期待 1/1/0）"; FAIL=$((FAIL + 1))
+    echo "  FAIL: [P] [$name] lib の呼び出しが崩れている（path=$nl call=$nc inline=${ni}、期待 1/1/0）"; FAIL=$((FAIL + 1))
   fi
 done
 LIB="$(dirname "$PB")/lib/push_dests.py"
@@ -323,7 +323,7 @@ PY
   if [ "$rc_ctl" = "2" ] && [ "$rc" = "0" ]; then
     echo "  PASS: [M] [$name] B1 は対照で rc=2、変異版で rc=0（このテストは解決器の欠落を検出する）"; PASS=$((PASS + 1))
   else
-    echo "  FAIL: [M] [$name] B1 対照 rc=$rc_ctl（期待 2）変異 rc=$rc（期待 0）"; FAIL=$((FAIL + 1))
+    echo "  FAIL: [M] [$name] B1 対照 rc=${rc_ctl}（期待 2）変異 rc=${rc}（期待 0）"; FAIL=$((FAIL + 1))
   fi
   rc=$(run_hook "$MUT" "$PLAIN" "$FEAT" 'git push origin develop')
   if [ "$rc" = "2" ]; then
@@ -347,9 +347,9 @@ for hook in "$PB" "$PG"; do
   rc_imp=$(run_hook "$NOLIB/$name.sh" "$PLAIN" "$DEV" 'git push')
   rc_exp=$(run_hook "$NOLIB/$name.sh" "$PLAIN" "$FEAT" 'git push origin develop')
   if [ "$rc_imp" != "1" ] && [ "$rc_exp" = "2" ]; then
-    echo "  PASS: [D] [$name] lib 欠落: 暗黙 rc=$rc_imp（1 でない）、明示 develop rc=2"; PASS=$((PASS + 1))
+    echo "  PASS: [D] [$name] lib 欠落: 暗黙 rc=${rc_imp}（1 でない）、明示 develop rc=2"; PASS=$((PASS + 1))
   else
-    echo "  FAIL: [D] [$name] lib 欠落: 暗黙 rc=$rc_imp（1 は不可）明示 develop rc=$rc_exp（期待 2）"; FAIL=$((FAIL + 1))
+    echo "  FAIL: [D] [$name] lib 欠落: 暗黙 rc=${rc_imp}（1 は不可）明示 develop rc=${rc_exp}（期待 2）"; FAIL=$((FAIL + 1))
   fi
 done
 
