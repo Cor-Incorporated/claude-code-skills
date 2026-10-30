@@ -22,12 +22,15 @@ def command_path(handler):
         parts = shlex.split(handler.get("command", ""))
     except ValueError:
         return None
-    # Leading NAME=value assignments are tuning for the hook, not a different
-    # hook: `CODEX_H1_MAX_ITERATIONS=100 bash …/h1-stall-runtime.sh` is the H1
-    # hook. Without this, a tuned hooks.json made every setup.sh stop at
-    # step 5 (2026-10-30 harness-pdca F14). The rest must still be exactly
+    # Leading CODEX_H1_* tuning assignments do not make it a different hook:
+    # `CODEX_H1_MAX_ITERATIONS=100 bash …/h1-stall-runtime.sh` is the H1 hook.
+    # Without this, a tuned hooks.json made every setup.sh stop at step 5
+    # (2026-10-30 harness-pdca F14). Only CODEX_H1_ names with plain values:
+    # an arbitrary NAME=value would let `X=1;exit;Y=1 bash <guard>`,
+    # `BASH_ENV=… bash <guard>` or `PATH=… bash <guard>` count as the guard while
+    # the shell never runs it (#451 review). The rest must still be exactly
     # `bash <path>`; any other shape is not recognised and fails closed.
-    while parts and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", parts[0]):
+    while parts and re.fullmatch(r"CODEX_H1_[A-Z0-9_]+=[A-Za-z0-9._:/-]*", parts[0]):
         parts = parts[1:]
     if len(parts) != 2 or parts[0] != "bash":
         return None

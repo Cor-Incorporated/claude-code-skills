@@ -137,5 +137,26 @@ with tempfile.TemporaryDirectory(prefix="h1-register-") as temp:
     check(invoke(wrapped).returncode != 0 and wrapped.read_bytes() == prior,
           "other wrappers (env, nice, ...) are not recognised as the H1 hook")
 
+    # #451 review: an assignment that runs code or swaps the shell must not let a
+    # command count as a guard.
+    for i, prefix in enumerate([
+        "X=1;exit;Y=1",
+        "BASH_ENV=/tmp/evil.sh",
+        "X=$(/tmp/evil)",
+        "PATH=/tmp/x",
+        "CODEX_H1_MAX_ITERATIONS=1;exit",
+    ]):
+        for guard in ("protect", "h1"):
+            bad_cfg = root / f"bypass-{i}-{guard}.json"
+            p_cmd = f"bash '{protect}'" if guard == "h1" else f"{prefix} bash '{protect}'"
+            h_cmd = f"{prefix} bash '{h1}'" if guard == "h1" else f"bash '{h1}'"
+            bad_cfg.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+                {"type": "command", "command": p_cmd},
+                {"type": "command", "command": h_cmd},
+            ]}]}}))
+            prior = bad_cfg.read_bytes()
+            check(invoke(bad_cfg).returncode != 0 and bad_cfg.read_bytes() == prior,
+                  f"{prefix!r} before the {guard} guard is not recognised (fails closed)")
+
 print(f"--- {passed} passed, 0 failed ---")
 PY
