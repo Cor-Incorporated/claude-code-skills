@@ -7,6 +7,7 @@ The new definition still requires an interactive trust review in Codex /hooks.
 
 import json
 import os
+import re
 import shlex
 import stat
 import sys
@@ -21,6 +22,13 @@ def command_path(handler):
         parts = shlex.split(handler.get("command", ""))
     except ValueError:
         return None
+    # Leading NAME=value assignments are tuning for the hook, not a different
+    # hook: `CODEX_H1_MAX_ITERATIONS=100 bash …/h1-stall-runtime.sh` is the H1
+    # hook. Without this, a tuned hooks.json made every setup.sh stop at
+    # step 5 (2026-10-30 harness-pdca F14). The rest must still be exactly
+    # `bash <path>`; any other shape is not recognised and fails closed.
+    while parts and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", parts[0]):
+        parts = parts[1:]
     if len(parts) != 2 or parts[0] != "bash":
         return None
     return Path(os.path.expanduser(parts[1])).resolve()

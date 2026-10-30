@@ -98,5 +98,44 @@ with tempfile.TemporaryDirectory(prefix="h1-register-") as temp:
     check(invoke(duplicate).returncode != 0 and duplicate.read_bytes() == prior,
           "duplicate UserPromptSubmit H1 fails without mutation")
 
+    # 2026-10-30 harness-pdca F14: the live ~/.codex/hooks.json tunes H1 with an
+    # env prefix and carries the H17 common control; setup.sh stopped at step 5.
+    tuned = root / "tuned.json"
+    tuned.write_text(json.dumps({"hooks": {
+        "PreToolUse": [{"matcher": ".*", "hooks": [
+            {"type": "command", "command": f"bash '{protect}'"},
+            {"type": "command", "command": f"CODEX_H1_MAX_ITERATIONS=100 bash '{h1}'"},
+            {"type": "command", "command": "bash /tmp/aidd-cc-codex.sh"},
+        ]}],
+        "UserPromptSubmit": [{"hooks": [
+            {"type": "command", "command": f"CODEX_H1_MAX_ITERATIONS=100 bash '{h1}'"},
+            {"type": "command", "command": "bash /tmp/aidd-cc-codex.sh"},
+        ]}],
+        "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "bash /tmp/aidd-cc-codex.sh"}]}],
+    }}))
+    prior = tuned.read_bytes()
+    result = invoke(tuned)
+    check(result.returncode == 0 and "already registered" in result.stdout and tuned.read_bytes() == prior,
+          "env-prefixed H1 hooks are recognised and left byte-for-byte unchanged")
+
+    tuned_other = root / "tuned-other.json"
+    tuned_other.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+        {"type": "command", "command": f"bash '{protect}'"},
+        {"type": "command", "command": f"bash '{h1}'"},
+        {"type": "command", "command": "CODEX_H1_MAX_ITERATIONS=100 bash /elsewhere/h1-stall-runtime.sh"},
+    ]}]}}))
+    prior = tuned_other.read_bytes()
+    check(invoke(tuned_other).returncode != 0 and tuned_other.read_bytes() == prior,
+          "an env-prefixed H1 that points elsewhere still fails closed")
+
+    wrapped = root / "wrapped.json"
+    wrapped.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+        {"type": "command", "command": f"bash '{protect}'"},
+        {"type": "command", "command": f"env X=1 bash '{h1}'"},
+    ]}]}}))
+    prior = wrapped.read_bytes()
+    check(invoke(wrapped).returncode != 0 and wrapped.read_bytes() == prior,
+          "other wrappers (env, nice, ...) are not recognised as the H1 hook")
+
 print(f"--- {passed} passed, 0 failed ---")
 PY
