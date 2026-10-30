@@ -24,8 +24,9 @@
 #   A  陰性: feature ブランチ・非保護の明示 ref・tags だけの push は 2 本とも rc=0
 #   E  rc=1 はどの行にも出ない（非ブロックのエラー = 素通り）
 #   L  rc=2 の行は ADR-006 台帳に hook 名つきの deny 行を 1 行以上積む
-#   P  2 本が同じ解決器を持つ（_push_dests_py の本文が一字一句同じ）
-#   M  片側変異: 解決器の出力を捨てると暗黙 push が再び rc=0 になる
+#   P  2 本が同じ hooks/lib/push_dests.py を呼び、インラインの写しを持たない
+#   M  片側変異: 解決器の出力を捨てると暗黙 push が再び rc=0 になる（lib つきの対照と比べる）
+#   D  配備欠落: lib が無くても rc=1 にならず、明示 ref は従来の検査が止める
 #
 # hook の process cwd は Bash ツールの cwd とは限らない。行ごとに process cwd と
 # 入力 JSON の .cwd を分けて与え、.cwd と `-C` / `cd` の側で判定していることを固定する。
@@ -54,6 +55,8 @@ mkrepo() {  # mkrepo <dir> <branch>
 git init -q --bare "$FIX/remote.git"
 DEV="$FIX/dev"; FEAT="$FIX/feat"; UP="$FIX/up"; SPACE="$FIX/dev with space"; PLAIN="$FIX/plain"
 mkrepo "$DEV" develop
+git -C "$DEV" branch feat/a
+git -C "$DEV" tag v1
 mkrepo "$FEAT" feat/xxx
 mkrepo "$SPACE" develop
 mkdir -p "$PLAIN"
@@ -82,6 +85,16 @@ git -C "$RSPEC" config remote.origin.push refs/heads/develop:refs/heads/review-c
 RSPEC2="$FIX/rspec2"
 mkrepo "$RSPEC2" feat/rs
 git -C "$RSPEC2" config remote.origin.push refs/heads/feat/rs:refs/heads/develop
+# feature 上（直前は develop）でローカルに develop がある
+SW="$FIX/sw"
+mkrepo "$SW" develop
+git -C "$SW" checkout -q -b feat/s
+# develop だが push.default=upstream で merge=review-copy、remote-tracking ref は未取得
+UPR="$FIX/upr"
+mkrepo "$UPR" develop
+git -C "$UPR" config push.default upstream
+git -C "$UPR" config branch.develop.remote origin
+git -C "$UPR" config branch.develop.merge refs/heads/review-copy
 
 json_escape() {
   local s="$1"
@@ -153,6 +166,20 @@ row 2 "$PLAIN" "$FEAT" "B26 sh -c の中で cd <develop> して push"           
 row 2 "$PLAIN" "$DEV"  "B27 switch -c の後に develop へ戻ってから push"   'git switch -c feat/z && git switch develop && git push'
 row 2 "$PLAIN" "$UP"   "B28 checkout develop（remote-tracking から作成）して push" 'git checkout develop && git push'
 row 2 "$PLAIN" "$RSPEC2" "B29 remote.origin.push が feature → develop"    'git push'
+row 2 "$PLAIN" "$DEV"  "B30 refs/heads/* を全部写すワイルドカード"         "git push origin 'refs/heads/*:refs/heads/*'"
+row 2 "$PLAIN" "$FEAT" "B31 cd -- <develop> して push"                     "cd -- $DEV && git push"
+row 2 "$PLAIN" "$FEAT" "B32 src が置換でも dst が明示の develop"           'git push origin "$(git rev-parse HEAD)":refs/heads/develop'
+row 2 "$PLAIN" "$DEV"  "B33 current を返す置換の変形（2>/dev/null）"       'git push origin "$(git branch --show-current 2>/dev/null)"'
+row 2 "$PLAIN" "$DEV"  "B34 current を返す置換の変形（@）"                 'git push origin "$(git rev-parse --abbrev-ref @)"'
+row 2 "$PLAIN" "$DEV"  "B35 current を返す置換の変形（パイプ）"            'git push -u origin "$(git branch --show-current | tr -d x)"'
+row 2 "$PLAIN" "$DEV"  "B36 置換を代入した変数の refspec"                  'BRANCH=$(git rev-parse --abbrev-ref HEAD) && git push -u origin "$BRANCH"'
+row 2 "$PLAIN" "$FEAT" "B37 変数に入れた develop"                          'B=develop; git push origin "$B"'
+row 2 "$PLAIN" "$DEV"  "B38 計算で決まる宛先は current とみなす（develop 上）" 'git push origin "$(printf feat/x)"'
+row 2 "$PLAIN" "$UP"   "B39 checkout -t origin/develop して push"          'git checkout -t origin/develop && git push'
+row 2 "$PLAIN" "$SW"   "B40 checkout -（直前の develop へ戻る）して push"  'git checkout - && git push'
+row 2 "$PLAIN" "$DEV"  "B41 git -P push（早期 exit をすり抜けない）"        'git -P push'
+row 2 "$PLAIN" "$DEV"  "B42 git --work-tree=. push origin HEAD"            'git --work-tree=. push origin HEAD'
+row 2 "$PLAIN" "$DEV"  "B43 git --literal-pathspecs push"                  'git --literal-pathspecs push'
 
 echo ""
 echo "=== A 陰性: 保護ブランチを更新しない push は rc=0 ==="
@@ -182,7 +209,7 @@ row 0 "$PLAIN" "$DEV"  "A17 PR 本文の heredoc（gh pr create --body に cat <
 row 0 "$PLAIN" "$FEAT" "A18 サブシェルの cd は外へ持ち越さない"           "(cd $DEV && git status); git push"
 row 0 "$PLAIN" "$UP"   "A19 -c push.default=current は呼び出しの設定で判定" 'git -c push.default=current push'
 row 0 "$PLAIN" "$REVIEW" "A20 develop だが @{push} が review-copy"        'git push'
-row 0 "$PLAIN" "$DEV"  "A21 current 以外を返すコマンド置換"               'git push origin "$(printf feat/x)"'
+row 0 "$PLAIN" "$FEAT" "A21 計算で決まる宛先は current（feature 上）"     'git push origin "$(printf feat/x)"'
 row 0 "$PLAIN" "$DEV"  "A22 末尾が \$ のリテラル ref"                      'git push origin HEAD:feat/cost$'
 row 0 "$PLAIN" "$DEV"  "A23 bash -c の中で cd <feature> して push"         "bash -c 'cd $FEAT && git push'"
 row 0 "$PLAIN" "$FEAT" "A24 bash -c の中の cd は外へ持ち越さない"          "bash -c 'cd $DEV && git status'; git push"
@@ -192,47 +219,95 @@ row 0 "$PLAIN" "$FEAT" "A27 checkout -- <path> は HEAD を変えない"        
 row 0 "$PLAIN" "$DEV"  "A28 echo の引数の git push（追記）"                'echo git push >> note.md'
 row 0 "$PLAIN" "$DEV"  "A29 echo の引数の git push（連鎖）"                'echo git push && git status'
 row 0 "$PLAIN" "$RSPEC" "A30 remote.origin.push が develop → review-copy" 'git push'
+row 0 "$PLAIN" "$DEV"  "A31 tags だけのワイルドカード"                     "git push origin 'refs/tags/*:refs/tags/*'"
+row 0 "$PLAIN" "$DEV"  "A32 feat/* だけのワイルドカード"                   "git push origin 'refs/heads/feat/*:refs/heads/feat/*'"
+row 0 "$PLAIN" "$UPR"  "A33 upstream の merge=review-copy（追跡 ref 未取得）" 'git push'
+row 0 "$PLAIN" "$DEV"  "A34 cd -- <feature> して HEAD を push"            "cd -- $FEAT && git push origin HEAD"
+row 0 "$PLAIN" "$DEV"  "A35 switch --create=<b> の結合形"                  'git switch --create=feat/new3 && git push -u origin HEAD'
+row 0 "$PLAIN" "$DEV"  "A36 checkout -b<b> の結合形"                       'git checkout -bfeat/new4 && git push -u origin HEAD'
+row 0 "$PLAIN" "$DEV"  "A37 command echo の引数の git push"                'command echo git push >> note.md'
+row 0 "$PLAIN" "$DEV"  "A38 env echo の引数の git push"                    'env echo git push >> note.md'
+row 0 "$PLAIN" "$DEV"  "A39 読めない cd（変数）は不明 = 止めない"          'cd "$UNSET_DIR_F22" && git push'
+row 0 "$PLAIN" "$DEV"  "A40 tag を checkout（detached）して HEAD を push"   'git checkout v1 && git push origin HEAD'
+row 0 "$PLAIN" "$SW"   "A41 checkout <branch> -- <path> は HEAD を変えない" 'git checkout develop -- README.md && git commit -m x && git push'
+row 0 "$PLAIN" "$DEV"  "A42 変数に入れた feature"                          'B=feat/q; git push origin "$B"'
 
 echo ""
-echo "=== P 対: 2 本の解決器が一字一句同じ ==="
-extract_py() {
-  awk '/^IFS= read -r -d .. _push_dests_py <<.PY. \|\| true$/{f=1; next} f && /^PY$/{exit} f' "$1"
-}
-PB_PY=$(extract_py "$PB"); PG_PY=$(extract_py "$PG")
-PB_SUM=$(printf '%s' "$PB_PY" | shasum -a 256 | cut -c1-12)
-PG_SUM=$(printf '%s' "$PG_PY" | shasum -a 256 | cut -c1-12)
-if [ -n "$PB_PY" ] && [ "$PB_PY" = "$PG_PY" ]; then
-  echo "  PASS: [P] _push_dests_py 同一 (protect-branches=$PB_SUM git-push-guard=$PG_SUM)"; PASS=$((PASS + 1))
+echo "=== P 対: 2 本が同じ lib を呼び、写しを持たない ==="
+LIB_LINE='_PUSH_DESTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/push_dests.py"'
+CALL='python3 "$_PUSH_DESTS" "$cmd" "$_push_base"'
+for hook in "$PB" "$PG"; do
+  name=$(basename "$hook" .sh)
+  nl=$(grep -cF "$LIB_LINE" "$hook" || true)
+  nc=$(grep -cF "$CALL" "$hook" || true)
+  ni=$(grep -c "_push_dests_py" "$hook" || true)
+  if [ "$nl" = 1 ] && [ "$nc" = 1 ] && [ "$ni" = 0 ]; then
+    echo "  PASS: [P] [$name] lib/push_dests.py を 1 回呼ぶ（path=$nl call=$nc inline=$ni）"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: [P] [$name] lib の呼び出しが崩れている（path=$nl call=$nc inline=$ni、期待 1/1/0）"; FAIL=$((FAIL + 1))
+  fi
+done
+LIB="$(dirname "$PB")/lib/push_dests.py"
+if [ -f "$LIB" ] && [ "$(dirname "$PB")" = "$(dirname "$PG")" ]; then
+  echo "  PASS: [P] 2 本の lib は同じファイル ($(shasum -a 256 "$LIB" | cut -c1-12))"; PASS=$((PASS + 1))
 else
-  echo "  FAIL: [P] _push_dests_py が不一致 (protect-branches=$PB_SUM lines=$(printf '%s' "$PB_PY" | wc -l | tr -d ' ') git-push-guard=$PG_SUM lines=$(printf '%s' "$PG_PY" | wc -l | tr -d ' '))"
+  echo "  FAIL: [P] lib が無い、または 2 本が別の hooks dir (pb=$(dirname "$PB") pg=$(dirname "$PG") lib_exists=$([ -f "$LIB" ] && echo 1 || echo 0))"
   FAIL=$((FAIL + 1))
 fi
 
 echo ""
 echo "=== M 片側変異: 解決器の出力を捨てると暗黙 push が通る ==="
-# 解決器を実行する 1 行を空出力に差し替える。陽性 B1 が rc=0 に戻り、明示の B6 は
-# 従来の明示 ref 検査が残るので rc=2 のまま（変異が解決器だけに効いている確認）。
+# hooks ツリーを lib ごと複製し、解決器の呼び出し 1 行だけを空出力に差し替える。
+# 対照（未変異の複製）で B1 が rc=2 であることを先に確かめる: lib を欠いた複製は
+# 「変異で反転した」ではなく「動かなかった」になるので変異の証明にならない。
+# 明示の B6 は従来の明示 ref 検査が残るので rc=2 のまま（変異が解決器だけに効く確認）。
+MUT_DIR="$FIX/mut"; CTL_DIR="$FIX/ctl"
+mkdir -p "$MUT_DIR" "$CTL_DIR"
+cp -R "$(dirname "$PB")/lib" "$MUT_DIR/lib"
+cp -R "$(dirname "$PB")/lib" "$CTL_DIR/lib"
 for hook in "$PB" "$PG"; do
   name=$(basename "$hook" .sh)
-  MUT="$FIX/$name.mut.sh"
+  CTL="$CTL_DIR/$name.sh"; MUT="$MUT_DIR/$name.sh"
+  cp "$hook" "$CTL"
   python3 - "$hook" "$MUT" <<'PY'
 import sys
 src = open(sys.argv[1], encoding="utf-8").read()
-old = 'python3 -c "$_push_dests_py"'
+old = 'python3 "$_PUSH_DESTS"'
 assert src.count(old) == 1, "mutation target missing: resolver call (count=%d)" % src.count(old)
 open(sys.argv[2], "w", encoding="utf-8").write(src.replace(old, "true"))
 PY
+  rc_ctl=$(run_hook "$CTL" "$PLAIN" "$DEV" 'git push')
   rc=$(run_hook "$MUT" "$PLAIN" "$DEV" 'git push')
-  if [ "$rc" = "0" ]; then
-    echo "  PASS: [M] [$name] 変異版で B1 が rc=0 に戻る（このテストは解決器の欠落を検出する）"; PASS=$((PASS + 1))
+  if [ "$rc_ctl" = "2" ] && [ "$rc" = "0" ]; then
+    echo "  PASS: [M] [$name] B1 は対照で rc=2、変異版で rc=0（このテストは解決器の欠落を検出する）"; PASS=$((PASS + 1))
   else
-    echo "  FAIL: [M] [$name] 変異版でも B1 が rc=$rc（テストが解決器を見ていない）"; FAIL=$((FAIL + 1))
+    echo "  FAIL: [M] [$name] B1 対照 rc=$rc_ctl（期待 2）変異 rc=$rc（期待 0）"; FAIL=$((FAIL + 1))
   fi
   rc=$(run_hook "$MUT" "$PLAIN" "$FEAT" 'git push origin develop')
   if [ "$rc" = "2" ]; then
     echo "  PASS: [M] [$name] 変異版でも明示 B6 は rc=2"; PASS=$((PASS + 1))
   else
     echo "  FAIL: [M] [$name] 変異版で明示 B6 が rc=$rc"; FAIL=$((FAIL + 1))
+  fi
+done
+
+echo ""
+echo "=== D 配備欠落: lib/push_dests.py が無い hooks dir ==="
+# 配備で lib が欠けた場合（F16 の古い checkout からの自動配備など）。暗黙 push は
+# 止められなくなるが、rc=1（素通りのエラー）にはならず、明示 ref は従来の検査が止める。
+NOLIB="$FIX/nolib"
+mkdir -p "$NOLIB"
+cp -R "$(dirname "$PB")/lib" "$NOLIB/lib"
+rm -f "$NOLIB/lib/push_dests.py"
+for hook in "$PB" "$PG"; do
+  name=$(basename "$hook" .sh)
+  cp "$hook" "$NOLIB/$name.sh"
+  rc_imp=$(run_hook "$NOLIB/$name.sh" "$PLAIN" "$DEV" 'git push')
+  rc_exp=$(run_hook "$NOLIB/$name.sh" "$PLAIN" "$FEAT" 'git push origin develop')
+  if [ "$rc_imp" != "1" ] && [ "$rc_exp" = "2" ]; then
+    echo "  PASS: [D] [$name] lib 欠落: 暗黙 rc=$rc_imp（1 でない）、明示 develop rc=2"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: [D] [$name] lib 欠落: 暗黙 rc=$rc_imp（1 は不可）明示 develop rc=$rc_exp（期待 2）"; FAIL=$((FAIL + 1))
   fi
 done
 
