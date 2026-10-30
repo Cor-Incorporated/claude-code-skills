@@ -174,12 +174,29 @@ row 2 "$PLAIN" "$DEV"  "B34 current を返す置換の変形（@）"            
 row 2 "$PLAIN" "$DEV"  "B35 current を返す置換の変形（パイプ）"            'git push -u origin "$(git branch --show-current | tr -d x)"'
 row 2 "$PLAIN" "$DEV"  "B36 置換を代入した変数の refspec"                  'BRANCH=$(git rev-parse --abbrev-ref HEAD) && git push -u origin "$BRANCH"'
 row 2 "$PLAIN" "$FEAT" "B37 変数に入れた develop"                          'B=develop; git push origin "$B"'
-row 2 "$PLAIN" "$DEV"  "B38 計算で決まる宛先は current とみなす（develop 上）" 'git push origin "$(printf feat/x)"'
+row 2 "$PLAIN" "$FEAT" "B38 計算で決まる宛先は止める（feature 上でも）"   'git push origin "$(printf feat/x)"'
 row 2 "$PLAIN" "$UP"   "B39 checkout -t origin/develop して push"          'git checkout -t origin/develop && git push'
 row 2 "$PLAIN" "$SW"   "B40 checkout -（直前の develop へ戻る）して push"  'git checkout - && git push'
 row 2 "$PLAIN" "$DEV"  "B41 git -P push（早期 exit をすり抜けない）"        'git -P push'
 row 2 "$PLAIN" "$DEV"  "B42 git --work-tree=. push origin HEAD"            'git --work-tree=. push origin HEAD'
 row 2 "$PLAIN" "$DEV"  "B43 git --literal-pathspecs push"                  'git --literal-pathspecs push'
+row 2 "$PLAIN" "$DEV"  "B44 行継続 git \\⏎push"                           $'git \\\npush'
+row 2 "$PLAIN" "$DEV"  "B45 行継続 git push \\⏎ origin"                    $'git push \\\n  origin'
+row 2 "$PLAIN" "$FEAT" "B46 行継続で割った develop"                       $'git push origin dev\\\nelop'
+row 2 "$PLAIN" "$FEAT" "B47 既定ブランチを計算する HEAD:\"$(… | sed)\""      'git push origin HEAD:"$(git symbolic-ref --short refs/remotes/origin/HEAD | sed s@^origin/@@)"'
+row 2 "$PLAIN" "$FEAT" "B48 for ループ変数の refspec"                      'for b in develop; do git push origin "$b"; done'
+row 2 "$PLAIN" "$FEAT" "B49 \${B:-develop} の既定値"                        'git push origin "${B:-develop}"'
+row 2 "$PLAIN" "$FEAT" "B50 関数の \$1"                                     'f() { git push origin "$1"; }; f develop'
+row 2 "$PLAIN" "$SW"   "B51 --branches（ローカルに develop）"               'git push --branches origin'
+row 2 "$PLAIN" "$SW"   "B52 matching refspec :"                            'git push origin :'
+row 2 "$PLAIN" "$FEAT" "B53 --mirror"                                      'git push --mirror origin'
+row 2 "$PLAIN" "$DEV"  "B54 bash -lc"                                      'bash -lc "git push"'
+row 2 "$PLAIN" "$DEV"  "B55 bash -c --"                                    'bash -c -- "git push"'
+row 2 "$PLAIN" "$FEAT" "B56 -c alias.p=push の alias"                      'git -c alias.p=push p origin develop'
+row 2 "$PLAIN" "$FEAT" "B57 xargs が refspec を与える"                      'echo develop | xargs git push origin'
+row 2 "$PLAIN" "$DEV"  "B58 \$G push（変数の git）"                         'G=git; $G push'
+row 2 "$PLAIN" "$FEAT" "B59 \$'\\x64evelop'（ANSI-C 引用）"                 "git push origin \$'\\x64evelop'"
+row 2 "$PLAIN" "$FEAT" "B60 --prune + ワイルドカード（削除しうる）"         "git push --prune origin 'refs/heads/*:refs/heads/*'"
 
 echo ""
 echo "=== A 陰性: 保護ブランチを更新しない push は rc=0 ==="
@@ -209,7 +226,8 @@ row 0 "$PLAIN" "$DEV"  "A17 PR 本文の heredoc（gh pr create --body に cat <
 row 0 "$PLAIN" "$FEAT" "A18 サブシェルの cd は外へ持ち越さない"           "(cd $DEV && git status); git push"
 row 0 "$PLAIN" "$UP"   "A19 -c push.default=current は呼び出しの設定で判定" 'git -c push.default=current push'
 row 0 "$PLAIN" "$REVIEW" "A20 develop だが @{push} が review-copy"        'git push'
-row 0 "$PLAIN" "$FEAT" "A21 計算で決まる宛先は current（feature 上）"     'git push origin "$(printf feat/x)"'
+row 0 "$PLAIN" "$FEAT" "A21 current を返す置換を代入した変数（feature 上）" 'BRANCH=$(git branch --show-current) && git push -u origin "$BRANCH"'
+row 0 "$PLAIN" "$FEAT" "A43 current を返す置換 + 2>/dev/null（feature 上）" 'git push origin "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"'
 row 0 "$PLAIN" "$DEV"  "A22 末尾が \$ のリテラル ref"                      'git push origin HEAD:feat/cost$'
 row 0 "$PLAIN" "$DEV"  "A23 bash -c の中で cd <feature> して push"         "bash -c 'cd $FEAT && git push'"
 row 0 "$PLAIN" "$FEAT" "A24 bash -c の中の cd は外へ持ち越さない"          "bash -c 'cd $DEV && git status'; git push"

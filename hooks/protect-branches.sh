@@ -56,11 +56,8 @@ _aidd_ask() {
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
-# --- Push destination resolver (F22, 2026-10-30) ---
-# hooks/lib/push_dests.py prints every branch each `git push` updates, in the repo git
-# reads for it (.cwd, `cd`, `git -C`; HEAD, @{upstream}, push.default ...). Both hard
-# blocks call the same file; its docstring has the rules and the 2026-10-30 incident.
-# Without python3 or the file it prints nothing and the explicit-ref checks still run.
+# --- Push destination resolver (F22, 2026-10-30): hooks/lib/push_dests.py, shared with
+# git-push-guard.sh (rules in its docstring). Missing python3 / file → explicit checks only.
 _PUSH_DESTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/push_dests.py"
 # The Bash tool's cwd, not the hook process cwd (which may be the session's start dir).
 _push_base=$(printf '%s' "$input" | jq -r '.cwd // ""' 2>/dev/null || true)
@@ -565,14 +562,17 @@ if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE"; then
 fi
 
 # --- Check 3c: every branch each `git push` updates, in the repo git reads (F22) ---
-# 宛先は lib/push_dests.py（全 refspec・暗黙 push・HEAD）。全 Bash で走る hook なので
-# python3 は git と push を両方含むときだけ起動する。_GIT_PUSH_RE では絞らない:
-# 引用つきの `git -C "/a b" push` は cmd_norm 上で値が割れて一致しない（B15）。
+# 宛先は lib/push_dests.py。python3 は git と push を両方含むときだけ起動する（全 Bash で
+# 走るため）。_GIT_PUSH_RE で絞らないのは `git -C "/a b" push` が一致しないから（B15）。
 _push_dest_lines=""
 if [[ "$cmd" == *git* && "$cmd" == *push* ]]; then
   _push_dest_lines=$(python3 "$_PUSH_DESTS" "$cmd" "$_push_base" 2>/dev/null || true)
 fi
 while IFS=$'\t' read -r _dest _dest_dir _dest_how || [ -n "${_dest:-}" ]; do
+  if [ "${_dest_how:-}" = "computed" ]; then
+    echo "[BLOCK] push の宛先が置換・変数・--mirror/--prune で決まり保護ブランチでないと確かめられない（${_dest_dir}）。宛先名を明示すること。" >&2
+    _aidd_block "protected-push-computed"
+  fi
   for branch in $PROTECTED_BRANCHES; do
     [ "$_dest" = "$branch" ] || continue
     if [ "$_dest_how" = "explicit" ]; then

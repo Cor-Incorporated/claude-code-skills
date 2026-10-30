@@ -27,17 +27,25 @@ pipe) is dropped; a body a shell or interpreter runs is a child command line.
 The arguments of a data command are text, not a git call.
 
 Destinations: the refspec's dst side (`+`, refs/heads/, `src:dst`, `:dst`
-delete), every refspec. `HEAD`, `@`, and a computed destination (a command
-substitution or an unset variable, e.g. `"$(git branch --show-current)"`) are
-the current branch. Wildcard refspecs map the local branches matching src onto
-dst. With no refspec or a remote only: remote.<remote>.push first, then
+delete), every refspec. `HEAD`, `@` and the known current-branch substitutions
+(`$(git branch --show-current)`, `$(git rev-parse --abbrev-ref HEAD)`, ... with
+an optional `2>/dev/null`) are the current branch; variables set earlier in the
+command are expanded. Any other computed destination (another substitution, an
+unset variable, `$1`, `${B:-x}`, a loop variable, `xargs`-supplied arguments,
+`--mirror`, `--prune`) cannot be decided here and prints `*  <dir>  computed`,
+which both hooks block. Wildcard refspecs map the local branches matching src
+onto dst; `:` and `--all` / `--branches` mean every local branch. Backslash
+line continuations are joined and `$'..'` is decoded before splitting; git
+aliases that expand to `push` are followed. With no refspec or a remote only: remote.<remote>.push first, then
 push.default (nothing -> none, matching -> every local branch, upstream ->
 branch.<b>.merge, else the current branch), with the push's own `-c`.
 `--tags` alone updates no branch. A `git switch` / `git checkout <branch>`
 earlier in the same command sets the current branch.
 
-Unknown state fails open: a directory or branch the parser cannot read
-(`cd "$X"`, `cd -`, detached, an unreadable switch) gives no destination. Before
+Unknown state fails open, an unknown destination fails closed: a directory
+or branch the parser cannot read (`cd "$X"`, `cd -`, detached, an unreadable
+switch) gives no destination, while a destination the command computes is
+blocked (code review 2026-10-30: computed destinations were the bypasses). Before
 this change every implicit push passed; a false positive in a hard block stops
 work; the server-side branch protection stays the last line.
 
@@ -61,9 +69,20 @@ DATA = {"cat", "echo", "printf", "tee", "grep", "egrep", "fgrep", "rg", "ag", "h
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 RUNNERS = {"sudo", "doas", "env", "command", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "setsid", "xargs"}
 SUBST = "__f22_subst__"
+COMPUTED = "*"
+BUILTINS = {
+    "add", "am", "apply", "archive", "bisect", "blame", "branch", "bundle", "cat-file", "checkout",
+    "cherry-pick", "clean", "clone", "commit", "config", "describe", "diff", "fetch", "for-each-ref",
+    "format-patch", "gc", "grep", "help", "init", "log", "ls-files", "ls-remote", "merge", "mv", "notes",
+    "pull", "push", "range-diff", "rebase", "reflog", "remote", "reset", "restore", "rev-parse", "revert",
+    "rm", "shortlog", "show", "stash", "status", "submodule", "switch", "symbolic-ref", "tag", "update-ref",
+    "version", "worktree",
+}
 Q1, Q2 = chr(39), chr(34)
 ASSIGN = r"[A-Za-z_][A-Za-z0-9_]*="
-CURRENT = r"git\s+(?:branch\s+--show-current|rev-parse\s+--abbrev-ref\s+HEAD|symbolic-ref\s+(?:-q\s+)?--short(?:\s+-q)?\s+HEAD)"
+CURRENT = (r"git\s+(?:branch\s+--show-current|rev-parse\s+--abbrev-ref\s+(?:HEAD|@)"
+           r"|symbolic-ref\s+(?:-q\s+)?--short(?:\s+-q)?\s+HEAD)(?:\s+2>(?:&1|\s*/dev/null))?")
+UNRESOLVED = r"\$(?:\{|[A-Za-z_0-9@*#?!-])"
 
 
 def expand(s):
@@ -260,15 +279,31 @@ def branch_of(ref):
     return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
 
 
+def split_refspec(ref):
+    # `src:dst` at the first colon outside `${...}` (`${B:-develop}` is one operand).
+    depth = 0
+    for n, ch in enumerate(ref):
+        if ref.startswith("${", n):
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+        elif ch == ":" and not depth:
+            return ref[:n], ref[n + 1:]
+    return ref, ""
+
+
 def refspec(ref, d, gopts, how):
     ref = expand(ref)
     ref = ref[1:] if ref.startswith("+") else ref
-    src, _, dst = ref.partition(":")
+    if ref == ":":
+        local_branches(d, gopts, "matching")
+        return
+    src, dst = split_refspec(ref)
     dst = dst or src
-    if SUBST in dst or re.search(r"\$\{?[A-Za-z_]", dst):
-        # A computed destination (substitution or unset variable) is almost always the
-        # current branch; `$(git rev-parse HEAD):develop` still reads its literal dst.
-        emit(head(d, gopts), d, "current")
+    if SUBST in dst or re.search(UNRESOLVED, dst):
+        # A destination the command computes cannot be decided here: fail closed.
+        # `$(git rev-parse HEAD):develop` still reads its literal dst.
+        emit(COMPUTED, d, "computed")
         return
     if "*" in src or "*" in dst:
         # Map each local branch the source pattern matches onto the destination pattern.
@@ -328,6 +363,10 @@ def push(d, gopts, rest):
                 k += 1
             elif t == "--tags":
                 tags = True
+            elif t in ("--all", "--branches"):
+                local_branches(d, gopts, "all")
+            elif t in ("--mirror", "--prune"):
+                emit(COMPUTED, d, "computed")  # may delete remote branches
             k += 1
             continue
         pos.append(t)
@@ -381,13 +420,24 @@ def segment(w):
         if cw == "eval":
             child(" ".join(w[c + 1:]))
             return
-        if cw in SHELLS and "-c" in w[c + 1:]:
-            k = w.index("-c", c + 1) + 1
-            if k < len(w):
-                child(w[k])
-            return
+        if cw in SHELLS:
+            # `-c`, `-lc`, `-xc`, `-c --`: the first operand after the options is the command.
+            k, has_c = c + 1, False
+            while k < len(w) and w[k][:1] in ("-", "+"):
+                if w[k] == "--":
+                    k += 1
+                    break
+                if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", w[k]):
+                    has_c = True
+                elif w[k] in ("-o", "+o", "-O", "+O"):
+                    k += 1
+                k += 1
+            if has_c:
+                if k < len(w):
+                    child(w[k])
+                return
     for i, t in enumerate(w):
-        if os.path.basename(t) != "git":
+        if os.path.basename(expand(t)) != "git":
             continue
         d, j, gopts = run, i + 1, []
         while j < len(w) and w[j].startswith("-"):
@@ -408,14 +458,35 @@ def segment(w):
                 j += 1
         if d is None:
             continue
-        if j < len(w) and w[j] == "push":
-            push(d, gopts, w[j + 1:])
-        elif j < len(w) and w[j] in ("switch", "checkout"):
-            switched(d, gopts, w[j], w[j + 1:])
+        sub, rest = (w[j], w[j + 1:]) if j < len(w) else ("", [])
+        if sub and sub not in BUILTINS:
+            # A git alias that expands to push (`-c alias.p=push` or the config).
+            val = ""
+            for n in range(0, len(gopts) - 1):
+                if gopts[n] == "-c" and gopts[n + 1].startswith("alias." + sub + "="):
+                    val = gopts[n + 1].split("=", 1)[1]
+            val = val or git(d, gopts, "config", "--get", "alias." + sub)
+            if val.split()[:1] == ["push"]:
+                sub, rest = "push", val.split()[1:] + rest
+        if sub == "push" and "xargs" in [os.path.basename(x) for x in w[:i]]:
+            emit(COMPUTED, d, "computed")  # xargs supplies the refspecs from stdin
+        elif sub == "push":
+            push(d, gopts, rest)
+        elif sub in ("switch", "checkout"):
+            switched(d, gopts, sub, rest)
+
+
+def ansi_c(m):
+    try:
+        return shlex.quote(m.group(1).encode("latin-1", "backslashreplace").decode("unicode_escape"))
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return m.group(0)
 
 
 def process(text):
     global run
+    text = text.replace("\\\n", "")  # backslash line continuation
+    text = re.sub(r"\$'((?:[^'\\]|\\.)*)'", ansi_c, text)
     text, bodies = heredocs(text)
     text = re.sub(r"\$\(\s*" + CURRENT + r"\s*\)|`\s*" + CURRENT + r"\s*`", "HEAD", text)
     stack = []

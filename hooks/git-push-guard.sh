@@ -251,6 +251,10 @@ done
 # resolver above also blocks `:develop` / `--delete develop` here; until now only
 # protect-branches.sh refused those.
 while IFS=$'\t' read -r _dest _dest_dir _dest_how || [[ -n "${_dest:-}" ]]; do
+  if [[ "${_dest_how:-}" == "computed" ]]; then
+    echo "[BLOCKED] Push destination is computed (substitution / variable / --mirror / --prune) in ${_dest_dir}; name the branch explicitly." >&2
+    _aidd_block "protected-push-computed"
+  fi
   for branch in develop main master; do
     [[ "$_dest" == "$branch" ]] || continue
     if [[ "$_dest_how" == "explicit" ]]; then
