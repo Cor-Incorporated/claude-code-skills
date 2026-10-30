@@ -122,6 +122,7 @@ row 2 "$PLAIN" "$DEV"  "B14 develop 上の暗黙 force（.cwd=develop）"       
 row 2 "$PLAIN" "$FEAT" "B15 -C の値に空白（引用つき）"                      "git -C \"$SPACE\" push"
 row 2 "$PLAIN" "$DEV"  "B16 @ は HEAD の別名"                               'git push origin @'
 row 2 "$PLAIN" "$FEAT" "B17 -C <develop> の暗黙 force（.cwd=feature）"     "git -C $DEV push --force"
+row 2 "$PLAIN" "$DEV"  "B18 refspec がコマンド置換の current"             'git push -u origin "$(git branch --show-current)"'
 
 echo ""
 echo "=== A 陰性: 保護ブランチを更新しない push は rc=0 ==="
@@ -140,6 +141,7 @@ row 0 "$PLAIN" "$DEV"  "A11 feature の削除（develop 上）"                 
 row 0 "$PLAIN" "$FEAT" "A12 feature 上の素の push + 末尾コメント"           "git push # it's done"
 row 0 "$DEV"   "$DEV"  "A13 -C <feature> の暗黙 force（.cwd=develop）"     "git -C $FEAT push --force"
 row 0 "$DEV"   "$FEAT" "A14 feature 上の暗黙 force（process cwd=develop）" 'git push --force'
+row 0 "$PLAIN" "$FEAT" "A15 refspec がコマンド置換の current（feature 上）" 'git push -u origin "$(git branch --show-current)"'
 
 echo ""
 echo "=== P 対: 2 本の解決器が一字一句同じ ==="

@@ -162,7 +162,9 @@ def push(d, gopts, rest):
         if ":" in ref:
             src, dst = ref.split(":", 1)
             ref = dst or src
-        if ref in ("HEAD", "@"):
+        # `"$(git branch --show-current)"` is cut at `(`, leaving `$`: the
+        # substitution names the current branch, the common agent idiom.
+        if ref in ("HEAD", "@") or ref.endswith("$"):
             current(d, gopts, False)
             continue
         if ref.startswith("refs/heads/"):
