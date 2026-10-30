@@ -85,8 +85,8 @@ none of these block the session from starting.
 
 | Hook | Purpose |
 |---|---|
-| `protect-branches.sh` | **Blocks** (`exit 2`) deletion of protected branches (`develop`, `main`, `master`) |
-| `git-push-guard.sh` | **Blocks** (`exit 2`) force-push and direct push to protected branches. All other lint/CI-setup checking was removed — see ADR-006 |
+| `protect-branches.sh` | **Blocks** (`exit 2`) deletion of protected branches (`develop`, `main`, `master`) and any push that updates one, including implicit pushes (`git push`, `git push origin HEAD`) resolved against the input's `.cwd`, `cd <dir>` and `git -C <dir>` (F22, `tests/test-hard-block-implicit-push.sh`) |
+| `git-push-guard.sh` | **Blocks** (`exit 2`) force-push and direct push to protected branches, explicit or implicit (same destination resolver as `protect-branches.sh`, kept byte-identical by the test above). All other lint/CI-setup checking was removed — see ADR-006 |
 
 #### Matcher: `Edit\|Write` (1)
 

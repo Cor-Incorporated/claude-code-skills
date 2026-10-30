@@ -56,6 +56,160 @@ _aidd_ask() {
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
+# --- Push destination resolver (F22, 2026-10-30) ---
+# 2026-10-30 統括の独立ドライラン（develop の checkout 上）で、素の `git push` と
+# `git push origin HEAD` が 2 本とも通っていた。protect-branches.sh は Check 3b の
+# grep が `push` の後の空白を要求し、無いと pipefail + set -e で rc=1（非ブロックの
+# エラー = 素通り）。git-push-guard.sh は明示の ref しか見ず、暗黙ブランチは force
+# 限定だった。どちらも `HEAD` を current に解決しなかった。
+#
+# この解決器は `git push` 1 回ごとに「更新する宛先ブランチ」を 1 行ずつ出す:
+#   <branch> TAB <git が読む dir> TAB explicit|current|push-upstream
+# dir は hook の process cwd ではなく、入力 JSON の .cwd を起点に、先行する
+# `cd <dir>` セグメントと、その呼び出し自身の `git -C <dir>`（累積・相対可）で決める。
+# 宛先: refspec の dst 側（`+` と refs/heads/ を外す。`:x` の削除も x）。refspec が
+# 無い / remote だけなら current と @{push}（push.default=upstream で上流が develop の
+# feature ブランチを捕まえる）。`HEAD` と `@` は current。`--tags` だけなら枝は出さない。
+# 宛先の決め方は hooks/codex/protect-branches-codex.sh と hooks/cursor/git-guard.sh の
+# push_destination() と同じで、全 refspec と @{push} に広げてある。
+# 本文は protect-branches.sh と git-push-guard.sh で一字一句同じ
+# （tests/test-hard-block-implicit-push.sh の P 行が比較する）。
+IFS= read -r -d '' _push_dests_py <<'PY' || true
+import os, re, shlex, subprocess, sys
+
+cmd = sys.argv[1]
+run = sys.argv[2] if len(sys.argv) > 2 and os.path.isdir(sys.argv[2]) else os.getcwd()
+env = dict(os.environ)
+seen = set()
+
+
+def expand(s):
+    s = re.sub(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", lambda m: env.get(m.group(1), m.group(0)), s)
+    return os.path.expanduser(s)
+
+
+def resolve(d, cur):
+    return os.path.normpath(os.path.join(cur, expand(d)))
+
+
+def words(seg):
+    try:
+        lex = shlex.shlex(seg, posix=True)
+        lex.whitespace_split = True
+        lex.commenters = ""
+        w = list(lex)
+    except ValueError:
+        w = seg.translate({34: 32, 39: 32}).split()
+    for n, t in enumerate(w):
+        if t.startswith("#"):
+            return w[:n]
+    return w
+
+
+def git(d, gopts, *args):
+    try:
+        r = subprocess.run(["git", "-C", d] + gopts + list(args),
+                           capture_output=True, text=True, timeout=5)
+    except Exception:
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def emit(name, d, how):
+    if name and (name, d, how) not in seen:
+        seen.add((name, d, how))
+        print(name + "\t" + d + "\t" + how)
+
+
+def current(d, gopts, implicit):
+    b = git(d, gopts, "symbolic-ref", "--short", "-q", "HEAD")
+    if not b:
+        return
+    emit(b, d, "current")
+    if not implicit:
+        return
+    up = git(d, gopts, "rev-parse", "--symbolic-full-name", "@{push}")
+    remote = (git(d, gopts, "config", "branch." + b + ".pushRemote")
+              or git(d, gopts, "config", "remote.pushDefault")
+              or git(d, gopts, "config", "branch." + b + ".remote"))
+    prefix = "refs/remotes/" + remote + "/"
+    if remote and up.startswith(prefix):
+        emit(up[len(prefix):], d, "push-upstream")
+
+
+def push(d, gopts, rest):
+    pos, tags, k = [], False, 0
+    while k < len(rest):
+        t = rest[k]
+        if t == "--":
+            pos += rest[k + 1:]
+            break
+        if t.startswith("-") and t != "-":
+            if t in ("-o", "--push-option", "--repo", "--receive-pack", "--exec"):
+                k += 1
+            elif t == "--tags":
+                tags = True
+            k += 1
+            continue
+        pos.append(t)
+        k += 1
+    if len(pos) < 2:
+        if not tags:
+            current(d, gopts, True)
+        return
+    for ref in pos[1:]:
+        ref = ref[1:] if ref.startswith("+") else ref
+        if ":" in ref:
+            src, dst = ref.split(":", 1)
+            ref = dst or src
+        if ref in ("HEAD", "@"):
+            current(d, gopts, False)
+            continue
+        if ref.startswith("refs/heads/"):
+            ref = ref[len("refs/heads/"):]
+        emit(ref, d, "explicit")
+
+
+for seg in re.split(r"[<>();|&`\n]", cmd):
+    w = words(seg)
+    if w and w[0] == "export":
+        w = w[1:]
+    if w and all(re.match(r"[A-Za-z_][A-Za-z0-9_]*=", t) for t in w):
+        for t in w:
+            name, _, val = t.partition("=")
+            env[name] = expand(val)
+        continue
+    if w and w[0] in ("cd", "pushd"):
+        nxt = resolve(w[1], run) if len(w) > 1 else os.path.expanduser("~")
+        if os.path.isdir(nxt):
+            run = nxt
+        continue
+    for i, t in enumerate(w):
+        if os.path.basename(t) != "git":
+            continue
+        d, j, gopts = run, i + 1, []
+        while j < len(w) and w[j].startswith("-"):
+            o = w[j]
+            if o == "-C" and j + 1 < len(w):
+                d = resolve(w[j + 1], d)
+                j += 2
+            elif o in ("--git-dir", "--work-tree") and j + 1 < len(w):
+                gopts += [o, expand(w[j + 1])]
+                j += 2
+            elif o.startswith(("--git-dir=", "--work-tree=")):
+                gopts.append(o)
+                j += 1
+            elif o in ("-c", "--namespace", "--config-env") and j + 1 < len(w):
+                j += 2
+            else:
+                j += 1
+        if j < len(w) and w[j] == "push":
+            push(d, gopts, w[j + 1:])
+PY
+# The Bash tool's cwd, not the hook process cwd (which may be the session's start dir).
+_push_base=$(printf '%s' "$input" | jq -r '.cwd // ""' 2>/dev/null || true)
+[ -n "$_push_base" ] && [ -d "$_push_base" ] || _push_base="$PWD"
+
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
 # so a real operation cannot be chained after a benign first token (prevents
@@ -471,7 +625,8 @@ check_force_push_segment() {
     # No explicit protected ref: fall back to current branch (implicit push).
     target_branch=$(extract_push_branch "$seg")
     if [ -z "$target_branch" ]; then
-      target_branch=$(git branch --show-current 2>/dev/null || echo "")
+      # .cwd, not the hook process cwd (F22). `-C` / `cd` forms are resolved by Check 3c.
+      target_branch=$(git -C "$_push_base" branch --show-current 2>/dev/null || echo "")
     fi
     for branch in $PROTECTED_BRANCHES; do
       if [ "$target_branch" = "$branch" ]; then
@@ -535,9 +690,14 @@ done
 # alone also blocks HEAD:refs/heads/main and refs/heads/main (Cursor/Codex parity).
 # False positives on feat/* and docs that merely mention main are excluded by
 # requiring a git push match + destination token equality (not bare substring).
+#
+# F22 (2026-10-30): 素の `git push` は `push` の後に空白が無く、下の grep が 1 を返す。
+# pipefail + set -e で代入ごと終了し rc=1（非ブロックのエラー = 素通り）になっていた。
+# `|| true` で空にして続け、暗黙の宛先は Check 3c が解決する。ここは python3 が
+# 無いときにも残る明示 ref の検査として置いている。
 if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE"; then
   push_target=$(echo "$cmd_norm" | grep -oE "push[[:space:]]+[^|;&)<>]*" | head -1 \
-    | sed 's/^push[[:space:]]*//' | sed -E 's/[[:space:]]+-(u|f|q|-force|-force-with-lease|--set-upstream|--quiet)([^[:space:]]*)?//g' | xargs)
+    | sed 's/^push[[:space:]]*//' | sed -E 's/[[:space:]]+-(u|f|q|-force|-force-with-lease|--set-upstream|--quiet)([^[:space:]]*)?//g' | xargs) || true
   refspec=$(echo "$push_target" | awk '{print $NF}')
   for branch in $PROTECTED_BRANCHES; do
     if [ "$refspec" = "$branch" ] \
@@ -546,10 +706,37 @@ if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE"; then
       echo "[BLOCK] 保護ブランチ '${branch}' への直接 push を検出。" >&2
       echo "  WHY: 共有ブランチへの直接 push は禁止です（refs/heads/ 表記含む）。" >&2
       echo "  FIX: feature ブランチで作業し、PR 経由でマージしてください。" >&2
-      _aidd_block
+      _aidd_block "protected-push"
     fi
   done
 fi
+
+# --- Check 3c: every branch each `git push` updates, in the repo git reads (F22) ---
+# 宛先は上の _push_dests_py が出す。暗黙 push（refspec 無し・remote だけ・HEAD・@）は
+# その呼び出しの dir の current と @{push} に解決する。明示 ref も全 refspec を見るので、
+# 保護 ref が最後の refspec でない `git push origin develop feat/x` も捕まえる。
+# この hook は全 Bash コマンドで走るので、python3 の起動は git と push を両方含むときに
+# 限る。_GIT_PUSH_RE では絞らない — 引用つきの `git -C "/a b" push` は引用を外した
+# cmd_norm 上で -C の値が 2 語に割れ、その正規表現に一致しない（B15）。
+_push_dest_lines=""
+if [[ "$cmd" == *git* && "$cmd" == *push* ]]; then
+  _push_dest_lines=$(python3 -c "$_push_dests_py" "$cmd" "$_push_base" 2>/dev/null || true)
+fi
+while IFS=$'\t' read -r _dest _dest_dir _dest_how || [ -n "${_dest:-}" ]; do
+  for branch in $PROTECTED_BRANCHES; do
+    [ "$_dest" = "$branch" ] || continue
+    if [ "$_dest_how" = "explicit" ]; then
+      echo "[BLOCK] 保護ブランチ '${branch}' への直接 push を検出。" >&2
+      _rule="protected-push"
+    else
+      echo "[BLOCK] 保護ブランチ '${branch}' への暗黙 push を検出（${_dest_dir} の ${_dest_how}）。" >&2
+      _rule="protected-push-implicit"
+    fi
+    echo "  WHY: 共有ブランチへの直接 push は禁止です（refspec 無し・HEAD・-C・cd を含む）。" >&2
+    echo "  FIX: feature ブランチで作業し、git push -u origin <feature> && gh pr create --base develop。" >&2
+    _aidd_block "$_rule"
+  done
+done <<< "$_push_dest_lines"
 
 # --- Check 4: gh pr merge --delete-branch (most dangerous!) ---
 # 旧実装は 1 本の正規表現だった:
