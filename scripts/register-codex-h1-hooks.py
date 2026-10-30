@@ -15,26 +15,36 @@ import tempfile
 from pathlib import Path
 
 
+# The one tuning prefix recognised, as an exact shape on the raw command
+# string (ADR-012: allow a shape, do not filter a parse). It applies to the H1
+# hook only. `CODEX_H1_MAX_ITERATIONS=100 bash …/h1-stall-runtime.sh` is how
+# ~/.codex/hooks.json has tuned H1 since 2026-10-28; without this every
+# setup.sh stopped at step 5 (harness-pdca F14). Two rounds of filtering a
+# shlex parse (#451 review) let `X=1;exit;Y=1 bash <guard>`, `BASH_ENV=…`,
+# `"CODEX_H1_X"=1 bash <guard>` and `CODEX_H1_X\=1 bash <guard>` count as a
+# guard that the shell never runs; matching the raw text closes that class.
+H1_TUNING = re.compile(r"CODEX_H1_MAX_ITERATIONS=[0-9]{1,4} (?=bash )")
+
+
 def command_path(handler):
     if not isinstance(handler, dict) or handler.get("type") != "command":
         return None
+    raw = handler.get("command", "")
+    if not isinstance(raw, str) or "\n" in raw or "\r" in raw:
+        return None
+    tuned = H1_TUNING.match(raw)
+    if tuned:
+        raw = raw[tuned.end():]
     try:
-        parts = shlex.split(handler.get("command", ""))
+        parts = shlex.split(raw)
     except ValueError:
         return None
-    # Leading CODEX_H1_* tuning assignments do not make it a different hook:
-    # `CODEX_H1_MAX_ITERATIONS=100 bash …/h1-stall-runtime.sh` is the H1 hook.
-    # Without this, a tuned hooks.json made every setup.sh stop at step 5
-    # (2026-10-30 harness-pdca F14). Only CODEX_H1_ names with plain values:
-    # an arbitrary NAME=value would let `X=1;exit;Y=1 bash <guard>`,
-    # `BASH_ENV=… bash <guard>` or `PATH=… bash <guard>` count as the guard while
-    # the shell never runs it (#451 review). The rest must still be exactly
-    # `bash <path>`; any other shape is not recognised and fails closed.
-    while parts and re.fullmatch(r"CODEX_H1_[A-Z0-9_]+=[A-Za-z0-9._:/-]*", parts[0]):
-        parts = parts[1:]
     if len(parts) != 2 or parts[0] != "bash":
         return None
-    return Path(os.path.expanduser(parts[1])).resolve()
+    path = Path(os.path.expanduser(parts[1])).resolve()
+    if tuned and path.name != "h1-stall-runtime.sh":
+        return None  # the tuning prefix belongs to H1, never to the protect guard
+    return path
 
 
 def handlers(groups, event):

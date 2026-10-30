@@ -145,6 +145,10 @@ with tempfile.TemporaryDirectory(prefix="h1-register-") as temp:
         "X=$(/tmp/evil)",
         "PATH=/tmp/x",
         "CODEX_H1_MAX_ITERATIONS=1;exit",
+        '"CODEX_H1_X"=1',
+        "CODEX_H1_X\\=1",
+        "CODEX_H1_BUDGET_USD=999999999",
+        "CODEX_H1_MAX_ITERATIONS=99999",
     ]):
         for guard in ("protect", "h1"):
             bad_cfg = root / f"bypass-{i}-{guard}.json"
@@ -157,6 +161,24 @@ with tempfile.TemporaryDirectory(prefix="h1-register-") as temp:
             prior = bad_cfg.read_bytes()
             check(invoke(bad_cfg).returncode != 0 and bad_cfg.read_bytes() == prior,
                   f"{prefix!r} before the {guard} guard is not recognised (fails closed)")
+
+    newline = root / "newline.json"
+    newline.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+        {"type": "command", "command": f"bash '{protect}'"},
+        {"type": "command", "command": f"bash\n'{h1}'"},
+    ]}]}}))
+    prior = newline.read_bytes()
+    check(invoke(newline).returncode != 0 and newline.read_bytes() == prior,
+          "a newline inside a guard command is not recognised (fails closed)")
+
+    protect_tuned = root / "protect-tuned.json"
+    protect_tuned.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+        {"type": "command", "command": f"CODEX_H1_MAX_ITERATIONS=100 bash '{protect}'"},
+        {"type": "command", "command": f"bash '{h1}'"},
+    ]}]}}))
+    prior = protect_tuned.read_bytes()
+    check(invoke(protect_tuned).returncode != 0 and protect_tuned.read_bytes() == prior,
+          "the H1 tuning prefix in front of the protect guard is not recognised")
 
 print(f"--- {passed} passed, 0 failed ---")
 PY
