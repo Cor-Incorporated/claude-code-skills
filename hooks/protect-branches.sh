@@ -565,7 +565,7 @@ fi
 # 宛先は lib/push_dests.py。python3 は git と push を両方含むときだけ起動する（全 Bash で
 # 走るため）。_GIT_PUSH_RE で絞らないのは `git -C "/a b" push` が一致しないから（B15）。
 _push_dest_lines=""
-if [[ "$cmd" == *git* && "$cmd" == *push* ]]; then
+if [[ "$cmd" == *git* && ( "$cmd" == *push* || "$cmd" == *send-pack* ) ]]; then
   _push_dest_lines=$(python3 "$_PUSH_DESTS" "$cmd" "$_push_base" 2>/dev/null || true)
 fi
 while IFS=$'\t' read -r _dest _dest_dir _dest_how || [ -n "${_dest:-}" ]; do

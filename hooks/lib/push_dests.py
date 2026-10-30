@@ -22,8 +22,9 @@ heredoc bodies run as children: a `cd` inside does not leak out.
 Splitting: only at unquoted `; | & < > ( )` and newlines; `#` comments are
 dropped. `$( )` / backquotes and `bash|sh|zsh|dash|ksh -c "<cmd>"` /
 `eval "<cmd>"` at command position are read as child command lines. A heredoc
-body fed to a data command (cat / echo / printf / tee / grep / head / tail, no
-pipe) is dropped; a body a shell or interpreter runs is a child command line.
+body is read as a child command line only when a shell, an interpreter, eval
+or source reads it (directly or through a pipe); any other body (cat, tee,
+gh pr create --body-file -, git commit -F -) is data and is dropped.
 The arguments of a data command are text, not a git call.
 
 Destinations: the refspec's dst side (`+`, refs/heads/, `src:dst`, `:dst`
@@ -34,7 +35,9 @@ command are expanded. Any other computed destination (another substitution, an
 unset variable, `$1`, `${B:-x}`, a loop variable, `xargs`-supplied arguments,
 `--mirror`, `--prune`) cannot be decided here and prints `*  <dir>  computed`,
 which both hooks block. Wildcard refspecs map the local branches matching src
-onto dst; `:` and `--all` / `--branches` mean every local branch. Backslash
+onto dst; `:` and `--all` / `--branches` mean every local branch. `heads/<b>`
+is `refs/heads/<b>`; `git send-pack` / `git http-push` count as pushes;
+redirections (`2>&1`, `>/dev/null`) do not end the push's arguments. Backslash
 line continuations are joined and `$'..'` is decoded before splitting; git
 aliases that expand to `push` are followed. With no refspec or a remote only: remote.<remote>.push first, then
 push.default (nothing -> none, matching -> every local branch, upstream ->
@@ -67,6 +70,7 @@ seen = set()
 heads = {}
 DATA = {"cat", "echo", "printf", "tee", "grep", "egrep", "fgrep", "rg", "ag", "head", "tail"}
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+CODE = SHELLS | {"eval", "source", ".", "python", "python3", "node", "ruby", "perl", "ssh", "xargs"}
 RUNNERS = {"sudo", "doas", "env", "command", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "setsid", "xargs"}
 SUBST = "__f22_subst__"
 CUR = "__f22_current__"  # a current-branch substitution, resolved in the shell cwd where it runs
@@ -87,7 +91,10 @@ UNRESOLVED = r"\$(?:\{|[A-Za-z_0-9@*#?!-])"
 
 
 def expand(s):
-    s = re.sub(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", lambda m: env.get(m.group(1), m.group(0)), s)
+    def var(m):
+        name = m.group(1) or m.group(2)
+        return env.get(name, m.group(0))
+    s = re.sub(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", var, s)
     return os.path.expanduser(s)
 
 
@@ -122,14 +129,19 @@ def heredocs(text):
         m = re.search(r"(?<!<)<<(?!<)-?\s*([\x22\x27]?)([A-Za-z_][A-Za-z0-9_]*)\1", line)
         if m and not (line[:m.start()].count(Q1) % 2 or line[:m.start()].count(Q2) % 2):
             head = re.split(r"\$\(|[;&|(`]", line[:m.start()])[-1]
-            w = [t for t in words(head) if not re.match(r"[A-Za-z_][A-Za-z0-9_]*=", t)]
-            receivers = [words(x)[:1] for x in line[m.end():].split("|")[1:]]
-            data = (bool(w) and os.path.basename(w[0]) in DATA
-                    and all(r and os.path.basename(r[0]) in DATA for r in receivers))
+            readers = [command_word(words(head))] + [command_word(words(x)) for x in line[m.end():].split("|")[1:]]
+            data = not any(re.fullmatch(r"python3(?:\.\d+)?", r) or r in CODE for r in readers)
             delim, keep = m.group(2), not data
     if delim is not None and keep and body:
         code.append("\n".join(body))
     return "\n".join(out), code
+
+
+def command_word(w):
+    c = 0
+    while c < len(w) and (w[c] in RUNNERS - {"xargs"} or w[c].startswith("-") or w[c].isdigit() or re.match(ASSIGN, w[c])):
+        c += 1
+    return os.path.basename(w[c]) if c < len(w) else ""
 
 
 def close_paren(text, k):
@@ -192,6 +204,14 @@ def split_top(text):
         elif c == "#" and (not buf or buf[-1][-1:].isspace()):
             j = text.find("\n", i)
             i = len(text) if j < 0 else j
+        elif c in "<>" and text[i + 1:i + 2] != "(" or (c == "&" and text[i + 1:i + 2] == ">"):
+            # A redirection (`2>&1`, `>/dev/null`, `<&-`, `&>f`, `<<EOF`): drop it and its
+            # target but stay in this segment, so `git push origin 2>&1 HEAD:develop` keeps its refspec.
+            m = re.match(r"(?:&>>?|>>|>\||>&|>|<<<|<<-?|<&|<>|<)\s*(?:[\x22\x27][^\x22\x27]*[\x22\x27]|[^\s;&|()<>]*)", text[i:])
+            while buf and buf[-1].isdigit():
+                buf.pop()  # the fd number in `2>`
+            buf.append(" ")
+            i += len(m.group(0)) if m and m.group(0) else 1
         elif c in ";|&<>()\n":
             out.append(("".join(buf), subs, c))
             buf, subs = [], []
@@ -279,7 +299,10 @@ def local_branches(d, gopts, how):
 
 
 def branch_of(ref):
-    return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+    for prefix in ("refs/heads/", "heads/"):
+        if ref.startswith(prefix):
+            return ref[len(prefix):]
+    return ref
 
 
 def split_refspec(ref):
@@ -357,7 +380,7 @@ def implicit(d, gopts, remote):
     emit(b, d, "current")
 
 
-def push(d, gopts, rest):
+def push(d, gopts, rest, sub="push"):
     pos, tags, k, repo = [], False, 0, ""
     while k < len(rest):
         t = rest[k]
@@ -383,7 +406,9 @@ def push(d, gopts, rest):
         pos.append(t)
         k += 1
     if len(pos) < 2:
-        if not tags:
+        if sub != "push":
+            local_branches(d, gopts, "matching")
+        elif not tags:
             implicit(d, gopts, pos[0] if pos else repo)
         return
     for ref in pos[1:]:
@@ -473,19 +498,31 @@ def segment(w):
         if d is None:
             continue
         sub, rest = (w[j], w[j + 1:]) if j < len(w) else ("", [])
-        if sub and sub not in BUILTINS:
-            # A git alias that expands to push (`-c alias.p=push` or the config).
+        for _ in range(5):
+            # A git alias (`-c alias.p=push`, the config, chained, or `!` shell aliases).
+            if not sub or sub in BUILTINS or sub in ("send-pack", "http-push"):
+                break
             val = ""
             for n in range(0, len(gopts) - 1):
                 if gopts[n] == "-c" and gopts[n + 1].startswith("alias." + sub + "="):
                     val = gopts[n + 1].split("=", 1)[1]
             val = val or git(d, gopts, "config", "--get", "alias." + sub)
-            if val.split()[:1] == ["push"]:
-                sub, rest = "push", val.split()[1:] + rest
+            if not val:
+                break
+            if val.startswith("!"):
+                child(val[1:] + " " + " ".join(shlex.quote(x) for x in rest))
+                sub = ""
+                break
+            aw = words(val)
+            while aw and aw[0].startswith("-"):
+                aw = aw[2:] if aw[0] in ("-c", "-C") else aw[1:]
+            if not aw:
+                break
+            sub, rest = aw[0], aw[1:] + rest
         if sub == "push" and "xargs" in [os.path.basename(x) for x in w[:i]]:
             emit(COMPUTED, d, "computed")  # xargs supplies the refspecs from stdin
-        elif sub == "push":
-            push(d, gopts, rest)
+        elif sub in ("push", "send-pack", "http-push"):
+            push(d, gopts, rest, sub)
         elif sub in ("switch", "checkout"):
             switched(d, gopts, sub, rest)
 

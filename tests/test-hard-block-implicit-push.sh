@@ -206,6 +206,13 @@ row 2 "$PLAIN" "$DEV"  "B61 置換はシェルの cwd（develop）で評価: -C 
 row 2 "$PLAIN" "$FEAT" "B62 サブシェル内の代入は外へ漏れない（外は develop）" 'B=develop; (B=feat/x); git push origin "$B"'
 row 2 "$PLAIN" "$DEV"  "B63 heredoc を tee 経由で bash へ"                  $'cat <<\'EOF\' | tee note.md | bash\ngit push\nEOF'
 row 2 "$PLAIN" "$FEAT" "B64 eval の cd は現在のシェルに残る（develop へ）"   "eval \"cd $DEV\"; git push origin HEAD"
+row 2 "$PLAIN" "$FEAT" "B65 heads/<b> は refs/heads/<b>"                   'git push origin HEAD:heads/develop'
+row 2 "$PLAIN" "$FEAT" "B66 引数の途中のリダイレクト 2>&1"                  'git push origin 2>&1 HEAD:develop'
+row 2 "$PLAIN" "$FEAT" "B67 引数の途中のリダイレクト >/dev/null"            'git push >/dev/null origin HEAD:develop'
+row 2 "$PLAIN" "$FEAT" "B68 ! alias（シェルの git push）"                   "git -c 'alias.p=!git push origin HEAD:develop' p"
+row 2 "$PLAIN" "$FEAT" "B69 2 段の alias（b → a → push）"                   'git -c alias.a=push -c alias.b=a b origin HEAD:develop'
+row 2 "$PLAIN" "$FEAT" "B70 git send-pack"                                 "git send-pack $FIX/remote.git feat/xxx:develop"
+row 2 "$PLAIN" "$FEAT" "B71 \${B#x} の展開（計算で決まる宛先）"              'B=xdevelop; git push origin HEAD:${B#x}'
 
 echo ""
 echo "=== A 陰性: 保護ブランチを更新しない push は rc=0 ==="
@@ -264,6 +271,8 @@ row 0 "$PLAIN" "$REPO" "A46 --repo review の push refspec（develop → review-
 row 0 "$PLAIN" "$REPO" "A47 --repo=review の push refspec"                 'git push --repo=review'
 row 0 "$PLAIN" "$DEV"  "A48 heredoc を tee へ（データ）"                    $'cat <<\'EOF\' | tee note.md\ngit push origin HEAD\nEOF'
 row 0 "$PLAIN" "$DEV"  "A49 eval の cd は現在のシェルに残る（feature へ）"   "eval \"cd $FEAT\"; git push origin HEAD"
+row 0 "$PLAIN" "$DEV"  "A50 gh pr create --body-file - の heredoc はデータ"  $'gh pr create --base develop --title t --body-file - <<\'EOF\'\nrun git push, then git push origin HEAD\nEOF'
+row 0 "$PLAIN" "$DEV"  "A51 git commit -F - の heredoc はデータ"            $'git commit -q -F - <<\'EOF\'\nfix: run git push before review\nEOF\ngit push -u origin feat/xxx'
 
 echo ""
 echo "=== P 対: 2 本が同じ lib を呼び、写しを持たない ==="

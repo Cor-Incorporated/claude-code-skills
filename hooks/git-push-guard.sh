@@ -148,7 +148,7 @@ fi
 # creating an unrecoverable deadlock where even `black .` is blocked.
 # F22: also run when `git` and `push` both appear. cmd_norm only collapses -C / -c /
 # --no-pager, so `git -P push` and `git --work-tree=. push` skipped §3 (code review M3).
-if ! echo "$cmd_norm" | grep -qE '\bgit\s+push\b' && ! [[ "$cmd" == *git* && "$cmd" == *push* ]]; then
+if ! echo "$cmd_norm" | grep -qE '\bgit\s+push\b' && ! [[ "$cmd" == *git* && ( "$cmd" == *push* || "$cmd" == *send-pack* ) ]]; then
   exit 0
 fi
 
