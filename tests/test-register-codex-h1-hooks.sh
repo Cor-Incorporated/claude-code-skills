@@ -181,11 +181,13 @@ with tempfile.TemporaryDirectory(prefix="h1-register-") as temp:
     check(invoke(protect_tuned).returncode != 0 and protect_tuned.read_bytes() == prior,
           "the H1 tuning prefix in front of the protect guard is not recognised")
 
-    for i, suffix in enumerate(["/", "/."]):
+    for i, suffix in enumerate(["/", "/.", "/../NAME", "/./../NAME"]):
         for guard in ("protect", "h1"):
             odd = root / f"path-{i}-{guard}.json"
-            p_path = f"{protect}{suffix}" if guard == "protect" else str(protect)
-            h_path = f"{h1}{suffix}" if guard == "h1" else str(h1)
+            name = {"protect": protect.name, "h1": h1.name}[guard]
+            suffix_g = suffix.replace("NAME", name)
+            p_path = f"{protect}{suffix_g}" if guard == "protect" else str(protect)
+            h_path = f"{h1}{suffix_g}" if guard == "h1" else str(h1)
             odd.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
                 {"type": "command", "command": f"bash '{p_path}'"},
                 {"type": "command", "command": f"bash '{h_path}'"},

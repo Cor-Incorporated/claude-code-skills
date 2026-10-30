@@ -42,10 +42,12 @@ def command_path(handler):
     if len(parts) != 2 or parts[0] != "bash":
         return None
     token = os.path.expanduser(parts[1])
-    # resolve() would turn `<guard>/` or `<guard>/.` into the guard, but bash
-    # fails on them ("Not a directory") and the guard never runs (#451 review,
-    # pre-existing on develop). The token itself must already be a plain path.
-    if token.endswith("/") or token.endswith("/.") or token.endswith("/.."):
+    # resolve() would turn `<guard>/`, `<guard>/.` or `<guard>/../<name>` into
+    # the guard, but bash fails on them ("Not a directory") and the guard never
+    # runs (#451 review, pre-existing on develop). Allow one shape only: an
+    # absolute path that is already in normal form (no `.`/`..` components, no
+    # doubled or trailing slash).
+    if not os.path.isabs(token) or os.path.normpath(token) != token:
         return None
     path = Path(token).resolve()
     if tuned and path.name != "h1-stall-runtime.sh":
