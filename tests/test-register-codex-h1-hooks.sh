@@ -5,6 +5,7 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 python3 - "$REPO_DIR/scripts/register-codex-h1-hooks.py" <<'PY'
 import copy
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -97,6 +98,142 @@ with tempfile.TemporaryDirectory(prefix="h1-register-") as temp:
     prior = duplicate.read_bytes()
     check(invoke(duplicate).returncode != 0 and duplicate.read_bytes() == prior,
           "duplicate UserPromptSubmit H1 fails without mutation")
+
+    # 2026-10-30 harness-pdca F14: the live ~/.codex/hooks.json tunes H1 with an
+    # env prefix and carries the H17 common control; setup.sh stopped at step 5.
+    tuned = root / "tuned.json"
+    tuned.write_text(json.dumps({"hooks": {
+        "PreToolUse": [{"matcher": ".*", "hooks": [
+            {"type": "command", "command": f"bash '{protect}'"},
+            {"type": "command", "command": f"CODEX_H1_MAX_ITERATIONS=100 bash '{h1}'"},
+            {"type": "command", "command": "bash /tmp/aidd-cc-codex.sh"},
+        ]}],
+        "UserPromptSubmit": [{"hooks": [
+            {"type": "command", "command": f"CODEX_H1_MAX_ITERATIONS=100 bash '{h1}'"},
+            {"type": "command", "command": "bash /tmp/aidd-cc-codex.sh"},
+        ]}],
+        "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "bash /tmp/aidd-cc-codex.sh"}]}],
+    }}))
+    prior = tuned.read_bytes()
+    result = invoke(tuned)
+    check(result.returncode == 0 and "already registered" in result.stdout and tuned.read_bytes() == prior,
+          "env-prefixed H1 hooks are recognised and left byte-for-byte unchanged")
+
+    tuned_other = root / "tuned-other.json"
+    tuned_other.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+        {"type": "command", "command": f"bash '{protect}'"},
+        {"type": "command", "command": f"bash '{h1}'"},
+        {"type": "command", "command": "CODEX_H1_MAX_ITERATIONS=100 bash /elsewhere/h1-stall-runtime.sh"},
+    ]}]}}))
+    prior = tuned_other.read_bytes()
+    check(invoke(tuned_other).returncode != 0 and tuned_other.read_bytes() == prior,
+          "an env-prefixed H1 that points elsewhere still fails closed")
+
+    wrapped = root / "wrapped.json"
+    wrapped.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+        {"type": "command", "command": f"bash '{protect}'"},
+        {"type": "command", "command": f"env X=1 bash '{h1}'"},
+    ]}]}}))
+    prior = wrapped.read_bytes()
+    check(invoke(wrapped).returncode != 0 and wrapped.read_bytes() == prior,
+          "other wrappers (env, nice, ...) are not recognised as the H1 hook")
+
+    # #451 review: an assignment that runs code or swaps the shell must not let a
+    # command count as a guard.
+    for i, prefix in enumerate([
+        "X=1;exit;Y=1",
+        "BASH_ENV=/tmp/evil.sh",
+        "X=$(/tmp/evil)",
+        "PATH=/tmp/x",
+        "CODEX_H1_MAX_ITERATIONS=1;exit",
+        '"CODEX_H1_X"=1',
+        "CODEX_H1_X\\=1",
+        "CODEX_H1_BUDGET_USD=999999999",
+        "CODEX_H1_MAX_ITERATIONS=99999",
+        "CODEX_H1_MAX_ITERATIONS=9999",
+    ]):
+        for guard in ("protect", "h1"):
+            bad_cfg = root / f"bypass-{i}-{guard}.json"
+            p_cmd = f"bash '{protect}'" if guard == "h1" else f"{prefix} bash '{protect}'"
+            h_cmd = f"{prefix} bash '{h1}'" if guard == "h1" else f"bash '{h1}'"
+            bad_cfg.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+                {"type": "command", "command": p_cmd},
+                {"type": "command", "command": h_cmd},
+            ]}]}}))
+            prior = bad_cfg.read_bytes()
+            check(invoke(bad_cfg).returncode != 0 and bad_cfg.read_bytes() == prior,
+                  f"{prefix!r} before the {guard} guard is not recognised (fails closed)")
+
+    newline = root / "newline.json"
+    newline.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+        {"type": "command", "command": f"bash '{protect}'"},
+        {"type": "command", "command": f"bash\n'{h1}'"},
+    ]}]}}))
+    prior = newline.read_bytes()
+    check(invoke(newline).returncode != 0 and newline.read_bytes() == prior,
+          "a newline inside a guard command is not recognised (fails closed)")
+
+    protect_tuned = root / "protect-tuned.json"
+    protect_tuned.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+        {"type": "command", "command": f"CODEX_H1_MAX_ITERATIONS=100 bash '{protect}'"},
+        {"type": "command", "command": f"bash '{h1}'"},
+    ]}]}}))
+    prior = protect_tuned.read_bytes()
+    check(invoke(protect_tuned).returncode != 0 and protect_tuned.read_bytes() == prior,
+          "the H1 tuning prefix in front of the protect guard is not recognised")
+
+    for i, suffix in enumerate(["/", "/.", "/../NAME", "/./../NAME"]):
+        for guard in ("protect", "h1"):
+            odd = root / f"path-{i}-{guard}.json"
+            name = {"protect": protect.name, "h1": h1.name}[guard]
+            suffix_g = suffix.replace("NAME", name)
+            p_path = f"{protect}{suffix_g}" if guard == "protect" else str(protect)
+            h_path = f"{h1}{suffix_g}" if guard == "h1" else str(h1)
+            odd.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+                {"type": "command", "command": f"bash '{p_path}'"},
+                {"type": "command", "command": f"bash '{h_path}'"},
+            ]}]}}))
+            prior = odd.read_bytes()
+            check(invoke(odd).returncode != 0 and odd.read_bytes() == prior,
+                  f"a {guard} path ending in {suffix!r} is not recognised (bash would not run it)")
+
+    # #451 review round 5: spellings that parse as the guard but are not the
+    # form this registrar writes. Only the written form counts.
+    link_dir = root / "link"
+    link_dir.symlink_to(hook_dir)
+    home = pathlib.Path.home()
+    for i, (p_cmd, h_cmd, label) in enumerate([
+        (f"bash '{protect}'", f'bash "{h1}"', "double-quoted H1 path"),
+        (f"bash '{link_dir / protect.name}'", f"bash '{h1}'", "protect through a symlinked dir"),
+        (f"bash '{protect}'", f"bash '{link_dir / h1.name}'", "H1 through a symlinked dir"),
+    ]):
+        odd = root / f"spelling-{i}.json"
+        odd.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+            {"type": "command", "command": p_cmd},
+            {"type": "command", "command": h_cmd},
+        ]}]}}))
+        prior = odd.read_bytes()
+        check(invoke(odd).returncode != 0 and odd.read_bytes() == prior,
+              f"{label}: not the written form, not recognised (fails closed)")
+
+    # A quoted ~ is expanded by a parser but never by the shell: with HOME at the
+    # temp root, `bash '~/Codex hooks with spaces/<guard>'` names the real guard
+    # to expanduser() while bash would look for a literal "~" directory.
+    for guard in ("protect", "h1"):
+        tilde = root / f"tilde-{guard}.json"
+        rel_p = f"~/{protect.relative_to(root)}"
+        rel_h = f"~/{h1.relative_to(root)}"
+        p_cmd = f"bash '{rel_p}'" if guard == "protect" else f"bash '{protect}'"
+        h_cmd = f"bash '{rel_h}'" if guard == "h1" else f"bash '{h1}'"
+        tilde.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+            {"type": "command", "command": p_cmd},
+            {"type": "command", "command": h_cmd},
+        ]}]}}))
+        prior = tilde.read_bytes()
+        env = dict(os.environ, HOME=str(root))
+        r = subprocess.run([sys.executable, script, str(tilde), str(hook_dir)], text=True, capture_output=True, env=env)
+        check(r.returncode != 0 and tilde.read_bytes() == prior,
+              f"a quoted ~ in the {guard} path is not recognised (the shell would not expand it)")
 
 print(f"--- {passed} passed, 0 failed ---")
 PY
