@@ -64,23 +64,41 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 # 限定だった。どちらも `HEAD` を current に解決しなかった。
 #
 # この解決器は `git push` 1 回ごとに「更新する宛先ブランチ」を 1 行ずつ出す:
-#   <branch> TAB <git が読む dir> TAB explicit|current|push-upstream
+#   <branch> TAB <git が読む dir> TAB explicit|current|push-upstream|matching
 # dir は hook の process cwd ではなく、入力 JSON の .cwd を起点に、先行する
-# `cd <dir>` セグメントと、その呼び出し自身の `git -C <dir>`（累積・相対可）で決める。
-# 宛先: refspec の dst 側（`+` と refs/heads/ を外す。`:x` の削除も x）。refspec が
-# 無い / remote だけなら current と @{push}（push.default=upstream で上流が develop の
-# feature ブランチを捕まえる）。`HEAD` と `@` は current。`--tags` だけなら枝は出さない。
+# `cd <dir>` と、その呼び出し自身の `git -C <dir>`（累積・相対可）で決める。
+# `( … )` / `$( … )` / バッククォートの中の cd は外へ持ち越さない（実シェルと同じ）。
+# 宛先: refspec の dst 側（`+` と refs/heads/ を外す。`:x` の削除も x）。`HEAD` と `@`
+# と、current を返す既知の置換（`$(git branch --show-current)` など）は current。
+# 他のコマンド置換は宛先不明として何も出さない（develop を返す置換は見逃す）。
+# refspec が無い / remote だけなら push.default と @{push} で決める（呼び出しの
+# `-c` も効かせる）: nothing → 無し、matching → ローカル枝すべて、@{push} が
+# 決まればその枝だけ、決まらなければ current。`--tags` だけなら枝は出さない。
+# データ文脈（cat / echo / printf / tee / grep / head / tail …、パイプ無し）が食う
+# heredoc の本文は読まない。本文を実行するもの（python3 - <<PY、| bash）は子として読む。
+# `bash -c "<cmd>"` / `sh -c` / `eval "<cmd>"` の引数も子として読む。
+# 区切り（; | & < > ( ) 改行）はクォートの外でだけ切る（`sh -c 'cd x && git push'`）。
 # 宛先の決め方は hooks/codex/protect-branches-codex.sh と hooks/cursor/git-guard.sh の
-# push_destination() と同じで、全 refspec と @{push} に広げてある。
+# push_destination() と同じで、全 refspec と push.default に広げてある。
 # 本文は protect-branches.sh と git-push-guard.sh で一字一句同じ
 # （tests/test-hard-block-implicit-push.sh の P 行が比較する）。
 IFS= read -r -d '' _push_dests_py <<'PY' || true
-import os, re, shlex, subprocess, sys
+import os
+import re
+import shlex
+import subprocess
+import sys
 
 cmd = sys.argv[1]
 run = sys.argv[2] if len(sys.argv) > 2 and os.path.isdir(sys.argv[2]) else os.getcwd()
 env = dict(os.environ)
 seen = set()
+DATA = {"cat", "echo", "printf", "tee", "grep", "egrep", "fgrep", "rg", "ag", "head", "tail"}
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+RUNNERS = {"sudo", "doas", "env", "command", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "setsid", "xargs"}
+SUBST = "__f22_subst__"
+Q1, Q2 = chr(39), chr(34)
+CURRENT = r"git\s+(?:branch\s+--show-current|rev-parse\s+--abbrev-ref\s+HEAD|symbolic-ref\s+(?:-q\s+)?--short(?:\s+-q)?\s+HEAD)"
 
 
 def expand(s):
@@ -97,13 +115,105 @@ def words(seg):
         lex = shlex.shlex(seg, posix=True)
         lex.whitespace_split = True
         lex.commenters = ""
-        w = list(lex)
+        return list(lex)
     except ValueError:
-        w = seg.translate({34: 32, 39: 32}).split()
-    for n, t in enumerate(w):
-        if t.startswith("#"):
-            return w[:n]
-    return w
+        return seg.translate({34: 32, 39: 32}).split()
+
+
+def heredocs(text):
+    # Outer text without heredoc bodies, and the bodies a shell or interpreter runs.
+    # A body fed to a data command (cat / echo / tee / grep ...) with no pipe is data.
+    out, code, delim, body, keep = [], [], None, [], False
+    for line in text.split("\n"):
+        if delim is not None:
+            if line.strip() == delim:
+                if keep:
+                    code.append("\n".join(body))
+                delim, body = None, []
+            else:
+                body.append(line)
+            continue
+        out.append(line)
+        m = re.search(r"(?<!<)<<(?!<)-?\s*([\x22\x27]?)([A-Za-z_][A-Za-z0-9_]*)\1", line)
+        if m and not (line[:m.start()].count(Q1) % 2 or line[:m.start()].count(Q2) % 2):
+            head = re.split(r"\$\(|[;&|(`]", line[:m.start()])[-1]
+            w = [t for t in words(head) if not re.match(r"[A-Za-z_][A-Za-z0-9_]*=", t)]
+            data = bool(w) and os.path.basename(w[0]) in DATA and "|" not in line[m.end():]
+            delim, keep = m.group(2), not data
+    if delim is not None and keep and body:
+        code.append("\n".join(body))
+    return "\n".join(out), code
+
+
+def close_paren(text, k):
+    depth, q, i = 0, None, k
+    while i < len(text):
+        c = text[i]
+        if q:
+            if c == "\\" and q == Q2:
+                i += 2
+                continue
+            if c == q:
+                q = None
+        elif c in (Q1, Q2):
+            q = c
+        elif c == "\\":
+            i += 2
+            continue
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return len(text)
+
+
+def split_top(text):
+    # [(segment, substitutions, delimiter)] split at unquoted ; | & < > ( ) newline.
+    # $( ) and backquotes become SUBST in the segment; their text is returned to run in a child scope.
+    out, buf, subs, i, q = [], [], [], 0, None
+    while i < len(text):
+        c = text[i]
+        if q == Q1:
+            buf.append(c)
+            q = None if c == Q1 else q
+            i += 1
+        elif c == "\\":
+            buf.append(text[i:i + 2])
+            i += 2
+        elif c == "$" and text[i + 1:i + 2] == "(":
+            j = close_paren(text, i + 1)
+            subs.append(text[i + 2:j])
+            buf.append(SUBST)
+            i = j + 1
+        elif c == "`":
+            j = text.find("`", i + 1)
+            j = len(text) if j < 0 else j
+            subs.append(text[i + 1:j])
+            buf.append(SUBST)
+            i = j + 1
+        elif q == Q2:
+            buf.append(c)
+            q = None if c == Q2 else q
+            i += 1
+        elif c in (Q1, Q2):
+            q = c
+            buf.append(c)
+            i += 1
+        elif c == "#" and (not buf or buf[-1][-1:].isspace()):
+            j = text.find("\n", i)
+            i = len(text) if j < 0 else j
+        elif c in ";|&<>()\n":
+            out.append(("".join(buf), subs, c))
+            buf, subs = [], []
+            i += 1
+        else:
+            buf.append(c)
+            i += 1
+    out.append(("".join(buf), subs, ""))
+    return out
 
 
 def git(d, gopts, *args):
@@ -121,20 +231,27 @@ def emit(name, d, how):
         print(name + "\t" + d + "\t" + how)
 
 
-def current(d, gopts, implicit):
+def implicit(d, gopts, remote):
     b = git(d, gopts, "symbolic-ref", "--short", "-q", "HEAD")
     if not b:
         return
-    emit(b, d, "current")
-    if not implicit:
+    mode = git(d, gopts, "config", "push.default") or "simple"
+    if mode == "nothing":
         return
+    if mode == "matching":
+        for name in git(d, gopts, "for-each-ref", "--format=%(refname:short)", "refs/heads").split("\n"):
+            emit(name, d, "matching")
+        return
+    pr = (git(d, gopts, "config", "branch." + b + ".pushRemote")
+          or git(d, gopts, "config", "remote.pushDefault")
+          or git(d, gopts, "config", "branch." + b + ".remote"))
     up = git(d, gopts, "rev-parse", "--symbolic-full-name", "@{push}")
-    remote = (git(d, gopts, "config", "branch." + b + ".pushRemote")
-              or git(d, gopts, "config", "remote.pushDefault")
-              or git(d, gopts, "config", "branch." + b + ".remote"))
-    prefix = "refs/remotes/" + remote + "/"
-    if remote and up.startswith(prefix):
-        emit(up[len(prefix):], d, "push-upstream")
+    prefix = "refs/remotes/" + pr + "/"
+    if pr and (not remote or remote == pr) and up.startswith(prefix):
+        dst = up[len(prefix):]
+        emit(dst, d, "current" if dst == b else "push-upstream")
+        return
+    emit(b, d, "current")
 
 
 def push(d, gopts, rest):
@@ -155,37 +272,55 @@ def push(d, gopts, rest):
         k += 1
     if len(pos) < 2:
         if not tags:
-            current(d, gopts, True)
+            implicit(d, gopts, pos[0] if pos else "")
         return
     for ref in pos[1:]:
+        if SUBST in ref:
+            continue
         ref = ref[1:] if ref.startswith("+") else ref
         if ":" in ref:
             src, dst = ref.split(":", 1)
             ref = dst or src
-        # `"$(git branch --show-current)"` is cut at `(`, leaving `$`: the
-        # substitution names the current branch, the common agent idiom.
-        if ref in ("HEAD", "@") or ref.endswith("$"):
-            current(d, gopts, False)
+        if ref in ("HEAD", "@"):
+            emit(git(d, gopts, "symbolic-ref", "--short", "-q", "HEAD"), d, "current")
             continue
         if ref.startswith("refs/heads/"):
             ref = ref[len("refs/heads/"):]
         emit(ref, d, "explicit")
 
 
-for seg in re.split(r"[<>();|&`\n]", cmd):
-    w = words(seg)
+def child(text):
+    global run
+    saved = run
+    process(text)
+    run = saved
+
+
+def segment(w):
+    global run
     if w and w[0] == "export":
         w = w[1:]
     if w and all(re.match(r"[A-Za-z_][A-Za-z0-9_]*=", t) for t in w):
         for t in w:
             name, _, val = t.partition("=")
             env[name] = expand(val)
-        continue
+        return
     if w and w[0] in ("cd", "pushd"):
         nxt = resolve(w[1], run) if len(w) > 1 else os.path.expanduser("~")
         if os.path.isdir(nxt):
             run = nxt
-        continue
+        return
+    for i, t in enumerate(w):
+        # `bash -c "<cmd>"` / `eval "<cmd>"` at command position (after env / VAR=... and
+        # similar runners) run their argument as a command line in a child.
+        if not all(p in RUNNERS or p.startswith("-") or p.isdigit()
+                   or re.match(r"[A-Za-z_][A-Za-z0-9_]*=", p) for p in w[:i]):
+            break
+        if t == "eval" or (os.path.basename(t) in SHELLS and "-c" in w[i + 1:]):
+            k = i + 1 if t == "eval" else w.index("-c", i + 1) + 1
+            if k < len(w):
+                child(" ".join(w[k:]) if t == "eval" else w[k])
+            return
     for i, t in enumerate(w):
         if os.path.basename(t) != "git":
             continue
@@ -195,18 +330,38 @@ for seg in re.split(r"[<>();|&`\n]", cmd):
             if o == "-C" and j + 1 < len(w):
                 d = resolve(w[j + 1], d)
                 j += 2
-            elif o in ("--git-dir", "--work-tree") and j + 1 < len(w):
+            elif o in ("-c", "--config-env", "--git-dir", "--work-tree") and j + 1 < len(w):
                 gopts += [o, expand(w[j + 1])]
                 j += 2
-            elif o.startswith(("--git-dir=", "--work-tree=")):
+            elif o.startswith(("--git-dir=", "--work-tree=", "--config-env=")):
                 gopts.append(o)
                 j += 1
-            elif o in ("-c", "--namespace", "--config-env") and j + 1 < len(w):
+            elif o == "--namespace" and j + 1 < len(w):
                 j += 2
             else:
                 j += 1
         if j < len(w) and w[j] == "push":
             push(d, gopts, w[j + 1:])
+
+
+def process(text):
+    global run
+    text, bodies = heredocs(text)
+    text = re.sub(r"\$\(\s*" + CURRENT + r"\s*\)|`\s*" + CURRENT + r"\s*`", "HEAD", text)
+    stack = []
+    for seg, subs, delim in split_top(text):
+        for s in subs:
+            child(s)
+        segment(words(seg))
+        if delim == "(":
+            stack.append(run)
+        elif delim == ")" and stack:
+            run = stack.pop()
+    for body in bodies:
+        child(body)
+
+
+process(cmd)
 PY
 # The Bash tool's cwd, not the hook process cwd (which may be the session's start dir).
 _push_base=$(printf '%s' "$input" | jq -r '.cwd // ""' 2>/dev/null || true)

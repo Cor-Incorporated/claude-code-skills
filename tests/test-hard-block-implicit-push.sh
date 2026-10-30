@@ -63,6 +63,18 @@ git -C "$UP" update-ref refs/remotes/origin/develop HEAD
 git -C "$UP" config push.default upstream
 git -C "$UP" config branch.feat/up.remote origin
 git -C "$UP" config branch.feat/up.merge refs/heads/develop
+# develop だが push.default=upstream で上流が review-copy: 素の push は review-copy だけを更新する
+REVIEW="$FIX/review"
+mkrepo "$REVIEW" develop
+git -C "$REVIEW" update-ref refs/remotes/origin/review-copy HEAD
+git -C "$REVIEW" config push.default upstream
+git -C "$REVIEW" config branch.develop.remote origin
+git -C "$REVIEW" config branch.develop.merge refs/heads/review-copy
+# feature 上だが push.default=matching でローカルに develop がある: 素の push は develop も押す
+MATCH="$FIX/match"
+mkrepo "$MATCH" feat/m
+git -C "$MATCH" branch develop
+git -C "$MATCH" config push.default matching
 
 json_escape() {
   local s="$1"
@@ -123,6 +135,14 @@ row 2 "$PLAIN" "$FEAT" "B15 -C の値に空白（引用つき）"               
 row 2 "$PLAIN" "$DEV"  "B16 @ は HEAD の別名"                               'git push origin @'
 row 2 "$PLAIN" "$FEAT" "B17 -C <develop> の暗黙 force（.cwd=feature）"     "git -C $DEV push --force"
 row 2 "$PLAIN" "$DEV"  "B18 refspec がコマンド置換の current"             'git push -u origin "$(git branch --show-current)"'
+row 2 "$PLAIN" "$DEV"  "B19 refspec がバッククォートの current"           'git push origin `git rev-parse --abbrev-ref HEAD`'
+row 2 "$PLAIN" "$FEAT" "B20 本文を実行する heredoc（bash <<EOF）"          $'bash <<\'EOF\'\ngit push origin develop\nEOF'
+row 2 "$PLAIN" "$DEV"  "B21 heredoc をパイプで bash へ（データ文脈ではない）" $'cat <<\'EOF\' | bash\ngit push\nEOF'
+row 2 "$PLAIN" "$FEAT" "B22 サブシェルの中で cd <develop> して push"       "(cd $DEV && git push)"
+row 2 "$PLAIN" "$MATCH" "B23 push.default=matching でローカルに develop"   'git push'
+row 2 "$PLAIN" "$DEV"  "B24 bash -c の中の素の push"                       'bash -c "git push"'
+row 2 "$PLAIN" "$DEV"  "B25 eval の中の HEAD push"                         'eval "git push origin HEAD"'
+row 2 "$PLAIN" "$FEAT" "B26 sh -c の中で cd <develop> して push"           "sh -c 'cd $DEV && git push'"
 
 echo ""
 echo "=== A 陰性: 保護ブランチを更新しない push は rc=0 ==="
@@ -142,6 +162,20 @@ row 0 "$PLAIN" "$FEAT" "A12 feature 上の素の push + 末尾コメント"     
 row 0 "$DEV"   "$DEV"  "A13 -C <feature> の暗黙 force（.cwd=develop）"     "git -C $FEAT push --force"
 row 0 "$DEV"   "$FEAT" "A14 feature 上の暗黙 force（process cwd=develop）" 'git push --force'
 row 0 "$PLAIN" "$FEAT" "A15 refspec がコマンド置換の current（feature 上）" 'git push -u origin "$(git branch --show-current)"'
+# A16/A17 は develop 上（.cwd=develop）で、本文が暗黙 push。解決器が本文を読めば block になる。
+# 本文が `git push origin develop` のような**明示**の保護 ref だと、従来からある
+# 明示 ref の検査（Check 3b / §2、heredoc を区別しない）が block する。
+# ac1fa58 でも rc=2 で、この変更の前からある誤検知。ここでは固定しない（PR に follow-up）。
+row 0 "$PLAIN" "$DEV"  "A16 データ heredoc の本文（cat <<EOF > note.md）"  $'cat <<\'EOF\' > note.md\ngit push\ngit push origin HEAD\nEOF'
+row 0 "$PLAIN" "$DEV"  "A17 PR 本文の heredoc（gh pr create --body に cat <<EOF の置換）" \
+  $'gh pr create --title t --body "$(cat <<\'EOF\'\nrun git push, then git push origin HEAD\nEOF\n)"'
+row 0 "$PLAIN" "$FEAT" "A18 サブシェルの cd は外へ持ち越さない"           "(cd $DEV && git status); git push"
+row 0 "$PLAIN" "$UP"   "A19 -c push.default=current は呼び出しの設定で判定" 'git -c push.default=current push'
+row 0 "$PLAIN" "$REVIEW" "A20 develop だが @{push} が review-copy"        'git push'
+row 0 "$PLAIN" "$DEV"  "A21 current 以外を返すコマンド置換"               'git push origin "$(printf feat/x)"'
+row 0 "$PLAIN" "$DEV"  "A22 末尾が \$ のリテラル ref"                      'git push origin HEAD:feat/cost$'
+row 0 "$PLAIN" "$DEV"  "A23 bash -c の中で cd <feature> して push"         "bash -c 'cd $FEAT && git push'"
+row 0 "$PLAIN" "$FEAT" "A24 bash -c の中の cd は外へ持ち越さない"          "bash -c 'cd $DEV && git status'; git push"
 
 echo ""
 echo "=== P 対: 2 本の解決器が一字一句同じ ==="
