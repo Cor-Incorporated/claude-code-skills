@@ -75,6 +75,13 @@ MATCH="$FIX/match"
 mkrepo "$MATCH" feat/m
 git -C "$MATCH" branch develop
 git -C "$MATCH" config push.default matching
+# remote.origin.push が push.default より先に効く: develop → review-copy / feature → develop
+RSPEC="$FIX/rspec"
+mkrepo "$RSPEC" develop
+git -C "$RSPEC" config remote.origin.push refs/heads/develop:refs/heads/review-copy
+RSPEC2="$FIX/rspec2"
+mkrepo "$RSPEC2" feat/rs
+git -C "$RSPEC2" config remote.origin.push refs/heads/feat/rs:refs/heads/develop
 
 json_escape() {
   local s="$1"
@@ -143,6 +150,9 @@ row 2 "$PLAIN" "$MATCH" "B23 push.default=matching でローカルに develop"  
 row 2 "$PLAIN" "$DEV"  "B24 bash -c の中の素の push"                       'bash -c "git push"'
 row 2 "$PLAIN" "$DEV"  "B25 eval の中の HEAD push"                         'eval "git push origin HEAD"'
 row 2 "$PLAIN" "$FEAT" "B26 sh -c の中で cd <develop> して push"           "sh -c 'cd $DEV && git push'"
+row 2 "$PLAIN" "$DEV"  "B27 switch -c の後に develop へ戻ってから push"   'git switch -c feat/z && git switch develop && git push'
+row 2 "$PLAIN" "$UP"   "B28 checkout develop（remote-tracking から作成）して push" 'git checkout develop && git push'
+row 2 "$PLAIN" "$RSPEC2" "B29 remote.origin.push が feature → develop"    'git push'
 
 echo ""
 echo "=== A 陰性: 保護ブランチを更新しない push は rc=0 ==="
@@ -176,6 +186,12 @@ row 0 "$PLAIN" "$DEV"  "A21 current 以外を返すコマンド置換"          
 row 0 "$PLAIN" "$DEV"  "A22 末尾が \$ のリテラル ref"                      'git push origin HEAD:feat/cost$'
 row 0 "$PLAIN" "$DEV"  "A23 bash -c の中で cd <feature> して push"         "bash -c 'cd $FEAT && git push'"
 row 0 "$PLAIN" "$FEAT" "A24 bash -c の中の cd は外へ持ち越さない"          "bash -c 'cd $DEV && git status'; git push"
+row 0 "$PLAIN" "$DEV"  "A25 switch -c してから HEAD を push（develop 上）" 'git switch -c feat/new && git push -u origin HEAD'
+row 0 "$PLAIN" "$DEV"  "A26 checkout -b してから素の push（develop 上）"   'git checkout -b feat/new2 && git push'
+row 0 "$PLAIN" "$FEAT" "A27 checkout -- <path> は HEAD を変えない"         'git checkout -- README.md && git push'
+row 0 "$PLAIN" "$DEV"  "A28 echo の引数の git push（追記）"                'echo git push >> note.md'
+row 0 "$PLAIN" "$DEV"  "A29 echo の引数の git push（連鎖）"                'echo git push && git status'
+row 0 "$PLAIN" "$RSPEC" "A30 remote.origin.push が develop → review-copy" 'git push'
 
 echo ""
 echo "=== P 対: 2 本の解決器が一字一句同じ ==="

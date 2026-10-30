@@ -70,10 +70,14 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 # `( … )` / `$( … )` / バッククォートの中の cd は外へ持ち越さない（実シェルと同じ）。
 # 宛先: refspec の dst 側（`+` と refs/heads/ を外す。`:x` の削除も x）。`HEAD` と `@`
 # と、current を返す既知の置換（`$(git branch --show-current)` など）は current。
+# current は同じコマンド内で先に走る `git switch` / `git checkout <branch>` を反映する
+# （`git switch -c feat/x && git push -u origin HEAD` は feat/x）。
 # 他のコマンド置換は宛先不明として何も出さない（develop を返す置換は見逃す）。
-# refspec が無い / remote だけなら push.default と @{push} で決める（呼び出しの
-# `-c` も効かせる）: nothing → 無し、matching → ローカル枝すべて、@{push} が
-# 決まればその枝だけ、決まらなければ current。`--tags` だけなら枝は出さない。
+# refspec が無い / remote だけなら、remote.<remote>.push の refspec を最優先し、
+# 無ければ push.default と <branch>@{push} で決める（呼び出しの `-c` も効かせる）:
+# nothing → 無し、matching → ローカル枝すべて、@{push} が決まればその枝だけ、
+# 決まらなければ current。`--tags` だけなら枝は出さない。
+# データコマンド（echo / cat / grep …）の引数に現れる `git` は呼び出しではない。
 # データ文脈（cat / echo / printf / tee / grep / head / tail …、パイプ無し）が食う
 # heredoc の本文は読まない。本文を実行するもの（python3 - <<PY、| bash）は子として読む。
 # `bash -c "<cmd>"` / `sh -c` / `eval "<cmd>"` の引数も子として読む。
@@ -93,6 +97,7 @@ cmd = sys.argv[1]
 run = sys.argv[2] if len(sys.argv) > 2 and os.path.isdir(sys.argv[2]) else os.getcwd()
 env = dict(os.environ)
 seen = set()
+heads = {}
 DATA = {"cat", "echo", "printf", "tee", "grep", "egrep", "fgrep", "rg", "ag", "head", "tail"}
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 RUNNERS = {"sudo", "doas", "env", "command", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "setsid", "xargs"}
@@ -225,27 +230,83 @@ def git(d, gopts, *args):
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def head(d, gopts):
+    key = os.path.realpath(d)
+    if key in heads:
+        return heads[key]
+    return git(d, gopts, "symbolic-ref", "--short", "-q", "HEAD")
+
+
+def switched(d, gopts, sub, rest):
+    # Track `git switch` / `git checkout` earlier in the command: the push reads that HEAD.
+    key = os.path.realpath(d)
+    if "--detach" in rest or (sub == "switch" and "-d" in rest):
+        heads[key] = ""
+        return
+    for k, t in enumerate(rest):
+        if t == "--":
+            return
+        if t in ("-c", "-C", "--create", "--force-create", "-b", "-B", "--orphan") and k + 1 < len(rest):
+            heads[key] = rest[k + 1]
+            return
+        if t.startswith("-"):
+            continue
+        # A branch (local, or remote-tracking that switch / checkout would create); a path
+        # or a commit leaves the HEAD we knew.
+        if (git(d, gopts, "rev-parse", "--verify", "-q", "refs/heads/" + t)
+                or git(d, gopts, "for-each-ref", "--format=%(refname)", "refs/remotes/*/" + t)):
+            heads[key] = t
+        return
+
+
 def emit(name, d, how):
     if name and (name, d, how) not in seen:
         seen.add((name, d, how))
         print(name + "\t" + d + "\t" + how)
 
 
+def local_branches(d, gopts, how):
+    for name in git(d, gopts, "for-each-ref", "--format=%(refname:short)", "refs/heads").split("\n"):
+        emit(name, d, how)
+
+
+def refspec(ref, d, gopts, how):
+    if SUBST in ref:
+        return
+    ref = ref[1:] if ref.startswith("+") else ref
+    if ":" in ref:
+        src, dst = ref.split(":", 1)
+        ref = dst or src
+    if ref in ("HEAD", "@"):
+        emit(head(d, gopts), d, "current")
+        return
+    if ref.startswith("refs/heads/"):
+        ref = ref[len("refs/heads/"):]
+    if "*" in ref:
+        local_branches(d, gopts, "wildcard")
+        return
+    emit(ref, d, how)
+
+
 def implicit(d, gopts, remote):
-    b = git(d, gopts, "symbolic-ref", "--short", "-q", "HEAD")
+    b = head(d, gopts)
     if not b:
+        return
+    pr = (git(d, gopts, "config", "branch." + b + ".pushRemote")
+          or git(d, gopts, "config", "remote.pushDefault")
+          or git(d, gopts, "config", "branch." + b + ".remote"))
+    specs = git(d, gopts, "config", "--get-all", "remote." + (remote or pr or "origin") + ".push")
+    if specs:
+        for spec in specs.split("\n"):
+            refspec(spec.strip(), d, gopts, "remote-push")
         return
     mode = git(d, gopts, "config", "push.default") or "simple"
     if mode == "nothing":
         return
     if mode == "matching":
-        for name in git(d, gopts, "for-each-ref", "--format=%(refname:short)", "refs/heads").split("\n"):
-            emit(name, d, "matching")
+        local_branches(d, gopts, "matching")
         return
-    pr = (git(d, gopts, "config", "branch." + b + ".pushRemote")
-          or git(d, gopts, "config", "remote.pushDefault")
-          or git(d, gopts, "config", "branch." + b + ".remote"))
-    up = git(d, gopts, "rev-parse", "--symbolic-full-name", "@{push}")
+    up = git(d, gopts, "rev-parse", "--symbolic-full-name", b + "@{push}")
     prefix = "refs/remotes/" + pr + "/"
     if pr and (not remote or remote == pr) and up.startswith(prefix):
         dst = up[len(prefix):]
@@ -275,18 +336,7 @@ def push(d, gopts, rest):
             implicit(d, gopts, pos[0] if pos else "")
         return
     for ref in pos[1:]:
-        if SUBST in ref:
-            continue
-        ref = ref[1:] if ref.startswith("+") else ref
-        if ":" in ref:
-            src, dst = ref.split(":", 1)
-            ref = dst or src
-        if ref in ("HEAD", "@"):
-            emit(git(d, gopts, "symbolic-ref", "--short", "-q", "HEAD"), d, "current")
-            continue
-        if ref.startswith("refs/heads/"):
-            ref = ref[len("refs/heads/"):]
-        emit(ref, d, "explicit")
+        refspec(ref, d, gopts, "explicit")
 
 
 def child(text):
@@ -321,6 +371,8 @@ def segment(w):
             if k < len(w):
                 child(" ".join(w[k:]) if t == "eval" else w[k])
             return
+    if w and os.path.basename(w[0]) in DATA:
+        return
     for i, t in enumerate(w):
         if os.path.basename(t) != "git":
             continue
@@ -342,6 +394,8 @@ def segment(w):
                 j += 1
         if j < len(w) and w[j] == "push":
             push(d, gopts, w[j + 1:])
+        elif j < len(w) and w[j] in ("switch", "checkout"):
+            switched(d, gopts, w[j], w[j + 1:])
 
 
 def process(text):
