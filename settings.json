@@ -352,7 +352,7 @@
     "feature-dev@claude-plugins-official": true,
     "frontend-design@claude-plugins-official": true,
     "context7@claude-plugins-official": true,
-    "claude-code-harness@claude-code-harness-marketplace": true,
+    "harness@claude-code-harness-marketplace": true,
     "gopls-lsp@claude-plugins-official": true
   },
   "language": "ツンデレ後輩女子",
