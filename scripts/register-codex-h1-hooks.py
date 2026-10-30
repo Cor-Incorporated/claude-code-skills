@@ -23,7 +23,7 @@ from pathlib import Path
 # shlex parse (#451 review) let `X=1;exit;Y=1 bash <guard>`, `BASH_ENV=…`,
 # `"CODEX_H1_X"=1 bash <guard>` and `CODEX_H1_X\=1 bash <guard>` count as a
 # guard that the shell never runs; matching the raw text closes that class.
-H1_TUNING = re.compile(r"CODEX_H1_MAX_ITERATIONS=[0-9]{1,4} (?=bash )")
+H1_TUNING = re.compile(r"CODEX_H1_MAX_ITERATIONS=[0-9]{1,3} (?=bash )")
 
 
 def command_path(handler):
@@ -41,7 +41,13 @@ def command_path(handler):
         return None
     if len(parts) != 2 or parts[0] != "bash":
         return None
-    path = Path(os.path.expanduser(parts[1])).resolve()
+    token = os.path.expanduser(parts[1])
+    # resolve() would turn `<guard>/` or `<guard>/.` into the guard, but bash
+    # fails on them ("Not a directory") and the guard never runs (#451 review,
+    # pre-existing on develop). The token itself must already be a plain path.
+    if token.endswith("/") or token.endswith("/.") or token.endswith("/.."):
+        return None
+    path = Path(token).resolve()
     if tuned and path.name != "h1-stall-runtime.sh":
         return None  # the tuning prefix belongs to H1, never to the protect guard
     return path

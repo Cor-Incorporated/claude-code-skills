@@ -149,6 +149,7 @@ with tempfile.TemporaryDirectory(prefix="h1-register-") as temp:
         "CODEX_H1_X\\=1",
         "CODEX_H1_BUDGET_USD=999999999",
         "CODEX_H1_MAX_ITERATIONS=99999",
+        "CODEX_H1_MAX_ITERATIONS=9999",
     ]):
         for guard in ("protect", "h1"):
             bad_cfg = root / f"bypass-{i}-{guard}.json"
@@ -179,6 +180,19 @@ with tempfile.TemporaryDirectory(prefix="h1-register-") as temp:
     prior = protect_tuned.read_bytes()
     check(invoke(protect_tuned).returncode != 0 and protect_tuned.read_bytes() == prior,
           "the H1 tuning prefix in front of the protect guard is not recognised")
+
+    for i, suffix in enumerate(["/", "/."]):
+        for guard in ("protect", "h1"):
+            odd = root / f"path-{i}-{guard}.json"
+            p_path = f"{protect}{suffix}" if guard == "protect" else str(protect)
+            h_path = f"{h1}{suffix}" if guard == "h1" else str(h1)
+            odd.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [
+                {"type": "command", "command": f"bash '{p_path}'"},
+                {"type": "command", "command": f"bash '{h_path}'"},
+            ]}]}}))
+            prior = odd.read_bytes()
+            check(invoke(odd).returncode != 0 and odd.read_bytes() == prior,
+                  f"a {guard} path ending in {suffix!r} is not recognised (bash would not run it)")
 
 print(f"--- {passed} passed, 0 failed ---")
 PY
