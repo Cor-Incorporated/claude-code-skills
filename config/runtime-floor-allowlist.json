@@ -197,11 +197,11 @@
       "false_positive_rate_over": 0.5,
       "window_days": 30,
       "or_zero_fires_days": 90,
-      "measured_from": "guard-ledger.jsonl rows with hook=harness-guardrail and rule RUNTIME_FLOOR:egress (needs the #445 bridge deployed; until then the plugin audit file). The deny reason carries the kind (egress:read/write/copy/socket/code/nested) and the host; each row is marked fp or tp in the monthly ADR-006 review.",
+      "measured_from": "guard-ledger.jsonl rows with hook=harness-guardrail and rule RUNTIME_FLOOR:egress (needs the #445 bridge deployed; until then the plugin audit file). Neither row carries the kind or the destination: an audit row has ts, host (the agent), tool, rule_id, category, decision, command_sha256 and command_len, and a ledger row keeps ts, rule, category and agent. Each deny is paired with the transcript's tool call by ts and command_sha256, its reason (egress:read/write/copy/socket/proxy/code/nested and the host) is read there, and it is marked fp or tp in the monthly ADR-006 review.",
       "redesign_if": "deliberate lexical evasion forms (the families in Cor-Incorporated/claude-code-harness COR-PATCHES.md: quoting, other tools' delimiters, line structure, option spelling, indirection, unread programs) show up as false positives or misses in the guard-ledger review of real use"
     },
-    "reviewed": "Cor-Incorporated/claude-code-harness#1 (merged a2e2a31; #2 docs only, merged b48c78b): Codex round 1 P1 x11 / P2 x2, round 2 P1 x14, round 3 P1 x10 (ordinary forms fixed, deliberate lexical evasions listed as residuals); adversarial round 1 CRITICAL x1 / MEDIUM x1 / LOW x4, round 2 CRITICAL 0 / HIGH 0 / MEDIUM x1 / LOW x2. Every input is a Go test in the mirror.",
+    "reviewed": "Cor-Incorporated/claude-code-harness#1 (merged a2e2a31; #2 and #3 docs only, merged b48c78b and e74049c): Codex round 1 P1 x11 / P2 x2, round 2 P1 x14, round 3 P1 x10 (ordinary forms fixed, deliberate lexical evasions listed as residuals); adversarial round 1 CRITICAL x1 / MEDIUM x1 / LOW x4, round 2 CRITICAL 0 / HIGH 0 / MEDIUM x1 / LOW x2. Every input is a Go test in the mirror.",
     "out_of_scope": "A lexical guard, not a sandbox (owner gate 2026-10-31): the forms an agent ordinarily types show 0 CRITICAL/HIGH; deliberate lexical evasions are known residuals. Every deny is in the plugin's audit file; the guard ledger gets it once the #445 bridge is deployed.",
-    "requires_commit": "b48c78b7e3c41f2b41994e5a67bd750617f5f44d"
+    "requires_commit": "e74049c061dc63b7160c161a410ece7ff93ed175"
   }
 }

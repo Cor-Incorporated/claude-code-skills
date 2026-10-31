@@ -11,7 +11,7 @@ Cor-Incorporated/claude-code-harness の `docs/runtime-floor-egress-allowlist.md
 | marketplace の取得元 | `github` `Chachamaru127/claude-code-harness` | `github` `Cor-Incorporated/claude-code-harness`（private、既定 branch `cor`） |
 | marketplace 名 | `claude-code-harness-marketplace` | 同じ（変えない） |
 | plugin id | `harness@claude-code-harness-marketplace` | 同じ。settings.json の `enabledPlugins` は変わらない |
-| 版 / gitCommitSha | `5.16.0` / `c2304c325d4432f51d632e0586d886767b0f41ea` | `5.16.0-cor.1` / `b48c78b7e3c41f2b41994e5a67bd750617f5f44d`（mirror #2 の merge。#2 は docs だけで、binary は #1 の merge a2e2a31b と同じ） |
+| 版 / gitCommitSha | `5.16.0` / `c2304c325d4432f51d632e0586d886767b0f41ea` | `5.16.0-cor.1` / `e74049c061dc63b7160c161a410ece7ff93ed175`（mirror #3 の merge。#2・#3 は docs だけで、binary は #1 の merge a2e2a31b と同じ） |
 | egress の宣言 env | なし | `HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW` / `HARNESS_RUNTIME_FLOOR_EGRESS_READ_ALLOW`（claude-code-skills の settings.json が配る） |
 
 現在値は次で確かめる:
@@ -26,7 +26,7 @@ python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.claude/pl
 
 ## 前提（両方そろってから始める）
 
-1. mirror の `cor` の版が `5.16.0-cor.1` で、先頭が `b48c78b7…`（2026-10-31T06:41:08Z に merge 済み。claude-code-skills の `config/runtime-floor-allowlist.json` の `egress.requires_commit`）。
+1. mirror の `cor` の版が `5.16.0-cor.1` で、先頭が `e74049c0…`（2026-10-31T07:10:08Z に merge 済み。claude-code-skills の `config/runtime-floor-allowlist.json` の `egress.requires_commit`）。
 
    ```bash
    gh api 'repos/Cor-Incorporated/claude-code-harness/contents/VERSION?ref=cor' --jq .content | base64 -d
@@ -36,16 +36,38 @@ python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.claude/pl
    gh api repos/Cor-Incorporated/claude-code-harness/branches/cor --jq .commit.sha
    ```
 
-   版が `5.16.0-cor.1` でなければ止める。先頭の sha が `b48c78b7…` と違えば、mirror に後から入った変更がある（`COR-PATCHES.md` を見てから進む）。
+   版が `5.16.0-cor.1` でなければ止める。先頭の sha が `e74049c0…` と違えば、mirror に後から入った変更がある（`COR-PATCHES.md` を見てから進む）。
    URL は引用符で囲む（zsh は `?` を glob として展開し、`no matches found` で止まる）。
 
-2. claude-code-skills の Cor-Incorporated/claude-code-skills#456（egress の宣言と settings.json env）と #457（F8 opt-out）が develop に merge 済みで、共有 checkout で `setup.sh` を流してある。live の env が宣言と一字一句一致すること:
+2. claude-code-skills の Cor-Incorporated/claude-code-skills#456（egress の宣言と settings.json env）と #457（F8 opt-out）が develop に merge 済みで、共有 checkout で `setup.sh` を流してある。merge と `setup.sh` はエージェントが済ませてから、この手順書を渡す（統括の指示）。済んでいなければ、共有 checkout で次の 3 つを実行する:
 
    ```bash
-   python3 -c 'import json,os;e=json.load(open(os.path.expanduser("~/.claude/settings.json")))["env"];d=json.load(open(os.path.expanduser("~/Developer/claude-code-skills/config/runtime-floor-allowlist.json")))["egress"];print([e.get(d[p]["env"])==",".join(d[p]["entries"]) for p in ("internal","read")])'
+   git -C ~/Developer/claude-code-skills switch develop
    ```
 
-   `[True, True]` であること。env は 5.16.0 には効かない（読まない）ので、先に配っても挙動は変わらない。
+   ```bash
+   git -C ~/Developer/claude-code-skills pull --ff-only
+   ```
+
+   ```bash
+   cd ~/Developer/claude-code-skills && bash setup.sh
+   ```
+
+   live の env が宣言と一字一句一致することを確かめる:
+
+   ```bash
+   python3 -c 'import json,os;e=json.load(open(os.path.expanduser("~/.claude/settings.json"))).get("env",{});d=json.load(open(os.path.expanduser("~/Developer/claude-code-skills/config/runtime-floor-allowlist.json")))["egress"];print([bool(d.get(p,{}).get("env")) and e.get(d[p]["env"])==",".join(d[p]["entries"]) for p in ("internal","read")])'
+   ```
+
+   `[True, True]` であること。`[False, False]` なら、共有 checkout が #456 より前か、`setup.sh` をまだ流していない（上の 3 つ）。env は 5.16.0 には効かない（読まない）ので、先に配っても挙動は変わらない。
+
+   `~/.claude/settings.local.json` の env は `settings.json` より優先する。床の変数が置かれていないことを確かめる:
+
+   ```bash
+   python3 -c 'import json,os;p=os.path.expanduser("~/.claude/settings.local.json");print(sorted(k for k in (json.load(open(p)).get("env",{}) if os.path.exists(p) else {}) if k.startswith("HARNESS_RUNTIME_FLOOR")))'
+   ```
+
+   `[]` であること（2026-10-31 の実測も `[]`）。何か出たら、その行を消すかどうかを決めてから進む。`HARNESS_RUNTIME_FLOOR_EGRESS=off` があると、切り替えても egress 床は動かない。
 
 ## 手順
 
@@ -102,28 +124,52 @@ hook は起動時の plugin パスで動く。走っているセッションは 
 python3 -c 'import json,os;d=json.load(open(os.path.expanduser("~/.claude/plugins/installed_plugins.json")));print([(e["version"],e["gitCommitSha"][:8]) for e in d["plugins"]["harness@claude-code-harness-marketplace"]])'
 ```
 
-`[('5.16.0-cor.1', 'b48c78b7')]` であること（2026-10-31 15:47 の隔離リハーサルの値）。
+`[('5.16.0-cor.1', 'e74049c0')]` であること（2026-10-31 16:17 の隔離リハーサルの値）。
 
 ```bash
 cd ~/Developer/claude-code-skills && bash tests/test-runtime-floor-allowlist.sh | tail -2
 ```
 
-`pass=70 fail=0 skip=0`（2026-10-31 15:35 JST に mirror の build f2f9926 で実測。b48c78b7 の binary も同じ）。テストは `installed_plugins.json` の installPath の enforcer を使う。`skip=1` なら、installed はまだ 5.16.0。
+`pass=71 fail=0 skip=0`（2026-10-31 16:08 JST に mirror の build で実測。binary は e74049c0 と同じ）。テストは `installed_plugins.json` の installPath の enforcer を使い、その `gitCommitSha` が宣言の `egress.requires_commit` と同じことも確かめる。`skip=1` なら、installed はまだ 5.16.0。
 
 ```bash
 cd ~/Developer/claude-code-skills && bash tests/test-auto-broadcast-optout.sh | tail -2
 ```
 
-`pass=18 fail=0 skip=0`。
+`pass=24 fail=0 skip=0`（2026-10-31 16:15 JST に mirror の build で実測。#457 の 4424a75）。
 
-わざと 1 回止めて、記録に行が増えることを確かめる。`curl https://example.com/` を 1 回打つと deny になる。その記録先:
+#### わざと 1 回止めて、記録に行が増えることを確かめる
 
-- plugin 自身の監査ファイル `<project>/.claude/state/audit/guardrail-fires.jsonl`。コマンドは SHA-256 と長さだけで、`RUNTIME_FLOOR:egress` の行が増える。これは今でも書かれる。
-- `~/.claude/hooks/ledger/guard-ledger.jsonl`。床 → 台帳の bridge（Cor-Incorporated/claude-code-skills#445、draft、登録数 29 → 30 の owner 判断待ち）が配備されてからのもの。それまでは台帳に床の行は無い。ADR-014 の退役・再設計の条件は台帳で測るので、#445 の配備が測定の前提になる。
+床は Claude Code の PreToolUse hook なので、**自分の端末で curl を打たない**（判定されずに本当に通信する）。再起動した Claude Code のセッションに打たせる。
 
-```bash
-tail -1 .claude/state/audit/guardrail-fires.jsonl
-```
+1. 監査ファイルの行数を数える:
+
+   ```bash
+   wc -l < ~/Developer/claude-code-skills/.claude/state/audit/guardrail-fires.jsonl
+   ```
+
+2. cwd が `~/Developer/claude-code-skills` の、再起動した Claude Code のセッション（worktree の中ではないもの。worktree のセッションは、その worktree の `.claude/state/` に書く）に、こう頼む: 「Bash tool で `curl -sS https://example.com/` を 1 回だけ実行して」。
+   返ってくる deny の理由（2026-10-31 に mirror の build で実測）:
+
+   ```text
+   RUNTIME_FLOOR:egress: runtime action hard floor: a read from a host that is not a declared public registry or cluster host requires human approval (egress:read) (read example.com)
+   ```
+
+3. もう一度 1 と同じコマンドを実行し、行数が 1 増えたことを確かめる。最後の行を見る:
+
+   ```bash
+   tail -1 ~/Developer/claude-code-skills/.claude/state/audit/guardrail-fires.jsonl
+   ```
+
+   `"rule_id":"RUNTIME_FLOOR:egress","category":"egress","decision":"deny"` を含むこと。`command_len` はセッションが実際に打ったコマンドの長さで、頼んだとおりなら 29。行に deny の種類と宛先は無い（理由はエージェントにだけ返る）。
+
+4. 台帳。bridge（Cor-Incorporated/claude-code-skills#445、30 本目の登録）が配備されていれば、同じセッションの次の Bash 呼び出しの後に、台帳へ 1 行入る。たとえば `true` を 1 回実行させてから:
+
+   ```bash
+   tail -1 ~/.claude/hooks/ledger/guard-ledger.jsonl
+   ```
+
+   `"hook":"harness-guardrail"`、`"rule":"RUNTIME_FLOOR:egress"`、`"decision":"deny"` を含むこと。ADR-014 の退役・再設計の条件はこの台帳で測る。
 
 ## 戻す
 
@@ -157,6 +203,8 @@ settings.json の egress env は 5.16.0 では読まれないので、外さな�
 | `marketplace add` が `Original error: Cloning into …` で失敗し、続く install が `Plugin "harness" not found in marketplace` | clone の一時的な失敗（2026-10-31 15:24 の隔離リハーサルで、戻す側の add に 1 回起きた。再実行で成功） | 同じ `add` を再実行してから `install`。remove の後なので、成功するまで新しいセッションを始めない |
 | `marketplace add` が認証で失敗 | private repo を読めない | `gh auth status` と `ssh -T git@github.com` で Cor-Incorporated の読み取り権限を確かめる。直らなければ「戻す」の add / install を実行する |
 | install 後の版が `5.16.0` | `cor` が `5.16.0-cor.1` でない（前提 1） | 前提 1 を確かめてから `claude plugin update harness@claude-code-harness-marketplace` |
+| 前提 2 の確認が `[False, False]` | 共有 checkout が #456 より前（宣言に `internal.env` が無い）か、`setup.sh` をまだ流していない | 前提 2 の 3 つのコマンドを実行してから、もう一度確かめる |
+| リンクテストが `L3 requires_commit: declared=... installed gitCommitSha=...` で落ちる | `cor` に、宣言の pin より後の commit が入った（VERSION が同じでも中身が違いうる） | 進めない。`COR-PATCHES.md` と `git log <pin>..origin/cor` で何が入ったかを見て、claude-code-skills の `egress.requires_commit` を PR で更新するか、戻す |
 | リンクテストが `L1 egress.internal: declared=... settings.json=...` で落ちる | **repo の** settings.json の値が宣言と違う（L1 は repo 側を比べる） | 両方の値が出ているので、repo の settings.json を宣言の値に直す（PR で）。live 側の確認は前提 2 のコマンド |
 | クラスタ宛てがまだ止まる | env が hook の process に届いていない（起動前の設定） | セッションを再起動する。`HARNESS_RUNTIME_FLOOR_EGRESS=off` は**置かない**（codex 子プロセスまで床が消える） |
 
@@ -168,3 +216,5 @@ settings.json の egress env は 5.16.0 では読まれないので、外さな�
   - 戻す側の add が clone の一時的な失敗で 1 回落ち、install も落ちた。再実行で `5.16.0 c2304c32` に戻った（上の失敗表の 1 行目）。
 - 2026-10-31 15:47 JST: mirror #2（docs だけ）の merge で `cor` が `b48c78b7` に進んだので、もう一度通した。
   - upstream `5.16.0 c2304c32` → remove → mirror を add して install すると `5.16.0-cor.1 b48c78b7`。戻すと `5.16.0 c2304c32`。add と install は全部 1 回で通った。
+- 2026-10-31 16:17 JST: mirror #3（docs だけ）の merge で `cor` が `e74049c0` に進んだので、もう一度通した。
+  - upstream `5.16.0 c2304c32` → remove → mirror を add して install すると `5.16.0-cor.1 e74049c0`。戻すと `5.16.0 c2304c32`。add と install は全部 1 回で通った。

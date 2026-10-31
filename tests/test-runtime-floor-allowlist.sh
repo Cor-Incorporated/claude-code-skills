@@ -131,7 +131,10 @@ try:
 except Exception:
     sys.exit(0)' 2>/dev/null)"
 BIN="${HARNESS_FLOOR_BIN:-${PLUGIN_ROOT%/}/bin/harness}"
-if [[ ! -x "$BIN" ]]; then
+if [[ -n "${HARNESS_FLOOR_BIN:-}" && ! -x "$BIN" ]]; then
+  # A mistyped override must not turn L2/L3/L4 into SKIPs and a green run (#456 review round 2).
+  bad "HARNESS_FLOOR_BIN" "HARNESS_FLOOR_BIN=$BIN is not an executable file"
+elif [[ ! -x "$BIN" ]]; then
   skp "L2 harness enforcer not installed on this machine"
   skp "L3 harness enforcer not installed on this machine"
   skp "L4 live: harness plugin not installed on this machine"
@@ -231,6 +234,30 @@ for r in json.load(open(sys.argv[1]))["egress"]["incident_inputs"]: print(r["id"
     done
     [[ $reads -eq 1 ]] && ok "L3 the enforcer binary reads both declared egress variables" \
       || bad "L3 binary" "neither $BIN nor its platform binaries name HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW and _READ_ALLOW"
+    # egress.requires_commit ↔ the enforcer: a Go change pushed to `cor` without a VERSION bump would
+    # install as the same version with other code (#456 review round 2).
+    PIN="$(jq_decl egress.requires_commit)"
+    if [[ -z "${HARNESS_FLOOR_BIN:-}" ]]; then
+      SHA="$(python3 -c 'import json,os
+d = json.load(open(os.path.expanduser("~/.claude/plugins/installed_plugins.json")))
+print(d["plugins"]["harness@claude-code-harness-marketplace"][0].get("gitCommitSha", ""))' 2>/dev/null)"
+      [[ "$SHA" == "$PIN" ]] && ok "L3 installed commit is egress.requires_commit ($PIN)" \
+        || bad "L3 requires_commit" "declared=$PIN installed gitCommitSha=${SHA:-none}"
+    else
+      # An override build is checked binary by binary against the pinned commit of its own checkout.
+      TOP="$(git -C "${BIN%/*}" rev-parse --show-toplevel 2>/dev/null)"
+      if [[ -n "$TOP" ]] && git -C "$TOP" cat-file -e "$PIN^{commit}" 2>/dev/null; then
+        diffs=""
+        for f in "${BIN%/*}"/harness-*; do
+          [[ -f "$f" ]] || continue
+          git -C "$TOP" show "$PIN:bin/${f##*/}" 2>/dev/null | cmp -s - "$f" || diffs="$diffs ${f##*/}"
+        done
+        [[ -z "$diffs" ]] && ok "L3 override binaries equal those at egress.requires_commit ($PIN)" \
+          || bad "L3 requires_commit" "declared=$PIN; these binaries differ from that commit:$diffs"
+      else
+        skp "L3 requires_commit: $PIN is not in the override's checkout (${TOP:-not a git checkout})"
+      fi
+    fi
   else
     while IFS=$'\t' read -r id want cmd; do
       r="$(decide "$cmd" "${EGRESS_ENV[@]}")"
