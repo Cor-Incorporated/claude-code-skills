@@ -7,8 +7,11 @@ _LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/aidd-ledger.sh"
 # shellcheck source=/dev/null
 [ -f "$_LEDGER_LIB" ] && . "$_LEDGER_LIB"
 _aidd_block() {
+  # Optional rule tag (mirror of protect-branches.sh). Callers without one keep
+  # the previous "protected-push".
+  local rule="${1:-protected-push}"
   if declare -F aidd_ledger_append >/dev/null 2>&1; then
-    aidd_ledger_append "git-push-guard" "block" "deny" "${cmd:-${cmd_norm:-}}" "protected-push"
+    aidd_ledger_append "git-push-guard" "block" "deny" "${cmd:-${cmd_norm:-}}" "$rule"
   fi
   exit 2
 }
@@ -16,21 +19,33 @@ _aidd_block() {
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
+# --- Push destination resolver (F22, 2026-10-30) ---
+# hooks/lib/push_dests.py prints every branch each `git push` updates, in the repo git
+# reads for it (.cwd, `cd`, `git -C`; HEAD, @{upstream}, push.default ...). Both hard
+# blocks call the same file; its docstring has the rules and the 2026-10-30 incident.
+# Without python3 or the file it prints nothing and the explicit-ref checks still run.
+_PUSH_DESTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/push_dests.py"
+# The Bash tool's cwd, not the hook process cwd (which may be the session's start dir).
+_push_base=$(printf '%s' "$input" | jq -r '.cwd // ""' 2>/dev/null || true)
+[ -n "$_push_base" ] && [ -d "$_push_base" ] || _push_base="$PWD"
+
 # --- Resolve git context dir: honor `cd <dir> && ...` and `git -C <dir>` ---
 # The hook process cwd is the SESSION cwd, not the repo the command targets.
 # Without this, the implicit-branch force-push check (git rev-parse HEAD) and
 # the pre-push lint checks (rev-parse --show-toplevel) evaluate whatever repo
 # the session happens to sit in — blocking pushes to repo B because repo A
 # has lint errors, or misreading the current branch entirely.
-ctx_dirs=$(CMD="$cmd" python3 - <<'PY'
+ctx_dirs=$(CMD="$cmd" BASE="$_push_base" python3 - <<'PY'
 import os, re
 cmd = os.environ.get("CMD", "")
+base = os.environ.get("BASE", "") or os.getcwd()
 q1, q2 = chr(34), chr(39)
 pat_val = r'((?:%s[^%s]+%s)|(?:%s[^%s]+%s)|(?:[^\s;&|]+))' % (q1, q1, q1, q2, q2, q2)
 def _resolve(m):
     if not m:
         return ""
     d = os.path.expanduser(os.path.expandvars(m.group(1).strip(q1 + q2)))
+    d = os.path.join(base, d) if d else ""
     return d if d and os.path.isdir(d) else ""
 
 # `git -C <dir>` wins over a leading `cd <dir> &&` (git resolves -C itself),
@@ -58,18 +73,15 @@ for seg in re.split(r'&&|\|\||[;\n|]', cmd):
         out.append(d)
 print("\n".join(out) if out else lead_cd)
 PY
-)
+) || ctx_dirs=""
 
 # Current branch of every pushing invocation's repo (one per line).
-# An empty ctx dir means the session cwd, which is what plain `git` reads.
+# An empty ctx dir means the Bash tool's cwd (.cwd), which is what plain `git`
+# reads — not the hook process cwd (F22, 2026-10-30).
 ctx_branches() {
   local d
   while IFS= read -r d || [[ -n "$d" ]]; do
-    if [[ -n "$d" ]]; then
-      git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null || true
-    else
-      git rev-parse --abbrev-ref HEAD 2>/dev/null || true
-    fi
+    git -C "${d:-$_push_base}" rev-parse --abbrev-ref HEAD 2>/dev/null || true
   done <<< "$ctx_dirs"
 }
 
@@ -134,7 +146,9 @@ fi
 # --- 0. Early exit: only run on git push commands (Issue #150) ---
 # Without this guard, black/ruff checks in section 3 block ALL Bash commands,
 # creating an unrecoverable deadlock where even `black .` is blocked.
-if ! echo "$cmd_norm" | grep -qE '\bgit\s+push\b'; then
+# F22: also run when `git` and `push` both appear. cmd_norm only collapses -C / -c /
+# --no-pager, so `git -P push` and `git --work-tree=. push` skipped §3 (code review M3).
+if ! echo "$cmd_norm" | grep -qE '\bgit\s+push\b' && ! [[ "$cmd" == *git* && ( "$cmd" == *push* || "$cmd" == *send-pack* ) ]]; then
   exit 0
 fi
 
@@ -219,7 +233,9 @@ for branch in develop main master; do
     # the dest equality check below; still used as a cheap prefilter).
     if echo "$cmd_norm" | grep -qE "git\s+push\s+.*(refs/heads/)?${branch}([^A-Za-z0-9._-]|$)" && \
        ! echo "$cmd_norm" | grep -qE "(--delete|(^|[[:space:]]):(refs/heads/)?${branch}\b)"; then
-        push_target=$(echo "$cmd_norm" | grep -oE "push\s+[^|;&)<>]*" | sed 's/push\s*//' | sed 's/\s*-[a-zA-Z-]*//g' | xargs)
+        # F22b: xargs exits 1 on an odd number of quotes (`# it's done`), which
+        # set -e turned into rc=1 = a non-blocking error = the push went through.
+        push_target=$(echo "$cmd_norm" | grep -oE "push\s+[^|;&)<>]*" | sed 's/push\s*//' | sed 's/\s*-[a-zA-Z-]*//g' | tr -d "\"'" | xargs) || true
         refspec=$(echo "$push_target" | awk '{print $NF}')
         if _is_protected_push_dest "$refspec" "$branch"; then
             echo "[BLOCKED] Direct push to '${branch}'. Use PR instead." >&2
@@ -228,5 +244,29 @@ for branch in develop main master; do
         fi
     fi
 done
+
+# --- 3. Every branch each `git push` updates, in the repo git reads (F22) ---
+# §1 covers implicit force only and §2 covers explicit refs only, so a plain
+# `git push` / `git push origin HEAD` on develop passed both (2026-10-30). The
+# resolver above also blocks `:develop` / `--delete develop` here; until now only
+# protect-branches.sh refused those.
+while IFS=$'\t' read -r _dest _dest_dir _dest_how || [[ -n "${_dest:-}" ]]; do
+  if [[ "${_dest_how:-}" == "computed" ]]; then
+    echo "[BLOCKED] Push destination is computed (substitution / variable / --mirror / --prune) in ${_dest_dir}; name the branch explicitly." >&2
+    _aidd_block "protected-push-computed"
+  fi
+  for branch in develop main master; do
+    [[ "$_dest" == "$branch" ]] || continue
+    if [[ "$_dest_how" == "explicit" ]]; then
+      echo "[BLOCKED] Direct push to '${branch}'. Use PR instead." >&2
+      _rule="protected-push"
+    else
+      echo "[BLOCKED] Implicit push to '${branch}' (${_dest_how} of ${_dest_dir}). Use PR instead." >&2
+      _rule="protected-push-implicit"
+    fi
+    echo "  git push -u origin feat/xxx && gh pr create --base develop" >&2
+    _aidd_block "$_rule"
+  done
+done < <(python3 "$_PUSH_DESTS" "$cmd" "$_push_base" 2>/dev/null || true)
 
 exit 0
