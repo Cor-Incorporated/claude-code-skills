@@ -216,15 +216,28 @@ h5_diff_has_structural_path() {
 if h5_diff_has_structural_path; then
   is_guard_pr=1
 fi
-# Self-declaration (PR template)
-if printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*yes|ブロック権限|完了判定検証器|block-capable guard'; then
+# Self-declaration (PR template).
+# The template (.github/pull_request_template.md) ships
+#   - [ ] **H5-guard: no**
+#   - [ ] **H5-guard: yes**
+# both UNCHECKED, under a heading that says "block-capable guard". An unchecked
+# row is an empty form field and a heading is template text; neither is the
+# author's declaration. Origin: #444 (2026-10-31) — the unchecked yes row
+# matched the grep below, so `H5-guard: no` could never exempt a PR that kept
+# the template, and every template-shaped PR was read as a guard PR. Only
+# checked rows (`- [x]`) and prose count. tests/test-h5-admission.sh pins this
+# with the real template as fixture and pairs it with the template rows; when
+# the template drops the unchecked rows, that pair row goes red and this strip
+# can be retired.
+PR_BODY_DECL="$(printf '%s\n' "$PR_BODY" | grep -vE '^[[:space:]]*- \[ \]|^[[:space:]]*#{1,6}[[:space:]]' || true)"
+if printf '%s' "$PR_BODY_DECL" | grep -qiE 'H5-guard:\s*yes|ブロック権限|完了判定検証器|block-capable guard'; then
   is_guard_pr=1
 fi
 # H5-guard: no may only clear the flag when NO structural path is touched.
 # Previously the denylist was a subset (hooks/*.sh|hooks/lib|settings) so
 # scripts/** and .github/workflows/** could self-exempt — that hole is closed.
-if printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*no' \
-  && ! printf '%s' "$PR_BODY" | grep -qiE 'H5-guard:\s*yes'; then
+if printf '%s' "$PR_BODY_DECL" | grep -qiE 'H5-guard:\s*no' \
+  && ! printf '%s' "$PR_BODY_DECL" | grep -qiE 'H5-guard:\s*yes'; then
   if ! h5_diff_has_structural_path; then
     is_guard_pr=0
   fi
