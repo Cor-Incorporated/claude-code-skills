@@ -215,7 +215,7 @@ if deficit > 0:
 
 print(json.dumps({
     "block": bool(unowned) or bool(orphaned) or deficit > 0,
-    "ids": sorted(str(r.get("id") or "") for r in unowned + orphaned),
+    "unowned_ids": sorted(str(r.get("id") or "") for r in unowned),
     "unowned": len(unowned),
     "owned": len(owned),
     "orphaned": len(orphaned),
@@ -280,39 +280,49 @@ if [ "$should_block" != "yes" ]; then
   exit 0
 fi
 
-# 同じセッションで同じ持ち越しに止めるのは 1 回だけ (#458, 2026-10-31)。local-llm レーンは、レーン契約で
-# 台帳への書き込みを禁じられたまま、同じ nohup の持ち越しで 48 回止められた（書けないので宣言も解決も
-# できない）。1 回目で知らせれば足りる。2 回目からは止めずに出して台帳に残す。止める理由が目標並列度
-# （deficit）のときと、新しい持ち越しが増えたときは従来どおり止める。session が分からないときも従来どおり。
-# 台帳 CLI と同じ場所の横に置く（AIDD_ASYNC_STATE を切り替えれば一緒に切り替わる）。
+# 同じセッションで同じ未宣言の持ち越しに止めるのは、AIDD_TURN_BOUNDARY_REARM_SEC（既定 3600 秒）に 1 回まで
+# (#458, 2026-10-31)。local-llm レーンは、レーン契約で台帳への書き込みを禁じられたまま、同じ nohup の持ち越しで
+# 48 回止められた（書けないので宣言も解決もできない）。
+#   - 時間がたてば、また止める（永久に黙らない。#471 review）。
+#   - 時間の内の 2 回目以降は止めずに、systemMessage で人に見せる。台帳には warn turn-boundary-repeat を残す。
+#   - 他セッション・登録元不明の stale な持ち越し（orphaned）、目標並列度の不足（deficit）、新しく増えた持ち越し、
+#     session が分からないときは、従来どおり毎回止める。
+#   - 記録には、今も未解決・未宣言の id だけを残す。
+# 記録は台帳 CLI と同じ場所の横に置く（AIDD_ASYNC_STATE を切り替えれば一緒に切り替わる）。
 SEEN_DIR="${AIDD_TURN_BOUNDARY_STATE:-${AIDD_ASYNC_STATE:-$HOME/.claude/state/async-work}.turn-boundary-seen}"
 repeat="$(printf '%s' "$verdict" | python3 -c '
-import json, os, re, sys
+import json, os, re, sys, tempfile, time
 v = json.load(sys.stdin)
-session, seen_dir = sys.argv[1], sys.argv[2]
-ids = [i for i in v.get("ids", []) if i]
-if not session or v.get("deficit", 0) > 0 or not ids:
+session, seen_dir, rearm = sys.argv[1], sys.argv[2], int(sys.argv[3] or 3600)
+ids = [i for i in v.get("unowned_ids", []) if i]
+if not session or v.get("deficit", 0) > 0 or v.get("orphaned", 0) > 0 or not ids:
     print("no"); raise SystemExit
 path = os.path.join(seen_dir, re.sub(r"[^A-Za-z0-9._-]", "_", session) + ".json")
 try:
-    seen = set(json.load(open(path, encoding="utf-8")))
-except (OSError, ValueError, TypeError):
-    seen = set()
-if set(ids) <= seen:
-    print("yes"); raise SystemExit
+    seen = json.load(open(path, encoding="utf-8"))
+    seen = {str(k): float(t) for k, t in seen.items()} if isinstance(seen, dict) else {}
+except (OSError, ValueError, TypeError, AttributeError):
+    seen = {}
+now = time.time()
+repeat = all(i in seen and now - seen[i] < rearm for i in ids)
+kept = {i: (seen[i] if repeat else now) for i in ids}
 try:
-    os.makedirs(seen_dir, exist_ok=True)
-    tmp = path + ".tmp"
-    json.dump(sorted(seen | set(ids)), open(tmp, "w", encoding="utf-8"))
+    os.makedirs(seen_dir, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=seen_dir, prefix=".seen-")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(kept, fh)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, path)
 except OSError:
     pass
-print("no")
-' "$session" "$SEEN_DIR" 2>/dev/null || echo no)"
+print("yes" if repeat else "no")
+' "$session" "$SEEN_DIR" "${AIDD_TURN_BOUNDARY_REARM_SEC:-3600}" 2>/dev/null || echo no)"
 if [ "$repeat" = "yes" ]; then
   append_ledger warn turn-boundary-repeat
-  printf '%s\n' "[turn-boundary] 同じ持ち越しで止めるのは 1 回だけ（2 回目以降は表示のみ）:" >&2
-  printf '%s\n' "$(printf '%s' "$verdict" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reason"])')" >&2
+  reason="$(printf '%s' "$verdict" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reason"])')"
+  printf '%s\n' "[turn-boundary] 同じ持ち越しで止めるのは ${AIDD_TURN_BOUNDARY_REARM_SEC:-3600} 秒に 1 回まで（今回は表示のみ）:" "$reason" >&2
+  # exit 0 の stderr はエージェントにも人にも届かない。人には systemMessage で見せる。
+  python3 -c 'import json,sys; print(json.dumps({"systemMessage": "[turn-boundary] 未宣言の持ち越しが残っている（止めるのは時間内に 1 回まで）:\n" + sys.argv[1]}, ensure_ascii=False))' "$reason"
   exit 0
 fi
 

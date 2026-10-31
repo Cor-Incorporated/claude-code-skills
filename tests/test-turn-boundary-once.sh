@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # NEGATIVE-TEST-FOR: hooks/aidd-turn-boundary-stop.sh
-# 同じセッションで同じ未宣言の持ち越しに止めるのは 1 回だけ (#458, 2026-10-31)。
+# 同じセッションで同じ未宣言の持ち越しに止めるのは、時間内に 1 回まで (#458, 2026-10-31; #471 review)。
 #
 # 起点: local-llm レーンはレーン契約で ~/.claude/state/async-work への書き込みを禁じられたまま、同じ
 # nohup の持ち越しで 48 回止められた（2026-10-31T03:27:43Z〜04:57:41Z）。書けないので、宣言も解決もできない。
@@ -24,12 +24,12 @@ ok() { echo "PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "FAIL: $1"; echo "    $2"; fail=$((fail + 1)); }
 
 reset() { export AIDD_ASYNC_STATE="$SB/aw-$1"; rm -rf "$AIDD_ASYNC_STATE" "$AIDD_ASYNC_STATE.turn-boundary-seen"; mkdir -p "$AIDD_ASYNC_STATE"; }
-seed() {  # id session
-  python3 - "$AIDD_ASYNC_STATE" "$1" "$2" <<'PY'
+seed() {  # id session [age_seconds]
+  python3 - "$AIDD_ASYNC_STATE" "$1" "$2" "${3:-0}" <<'PY'
 import json, os, sys, time
-state, ident, session = sys.argv[1:4]
+state, ident, session, age = sys.argv[1:5]
 json.dump({"id": ident, "kind": "generic", "detail": "nohup: runner " + ident, "owner": "", "check_cmd": "",
-           "source": "posttooluse-auto", "session": session, "registered_ts": int(time.time()),
+           "source": "posttooluse-auto", "session": session, "registered_ts": int(time.time()) - int(age),
            "resolved_ts": 0, "resolved": False, "conclusion": ""},
           open(os.path.join(state, ident + ".json"), "w", encoding="utf-8"))
 PY
@@ -37,7 +37,7 @@ PY
 stop() {  # hook session [env...] -> rc
   local hook="$1" session="$2"; shift 2
   python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"Stop","session_id":sys.argv[1]}))' "$session" \
-    | env "$@" bash "$hook" >/dev/null 2>"$SB/err"
+    | env "$@" bash "$hook" >"$SB/out" 2>"$SB/err"
   echo $?
 }
 
@@ -45,7 +45,8 @@ reset a
 seed nohup-1 s1
 r1="$(stop "$HOOK" s1)"; r2="$(stop "$HOOK" s1)"
 [[ "$r1" == 2 ]] && ok "1 回目は止める (rc=$r1)" || bad "first stop" "rc=$r1"
-[[ "$r2" == 0 ]] && grep -q '1 回だけ' "$SB/err" && ok "同じ id の 2 回目は止めずに出す (rc=$r2)" || bad "second stop" "rc=$r2 $(cat "$SB/err")"
+[[ "$r2" == 0 ]] && grep -q '"systemMessage"' "$SB/out" && ok "同じ id の 2 回目は止めず、systemMessage で人に見せる (rc=$r2)" \
+  || bad "second stop" "rc=$r2 out=$(cat "$SB/out") err=$(head -2 "$SB/err")"
 grep -q '"rule":"turn-boundary-repeat"' "$LEDGER" 2>/dev/null && ok "2 回目は台帳に warn turn-boundary-repeat" \
   || bad "repeat ledger row" "$(tail -2 "$LEDGER" 2>/dev/null)"
 
@@ -61,6 +62,27 @@ r4="$(stop "$HOOK" s2)"
 reset c
 d1="$(stop "$HOOK" s3 AIDD_LANE_TARGET=2)"; d2="$(stop "$HOOK" s3 AIDD_LANE_TARGET=2)"
 [[ "$d1" == 2 && "$d2" == 2 ]] && ok "目標並列度の不足は毎回止める (rc=$d1, $d2)" || bad "deficit" "rc=$d1, $d2"
+
+reset e
+seed nohup-e s6
+e1="$(stop "$HOOK" s6 AIDD_TURN_BOUNDARY_REARM_SEC=0)"; e2="$(stop "$HOOK" s6 AIDD_TURN_BOUNDARY_REARM_SEC=0)"
+[[ "$e1" == 2 && "$e2" == 2 ]] && ok "時間がたてば、また止める（REARM=0 で 2 回とも rc=2）" || bad "re-arm" "rc=$e1, $e2"
+
+reset f
+seed nohup-dead dead-session 10800
+f1="$(stop "$HOOK" s7)"; f2="$(stop "$HOOK" s7)"
+[[ "$f1" == 2 && "$f2" == 2 ]] && ok "持ち主のいない stale な持ち越しは毎回止める (rc=$f1, $f2)" || bad "orphan" "rc=$f1, $f2"
+
+reset g
+seed nohup-g1 s8
+stop "$HOOK" s8 >/dev/null
+rm -f "$AIDD_ASYNC_STATE/nohup-g1.json"
+seed nohup-g2 s8
+stop "$HOOK" s8 >/dev/null
+seen_ids="$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1])))))' "$AIDD_ASYNC_STATE.turn-boundary-seen/s8.json" 2>/dev/null)"
+[[ "$seen_ids" == "nohup-g2" ]] && ok "記録には今も未解決の id だけが残る ($seen_ids)" || bad "prune" "seen: '$seen_ids'"
+perm="$(stat -f '%Lp' "$AIDD_ASYNC_STATE.turn-boundary-seen/s8.json" 2>/dev/null || stat -c '%a' "$AIDD_ASYNC_STATE.turn-boundary-seen/s8.json")"
+[[ "$perm" == 600 ]] && ok "記録の権限は 600" || bad "perm" "$perm"
 
 # 反証: 繰り返しの判定を外す
 MUT="$SB/mutant.sh"

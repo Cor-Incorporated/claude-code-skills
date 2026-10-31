@@ -19,6 +19,21 @@
 #   呼ぶ必要がある。この限界を隠して「全ての非同期作業を捕捉する」と書いては
 #   ならない。
 #
+#   判定の仕方 (#459 / #471、2026-10-31):
+#   - 語は引用を外して読む。
+#   - コマンド位置は区切り（; & | ( ) と改行）の直後だけ。
+#   - $( ) とバッククォートの本文もコマンドとして見る。
+#   - 先頭の VAR=x / env / command / timeout / nice は読み飛ばす。
+#   - gh workflow run を外すのは、その行の唯一のコマンドが rc≠0 で終わったときと --help のときだけ。
+#     tty の無い gh は run の URL しか出さないか、何も出さない。だから出力が無いことは、
+#     発射していない証拠にならない。
+#   検出できない形も残っている:
+#   - bash -c "…" の引用の中
+#   - eval
+#   - 変数に入れたコマンド（$CMD）
+#   - 関数や alias の中
+#   - ファイルにしたスクリプト
+#
 # 失敗しても作業は止めない（PostToolUse は観測点であって関門ではない）。
 set -uo pipefail
 
@@ -93,7 +108,7 @@ print(v if isinstance(v, str) and v and v == v.strip() else "")
 # 対でない括弧まで構文として読み、hook ごと構文エラーになる（自動登録が黙って止まる）。
 classify() {
   python3 - "$1" "$2" <<'PY'
-import hashlib, json, re, shlex, sys, time
+import hashlib, json, re, sys, time
 
 cmd = sys.argv[1]
 out = []
@@ -170,51 +185,234 @@ def strip_heredocs(text):
 # コマンド位置は、引用を外した語で決める (#459, 2026-10-31)。それまでの正規表現
 # `(?:\A|[\n;&|(){}]\s*)` は引用を区別せず、`echo "--- commands (gh workflow run lines)"` の
 # 引用の中の `(` の直後をコマンド位置とみなし、`lines)"` を workflow 名とする cd-run を登録した。
-# shlex（punctuation_chars）で語に分け、区切り（; && || | & ( ) { } と改行）の直後の語だけを見る。
-# 引用が閉じていないコマンドは shell も実行しないので、何も登録しない。
-SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", "{", "}", ";;", "|&"}
+# 小さな字句解析で単純コマンドの語に分ける。
+#   - 区切りは ; & | ( ) と改行。
+#   - '…'、"…"、$'…'、\ の後の改行、${…} を扱う。
+#   - # は語の先頭だけでコメントになる（a#b、$# は語）。
+#   - $( ) とバッククォートの本文は、single quote の外にあれば、それ自体をコマンドとして判定する
+#     （URL="$(gh workflow run x)" は発射である）。
+#   - 先頭の VAR=value、env / command / timeout <時間> / nice は前置きとして読み飛ばす。
+# 解析できない文字列（引用が閉じていないなど）は、旧来の正規表現で判定する。
+AT_COMMAND = r"(?:\A|[\n;&|(){}]\s*)"
+SEP = set(";&|(){}")
 
 
-def simple_commands(text):
-    """引用を外した語のリストを、単純コマンドごとに返す（先頭の VAR=value は除く）。"""
-    lexer = shlex.shlex(text.replace("\n", " ; "), posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
+def match_close(text, i, open_ch="(", close_ch=")"):
+    """text[i] == open_ch. Index of the matching close_ch, skipping quoted parts; ValueError when unbalanced."""
+    depth, j, n = 0, i, len(text)
+    while j < n:
+        c = text[j]
+        if c == "\\":
+            j += 2
+            continue
+        if c == "'":
+            k = text.find("'", j + 1)
+            if k < 0:
+                raise ValueError("unclosed '")
+            j = k + 1
+            continue
+        if c == '"':
+            j += 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            j += 1
+            continue
+        if c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    raise ValueError("unbalanced " + open_ch)
+
+
+def lex(text):
+    """(simple commands as lists of unquoted words, bodies of $( ) / backticks outside single quotes)."""
+    cmds, cur, subs = [], [], []
+    word = None
+    i, n = 0, len(text)
+
+    def add(s):
+        nonlocal word
+        word = (word or "") + s
+
+    def end_word():
+        nonlocal word
+        if word is not None:
+            cur.append(word)
+            word = None
+
+    def end_cmd():
+        nonlocal cur
+        end_word()
+        if cur:
+            cmds.append(cur)
+        cur = []
+
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            if text[i + 1] != "\n":
+                add(text[i + 1])
+            i += 2
+        elif text.startswith("$'", i):
+            j, buf = i + 2, ""
+            while j < n and text[j] != "'":
+                if text[j] == "\\" and j + 1 < n:
+                    buf += text[j + 1]
+                    j += 2
+                    continue
+                buf += text[j]
+                j += 1
+            if j >= n:
+                raise ValueError("unclosed $'")
+            add(buf)
+            i = j + 1
+        elif c == "'":
+            j = text.find("'", i + 1)
+            if j < 0:
+                raise ValueError("unclosed '")
+            add(text[i + 1:j])
+            i = j + 1
+        elif c == '"':
+            j, buf = i + 1, ""
+            while j < n and text[j] != '"':
+                if text[j] == "\\" and j + 1 < n:
+                    buf += text[j + 1]
+                    j += 2
+                elif text.startswith("$(", j) and not text.startswith("$((", j):
+                    k = match_close(text, j + 1)
+                    subs.append(text[j + 2:k])
+                    buf += text[j:k + 1]
+                    j = k + 1
+                elif text[j] == "`":
+                    k = text.find("`", j + 1)
+                    if k < 0:
+                        raise ValueError("unclosed `")
+                    subs.append(text[j + 1:k])
+                    buf += text[j:k + 1]
+                    j = k + 1
+                else:
+                    buf += text[j]
+                    j += 1
+            if j >= n:
+                raise ValueError('unclosed "')
+            add(buf)
+            i = j + 1
+        elif text.startswith("$((", i):
+            k = match_close(text, i + 1)
+            add(text[i:k + 1])
+            i = k + 1
+        elif text.startswith("$(", i):
+            k = match_close(text, i + 1)
+            subs.append(text[i + 2:k])
+            add(text[i:k + 1])
+            i = k + 1
+        elif text.startswith("${", i):
+            k = match_close(text, i + 1, "{", "}")
+            add(text[i:k + 1])
+            i = k + 1
+        elif c == "`":
+            k = text.find("`", i + 1)
+            if k < 0:
+                raise ValueError("unclosed `")
+            subs.append(text[i + 1:k])
+            add(text[i:k + 1])
+            i = k + 1
+        elif c == "#" and word is None:
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif c in " \t\r":
+            end_word()
+            i += 1
+        elif c == "\n" or c in SEP:
+            # `2>&1` / `&>`: an & right after > or before > is a redirection, not a separator
+            if c == "&" and ((word or "").endswith(">") or text.startswith("&>", i)):
+                add(c)
+                i += 1
+                continue
+            end_cmd()
+            i += 1
+        else:
+            add(c)
+            i += 1
+    if word is not None or cur:
+        end_cmd()
+    return cmds, subs
+
+
+def strip_prefix(words):
+    """Drop leading VAR=value words and the env / command / timeout <dur> / nice wrappers."""
+    w = list(words)
+    while w:
+        if re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w[0]):
+            w = w[1:]
+        elif w[0] in ("env", "command", "nice", "builtin"):
+            w = w[1:]
+            while w and (w[0].startswith("-") or re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w[0])):
+                w = w[1:]
+        elif w[0] in ("timeout", "gtimeout"):
+            w = w[1:]
+            while w and w[0].startswith("-"):
+                w = w[1:]
+            w = w[1:]  # the duration
+        else:
+            break
+    return w
+
+
+def simple_commands(text, depth=0):
+    """Every simple command, $( ) and backtick bodies included. None when the text cannot be lexed."""
     try:
-        words = list(lexer)
+        cmds, subs = lex(text)
     except ValueError:
-        return []
-    cmds, cur = [], []
-    for w in words:
-        if w in SEPARATORS or set(w) <= set(";&|()"):
-            if cur:
-                cmds.append(cur)
-            cur = []
-            continue
-        if not cur and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w):
-            continue
-        cur.append(w)
-    if cur:
-        cmds.append(cur)
-    return cmds
+        return None
+    out_cmds = [strip_prefix(c) for c in cmds]
+    if depth < 4:
+        for s in subs:
+            inner = simple_commands(s, depth + 1)
+            out_cmds.extend(inner or [])
+    return [c for c in out_cmds if c]
+
+
+def legacy_commands(text):
+    """The pre-#459 regex, for text the lexer cannot read (commands at its command positions)."""
+    found = []
+    for m in re.finditer(AT_COMMAND + r"gh\s+workflow\s+run\s+([^\s;|&]+)", text):
+        found.append(["gh", "workflow", "run", m.group(1)])
+    for m in re.finditer(AT_COMMAND + r"gh\s+run\s+watch\s+(\d+)", text):
+        found.append(["gh", "run", "watch", m.group(1)])
+    if re.search(AT_COMMAND + r"nohup\s", text):
+        found.append(["nohup", "?"])
+    return found
 
 
 scan = strip_heredocs(cmd)
-RUN_URL = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/actions/runs/(\d+)")
+commands = simple_commands(scan)
+if commands is None:
+    # The lexer could not read it. If bash cannot either (an unclosed quote), nothing ran; otherwise use the
+    # pre-#459 regex rather than miss a launch the lexer does not understand.
+    import subprocess
+    try:
+        parses = subprocess.run(["bash", "-n", "-c", scan], capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        parses = True
+    commands = legacy_commands(scan) if parses else []
+# Any host: GitHub Enterprise prints its own (claude-code-skills#471 review).
+RUN_URL = re.compile(r"https?://[^/\s]+/[^/\s]+/[^/\s]+/actions/runs/(\d+)")
 
-for words in simple_commands(scan):
-    # gh workflow run <wf> — 発射した。登録の根拠は実行結果にする (#459): 終了コードが分かれば 0 のときだけ、
-    # 出力があれば「Created workflow_dispatch event」か run の URL があるときだけ。run の URL があれば
-    # id は run-<run id> にして、後の `gh run watch <run id>` と同じ持ち越しにする。
+launches = []
+for words in commands:
+    # gh workflow run <wf> — 発射した。外すのは、実行が失敗したと分かるとき（rc が 0 以外）と --help だけ。
+    # Claude Code の Bash には tty が無く、gh は run の URL だけを出すか、何も出さない（204 の経路・GHES・古い gh）。
+    # 出力が無いことは「発射していない」証拠にならない (#471 review)。
     if words[:3] == ["gh", "workflow", "run"] and len(words) > 3:
-        wf = words[3]
-        if rc is not None and rc != 0:
+        # rc は行の最後のコマンドのもの。発射が行の唯一のコマンドのときだけ、失敗の証拠になる
+        # （`gh workflow run x && gh run list | grep -q x` の grep が 1 で終わっても、発射はしている）。
+        if (rc is not None and rc != 0 and len(commands) == 1) or "--help" in words or "-h" in words:
             continue
-        if rc is not None and not (RUN_URL.search(said) or "Created workflow_dispatch event" in said):
-            continue
-        m = RUN_URL.search(said)
-        rid = m.group(1) if m else ""
-        out.append(("cd-run", "run-%s" % rid if rid else ident("wf", wf + cmd),
-                    "gh workflow run %s%s" % (wf, " (run %s)" % rid if rid else "")))
+        launches.append(words[3])
     # gh run watch <id> — 完走待ち。待ちはツール呼び出しの寿命を超えうる。
     elif words[:3] == ["gh", "run", "watch"] and len(words) > 3 and words[3].isdigit():
         out.append(("cd-run", "run-%s" % words[3], "gh run watch %s" % words[3]))
@@ -222,6 +420,13 @@ for words in simple_commands(scan):
     elif words[0] == "nohup" and len(words) > 1:
         head = re.sub(r"\s+", " ", cmd).strip()[:120]
         out.append(("generic", ident("nohup", cmd), "nohup: %s" % head))
+# run の URL は、発射と同じ数だけあるときに順に割り当てる（id は run-<run id>、後の gh run watch と同じ持ち越し）。
+# 数が合わなければ（別の run の URL が混じる・出力が無い）、URL は使わない。
+urls = RUN_URL.findall(said) if launches else []
+for k, wf in enumerate(launches):
+    rid = urls[k] if len(urls) == len(launches) else ""
+    out.append(("cd-run", "run-%s" % rid if rid else ident("wf", "%s#%d#%s" % (wf, k, cmd)),
+                "gh workflow run %s%s" % (wf, " (run %s)" % rid if rid else "")))
 
 for kind, ident_, detail in out:
     print("%s\t%s\t%s" % (kind, ident_, detail))
