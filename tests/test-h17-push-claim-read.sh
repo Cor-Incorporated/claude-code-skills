@@ -187,6 +187,35 @@ post "$HOOK" n9 "PATH=/tmp/fake:/usr/bin gh pr view 606 --json state" '{"state":
 o="$(stop "$HOOK" n9 "$REPORT")"
 blocked "$o" && ok "N9 a PATH= prefix does not count" || bad "N9 PATH prefix" "$o"
 
+# --- #470 review round 3 -------------------------------------------------------------------------------------
+# T1 a read of the base branch does not bind by its sha either ('base develop 691a9d1')
+post "$HOOK" t1 "git ls-remote origin refs/heads/develop" "$SHA	refs/heads/develop"
+o="$(stop "$HOOK" t1 $'Lane L1 pushed feat/l1-practical-bench (base develop 691a9d1).\nStatus: partial')"
+blocked "$o" && ok "T1 a read of develop does not bind a push by naming develop's sha" || bad "T1 base sha" "$o"
+post "$HOOK" t1b "gh api repos/Cor-Incorporated/ai-cluster/commits/main --jq .sha" "$SHA"
+o="$(stop "$HOOK" t1b $'Lane L1 pushed feat/l1-practical-bench; main is at 691a9d1 now.\nStatus: partial')"
+blocked "$o" && ok "T1b a read of main does not bind a push by naming main's sha" || bad "T1b main sha" "$o"
+# T2 --jq and -q are one option: the second spelling also prints a literal
+post "$HOOK" t2 "gh pr view 606 --json state --jq .state -q '\"MERGED\"'" "MERGED"
+o="$(stop "$HOOK" t2 "$REPORT")"
+blocked "$o" && ok "T2 --jq then -q does not count" || bad "T2 jq alias" "$o"
+# T3 -q on gh api after --jq does not count either
+post "$HOOK" t3 "gh api repos/Cor-Incorporated/ai-cluster/pulls/606 --jq .merged -q true" "true"
+o="$(stop "$HOOK" t3 "$REPORT")"
+blocked "$o" && ok "T3 gh api --jq then -q does not count" || bad "T3 api jq alias" "$o"
+# U1 a sentence period after the ref still names it
+post "$HOOK" u1 "git ls-remote origin refs/heads/feat/l1-practical-bench" "$SHA	refs/heads/feat/l1-practical-bench"
+o="$(stop "$HOOK" u1 $'Lane L1 pushed feat/l1-practical-bench.\nStatus: partial')"
+blocked "$o" && bad "U1 a trailing period binds" "$o" || ok "U1 a trailing period after the ref binds"
+# U2 a Japanese particle after the ref still names it
+post "$HOOK" u2 "git ls-remote origin refs/heads/feat/l1-practical-bench" "$SHA	refs/heads/feat/l1-practical-bench"
+o="$(stop "$HOOK" u2 $'L1 は feat/l1-practical-benchをpush済み。\nStatus: partial')"
+blocked "$o" && bad "U2 a Japanese particle binds" "$o" || ok "U2 a Japanese particle after the ref binds"
+# U3 a longer ref does not name the read one
+post "$HOOK" u3 "git ls-remote origin refs/heads/feat/l1-practical-bench" "$SHA	refs/heads/feat/l1-practical-bench"
+o="$(stop "$HOOK" u3 $'Lane L1 pushed feat/l1-practical-bench-old.\nStatus: partial')"
+blocked "$o" && ok "U3 feat/l1-practical-bench-old does not name feat/l1-practical-bench" || bad "U3 longer ref" "$o"
+
 # --- link: the reporter case through a mutant without the read acceptance -----------------------------------
 MUT="$SB/mutant"
 mkdir -p "$MUT/lib"

@@ -796,6 +796,12 @@ _PUSH_WORDS = re.compile(r"(pushed|push済み|push した)", re.IGNORECASE)
 _MERGE_WORDS = re.compile(r"(merged|マージ済み|マージした)", re.IGNORECASE)
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# a read of a base branch never binds, by name or by sha: a relay answer names its base and the base's head while
+# claiming another branch was pushed ('pushed feat/l1 (base develop 691a9d1)', #470 review round 3). A merge into a
+# base branch is bound by reading the pull request, not the branch.
+_BASE_REFS = {"main", "master", "develop", "trunk", "HEAD"}
+# gh uses the LAST of repeated output options, whatever the spelling: `--jq .state -q '"MERGED"'` prints a literal
+_OUTPUT_OPTS = (("--jq", "-q"), ("--json",), ("--template", "-t"))
 
 
 def _claimed_kinds(text: str) -> set[str]:
@@ -846,9 +852,10 @@ def _read_binding(cmd: str, out: str) -> tuple[str, list[str]] | None:
     if words[:2] == ["git", "-C"] and len(words) > 2:
         words = ["git"] + words[3:]
     out = out.strip()
-    # gh uses the LAST --jq / --template: a second one could print a literal (#470 review round 2)
-    for flag in ("--jq", "-q", "--json", "--template", "-t"):
-        if sum(1 for w in words if w == flag or w.startswith(flag + "=") or (len(flag) == 2 and w.startswith(flag) and w != flag and not w.startswith("--"))) > 1:
+    # gh uses the LAST --jq / --template: a second one could print a literal (#470 review rounds 2 and 3)
+    for group in _OUTPUT_OPTS:
+        if sum(1 for w in words for flag in group
+               if w == flag or w.startswith(flag + "=") or (len(flag) == 2 and w.startswith(flag) and w != flag)) > 1:
             return None
     if words[:3] == ["gh", "pr", "view"] and len(words) > 3:
         if _opt(words, "--template", "-t") is not None or "--web" in words or "-w" in words:
@@ -884,6 +891,8 @@ def _read_binding(cmd: str, out: str) -> tuple[str, list[str]] | None:
         m = re.match(r"/?repos/[^/]+/[^/]+/(?:commits|branches|git/refs?/heads)/(.+)$", path)
         if m:
             ref = m.group(1)
+            if re.sub(r"^(refs/)?heads/", "", ref) in _BASE_REFS:
+                return None
             if jq is not None:
                 sha = out if jq.strip() in (".sha", ".commit.sha", ".object.sha") else ""
             else:
@@ -905,6 +914,8 @@ def _read_binding(cmd: str, out: str) -> tuple[str, list[str]] | None:
         if remote == "." or remote.startswith(("/", ".", "~", "file:")) or "$" in remote:
             return None
         short = re.sub(r"^refs/heads/", "", ref)
+        if short in _BASE_REFS:
+            return None
         for line in out.splitlines():
             sha, _tab, name = line.partition("\t")
             if _HEX40.match(sha.strip()) and (name.strip() == ref or name.strip() == "refs/heads/" + short):
@@ -913,19 +924,17 @@ def _read_binding(cmd: str, out: str) -> tuple[str, list[str]] | None:
     return None
 
 
-_BASE_REFS = {"main", "master", "develop", "trunk", "HEAD"}
-
-
 def _names(text: str, token: str) -> bool:
-    """The answer names <token> as a whole token. A base branch never binds: a relay answer names its PR base
-    ('PR base is develop') while claiming another branch was pushed (#470 review round 2). A limit that stays: one
+    """The answer names <token> as a whole token: no ASCII word character, `.`, `/` or `-` touches it, so a sentence
+    period or a Japanese particle after the ref still names it ('pushed feat/l1.', 'feat/l1をpush済み'; #470 review
+    round 3) and `feat/l1-old` does not name `feat/l1`. A base branch never binds (see _BASE_REFS). A limit that stays: one
     verified object binds every claim of the same kind in the answer ('#445 and #612 are merged' after reading only
     #445) — splitting the answer into claims would classify prose, which ADR-009 rules out."""
     if not token or token in _BASE_REFS:
         return False
     if token.startswith("#"):
         return bool(re.search(re.escape(token) + r"(?!\d)", text))
-    return bool(re.search(r"(?<![\w./-])" + re.escape(token) + r"(?![\w./-])", text))
+    return bool(re.search(r"(?<![A-Za-z0-9_./-])" + re.escape(token) + r"(?![A-Za-z0-9_/-])(?!\.[A-Za-z0-9_])", text))
 
 
 def _push_read_verified(rows: list[dict], text: str = "") -> bool:
