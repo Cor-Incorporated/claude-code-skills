@@ -132,18 +132,19 @@ cor-os の `CLOUDFLARE_ACCESS_READ_API_TOKEN` の登録に、22:4x〜23:35 で 5
 - 無効な値が 2 回 GitHub secret に入り（6111 Invalid format / 400 Authentication failed）、release run が 2 本、認証で落ちた。
 - 手順は旧い UI の文言、token の置き場所、token の長さ（40 文字と決め打ち。実物は 53 文字）を、実物を見ずに書いていた。
 - 「token をコピー → コマンドを貼る」の順で、コマンドを貼った時点でクリップボードが上書きされた。
-- verify が active でなくても `gh secret set` が走る 1 行を渡していた。
+- verify が active でなくても登録まで走る 1 行を渡していた。
 
 決まり:
 
 1. **秘密の登録は `scripts/register-secret-verified.sh` で渡す**（`~/.claude/scripts/` に配備）。この script は次の順で動く:
    1. 値を表示しない入力で受ける。
    2. 提供元の verify が通るかを確かめる。
-   3. 通ったときだけ `gh secret set` する。
+   3. 通ったときだけ GitHub secret に登録する（gh は値を stdin で受ける）。
    4. 一時ファイルを消す。
-   順番やクリップボードを人に委ねない。検証のない `gh secret set` の 1 行を手順に書かない
-   （`tests/test-handover-secret-steps.sh` が、`gh secret set` の行の前 5 行に検証が無い手順を落とす）。
+   順番やクリップボードを人に委ねない。script を通さない登録コマンドを手順に書かない
+   （`tests/test-handover-secret-steps.sh` が、script を名指ししない登録の行を落とす。どうしても要る行には理由つきの `<!-- secret-set-ok: <理由> -->` を同じ行か直前の行に置く）。
    例: `bash ~/.claude/scripts/register-secret-verified.sh CLOUDFLARE_ACCESS_READ_API_TOKEN Cor-Incorporated/cor-os --cloudflare-account <account id>`
+   （account id は `wrangler whoami` の出力の 32 桁）
 2. **UI の操作は、スクショか実機で確かめた文言だけを書く。** 確かめていない画面名・ボタン名は「未確認」と書く。
 3. **値の形式（長さ・文字種・接頭辞）を決め打ちしない。** 形式を確かめるのは提供元の verify であって、手順書の推測ではない。
 

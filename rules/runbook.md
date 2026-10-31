@@ -69,6 +69,20 @@ Alpha デプロイ手順書を 2 度書き、2 度とも**実行不可能**だ�
 
 ---
 
+### 7. 秘密の登録は「検証 → 登録 → 削除」を 1 つのコマンドにして渡す（2026-10-31 のインシデント）
+
+cor-os の `CLOUDFLARE_ACCESS_READ_API_TOKEN` の登録に 5 回・約 50 分かかり、無効な値が 2 回 GitHub secret に入った。
+
+- 手順は旧い UI の文言と、token の長さ（40 文字の決め打ち、実物は 53 文字）を、実物を見ずに書いていた。
+- コピーと貼り付けの順番を人に委ねていた。
+- verify が通らなくても登録まで走る 1 行を渡していた。
+
+- 渡すのは `bash ~/.claude/scripts/register-secret-verified.sh <NAME> <owner/repo> --verify-url <URL>`（Cloudflare なら `--cloudflare-account <id>`。id は `wrangler whoami` の 32 桁）。値は表示しない入力で受け、verify が通ったときだけ登録する。script を通さない登録コマンドを手順に書かない（`tests/test-handover-secret-steps.sh`）。
+- UI 操作は、スクショか実機で確かめた文言だけを書く。確かめていないものは「未確認」と書く。
+- 値の形式（長さ・文字種）を決め打ちしない。形式は提供元の verify が決める。
+
+---
+
 ## チェックリスト（手順書を出す前に）
 
 - [ ] ワークフロー/スクリプトの**定義ファイルを開いて読んだ**
@@ -82,18 +96,6 @@ Alpha デプロイ手順書を 2 度書き、2 度とも**実行不可能**だ�
 - [ ] バリデーションから失敗モードを逆算した
 
 ---
-
-### 7. 秘密の登録は「検証 → 登録 → 削除」を 1 つのコマンドにして渡す（2026-10-31 のインシデント）
-
-cor-os の `CLOUDFLARE_ACCESS_READ_API_TOKEN` の登録に 5 回・約 50 分かかり、無効な値が 2 回 GitHub secret に入った。
-
-- 手順は旧い UI の文言と、token の長さ（40 文字の決め打ち、実物は 53 文字）を、実物を見ずに書いていた。
-- コピーと貼り付けの順番を人に委ねていた。
-- verify が通らなくても `gh secret set` が走る 1 行を渡していた。
-
-- 渡すのは `bash ~/.claude/scripts/register-secret-verified.sh <NAME> <owner/repo> --verify-url <URL>`（Cloudflare なら `--cloudflare-account <id>`）。値は表示しない入力で受け、verify が通ったときだけ登録する。検証のない `gh secret set` の 1 行を手順に書かない（`tests/test-handover-secret-steps.sh`）。
-- UI 操作は、スクショか実機で確かめた文言だけを書く。確かめていないものは「未確認」と書く。
-- 値の形式（長さ・文字種）を決め打ちしない。形式は提供元の verify が決める。
 
 ---
 
