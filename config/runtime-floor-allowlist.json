@@ -1,0 +1,98 @@
+{
+  "schema": "runtime-floor-allowlist.v1",
+  "declared": "2026-10-30",
+  "origin": "harness-pdca-20261030 F1/F2/F3",
+  "enforcer": {
+    "plugin": "harness@claude-code-harness-marketplace",
+    "source": "go/internal/runtimefloor/runtimefloor.go",
+    "verified_version": "5.16.0"
+  },
+  "secret_read": {
+    "enforced": false,
+    "env": "HARNESS_RUNTIME_FLOOR_SECRET_ALLOW",
+    "rendered_into": "nothing while enforced=false (settings.json must not carry the env)",
+    "must_deny": [
+      "cat ~/.ssh/config",
+      "grep -nE '^Host ' ~/.ssh/config",
+      "cat .env",
+      "cat app/.env.local",
+      "head -3 .env.production",
+      "cat certs/server.pem",
+      "cat deploy.key",
+      "cp ~/.aws/credentials /tmp/x",
+      "cat config/credentials"
+    ],
+    "known_upstream_limits": {
+      "why": "the plugin takes the token around an indicator match that starts at the preceding whitespace, so a bare name with no directory part is read as the previous word and never reaches the allowlist. Measured 2026-10-30 (#445 review M4). Use ./.env.example.",
+      "still_denied": [
+        "cat .env.example",
+        "head -20 .env.example",
+        "grep -n API_ .env.sample"
+      ]
+    },
+    "why_not_enforced": "The plugin takes the whitespace-delimited token around an indicator, so any allowlist entry also allows a real secret glued to an allowed name without whitespace: with *.template allowed, 'cat ~/.aws/credentials;x.template' is allowed (measured 2026-10-30, #446 review). An exact basename or a path prefix composes the same way. Ship only after the upstream tokenizer splits on ; | & < > ( ) (added to the upstream patch).",
+    "proposed_allow": [
+      {
+        "pattern": "*.template",
+        "why": "values-free templates. 2026-10-30 orchestrator: cat docs/templates/nas-mounts/smb-credentials.cred.template was denied by the 'credentials' indicator"
+      },
+      {
+        "pattern": ".env.example",
+        "why": "committed, values-free env template (dotenv convention)"
+      },
+      {
+        "pattern": ".env.sample",
+        "why": "committed, values-free env template (dotenv convention)"
+      }
+    ],
+    "observed_false_positives": [
+      "cat docs/templates/nas-mounts/smb-credentials.cred.template",
+      "head -20 app/.env.example",
+      "grep -n API_ app/.env.sample",
+      "cat ./.env.example"
+    ],
+    "composition_opened_by_proposal": [
+      "cat ~/.aws/credentials;x.template",
+      "cat ~/.aws/credentials>x.template",
+      "cat x/.env;y/z.template"
+    ]
+  },
+  "egress": {
+    "enforced": false,
+    "why_not_enforced": "5.16.0 has no egress allowlist knob: isAllowlistedHost() hardcodes localhost/127.0.0.1. The only switch is HARNESS_RUNTIME_FLOOR_EGRESS=off, which disables the whole category and is inherited by codex/cursor launched from a Claude Bash call. Do not set it.",
+    "proposed_env": "HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW",
+    "proposed_patch": "docs/audits/2026-10-30-harness-pdca/upstream-runtime-floor.patch",
+    "internal": {
+      "cidrs": [
+        "100.64.0.0/10",
+        "192.168.11.0/24",
+        "192.168.3.0/24"
+      ],
+      "hosts": [
+        "evo-x2",
+        "evo-x2-2",
+        "evo-x2-3",
+        "thinkstationpgx-ab59",
+        "jetson-thor"
+      ]
+    },
+    "must_deny_external": [
+      "curl -s https://pypi.org/pypi/awscrt/json",
+      "curl -sS https://github.com/Cor-Incorporated/grift-cli/releases",
+      "wget https://example.com/x.tar.gz",
+      "scp ./build deploy@files.example.com:/srv/"
+    ],
+    "known_false_negatives_upstream": [
+      "scp ./build deploy@203.0.113.7:/srv/ is allowed: remoteHostPattern needs a letter TLD, so a raw IP destination is never matched",
+      "rsync -a ./out/ 198.51.100.4:/srv/out/ is allowed for the same reason",
+      "ssh evo-x2 'nc -z 192.168.11.23 445' is allowed: the quoted 'nc token is not equal to nc"
+    ],
+    "observed_false_positives_2026_10_30": [
+      "nc -z -G 3 -w 3 192.168.11.23 445 (and even nc -z -G 3 127.0.0.1 22): the token after nc is the flag -z, read as the host",
+      "rsync -a --delete ./snap-before/ ./snap-after/ && cp CLAUDE.md x/: a local copy; CLAUDE.md looks like a host because .md is a ccTLD",
+      "scp scripts/e2e/run.sh jetson-thor:ets/ && ssh jetson-thor 'python -m engineai_thor_sidecar.cli run': the module name is read as the host",
+      "python3 heredoc whose body mentions rsync and a *.sh file: egress does not strip heredoc bodies (secret-read does)",
+      "curl -s http://192.168.11.28:4000/health and curl -s http://evo-x2:8080/v1/models: cluster LAN/tailnet hosts, no allowlist knob"
+    ]
+  }
+}
