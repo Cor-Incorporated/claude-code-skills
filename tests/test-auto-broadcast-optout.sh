@@ -95,6 +95,42 @@ out="$(python3 "$APPLY" "$SB/broken.json" --home "$H")"; rc=$?
 [[ $rc -eq 0 && "$out" == *"broken: NotADirectoryError"* && "$out" == *"ai-cluster: already"* ]] \
   && ok "O1 an error in one repository is reported and the next one still runs (rc=0)" || bad "O1 per-repo error" "rc=$rc $out"
 
+# Round 2 of the #457 review: what is already at the target is never followed, shown or blocked on,
+# and only a direct child of ~/Developer is a repository.
+printf '{"token": "FAKE-SECRET-123"}\n' >"$H/outside/secret.json"
+mkdir -p "$H/Developer/tlink/.git" "$H/Developer/tlink/.claude/sessions" "$H/Developer/slink/.git" "$H/Developer/slink/.claude" \
+  "$H/Developer/fifo/.git" "$H/Developer/fifo/.claude/sessions" "$H/Developer/other/.git" "$H/Developer/other/.claude/sessions" \
+  "$H/Developer/nest/sub/.git"
+ln -s "$H/outside/secret.json" "$H/Developer/tlink/.claude/sessions/auto-broadcast.json"
+ln -s "$H/outside" "$H/Developer/slink/.claude/sessions"
+mkfifo "$H/Developer/fifo/.claude/sessions/auto-broadcast.json"
+printf '{"api_key": "FAKE-9"}\n' >"$H/Developer/other/.claude/sessions/auto-broadcast.json"
+python3 - "$DECL" "$SB/round2.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["repos"] = ["~/Developer/tlink", "~/Developer/slink", "~/Developer/fifo", "~/Developer/other", "~/Developer/nest/sub"]
+json.dump(d, open(sys.argv[2], "w"))
+PY
+# A FIFO must not hang the applier (setup.sh would stop at step 6b): give it 10 s.
+out="$(python3 -c 'import subprocess,sys
+try:
+    r = subprocess.run([sys.executable] + sys.argv[1:], capture_output=True, text=True, timeout=10)
+    print(r.stdout, end=""); print("rc=%d" % r.returncode)
+except subprocess.TimeoutExpired:
+    print("TIMEOUT")' "$APPLY" "$SB/round2.json" --home "$H")"
+[[ "$out" != *TIMEOUT* && "$out" == *"rc=0"* ]] && ok "O1 a FIFO at the target does not block the applier" || bad "O1 fifo" "$out"
+[[ "$out" == *"rc=0"* && "$out" != *FAKE-SECRET-123* && "$out" != *FAKE-9* ]] \
+  && ok "O1 content at the target that is not an opt-out choice is never printed (symlinked or not)" || bad "O1 shown" "$out"
+[[ "$out" == *"tlink: left as is, .claude/sessions/auto-broadcast.json is not a readable regular JSON file"* \
+   && "$(cat "$H/outside/secret.json")" == '{"token": "FAKE-SECRET-123"}' ]] \
+  && ok "O1 a symlink at the target is left alone and not followed" || bad "O1 target symlink" "$out"
+[[ "$out" == *"slink: .claude/sessions leaves the repository, refused"* && ! -e "$H/outside/auto-broadcast.json" ]] \
+  && ok "O1 a sessions symlink out of the repository is refused before anything is read or written" || bad "O1 sessions symlink" "$out"
+[[ "$out" == *"other: left as is, its content differs and is not shown"* ]] \
+  && ok "O1 a different non-choice file is kept and reported without its content" || bad "O1 other" "$out"
+[[ "$out" == *"nest/sub: not a repository at ~/Developer/<name>, refused"* && ! -e "$H/Developer/nest/sub/.claude" ]] \
+  && ok "O1 a nested path under ~/Developer is refused" || bad "O1 nested" "$out"
+
 # --- O2 ---------------------------------------------------------------------
 grep -q 'python3 "$REPO_DIR/scripts/apply-auto-broadcast-optout.py" "$REPO_DIR/config/auto-broadcast-optout.json"' "$ROOT/setup.sh" \
   && ok "O2 setup.sh applies the declaration" || bad "O2 wiring" "setup.sh does not call the applier with the declaration"
