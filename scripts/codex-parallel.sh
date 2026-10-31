@@ -295,6 +295,11 @@ if [[ "${1:-}" == "--review" ]]; then
     # H1: review runs get the same stop conditions as implementation runs.
     H1_ID="${CODEX_H1_DELEGATION:-codex-review:${REPO_NAME}}"
     h1_init "$H1_ID" "$REPO_PATH"
+    # The review lane never gets the hook-trust bypass, so the hook may count nothing: Codex's own event log is
+    # its sign of life. A stopped review must not return the previous review of another diff, so the output
+    # file starts empty (#472 review round 2).
+    export CODEX_H1_EVENT_LOG="$CODEX_EVENT_LOG"
+    rm -f "$OUTPUT_FILE"
     h1_start_watchdog "$H1_ID" "$$"
     log "$(h1_watchdog_status)"
 
@@ -429,13 +434,14 @@ if [[ -d "$WORKTREE_PATH" ]]; then
     wt_here="$(cd "$WORKTREE_PATH" && pwd -P)"
     if [[ "$wt_root" != "$wt_here" || "$wt_ref" != "refs/heads/${BRANCH_NAME}" \
           || -z "$wt_gitdir" || -d "$wt_gitdir/rebase-merge" || -d "$wt_gitdir/rebase-apply" \
-          || -f "$wt_gitdir/MERGE_HEAD" || -f "$wt_gitdir/CHERRY_PICK_HEAD" ]]; then
+          || -f "$wt_gitdir/MERGE_HEAD" || -f "$wt_gitdir/CHERRY_PICK_HEAD" || -f "$wt_gitdir/REVERT_HEAD" \
+          || -d "$wt_gitdir/sequencer" ]]; then
         error "Not replacing ${WORKTREE_PATH}: root=${wt_root:-none} HEAD=${wt_ref:-detached};"
         error "  expected its own checkout on refs/heads/${BRANCH_NAME} with no rebase/merge/cherry-pick in progress."
         error "  Finish or abort the operation there, or remove the worktree yourself after saving what you need."
         exit 1
     fi
-    if ! wt_status="$(git -C "$WORKTREE_PATH" status --porcelain)"; then
+    if ! wt_status="$(git -C "$WORKTREE_PATH" status --porcelain --untracked-files=all)"; then
         error "git status failed in ${WORKTREE_PATH}; not replacing it."
         exit 1
     fi
@@ -450,7 +456,10 @@ for p in sys.stdin.read().split("\0"):
     if not p:
         continue
     base = os.path.basename(p)
-    secret = re.match(r"(\.env($|\.(?!example$|sample$|template$))|id_(rsa|dsa|ecdsa|ed25519)|.*\.(pem|key|p12|pfx|keystore)$|.*credentials)", base)
+    secret = re.match(
+        r"(\.env($|\.(?!example$|sample$|template$))|\.envrc$|\.dev\.vars|\.(npm|pypi|net)rc$|id_(rsa|dsa|ecdsa|ed25519)"
+        r"|.*\.(pem|key|p12|pfx|p8|jks|ppk|keystore)$|.*\.tfvars(\.json)?$|secrets?\..*|.*credentials"
+        r"|.*(service[-_]?account|-key).*\.json$|kubeconfig$)", base, re.IGNORECASE)
     try:
         big = os.path.getsize(os.path.join(root, p)) > 10 * 1024 * 1024
     except OSError:

@@ -76,6 +76,10 @@ first_run "$ROOT/scripts/codex-parallel.sh" feat/secret
 printf 'API_KEY=not-a-real-key\n' >"$REPO/.worktrees/codex/feat-secret/.env"
 refused feat/secret "an untracked .env"
 
+first_run "$ROOT/scripts/codex-parallel.sh" feat/devvars
+printf 'CF_API_TOKEN=not-real\n' >"$REPO/.worktrees/codex/feat-devvars/.dev.vars"
+refused feat/devvars "an untracked .dev.vars"
+
 first_run "$ROOT/scripts/codex-parallel.sh" feat/hook
 mkdir -p "$SB/hooks" && printf '#!/bin/sh\nexit 1\n' >"$SB/hooks/pre-commit" && chmod +x "$SB/hooks/pre-commit"
 git -C "$REPO/.worktrees/codex/feat-hook" config core.hooksPath "$SB/hooks"

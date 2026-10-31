@@ -112,7 +112,7 @@ h1_check() {
     file="$(h1_state_file "$1")"
     [ -f "$file" ] || return 0
     python3 - "$file" <<'PY' 2>/dev/null || true
-import json, os, sys, time
+import json, math, os, sys, time
 path = sys.argv[1]
 try:
     s = json.load(open(path))
@@ -134,7 +134,7 @@ def env_sec(name, default):
         v = float(os.environ[name])
     except (KeyError, ValueError):
         return default
-    return int(v) if v > 0 else default
+    return int(v) if math.isfinite(v) and v > 0 else default
 start_idle = env_sec("CODEX_H1_START_IDLE_SEC", min(no_progress, 900))
 # Codex's own --json event log keeps growing while it works, even when the hook does not count (untrusted, no jq);
 # in the stdin hang it held one line written at start (#472 review).
@@ -307,13 +307,13 @@ h1_watchdog_status() {
     elif [ -n "${H1_WATCHDOG_PID:-}" ] && kill -0 "$H1_WATCHDOG_PID" 2>/dev/null; then
         local idle
         idle="$(python3 -c '
-import os, sys
+import math, os, sys
 def env_sec(name, default):
     try:
         v = float(os.environ[name])
     except (KeyError, ValueError):
         return default
-    return int(v) if v > 0 else default
+    return int(v) if math.isfinite(v) and v > 0 else default
 no_progress = env_sec("CODEX_H1_NO_PROGRESS_SEC", 2700)
 print(env_sec("CODEX_H1_START_IDLE_SEC", min(no_progress, 900)))
 ' 2>/dev/null || echo "?")"

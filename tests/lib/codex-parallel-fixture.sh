@@ -6,6 +6,7 @@
 # FAKE_CODEX_MODE:
 #   stdin  — print the real CLI's "Reading additional input from stdin..." line, then read stdin to EOF (cat)
 #   idle   — never make a tool call: sleep FAKE_CODEX_SLEEP seconds
+#   busy   — print one event a second for FAKE_CODEX_BUSY_SEC seconds, with no tool call
 #   edit   — write FAKE_CODEX_FILE into the worktree (-C) and exit 0
 # Sourced by tests/test-codex-*.sh. Needs ROOT set to the repository root.
 
@@ -39,6 +40,10 @@ case "${FAKE_CODEX_MODE:-edit}" in
     idle)
         echo '{"type":"thread.started"}'
         exec "$(dirname "$0")/codex-sleep" "${FAKE_CODEX_SLEEP:-120}"
+        ;;
+    busy)
+        # works without tool calls the hook can count: one event a second on stdout (the --json event log)
+        for _ in $(seq "${FAKE_CODEX_BUSY_SEC:-8}"); do echo '{"type":"item.completed"}'; sleep 1; done
         ;;
     edit)
         printf '%s\n' "${FAKE_CODEX_CONTENT:-edited}" >"$cwd/${FAKE_CODEX_FILE:-codex-edit.txt}"

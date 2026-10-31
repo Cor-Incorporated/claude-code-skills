@@ -39,6 +39,7 @@ grep -q 'watchdog stop: no-progress-from-start' "$SB/run.log" && ok "C2 the H1 s
 # A relaunch of the same delegation is not killed by the previous start's stop: h1_init clears it (#472 review M-5:
 # check h1_check itself, a quick fake exits before the first poll and proves nothing).
 relaunch_check() {  # <lib> -> what h1_check prints after a stop and a fresh h1_init
+  # shellcheck source=/dev/null
   ( . "$1"; h1_init relaunch-id "$SB"; h1_mark_stop relaunch-id no-progress-from-start; h1_init relaunch-id "$SB"
     h1_check relaunch-id )
 }
@@ -62,6 +63,56 @@ PY
 st="$( ( . "$ROOT/scripts/lib/h1-runtime.sh"; CODEX_H1_START_IDLE_SEC=3s; export CODEX_H1_START_IDLE_SEC
         H1_WATCHDOG_PID=$$; h1_watchdog_status ) )"
 [[ "$st" == *"idle-from-start 900s"* ]] && ok "C2 CODEX_H1_START_IDLE_SEC=3s is ignored (900s shown and used)" || bad "C2 env parse" "$st"
+
+# h1_check itself parses the knob: with a malformed value the other rules still work (budget-cap still trips).
+budget_check() {  # <lib> -> what h1_check prints on an over-budget state with CODEX_H1_START_IDLE_SEC=3s
+  # shellcheck source=/dev/null
+  ( . "$1"; h1_init budget-id "$SB"
+    python3 -c 'import json,sys; p=sys.argv[1]; s=json.load(open(p)); s.update(budget_usd=1, budget_epoch_spend_usd=5); json.dump(s, open(p,"w"))' \
+      "$(h1_state_file budget-id)"
+    CODEX_H1_START_IDLE_SEC=3s h1_check budget-id )
+}
+[[ "$(budget_check "$ROOT/scripts/lib/h1-runtime.sh")" == budget-cap ]] && ok "C2 a malformed knob leaves budget-cap working" \
+  || bad "C2 budget with a malformed knob" "h1_check printed '$(budget_check "$ROOT/scripts/lib/h1-runtime.sh")'"
+MUTENV="$SB/mutenv/h1-runtime.sh"
+python3 - "$ROOT/scripts/lib/h1-runtime.sh" "$MUTENV" <<'PY'
+import pathlib, sys
+src, dst = sys.argv[1:3]
+text = pathlib.Path(src).read_text()
+needle = 'start_idle = env_sec("CODEX_H1_START_IDLE_SEC", min(no_progress, 900))\n'
+if needle not in text:
+    raise SystemExit("mutation target not found")
+pathlib.Path(dst).parent.mkdir(parents=True, exist_ok=True)
+pathlib.Path(dst).write_text(text.replace(needle, 'start_idle = int(os.environ.get("CODEX_H1_START_IDLE_SEC") or 900)\n', 1))
+PY
+[[ -z "$(budget_check "$MUTENV")" ]] && ok "C2 mutant (bare int()) loses budget-cap on the same state" \
+  || bad "C2 env mutant" "mutant printed '$(budget_check "$MUTENV")'"
+
+# A run that keeps writing events is not stopped, even though the hook counts no tool call.
+export FAKE_CODEX_MODE=busy FAKE_CODEX_BUSY_SEC=8
+busy="$(codex_run "$ROOT/scripts/codex-parallel.sh" feat/busy)"
+! grep -q 'stop condition tripped' "$SB/run.log" && grep -q 'Status:    SUCCESS' "$SB/run.log" \
+  && ok "C2 a run that writes events is not stopped (${busy}s)" || bad "C2 busy" "$(grep -E 'tripped|Status' "$SB/run.log")"
+MUTEV="$SB/mutev/codex-parallel.sh"
+python3 - "$ROOT" "$MUTEV" <<'PY'
+import pathlib, shutil, sys
+root, mut = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+(mut.parent / "lib").mkdir(parents=True, exist_ok=True)
+for f in (root / "scripts/lib").iterdir():
+    if f.is_file():
+        shutil.copy(f, mut.parent / "lib" / f.name)
+lib = mut.parent / "lib/h1-runtime.sh"
+text = lib.read_text()
+needle = 'int(s.get("watchdog_started_ts") or 0), events_ts) > start_idle'
+if needle not in text:
+    raise SystemExit("mutation target not found")
+lib.write_text(text.replace(needle, 'int(s.get("watchdog_started_ts") or 0)) > start_idle', 1))
+shutil.copy(root / "scripts/codex-parallel.sh", mut)
+PY
+codex_run "$MUTEV" feat/busy-mutant >/dev/null
+grep -q 'stop condition tripped (no-progress-from-start)' "$SB/run.log" \
+  && ok "C2 mutant (event log ignored) stops the busy run" || bad "C2 events mutant" "$(grep -E 'tripped|Status' "$SB/run.log")"
+export FAKE_CODEX_MODE=idle
 
 # Mutant: the start-idle check removed → only the outer timeout (30 s) ends the run. The wrapper is copied next to
 # the mutated library so it sources that one.
