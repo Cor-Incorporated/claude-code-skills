@@ -197,8 +197,10 @@
       "false_positive_rate_over": 0.5,
       "window_days": 30,
       "or_zero_fires_days": 90,
-      "measured_from": "guard-ledger.jsonl rows with hook=harness-guardrail and rule RUNTIME_FLOOR:egress (bridge in #445). The deny reason carries the kind (egress:read/write/copy/socket/code) and the host; each row is marked fp or tp in the monthly ADR-006 review."
+      "measured_from": "guard-ledger.jsonl rows with hook=harness-guardrail and rule RUNTIME_FLOOR:egress (bridge in #445). The deny reason carries the kind (egress:read/write/copy/socket/code) and the host; each row is marked fp or tp in the monthly ADR-006 review.",
+      "redesign_if": "deliberate lexical evasion forms (the families in Cor-Incorporated/claude-code-harness COR-PATCHES.md: quoting, other tools' delimiters, line structure, option spelling, indirection, unread programs) show up as false positives or misses in the guard-ledger review of real use"
     },
-    "reviewed": "Cor-Incorporated/claude-code-harness#1: Codex P1 x11 / P2 x2 and an adversarial review (CRITICAL x1, MEDIUM x1, LOW x4) on the first cut ee5f960; every input is a Go test in the mirror and was red on ee5f960."
+    "reviewed": "Cor-Incorporated/claude-code-harness#1: Codex round 1 P1 x11 / P2 x2 and round 2 P1 x14; adversarial round 1 CRITICAL x1 / MEDIUM x1 / LOW x4 and round 2 CRITICAL 0 / HIGH 0 / MEDIUM x1 / LOW x2. Every input is a Go test in the mirror, red on the head it was found at.",
+    "out_of_scope": "A lexical guard, not a sandbox (owner gate 2026-10-31): the forms an agent ordinarily types show 0 CRITICAL/HIGH; deliberate lexical evasions are known residuals. Every deny still reaches guard-ledger.jsonl."
   }
 }
