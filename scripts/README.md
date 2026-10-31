@@ -27,6 +27,15 @@ bash ~/.claude/scripts/codex-orchestrate.sh --csv ~/Developer/<repo> tasks.csv "
 
 手動オーバーライド: `CODEX_SANDBOX=danger-full-access bash codex-parallel.sh ...`
 
+### 停止と差し替え（2026-10-31）
+
+- Codex の stdin は常に `/dev/null`（背景の Bash から起動しても `Reading additional input from stdin...` で止まらない）。
+- H1 の watchdog は、起動から tool call が 0 回で、Codex の event log も伸びないまま `CODEX_H1_START_IDLE_SEC`（既定 `min(CODEX_H1_NO_PROGRESS_SEC, 900)` 秒）たつと `no-progress-from-start` で止める。起動ログに `H1 watchdog: alive pid …` が出る（出なければ watchdog は動いていない）。
+- `CODEX_REPLACE_WORKTREE=1` は、未 commit の作業を先に `chore(wip): …`（`Agent-Lane: codex`）として branch に残す。
+  - 次のときは差し替えない: worktree が別ブランチや detached HEAD にある、rebase / merge / cherry-pick の途中、`.git` の参照が壊れている、秘密に見えるか 10 MB を超える未追跡ファイルがある、commit hook が拒否した。
+  - `CODEX_REPLACE_SAVE_WIP=0` で保存せずに捨てる（上の「差し替えない」条件は、そのときも効く）。
+- `CODEX_H1_START_IDLE_SEC` の `0` や読めない値は既定値になる。この規則だけを外すには、大きな値を置く。
+
 ## tasks.json例
 ```json
 {
