@@ -122,7 +122,14 @@ grep -q 'scripts/check-plugin-ids.py" "$REPO_DIR/settings.json" "$installed_plug
   && ok "L4 setup.sh runs scripts/check-plugin-ids.py against the live settings.json" || bad "L4 wiring" "setup.sh does not call the check with the live file"
 
 # --- L2 / L3 / L4 live: the enforcer ------------------------------------------
-PLUGIN_ROOT="$(ls -d "$HOME"/.claude/plugins/cache/claude-code-harness-marketplace/harness/*/ 2>/dev/null | sort -V | tail -1)"
+# The installed plugin is the one installed_plugins.json records, not the highest cache directory:
+# after a switch both 5.16.0/ and 5.16.0-cor.1/ stay, and `sort -V` puts "5.16.0/" last (#456 review).
+PLUGIN_ROOT="$(python3 -c 'import json,os,sys
+try:
+    d = json.load(open(os.path.expanduser("~/.claude/plugins/installed_plugins.json")))
+    print(d["plugins"]["harness@claude-code-harness-marketplace"][0]["installPath"])
+except Exception:
+    sys.exit(0)' 2>/dev/null)"
 BIN="${HARNESS_FLOOR_BIN:-${PLUGIN_ROOT%/}/bin/harness}"
 if [[ ! -x "$BIN" ]]; then
   skp "L2 harness enforcer not installed on this machine"
@@ -216,9 +223,14 @@ for r in json.load(open(sys.argv[1]))["egress"]["incident_inputs"]: print(r["id"
       r="$(decide "$cmd")"
       [[ "$r" == RUNTIME_FLOOR:egress* ]] && ok "L3 mutation: $id denied once the declared env is removed" || bad "L3 mutation $id" "allowed without the env: $cmd"
     done
-    grep -q "HARNESS_RUNTIME_FLOOR_EGRESS_READ_ALLOW" "${PLUGIN_ROOT%/}/go/internal/runtimefloor/egress_policy.go" 2>/dev/null \
-      || [[ -n "${HARNESS_FLOOR_BIN:-}" ]] \
-      && ok "L3 the enforcer reads both declared egress variables" || bad "L3 source" "egress_policy.go does not read the read-allowlist variable"
+    # The binary that ran must contain both variable names (bin/harness may be the shell shim, so
+    # its platform binaries next to it are read too).
+    reads=0
+    for f in "$BIN" "${BIN%/*}"/harness-*; do
+      [[ -f "$f" ]] && grep -aq HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW "$f" && grep -aq HARNESS_RUNTIME_FLOOR_EGRESS_READ_ALLOW "$f" && reads=1 && break
+    done
+    [[ $reads -eq 1 ]] && ok "L3 the enforcer binary reads both declared egress variables" \
+      || bad "L3 binary" "neither $BIN nor its platform binaries name HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW and _READ_ALLOW"
   else
     while IFS=$'\t' read -r id want cmd; do
       r="$(decide "$cmd" "${EGRESS_ENV[@]}")"

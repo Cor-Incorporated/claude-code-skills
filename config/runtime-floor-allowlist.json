@@ -63,7 +63,7 @@
   "egress": {
     "enforced": true,
     "requires_enforcer": "5.16.0-cor.1",
-    "design": "aidd-governance ADR-014 (2026-10-31). (i) direction and method decide: a read (GET/HEAD, no upload) of a declared public registry passes, a write (POST, form, upload, raw socket, remote copy) to any host outside the cluster is denied, registries included, and a read from an undeclared host is denied; (ii) the cluster and this machine are not egress; (iii) only commands that run are judged: heredoc bodies nothing executes, comments and the arguments of echo/printf/grep are text; (iv) a destination the command computes fails closed for a write; (v) every deny reaches guard-ledger.jsonl through hooks/harness-guardrail-ledger.sh (#445); (vi) retire_if below.",
+    "design": "aidd-governance ADR-014 (2026-10-31). (i) direction and method decide: a read (GET/HEAD, no upload) of a declared public registry passes, a write (POST, form, upload, raw socket, remote copy) to any host outside the cluster is denied, registries included, and a read from an undeclared host is denied; (ii) the cluster and this machine are not egress; (iii) only commands that run are judged: heredoc bodies nothing executes, comments and the arguments of echo/printf/grep are text; (iv) a destination the command computes fails closed for a write; (v) every deny is written to the plugin's audit file <project>/.claude/state/audit/guardrail-fires.jsonl, and reaches guard-ledger.jsonl through hooks/harness-guardrail-ledger.sh once #445 (draft, owner decision on the 30th registration) is deployed; (vi) retire_if below.",
     "replaces": "5.16.0 checkEgress (lexical scan of the whole command text). False-positive rate on 2026-10-30: 6 of 8 = 75 %, over the ADR-006 retirement line of 50 %.",
     "never_set": "HARNESS_RUNTIME_FLOOR_EGRESS=off disables the whole category and is inherited by codex/cursor launched from a Claude Bash call.",
     "internal": {
@@ -197,10 +197,11 @@
       "false_positive_rate_over": 0.5,
       "window_days": 30,
       "or_zero_fires_days": 90,
-      "measured_from": "guard-ledger.jsonl rows with hook=harness-guardrail and rule RUNTIME_FLOOR:egress (bridge in #445). The deny reason carries the kind (egress:read/write/copy/socket/code) and the host; each row is marked fp or tp in the monthly ADR-006 review.",
+      "measured_from": "guard-ledger.jsonl rows with hook=harness-guardrail and rule RUNTIME_FLOOR:egress (needs the #445 bridge deployed; until then the plugin audit file). The deny reason carries the kind (egress:read/write/copy/socket/code/nested) and the host; each row is marked fp or tp in the monthly ADR-006 review.",
       "redesign_if": "deliberate lexical evasion forms (the families in Cor-Incorporated/claude-code-harness COR-PATCHES.md: quoting, other tools' delimiters, line structure, option spelling, indirection, unread programs) show up as false positives or misses in the guard-ledger review of real use"
     },
-    "reviewed": "Cor-Incorporated/claude-code-harness#1: Codex round 1 P1 x11 / P2 x2 and round 2 P1 x14; adversarial round 1 CRITICAL x1 / MEDIUM x1 / LOW x4 and round 2 CRITICAL 0 / HIGH 0 / MEDIUM x1 / LOW x2. Every input is a Go test in the mirror, red on the head it was found at.",
-    "out_of_scope": "A lexical guard, not a sandbox (owner gate 2026-10-31): the forms an agent ordinarily types show 0 CRITICAL/HIGH; deliberate lexical evasions are known residuals. Every deny still reaches guard-ledger.jsonl."
+    "reviewed": "Cor-Incorporated/claude-code-harness#1 (merged a2e2a31): Codex round 1 P1 x11 / P2 x2, round 2 P1 x14, round 3 P1 x10 (ordinary forms fixed, deliberate lexical evasions listed as residuals); adversarial round 1 CRITICAL x1 / MEDIUM x1 / LOW x4, round 2 CRITICAL 0 / HIGH 0 / MEDIUM x1 / LOW x2. Every input is a Go test in the mirror.",
+    "out_of_scope": "A lexical guard, not a sandbox (owner gate 2026-10-31): the forms an agent ordinarily types show 0 CRITICAL/HIGH; deliberate lexical evasions are known residuals. Every deny is in the plugin's audit file; the guard ledger gets it once the #445 bridge is deployed.",
+    "requires_commit": "a2e2a31b11d505df6fbf453c05a69e299814276b"
   }
 }
