@@ -103,7 +103,7 @@ python3 -c 'import json,os;d=json.load(open(os.path.expanduser("~/.claude/plugin
 cd ~/Developer/claude-code-skills && bash tests/test-runtime-floor-allowlist.sh | tail -2
 ```
 
-`pass=64 fail=0 skip=0`（2026-10-31 に mirror の build で実測した値。SKIP が 1 なら、まだ 5.16.0 が読まれている）。
+`pass=70 fail=0 skip=0`（2026-10-31 14:16 JST に mirror の build 310a11b で実測した値。SKIP が 1 なら、まだ 5.16.0 が読まれている）。
 
 ```bash
 cd ~/Developer/claude-code-skills && bash tests/test-auto-broadcast-optout.sh | tail -2
