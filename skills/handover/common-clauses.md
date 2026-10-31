@@ -125,6 +125,28 @@
   `Evidence: <実行コマンド> | <生出力の要点 or ログパス> | <実行時刻>`
 - 撤収 3 欄を書く: 回収コミット SHA / 削除した worktree・ブランチ / 残す判断待ち在庫（理由つき）。
 
+### 秘密の登録と UI 手順（2026-10-31 のインシデント）
+
+cor-os の `CLOUDFLARE_ACCESS_READ_API_TOKEN` の登録に、22:4x〜23:35 で 5 回試して約 50 分かかった。
+
+- 無効な値が 2 回 GitHub secret に入り（6111 Invalid format / 400 Authentication failed）、release run が 2 本、認証で落ちた。
+- 手順は旧い UI の文言、token の置き場所、token の長さ（40 文字と決め打ち。実物は 53 文字）を、実物を見ずに書いていた。
+- 「token をコピー → コマンドを貼る」の順で、コマンドを貼った時点でクリップボードが上書きされた。
+- verify が active でなくても `gh secret set` が走る 1 行を渡していた。
+
+決まり:
+
+1. **秘密の登録は `scripts/register-secret-verified.sh` で渡す**（`~/.claude/scripts/` に配備）。この script は次の順で動く:
+   1. 値を表示しない入力で受ける。
+   2. 提供元の verify が通るかを確かめる。
+   3. 通ったときだけ `gh secret set` する。
+   4. 一時ファイルを消す。
+   順番やクリップボードを人に委ねない。検証のない `gh secret set` の 1 行を手順に書かない
+   （`tests/test-handover-secret-steps.sh` が、`gh secret set` の行の前 5 行に検証が無い手順を落とす）。
+   例: `bash ~/.claude/scripts/register-secret-verified.sh CLOUDFLARE_ACCESS_READ_API_TOKEN Cor-Incorporated/cor-os --cloudflare-account <account id>`
+2. **UI の操作は、スクショか実機で確かめた文言だけを書く。** 確かめていない画面名・ボタン名は「未確認」と書く。
+3. **値の形式（長さ・文字種・接頭辞）を決め打ちしない。** 形式を確かめるのは提供元の verify であって、手順書の推測ではない。
+
 ### 禁止
 
 - 認証情報を文書・コミット・PR 本文に含めない。

@@ -11,3 +11,5 @@ Run each command you cite once, on its own: nothing joined to it with `;`, `&&`,
 <!-- exit-status: echo -->
 Run each command you cite once, as `<command>; echo exit=$?`, with nothing else joined to it by `;`, `&&`, `||`, `|` or `&`. This tool does not always report the exit code to the gate, so the gate reads the `exit=N` line that the echo prints right after the command. Cite the command itself in the Evidence line, without the echo. Do not cite a command that you ran only inside a longer line.
 <!-- end exit-status -->
+
+To store a secret, use `bash ~/.claude/scripts/register-secret-verified.sh <NAME> <owner/repo> --verify-url <URL>`: it takes the value from a hidden prompt and stores it only after the provider's verify passes. Never hand anyone a bare `gh secret set`, never leave the copy/paste order to a person, and never assume a value's length or format.
