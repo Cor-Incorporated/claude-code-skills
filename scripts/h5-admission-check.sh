@@ -227,9 +227,10 @@ fi
 # the template, and every template-shaped PR was read as a guard PR. Only
 # checked rows (`- [x]`) and prose count. tests/test-h5-admission.sh pins this
 # with the real template as fixture and pairs it with the template rows; when
-# the template drops the unchecked rows, that pair row goes red and this strip
-# can be retired.
-PR_BODY_DECL="$(printf '%s\n' "$PR_BODY" | grep -vE '^[[:space:]]*- \[ \]|^[[:space:]]*#{1,6}[[:space:]]' || true)"
+# the template drops the unchecked rows, that pair row goes red and the row
+# strip can be retired; the heading strip retires with the template's
+# "block-capable guard" heading (same pair row checks that heading).
+PR_BODY_DECL="$(printf '%s\n' "$PR_BODY" | grep -vE '^[[:space:]]*[-*+] \[ \]|^[[:space:]]*#{1,6}[[:space:]]' || true)"
 if printf '%s' "$PR_BODY_DECL" | grep -qiE 'H5-guard:\s*yes|ブロック権限|完了判定検証器|block-capable guard'; then
   is_guard_pr=1
 fi
