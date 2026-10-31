@@ -215,7 +215,9 @@ chmod +x "$SCRIPTS_DIR"/*.sh 2>/dev/null || true
 echo "  Copied $( (ls "$REPO_DIR"/scripts/* 2>/dev/null || true) | wc -l | tr -d ' ') script files"
 # 6b. Auto-broadcast opt-out per repository (aidd-governance#230 F8): the harness
 # plugin broadcast every .md/.sh/.go edit, Claude Code memory paths included.
-python3 "$REPO_DIR/scripts/apply-auto-broadcast-optout.py" "$REPO_DIR/config/auto-broadcast-optout.json"
+# A failure here is reported and never stops setup.sh (steps 7-9 must still run; #457 review).
+python3 "$REPO_DIR/scripts/apply-auto-broadcast-optout.py" "$REPO_DIR/config/auto-broadcast-optout.json" \
+  || echo "  ! auto-broadcast opt-out not fully applied (rc=$?); setup continues" >&2
 
 # 7. Prune retired hooks/scripts + gate state (ADR-006 minimal safety net)
 # setup.sh only ever COPIES; nothing else deletes stale deployed files. This

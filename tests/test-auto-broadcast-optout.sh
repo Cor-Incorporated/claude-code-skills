@@ -56,12 +56,61 @@ out2="$(python3 "$APPLY" "$DECL" --home "$H")"
 out="$(python3 "$APPLY" "$DECL" --home "$H" --check)"; rc=$?
 [[ $rc -eq 0 ]] && ok "O1 --check passes once applied (rc=0)" || bad "O1 check after" "rc=$rc $out"
 
+# Escapes from the #457 review: a declaration can only list repositories under ~/Developer, and the
+# file name and content are fixed in the applier.
+mkdir -p "$H/outside/victim/.git" "$H/Developer/linked/.git"
+ln -s "$H/outside" "$H/Developer/linked/.claude"
+python3 - "$DECL" "$SB/evil.json" "$H" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["repos"] = ["~/../outside/victim", sys.argv[3] + "/outside/victim", "~/Developer/linked", "~/Developer/claude-code-skills"]
+json.dump(d, open(sys.argv[2], "w"))
+PY
+out="$(python3 "$APPLY" "$SB/evil.json" --home "$H")"; rc=$?
+[[ $rc -eq 0 && ! -e "$H/outside/victim/.claude" && ! -e "$H/outside/sessions" ]] \
+  && ok "O1 ~/../, an absolute path and a .claude symlink out of the repository write nothing outside" \
+  || bad "O1 escape" "rc=$rc $(ls -R "$H/outside" 2>/dev/null | tr '\n' ' ') $out"
+for field in file content; do
+  python3 - "$DECL" "$SB/evil-$field.json" "$field" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+if sys.argv[3] == "file":
+    d["file"] = "../../.claude/settings.local.json"
+else:
+    d["content"] = {"env": {"HARNESS_RUNTIME_FLOOR_EGRESS": "off"}}
+json.dump(d, open(sys.argv[2], "w"))
+PY
+  out="$(python3 "$APPLY" "$SB/evil-$field.json" --home "$H")"; rc=$?
+  [[ $rc -eq 2 && ! -e "$H/.claude/settings.local.json" ]] \
+    && ok "O1 a declaration that changes the $field is refused (rc=2, nothing written)" || bad "O1 $field" "rc=$rc $out"
+done
+mkdir -p "$H/Developer/broken/.git" && printf 'x' >"$H/Developer/broken/.claude"
+python3 - "$DECL" "$SB/broken.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["repos"] = ["~/Developer/broken", "~/Developer/ai-cluster"]
+json.dump(d, open(sys.argv[2], "w"))
+PY
+out="$(python3 "$APPLY" "$SB/broken.json" --home "$H")"; rc=$?
+[[ $rc -eq 0 && "$out" == *"broken: NotADirectoryError"* && "$out" == *"ai-cluster: already"* ]] \
+  && ok "O1 an error in one repository is reported and the next one still runs (rc=0)" || bad "O1 per-repo error" "rc=$rc $out"
+
 # --- O2 ---------------------------------------------------------------------
 grep -q 'python3 "$REPO_DIR/scripts/apply-auto-broadcast-optout.py" "$REPO_DIR/config/auto-broadcast-optout.json"' "$ROOT/setup.sh" \
   && ok "O2 setup.sh applies the declaration" || bad "O2 wiring" "setup.sh does not call the applier with the declaration"
+# setup.sh runs under set -e: a failing applier must not stop steps 7-9.
+grep -A1 'scripts/apply-auto-broadcast-optout.py' "$ROOT/setup.sh" | grep -q '|| echo' \
+  && ok "O2 a failing applier does not stop setup.sh (|| guard)" || bad "O2 abort guard" "step 6b has no || guard under set -e"
 
 # --- O3 ---------------------------------------------------------------------
-PLUGIN_ROOT="$(ls -d "$HOME"/.claude/plugins/cache/claude-code-harness-marketplace/harness/*/ 2>/dev/null | sort -V | tail -1)"
+# The installed plugin is the one installed_plugins.json records, not the highest cache directory:
+# after a switch both 5.16.0/ and 5.16.0-cor.1/ stay, and `sort -V` puts "5.16.0/" last (#456 review).
+PLUGIN_ROOT="$(python3 -c 'import json,os,sys
+try:
+    d = json.load(open(os.path.expanduser("~/.claude/plugins/installed_plugins.json")))
+    print(d["plugins"]["harness@claude-code-harness-marketplace"][0]["installPath"])
+except Exception:
+    sys.exit(0)' 2>/dev/null)"
 BIN="${HARNESS_FLOOR_BIN:-${PLUGIN_ROOT%/}/bin/harness}"
 if [[ ! -x "$BIN" ]]; then
   skp "O3 harness plugin not installed on this machine"
