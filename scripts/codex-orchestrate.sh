@@ -45,6 +45,7 @@
 #   CODEX_H1_BUDGET_USD      — 全モデルの推定予算 USD (default: 50 / session epoch)
 #   CODEX_H1_MAX_ITERATIONS  — 反復上限 (default: 10)
 #   CODEX_H1_NO_PROGRESS_SEC — 無進捗タイムアウト秒 (default: 2700 = 45分)
+#   CODEX_H1_START_IDLE_SEC  — 起動から tool call 0、event log も伸びないまま止める秒 (default: min(上, 900))
 #   CODEX_H1_WRAPPER_ENFORCE — 0 で watchdog 無効化（hook 側の block は残る）
 #   CSV fan-out は自前で 1 委任として計上する。JSON worktree モードは
 #   codex-parallel.sh へ委譲するので、そちらが per-branch に計上する。
@@ -74,6 +75,7 @@ if ! declare -F h1_init >/dev/null 2>&1; then
     h1_stop_watchdog() { :; }
     h1_summary() { printf 'H1: runtime library not installed\n'; }
 fi
+declare -F h1_watchdog_status >/dev/null 2>&1 || h1_watchdog_status() { printf 'H1 watchdog: NOT RUNNING (runtime library has no status)\n'; }
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -236,6 +238,7 @@ CSVEOF
     # H1: the CSV fan-out is one Codex process, so it is one delegation.
     H1_ID="${CODEX_H1_DELEGATION:-codex-csv:$(basename "$CSV_FILE")}"
     h1_init "$H1_ID" "$REPO_PATH"
+    export CODEX_H1_EVENT_LOG="$CODEX_EVENT_LOG"
     h1_start_watchdog "$H1_ID" "$$"
     log "$(h1_watchdog_status)"
 

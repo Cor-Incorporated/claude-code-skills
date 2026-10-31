@@ -127,9 +127,24 @@ if forced and forced != "budget-cap":
 # records it on the first tool call) and the model scope below cannot apply. 2026-10-31: the L1 run sat on
 # "Reading additional input from stdin..." for 2 h 18 m with tool_calls 0 and model None, and the idle check further
 # down was unreachable behind `if not restricted`. A run with no tool call is stuck whatever the model.
-start_idle = int(os.environ.get("CODEX_H1_START_IDLE_SEC") or min(no_progress, 900))
+def env_sec(name, default):
+    """A positive number of seconds from the environment, else the default ('900s', '0' and '-1' are the default:
+    one typo must not switch every rule off or stop every run; #472 review)."""
+    try:
+        v = float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+    return int(v) if v > 0 else default
+start_idle = env_sec("CODEX_H1_START_IDLE_SEC", min(no_progress, 900))
+# Codex's own --json event log keeps growing while it works, even when the hook does not count (untrusted, no jq);
+# in the stdin hang it held one line written at start (#472 review).
+events = os.environ.get("CODEX_H1_EVENT_LOG") or ""
+try:
+    events_ts = int(os.path.getmtime(events)) if events else 0
+except OSError:
+    events_ts = 0
 if int(s.get("tool_calls") or 0) - int(s.get("tool_calls_at_start") or 0) <= 0 and \
-        now - max(int(os.path.getmtime(path)), int(s.get("watchdog_started_ts") or 0)) > start_idle:
+        now - max(int(os.path.getmtime(path)), int(s.get("watchdog_started_ts") or 0), events_ts) > start_idle:
     print("no-progress-from-start"); raise SystemExit(0)
 # Budget caps apply to all models. Preserve no-progress / iteration model scope.
 restricted_tokens = [
@@ -290,10 +305,20 @@ h1_watchdog_status() {
     if ! h1_enabled; then
         printf 'H1 watchdog: OFF (CODEX_H1_WRAPPER_ENFORCE=0); only the PreToolUse hook enforces\n'
     elif [ -n "${H1_WATCHDOG_PID:-}" ] && kill -0 "$H1_WATCHDOG_PID" 2>/dev/null; then
+        local idle
+        idle="$(python3 -c '
+import os, sys
+def env_sec(name, default):
+    try:
+        v = float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+    return int(v) if v > 0 else default
+no_progress = env_sec("CODEX_H1_NO_PROGRESS_SEC", 2700)
+print(env_sec("CODEX_H1_START_IDLE_SEC", min(no_progress, 900)))
+' 2>/dev/null || echo "?")"
         printf 'H1 watchdog: alive pid %s, poll %ss, idle-from-start %ss, no-progress %ss\n' \
-            "$H1_WATCHDOG_PID" "${CODEX_H1_POLL_SEC:-30}" \
-            "${CODEX_H1_START_IDLE_SEC:-$(( ${CODEX_H1_NO_PROGRESS_SEC:-2700} < 900 ? ${CODEX_H1_NO_PROGRESS_SEC:-2700} : 900 ))}" \
-            "${CODEX_H1_NO_PROGRESS_SEC:-2700}"
+            "$H1_WATCHDOG_PID" "${CODEX_H1_POLL_SEC:-30}" "$idle" "${CODEX_H1_NO_PROGRESS_SEC:-2700}"
     else
         printf 'H1 watchdog: NOT RUNNING (start failed); the run has only the wall-clock timeout\n'
     fi
@@ -320,6 +345,8 @@ print("H1: epoch spend $%.2f/$%.2f, total estimate $%.2f (%s) | tool_calls %s | 
          float(s.get("budget_usd") or 0), float(s.get("spend_usd") or 0),
          s.get("budget_source", "unknown"), s.get("tool_calls", 0),
          s.get("iterations", 0), s.get("max_iterations", 0),
-         s.get("last_block_rule") or "none", s.get("forced_stop") or "none"))
+         s.get("last_block_rule") or "none",
+         (s.get("forced_stop") if s.get("forced_stop") and int(s.get("last_block_ts") or 0) >= int(s.get("watchdog_started_ts") or 0)
+          else "none")))
 PY
 }

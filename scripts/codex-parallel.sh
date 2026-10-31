@@ -420,17 +420,61 @@ if [[ -d "$WORKTREE_PATH" ]]; then
     # Uncommitted work is saved on the branch before the forced removal, unless CODEX_REPLACE_SAVE_WIP=0.
     # 2026-10-31: every L1 relaunch with CODEX_REPLACE_WORKTREE=1 would have deleted the previous run's edits;
     # the orchestrator committed them by hand each time.
-    if [[ -n "$(git -C "$WORKTREE_PATH" status --porcelain 2>/dev/null)" ]]; then
+    # The worktree must be a valid checkout of this branch with no operation in progress, or the save could land on
+    # no branch (detached HEAD, a rebase stopped by a conflict), on the main checkout (a missing .git link makes
+    # `git -C` walk up), or be skipped (a failing `git status` read as clean) (claude-code-skills#472 review).
+    wt_root="$(git -C "$WORKTREE_PATH" rev-parse --show-toplevel 2>/dev/null)" || wt_root=""
+    wt_ref="$(git -C "$WORKTREE_PATH" symbolic-ref -q HEAD 2>/dev/null)" || wt_ref=""
+    wt_gitdir="$(git -C "$WORKTREE_PATH" rev-parse --absolute-git-dir 2>/dev/null)" || wt_gitdir=""
+    wt_here="$(cd "$WORKTREE_PATH" && pwd -P)"
+    if [[ "$wt_root" != "$wt_here" || "$wt_ref" != "refs/heads/${BRANCH_NAME}" \
+          || -z "$wt_gitdir" || -d "$wt_gitdir/rebase-merge" || -d "$wt_gitdir/rebase-apply" \
+          || -f "$wt_gitdir/MERGE_HEAD" || -f "$wt_gitdir/CHERRY_PICK_HEAD" ]]; then
+        error "Not replacing ${WORKTREE_PATH}: root=${wt_root:-none} HEAD=${wt_ref:-detached};"
+        error "  expected its own checkout on refs/heads/${BRANCH_NAME} with no rebase/merge/cherry-pick in progress."
+        error "  Finish or abort the operation there, or remove the worktree yourself after saving what you need."
+        exit 1
+    fi
+    if ! wt_status="$(git -C "$WORKTREE_PATH" status --porcelain)"; then
+        error "git status failed in ${WORKTREE_PATH}; not replacing it."
+        exit 1
+    fi
+    if [[ -n "$wt_status" ]]; then
         if [[ "${CODEX_REPLACE_SAVE_WIP:-1}" == "1" ]]; then
+            # Untracked files that look like secrets or are large are not swept into a commit the wrapper later
+            # tells you to push.
+            risky="$(git -C "$WORKTREE_PATH" ls-files --others --exclude-standard -z | python3 -c '
+import os, re, sys
+root = sys.argv[1]
+for p in sys.stdin.read().split("\0"):
+    if not p:
+        continue
+    base = os.path.basename(p)
+    secret = re.match(r"(\.env($|\.(?!example$|sample$|template$))|id_(rsa|dsa|ecdsa|ed25519)|.*\.(pem|key|p12|pfx|keystore)$|.*credentials)", base)
+    try:
+        big = os.path.getsize(os.path.join(root, p)) > 10 * 1024 * 1024
+    except OSError:
+        big = False
+    if secret or big:
+        print(p + (" (large)" if big and not secret else ""))
+' "$WORKTREE_PATH")"
+            if [[ -n "$risky" ]]; then
+                error "Not replacing ${WORKTREE_PATH}: untracked files that must not be committed automatically:"
+                printf '  %s\n' "$risky" >&2
+                error "  Move or ignore them, commit what you want yourself, or leave CODEX_REPLACE_WORKTREE unset."
+                exit 1
+            fi
+            log "Saving uncommitted work before the replacement:"
+            printf '%s\n' "$wt_status" | sed 's/^/    /'
             if git -C "$WORKTREE_PATH" add -A \
                 && git -C "$WORKTREE_PATH" commit -q \
-                    -m "wip(${BRANCH_NAME}): save uncommitted work before the worktree is replaced" \
+                    -m "chore(wip): save uncommitted work on ${BRANCH_NAME} before the worktree is replaced" \
                     -m "Saved by codex-parallel.sh (CODEX_REPLACE_WORKTREE=1) before git worktree remove --force." \
                     -m "Agent-Lane: codex"; then
                 log "Saved uncommitted work: $(git -C "$WORKTREE_PATH" rev-parse --short HEAD) on ${BRANCH_NAME}"
             else
-                error "Could not commit the uncommitted work in ${WORKTREE_PATH}; not replacing it."
-                error "Commit or stash it yourself, or set CODEX_REPLACE_SAVE_WIP=0 to discard it."
+                error "Could not commit the uncommitted work in ${WORKTREE_PATH} (a commit hook may have refused it);"
+                error "  not replacing it. Commit it yourself, or leave CODEX_REPLACE_WORKTREE unset."
                 exit 1
             fi
         else
@@ -520,6 +564,7 @@ fi
 # H1: budget / iteration / no-progress stop conditions for this delegation.
 H1_ID="${CODEX_H1_DELEGATION:-codex-parallel:${BRANCH_NAME}}"
 h1_init "$H1_ID" "$WORKTREE_PATH"
+export CODEX_H1_EVENT_LOG="$CODEX_EVENT_LOG"
 h1_start_watchdog "$H1_ID" "$$"
 log "$(h1_watchdog_status)"
 
