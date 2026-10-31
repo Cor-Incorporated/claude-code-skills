@@ -94,6 +94,69 @@ post "$HOOK" r11 "gh pr view 606 --json headRefOid --jq .headRefOid" "$SHA"
 o="$(stop "$HOOK" r11 "$REPORT")"
 blocked "$o" && ok "R11 gh pr view without a merged state does not bind" || bad "R11 headRefOid only" "$o"
 
+# --- #470 review: a read binds only what it read ---------------------------------------------------------------
+# R12 a read of ANOTHER pull request does not bind the claimed one
+post "$HOOK" r12 "gh pr view 445 --repo Cor-Incorporated/claude-code-skills --json state" '{"state":"MERGED"}'
+o="$(stop "$HOOK" r12 "$REPORT")"
+blocked "$o" && ok "R12 a read of #445 does not bind a claim about #606" || bad "R12 other PR" "$o"
+
+# R13 gh pr list --state merged is not a read of one pull request
+post "$HOOK" r13 "gh pr list --repo Cor-Incorporated/ai-cluster --state merged" "606  docs: x  MERGED"
+o="$(stop "$HOOK" r13 "$REPORT")"
+blocked "$o" && ok "R13 gh pr list --state merged does not bind" || bad "R13 pr list" "$o"
+
+# R14 plain-text gh pr view of an OPEN PR whose body says (MERGED)
+post "$HOOK" r14 "gh pr view 606 --repo Cor-Incorporated/ai-cluster" $'title:\tx\nstate:\tOPEN\n--\nThis replaces #600 (MERGED).'
+o="$(stop "$HOOK" r14 "$REPORT")"
+blocked "$o" && ok "R14 plain-text output that only mentions MERGED does not bind" || bad "R14 plain text" "$o"
+
+# R15 a --jq that prints a literal
+post "$HOOK" r15 "gh pr view 606 --json state --jq '\"MERGED\"'" "MERGED"
+o="$(stop "$HOOK" r15 "$REPORT")"
+blocked "$o" && ok "R15 --jq '\"MERGED\"' (a literal) does not bind" || bad "R15 jq literal" "$o"
+
+# R16 command substitution inside the cd argument
+post "$HOOK" r16 'cd "$(echo MERGED >&2; pwd)" && gh pr view 606 --json state --jq .state' $'MERGED\nOPEN'
+o="$(stop "$HOOK" r16 "$REPORT")"
+blocked "$o" && ok "R16 \$( ) in the cd argument does not count" || bad "R16 cd subst" "$o"
+
+# R17 gh api pulls/<n>/comments is not the pull request
+post "$HOOK" r17 "gh api repos/Cor-Incorporated/ai-cluster/pulls/606/comments" '[{"body":"MERGED","merged":true}]'
+o="$(stop "$HOOK" r17 "$REPORT")"
+blocked "$o" && ok "R17 gh api …/pulls/<n>/comments does not bind" || bad "R17 sub-path" "$o"
+
+# R18 git ls-remote . (local refs) does not bind a push
+post "$HOOK" r18 "git ls-remote . refs/heads/feat/l1-practical-bench" "$SHA	refs/heads/feat/l1-practical-bench"
+o="$(stop "$HOOK" r18 "$PUSHED")"
+blocked "$o" && ok "R18 git ls-remote . does not bind a push" || bad "R18 ls-remote ." "$o"
+
+# R19 a push read does not bind a merge claim
+post "$HOOK" r19 "git ls-remote origin refs/heads/feat/l1-practical-bench" "$SHA	refs/heads/feat/l1-practical-bench"
+o="$(stop "$HOOK" r19 "$REPORT")"
+blocked "$o" && ok "R19 a push read does not bind a merge claim" || bad "R19 kind" "$o"
+
+# R20 a push read of another ref does not bind
+post "$HOOK" r20 "gh api repos/Cor-Incorporated/ai-cluster/commits/main --jq .sha" "$SHA"
+o="$(stop "$HOOK" r20 "$PUSHED")"
+blocked "$o" && ok "R20 a read of main does not bind a push of feat/l1-practical-bench" || bad "R20 other ref" "$o"
+
+# R21 git -C <dir> ls-remote and GH_REPO=… gh pr view are honest forms and bind
+post "$HOOK" r21 "git -C ~/Developer/ai-cluster ls-remote origin refs/heads/feat/l1-practical-bench" "$SHA	refs/heads/feat/l1-practical-bench"
+o="$(stop "$HOOK" r21 "$PUSHED")"
+blocked "$o" && bad "R21 git -C <dir> ls-remote binds" "$o" || ok "R21 git -C <dir> ls-remote binds"
+post "$HOOK" r22 "GH_REPO=Cor-Incorporated/ai-cluster gh pr view 606 --json state" '{"state":"MERGED"}'
+o="$(stop "$HOOK" r22 "$REPORT")"
+blocked "$o" && bad "R22 GH_REPO=… gh pr view binds" "$o" || ok "R22 GH_REPO=… gh pr view binds"
+
+# R23 a claim of both kinds needs both reads
+BOTH=$'Lane L1 pushed feat/l1-practical-bench and #606 is merged.\nStatus: partial'
+post "$HOOK" r23 "gh pr view 606 --json state" '{"state":"MERGED"}'
+o="$(stop "$HOOK" r23 "$BOTH")"
+blocked "$o" && ok "R23 a merge read alone does not bind a push-and-merge claim" || bad "R23 both kinds" "$o"
+post "$HOOK" r23 "git ls-remote origin refs/heads/feat/l1-practical-bench" "$SHA	refs/heads/feat/l1-practical-bench"
+o="$(stop "$HOOK" r23 "$BOTH")"
+blocked "$o" && bad "R23b both reads bind a push-and-merge claim" "$o" || ok "R23b both reads bind a push-and-merge claim"
+
 # --- link: the reporter case through a mutant without the read acceptance -----------------------------------
 MUT="$SB/mutant"
 mkdir -p "$MUT/lib"
@@ -103,7 +166,7 @@ python3 - "$MUT/lib/aidd_cc_controls.py" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
-old = '    """A successful read whose output shows a merged pull request or a pushed commit."""\n'
+old = '    """Every claimed kind has a successful read of that kind whose object the answer names."""\n'
 assert old in s, "mutation anchor missing"
 s = s.replace(old, old + "    return False  # MUTANT: reads are not evidence\n", 1)
 open(p, "w", encoding="utf-8").write(s)

@@ -12,7 +12,9 @@ Adapters translate that into each harness's wire format.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+import shlex
 import time
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from aidd_cc_eval import deadline_status, file_sha
 from aidd_cc_text import (
     ADJUDICATION_RE,
     FIX_SUBJECT_RE,
+    NEGATED_COMPLETION_RE,
     cmd_in_ledger,
     commit_subject,
     declared_status,
@@ -780,45 +783,159 @@ def _push_executed(rows: list[dict]) -> bool:
 
 # ADR-015 (aidd-governance#235, 2026-10-31): a session that REPORTS another lane's push/merge binds the claim by
 # reading it back, not by doing it (the orchestrator was blocked 5+ times for relaying a lane's merge). The subject of
-# the sentence is not classified (ADR-009): the read is accepted as evidence like the push itself. A read counts only
-# when it ran alone or after one `cd`, and only when its own output shows the state, so `gh pr view 1 && echo MERGED`
-# or an OPEN pull request does not count.
-_MERGE_READ_RE = re.compile(r"(gh pr (view|list)|gh api\s+\S*pulls/\d+)\b")
-_PUSH_READ_RE = re.compile(r"(git ls-remote|gh api\s+\S*(commits|branches|git/refs?)/)")
-_MERGED_OUT_RE = re.compile(
-    r'\bMERGED\b|"merged"\s*:\s*true|"merged_?[aA]t"\s*:\s*"\d{4}-'
-    r'|"mergeCommit"\s*:\s*\{\s*"oid"\s*:\s*"[0-9a-f]{40}"'
-)
-_SHA_OUT_RE = re.compile(r"\b[0-9a-f]{40}\b")
+# the sentence is not classified (ADR-009). A read binds only what it read (claude-code-skills#470 review):
+#   - kind: a merge word needs a merge read, a push word a push read (PUSH_CLAIM_RE's own alternatives, no new words);
+#   - object: the read names a pull request / ref, and the answer must name the same one (#606, /pull/606, the ref or
+#     a 7+ hex prefix of the sha the read returned) — a token match, like the Readback path match;
+#   - shape: one command (after one `cd`, `git -C <dir>` or VAR=value), no $( ) / backticks / <( ), and its output is
+#     parsed, not searched: `gh pr view <n> --json …state…` → state MERGED (or `--jq .state` → MERGED),
+#     `gh api repos/o/r/pulls/<n>` (GET, no sub-path) → merged true (or `--jq .merged` → true),
+#     `gh api repos/o/r/commits|branches/<ref>` / `git/ref(s)/heads/<ref>` → a sha, and
+#     `git ls-remote <remote> <ref>` (a named remote or URL, not `.` or a path) → `<sha>\t<that ref>`.
+_PUSH_WORDS = re.compile(r"(pushed|push済み|push した)", re.IGNORECASE)
+_MERGE_WORDS = re.compile(r"(merged|マージ済み|マージした)", re.IGNORECASE)
+_HEX40 = re.compile(r"^[0-9a-f]{40}$")
+_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
-def _push_read_verified(rows: list[dict]) -> bool:
-    """A successful read whose output shows a merged pull request or a pushed commit."""
+def _claimed_kinds(text: str) -> set[str]:
+    cleaned = NEGATED_COMPLETION_RE.sub(" ", text or "")
+    kinds = set()
+    if _PUSH_WORDS.search(cleaned):
+        kinds.add("push")
+    if _MERGE_WORDS.search(cleaned):
+        kinds.add("merge")
+    return kinds
+
+
+def _opt(words: list[str], *names: str) -> str | None:
+    for i, w in enumerate(words):
+        for n in names:
+            if w == n and i + 1 < len(words):
+                return words[i + 1]
+            if n.startswith("--") and w.startswith(n + "="):
+                return w[len(n) + 1:]
+    return None
+
+
+def _json(out: str):
+    try:
+        return json.loads(out)
+    except ValueError:
+        return None
+
+
+def _read_binding(cmd: str, out: str) -> tuple[str, list[str]] | None:
+    """(kind, object tokens) when <cmd> is one accepted read whose output <out> shows the result, else None."""
+    parts = shell_segments_with_separators(cmd)
+    segs = [seg.strip() for seg, _sep in parts]
+    if len(segs) == 2 and parts[1][1] == "&&" and re.match(r"cd\s", segs[0]):
+        if re.search(r"\$\(|`|<\(", segs[0]):
+            return None
+        segs = segs[1:]
+    if len(segs) != 1 or re.search(r"\$\(|`|<\(", segs[0]):
+        return None
+    try:
+        words = shlex.split(segs[0])
+    except ValueError:
+        return None
+    while words and _ASSIGN.match(words[0]):
+        words = words[1:]
+    if words[:2] == ["git", "-C"] and len(words) > 2:
+        words = ["git"] + words[3:]
+    out = out.strip()
+    if words[:3] == ["gh", "pr", "view"] and len(words) > 3:
+        if _opt(words, "--template", "-t") is not None or "--web" in words or "-w" in words:
+            return None
+        m = re.match(r"(?:https?://\S+/pull/)?(\d+)$", words[3])
+        if not m:
+            return None
+        jq = _opt(words, "--jq", "-q")
+        fields = _opt(words, "--json") or ""
+        if jq is not None:
+            ok = jq.strip() == ".state" and out == "MERGED"
+        else:
+            obj = _json(out)
+            ok = "state" in fields.split(",") and isinstance(obj, dict) and obj.get("state") == "MERGED"
+        return ("merge", ["#" + m.group(1), "/pull/" + m.group(1)]) if ok else None
+    if words[:2] == ["gh", "api"] and len(words) > 2:
+        if _opt(words, "--method", "-X") not in (None, "GET") or any(
+                w in ("-f", "-F", "--field", "--raw-field", "--input") or w.startswith(("--field=", "--raw-field="))
+                for w in words):
+            return None
+        path = next((w for w in words[2:] if w.startswith("repos/") or w.startswith("/repos/")), "")
+        jq = _opt(words, "--jq", "-q")
+        m = re.match(r"/?repos/[^/]+/[^/]+/pulls/(\d+)$", path)
+        if m:
+            if jq is not None:
+                ok = jq.strip() == ".merged" and out == "true"
+            else:
+                obj = _json(out)
+                ok = isinstance(obj, dict) and obj.get("merged") is True
+            return ("merge", ["#" + m.group(1), "/pull/" + m.group(1)]) if ok else None
+        m = re.match(r"/?repos/[^/]+/[^/]+/(?:commits|branches|git/refs?/heads)/(.+)$", path)
+        if m:
+            ref = m.group(1)
+            if jq is not None:
+                sha = out if jq.strip() in (".sha", ".commit.sha", ".object.sha") else ""
+            else:
+                obj = _json(out)
+                sha = ""
+                if isinstance(obj, dict):
+                    for cand in (obj.get("sha"), (obj.get("commit") or {}).get("sha") if isinstance(obj.get("commit"), dict) else None,
+                                 (obj.get("object") or {}).get("sha") if isinstance(obj.get("object"), dict) else None):
+                        if isinstance(cand, str):
+                            sha = cand
+                            break
+            return ("push", [ref, sha[:7]]) if _HEX40.match(sha) else None
+        return None
+    if words[:2] == ["git", "ls-remote"]:
+        args = [w for w in words[2:] if not w.startswith("-")]
+        if len(args) < 2:
+            return None
+        remote, ref = args[0], args[1]
+        if remote == "." or remote.startswith(("/", ".", "~", "file:")):
+            return None
+        short = re.sub(r"^refs/heads/", "", ref)
+        for line in out.splitlines():
+            sha, _tab, name = line.partition("\t")
+            if _HEX40.match(sha.strip()) and (name.strip() == ref or name.strip() == "refs/heads/" + short):
+                return ("push", [short, sha.strip()[:7]])
+        return None
+    return None
+
+
+def _names(text: str, token: str) -> bool:
+    if not token:
+        return False
+    if token.startswith("#"):
+        return bool(re.search(re.escape(token) + r"(?!\d)", text))
+    return token in text
+
+
+def _push_read_verified(rows: list[dict], text: str = "") -> bool:
+    """Every claimed kind has a successful read of that kind whose object the answer names."""
+    kinds = _claimed_kinds(text)
+    bound = set()
     for r in rows:
         if r.get("event") != "post" or r.get("rc") != 0:
             continue
-        parts = shell_segments_with_separators(str(r.get("cmd", "")))
-        segs = [seg.strip() for seg, _sep in parts]
-        if len(segs) == 2 and parts[1][1] == "&&" and re.match(r"cd\s", segs[0]):
-            segs = segs[1:]
-        if len(segs) != 1:
-            continue
-        out = str(r.get("out_sample", ""))
-        if _MERGE_READ_RE.match(segs[0]) and _MERGED_OUT_RE.search(out):
-            return True
-        if _PUSH_READ_RE.match(segs[0]) and _SHA_OUT_RE.search(out):
-            return True
-    return False
+        b = _read_binding(str(r.get("cmd", "")), str(r.get("out_sample", "")))
+        if b and any(_names(text, t) for t in b[1]):
+            bound.add(b[0])
+    return bool(kinds) and kinds <= bound
 
 
-def _push_bound(rows: list[dict]) -> bool:
-    """DOT-INC-026: the session pushed/merged itself, or read the result back (ADR-015)."""
-    return _push_executed(rows) or _push_read_verified(rows)
+def _push_bound(rows: list[dict], text: str = "") -> bool:
+    """DOT-INC-026: the session pushed/merged itself, or read back what the answer names (ADR-015)."""
+    return _push_executed(rows) or _push_read_verified(rows, text)
 
 
 PUSH_UNBOUND = (
-    "push/merge claimed but no successful push/merge command in the session ledger, nor a read that shows it "
-    "(gh pr view … MERGED, gh api …/commits/<ref>, git ls-remote) (DOT-INC-026)"
+    "push/merge claimed but no successful push/merge command in the session ledger, nor a read of what the answer "
+    "names: one command whose output shows it — gh pr view <n> --json state (MERGED), gh api repos/o/r/pulls/<n> "
+    "(merged true), gh api repos/o/r/commits/<ref>, or git ls-remote <remote> <ref> — with that #<n> / ref / sha in "
+    "the answer (DOT-INC-026)"
 )
 
 
@@ -845,7 +962,7 @@ def stop_check(
         # review 2026-10-17 P2): those two bindings run even here; the evidence trailer is not required.
         if (
             has_push_claim(text)
-            and not _push_bound(rows)
+            and not _push_bound(rows, text)
             and not mutated("evidence.readback")
         ):
             problems.append(PUSH_UNBOUND)
@@ -878,7 +995,7 @@ def stop_check(
         # vocabulary backstop is for sessions WITHOUT tool rows (ADR-009; independent review r2 P2)
         if (
             has_push_claim(text)
-            and not _push_bound(rows)
+            and not _push_bound(rows, text)
             and not mutated("evidence.readback")
         ):
             problems.append(PUSH_UNBOUND)
@@ -969,7 +1086,7 @@ def stop_check(
     if has_persist_claim(text) and not mutated("evidence.readback"):
         problems.extend(_readback_problems(text, cwd, _touched_paths(rows)))
     if has_push_claim(text) and not mutated("evidence.readback"):
-        if not _push_bound(rows):
+        if not _push_bound(rows, text):
             problems.append(PUSH_UNBOUND)
     problems.extend(denominator_mismatch(text, meta.get("denominator")))
     problems.extend(source_set_problems(rows))
