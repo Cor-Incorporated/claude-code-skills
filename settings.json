@@ -2,7 +2,9 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001"
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001",
+    "HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW": "100.64.0.0/10,192.168.11.0/24,192.168.3.0/24,evo-x2,evo-x2-2,evo-x2-3,thinkstationpgx-ab59,jetson-thor",
+    "HARNESS_RUNTIME_FLOOR_EGRESS_READ_ALLOW": "pypi.org,files.pythonhosted.org,api.github.com,github.com,codeload.github.com,raw.githubusercontent.com,objects.githubusercontent.com,huggingface.co,pkg.go.dev,proxy.golang.org,sum.golang.org,registry.npmjs.org,www.npmjs.com"
   },
   "permissions": {
     "allow": [

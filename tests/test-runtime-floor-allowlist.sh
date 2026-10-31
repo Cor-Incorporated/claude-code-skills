@@ -6,23 +6,31 @@
 # cat が RUNTIME_FLOOR:secret-read で止まった。許可は plugin の
 # HARNESS_RUNTIME_FLOOR_SECRET_ALLOW でしか表せないが、実 enforcer に当てると
 # 許可した名前に秘密を空白なしで連結した形 (cat ~/.aws/credentials;x.template) まで
-# 通ることが分かった (#446 review)。だから secret_read も egress も今は enforced=false。
+# 通ることが分かった (#446 review)。だから secret_read は今も enforced=false。
+#
+# egress (2026-10-31, aidd-governance#230 / ADR-014): 5.16.0 の egress 床は誤検知率
+# 75 % で退役条件に当たり、Cor の private mirror (5.16.0-cor.1) で再設計した。
+# クラスタは HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW、読み取りだけ通す公開レジストリは
+# HARNESS_RUNTIME_FLOOR_EGRESS_READ_ALLOW で宣言し、settings.json が配る。
 #
 # 層:
 #   L1 enforced=false の区分は settings.json に env を置かない (宣言だけで効いた
 #      ことにしない)。enforced=true なら値が一字一句一致する。両方の値を挙げて落ちる
-#   L2 実 enforcer: 現在 (env なし) の判定と、提案中の env での判定を両方記録する。
-#      must_deny は両方で deny、observed_false_positives は env なしで deny (誤検知の
-#      記録) / env ありで allow、composition_opened_by_proposal は env ありで allow
-#      (= enforced にしない理由。upstream の tokenizer が直ればここが red になり、
-#      宣言を enforced=true に変える合図になる)
-#   L3 egress: plugin に knob が無い。HARNESS_RUNTIME_FLOOR_EGRESS=off も提案中の env も
-#      settings に置かない
+#   L2 実 enforcer: 現在 (env なし) の判定と、宣言した env での判定を両方記録する。
+#      secret_read: must_deny は両方で deny、observed_false_positives は env なしで
+#      deny / env ありで allow。composition_opened_by_proposal は、composition_fixed_in
+#      より前の enforcer では env ありで allow (= enforced にしない理由)、以後は deny
+#   L3 egress: enforcer が requires_enforcer なら incident_inputs の after・must_allow・
+#      must_deny を宣言どおりの env で確かめ、env を外す片側変異で red になることも
+#      確かめる。それより前の enforcer (5.16.0) では incident_inputs の before が再現する
+#      ことだけ確かめ、after は「切り替え待ち (人間ゲート)」として SKIP に数える
 #   L4 settings.json の enabledPlugins ↔ インストール済み plugin ↔ live の settings.json
 #      (2026-10-30 実測: repo は claude-code-harness@…、実体は harness@…。この
 #       settings.json を setup.sh で配ると床ごと plugin が無効になる)
 #
-# L2 と live 側の L4 は plugin がインストールされた機械だけで走る (CI では SKIP と数える)。
+# 実 enforcer は既定でインストール済み plugin の bin/harness。HARNESS_FLOOR_BIN で
+# 別の build (mirror の bin/harness-darwin-arm64 など) を指せる。
+# L2/L3 と live 側の L4 は plugin がある機械だけで走る (CI では SKIP と数える)。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DECL="$ROOT/config/runtime-floor-allowlist.json"
@@ -38,7 +46,7 @@ skp() { echo "SKIP: $1"; skip=$((skip + 1)); }
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 
-# --- L1 / L3: declaration ↔ settings.json ------------------------------------
+# --- L1: declaration ↔ settings.json -----------------------------------------
 decl_check() { # $1 = settings path → prints problems, empty when consistent
   python3 - "$DECL" "$1" <<'PY'
 import json, sys
@@ -56,22 +64,37 @@ elif key in env:
 eg = decl["egress"]
 if str(env.get("HARNESS_RUNTIME_FLOOR_EGRESS", "")).strip().lower() == "off":
     problems.append("settings.json sets HARNESS_RUNTIME_FLOOR_EGRESS=off (disables the whole category)")
-if not eg["enforced"] and eg["proposed_env"] in env:
-    problems.append(f"{eg['proposed_env']} is in settings.json but egress.enforced=false")
+for part in ("internal", "read"):
+    k = eg[part]["env"]
+    declared = ",".join(eg[part]["entries"])
+    if eg["enforced"] and env.get(k) != declared:
+        problems.append(f"egress.{part}: declared={declared!r} settings.json={env.get(k)!r}")
+    if not eg["enforced"] and k in env:
+        problems.append(f"egress.enforced=false but settings.json sets {k}")
 print("; ".join(problems))
 PY
 }
 out="$(decl_check "$SETTINGS")"
-[[ -z "$out" ]] && ok "L1/L3 settings.json carries no floor allowlist that the declaration does not enforce" || bad "L1/L3" "$out"
+[[ -z "$out" ]] && ok "L1 settings.json carries exactly the floor env the declaration enforces" || bad "L1" "$out"
 
-python3 - "$SETTINGS" "$SB/settings-mutant.json" <<'PY'
+mutate_settings() { # $1 = python expression on s["env"] → writes $SB/settings-mutant.json
+  python3 - "$SETTINGS" "$SB/settings-mutant.json" "$1" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1]))
-s["env"]["HARNESS_RUNTIME_FLOOR_SECRET_ALLOW"] = "*.template"
+env = s["env"]
+exec(sys.argv[3])
 json.dump(s, open(sys.argv[2], "w"))
 PY
+}
+mutate_settings 'env["HARNESS_RUNTIME_FLOOR_SECRET_ALLOW"] = "*.template"'
 out="$(decl_check "$SB/settings-mutant.json")"
-[[ -n "$out" ]] && ok "L1 one-sided mutation (env added to settings.json only) goes red: $out" || bad "L1 mutation" "not detected"
+[[ -n "$out" ]] && ok "L1 one-sided mutation (secret env added to settings.json only) goes red: $out" || bad "L1 mutation secret" "not detected"
+mutate_settings 'env["HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW"] = env["HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW"].rsplit(",", 1)[0]'
+out="$(decl_check "$SB/settings-mutant.json")"
+[[ "$out" == *"declared="*"settings.json="* ]] && ok "L1 one-sided mutation (a cluster host dropped from settings.json only) goes red with both values" || bad "L1 mutation egress" "${out:-not detected}"
+mutate_settings 'env["HARNESS_RUNTIME_FLOOR_EGRESS"] = "off"'
+out="$(decl_check "$SB/settings-mutant.json")"
+[[ "$out" == *"EGRESS=off"* ]] && ok "L1 HARNESS_RUNTIME_FLOOR_EGRESS=off in settings.json goes red" || bad "L1 mutation off" "${out:-not detected}"
 
 # --- L4 fixtures: the same script setup.sh runs (scripts/check-plugin-ids.py) ---
 C="$ROOT/scripts/check-plugin-ids.py"
@@ -98,66 +121,111 @@ out="$(python3 "$C" "$SB/repo.json" "$SB/broken.json" "$SB/live.json")"; rc=$?
 grep -q 'scripts/check-plugin-ids.py" "$REPO_DIR/settings.json" "$installed_plugins" "$CLAUDE_DIR/settings.json"' "$ROOT/setup.sh" \
   && ok "L4 setup.sh runs scripts/check-plugin-ids.py against the live settings.json" || bad "L4 wiring" "setup.sh does not call the check with the live file"
 
-# --- L2 / L4 live: the installed enforcer -------------------------------------
+# --- L2 / L3 / L4 live: the enforcer ------------------------------------------
 PLUGIN_ROOT="$(ls -d "$HOME"/.claude/plugins/cache/claude-code-harness-marketplace/harness/*/ 2>/dev/null | sort -V | tail -1)"
-BIN="${PLUGIN_ROOT%/}/bin/harness"
-if [[ -z "$PLUGIN_ROOT" || ! -x "$BIN" ]]; then
-  skp "L2 harness plugin not installed on this machine"
+BIN="${HARNESS_FLOOR_BIN:-${PLUGIN_ROOT%/}/bin/harness}"
+if [[ ! -x "$BIN" ]]; then
+  skp "L2 harness enforcer not installed on this machine"
+  skp "L3 harness enforcer not installed on this machine"
   skp "L4 live: harness plugin not installed on this machine"
 else
+  VERSION="$("$BIN" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' | head -1)"
+  [[ -n "$VERSION" ]] || VERSION="$(basename "${PLUGIN_ROOT%/}")"
+  echo "enforcer: $BIN (version ${VERSION:-unknown})"
   PROJ="$SB/proj"
   mkdir -p "$PROJ/.git"
+  jq_decl() { python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+for k in sys.argv[2].split("."): d=d[k]
+print(d if isinstance(d,str) else "\n".join(d) if isinstance(d,list) and all(isinstance(x,str) for x in d) else json.dumps(d))' "$DECL" "$1"; }
   PROPOSED="$(python3 -c 'import json,sys;print(",".join(a["pattern"] for a in json.load(open(sys.argv[1]))["secret_read"]["proposed_allow"]))' "$DECL")"
+  EG_INTERNAL="$(python3 -c 'import json,sys;print(",".join(json.load(open(sys.argv[1]))["egress"]["internal"]["entries"]))' "$DECL")"
+  EG_READ="$(python3 -c 'import json,sys;print(",".join(json.load(open(sys.argv[1]))["egress"]["read"]["entries"]))' "$DECL")"
 
-  decide() { # $1 = allow env ("" = unset), $2 = command → prints the deny reason or ""
-    python3 -c 'import json,sys;print(json.dumps({"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]},"cwd":sys.argv[1],"session_id":"floor-allowlist-test"}))' "$PROJ" "$2" \
-      | if [[ -n "$1" ]]; then HARNESS_RUNTIME_FLOOR_SECRET_ALLOW="$1" "$BIN" hook pre-tool; else env -u HARNESS_RUNTIME_FLOOR_SECRET_ALLOW "$BIN" hook pre-tool; fi 2>/dev/null \
+  # decide <command> [VAR=value ...] → prints the deny reason or "". Every floor
+  # variable of the calling shell is removed first, so only the given ones apply.
+  decide() {
+    local cmd="$1"; shift
+    python3 -c 'import json,sys;print(json.dumps({"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]},"cwd":sys.argv[1],"session_id":"floor-allowlist-test"}))' "$PROJ" "$cmd" \
+      | env -u HARNESS_RUNTIME_FLOOR_SECRET_ALLOW -u HARNESS_RUNTIME_FLOOR_EGRESS -u HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW \
+          -u HARNESS_RUNTIME_FLOOR_EGRESS_READ_ALLOW "$@" "$BIN" hook pre-tool 2>/dev/null \
       | python3 -c 'import json,sys
 raw=sys.stdin.read().strip()
 o=json.loads(raw) if raw else {}
 h=o.get("hookSpecificOutput",{})
 print(h.get("permissionDecisionReason","") if h.get("permissionDecision")=="deny" else "")'
   }
-  list() { python3 -c 'import json,sys
-d=json.load(open(sys.argv[1]))
-for k in sys.argv[2].split("."): d=d[k]
-print("\n".join(d))' "$DECL" "$1"; }
+  SECRET_ENV="HARNESS_RUNTIME_FLOOR_SECRET_ALLOW=$PROPOSED"
+  EGRESS_ENV=("HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW=$EG_INTERNAL" "HARNESS_RUNTIME_FLOOR_EGRESS_READ_ALLOW=$EG_READ")
 
+  # L2 secret_read
   while IFS= read -r cmd; do
-    r0="$(decide "" "$cmd")"; r1="$(decide "$PROPOSED" "$cmd")"
+    r0="$(decide "$cmd")"; r1="$(decide "$cmd" "$SECRET_ENV")"
     [[ "$r0" == RUNTIME_FLOOR:secret-read* && "$r1" == RUNTIME_FLOOR:secret-read* ]] \
       && ok "L2 denied now and with the proposed env: $cmd" || bad "L2 must_deny" "$cmd -> now='$r0' proposed='$r1'"
-  done < <(list secret_read.must_deny)
+  done < <(jq_decl secret_read.must_deny)
 
   while IFS= read -r cmd; do
-    r0="$(decide "" "$cmd")"; r1="$(decide "$PROPOSED" "$cmd")"
+    r0="$(decide "$cmd")"; r1="$(decide "$cmd" "$SECRET_ENV")"
     [[ "$r0" == RUNTIME_FLOOR:secret-read* && -z "$r1" ]] \
       && ok "L2 false positive recorded (denied now, allowed by the proposal): $cmd" || bad "L2 observed_false_positives" "$cmd -> now='$r0' proposed='$r1'"
-  done < <(list secret_read.observed_false_positives)
+  done < <(jq_decl secret_read.observed_false_positives)
+
+  FIXED_IN="$(jq_decl secret_read.composition_fixed_in)"
+  while IFS= read -r cmd; do
+    r0="$(decide "$cmd")"; r1="$(decide "$cmd" "$SECRET_ENV")"
+    if [[ "$VERSION" == "$FIXED_IN" ]]; then
+      [[ "$r0" == RUNTIME_FLOOR:secret-read* && "$r1" == RUNTIME_FLOOR:secret-read* ]] \
+        && ok "L2 composition closed in $FIXED_IN (denied with the proposal): $cmd" \
+        || bad "L2 composition_fixed_in $FIXED_IN does not close" "$cmd -> now='$r0' proposed='$r1'"
+    else
+      [[ "$r0" == RUNTIME_FLOOR:secret-read* && -z "$r1" ]] \
+        && ok "L2 why not enforced: the proposal would open $cmd" \
+        || bad "L2 composition_opened_by_proposal changed (tokenizer fixed?) — re-evaluate enforced" "$cmd -> now='$r0' proposed='$r1'"
+    fi
+  done < <(jq_decl secret_read.composition_opened_by_proposal)
 
   while IFS= read -r cmd; do
-    r0="$(decide "" "$cmd")"; r1="$(decide "$PROPOSED" "$cmd")"
-    [[ "$r0" == RUNTIME_FLOOR:secret-read* && -z "$r1" ]] \
-      && ok "L2 why not enforced: the proposal would open $cmd" \
-      || bad "L2 composition_opened_by_proposal changed (upstream tokenizer fixed?) — re-evaluate enforced" "$cmd -> now='$r0' proposed='$r1'"
-  done < <(list secret_read.composition_opened_by_proposal)
-
-  while IFS= read -r cmd; do
-    r="$(decide "$PROPOSED" "$cmd")"
+    r="$(decide "$cmd" "$SECRET_ENV")"
     [[ "$r" == RUNTIME_FLOOR:secret-read* ]] && ok "L2 known upstream limit (bare name) denied even with the proposal: $cmd" \
       || bad "L2 known_upstream_limits changed" "$cmd -> '${r}'"
-  done < <(list secret_read.known_upstream_limits.still_denied)
+  done < <(jq_decl secret_read.known_upstream_limits.still_denied)
 
-  while IFS= read -r cmd; do
-    r="$(decide "" "$cmd")"
-    [[ "$r" == RUNTIME_FLOOR:egress* ]] && ok "L2 external egress denied: $cmd" || bad "L2 external egress allowed" "$cmd -> '${r}'"
-  done < <(list egress.must_deny_external)
-
-  if grep -q "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["egress"]["proposed_env"])' "$DECL")" \
-      "${PLUGIN_ROOT%/}/go/internal/runtimefloor/runtimefloor.go" 2>/dev/null; then
-    bad "L3 the installed plugin now reads the proposed egress env" "re-evaluate egress.enforced"
+  # L3 egress
+  REQUIRES="$(jq_decl egress.requires_enforcer)"
+  incidents() { python3 -c 'import json,sys
+for r in json.load(open(sys.argv[1]))["egress"]["incident_inputs"]: print(r["id"]+"\t"+r[sys.argv[2]]+"\t"+r["cmd"])' "$DECL" "$1"; }
+  if [[ "$VERSION" == "$REQUIRES" ]]; then
+    while IFS=$'\t' read -r id want cmd; do
+      r="$(decide "$cmd" "${EGRESS_ENV[@]}")"
+      got=allow; [[ -n "$r" ]] && got=deny
+      [[ "$got" == "$want" ]] && ok "L3 $id after=$want with the declared env: $cmd" || bad "L3 incident $id" "want $want, got $got ($r): $cmd"
+    done < <(incidents after)
+    while IFS= read -r cmd; do
+      r="$(decide "$cmd" "${EGRESS_ENV[@]}")"
+      [[ -z "$r" ]] && ok "L3 must_allow: $cmd" || bad "L3 must_allow denied" "$cmd -> '$r'"
+    done < <(jq_decl egress.must_allow)
+    while IFS= read -r cmd; do
+      r="$(decide "$cmd" "${EGRESS_ENV[@]}")"
+      [[ "$r" == RUNTIME_FLOOR:egress* ]] && ok "L3 must_deny: $cmd" || bad "L3 must_deny allowed" "$cmd -> '${r}'"
+    done < <(jq_decl egress.must_deny)
+    # One-sided mutation on the enforcer side: without the env, cluster and
+    # registry reads are denied again, so it is the declaration that opens them.
+    for id in F2-5 F2-8; do
+      cmd="$(incidents after | awk -F'\t' -v id="$id" '$1==id {print $3}')"
+      r="$(decide "$cmd")"
+      [[ "$r" == RUNTIME_FLOOR:egress* ]] && ok "L3 mutation: $id denied once the declared env is removed" || bad "L3 mutation $id" "allowed without the env: $cmd"
+    done
+    grep -q "HARNESS_RUNTIME_FLOOR_EGRESS_READ_ALLOW" "${PLUGIN_ROOT%/}/go/internal/runtimefloor/egress_policy.go" 2>/dev/null \
+      || [[ -n "${HARNESS_FLOOR_BIN:-}" ]] \
+      && ok "L3 the enforcer reads both declared egress variables" || bad "L3 source" "egress_policy.go does not read the read-allowlist variable"
   else
-    ok "L3 the installed plugin has no egress allowlist knob (egress.enforced=false is accurate)"
+    while IFS=$'\t' read -r id want cmd; do
+      r="$(decide "$cmd" "${EGRESS_ENV[@]}")"
+      got=allow; [[ -n "$r" ]] && got=deny
+      [[ "$got" == "$want" ]] && ok "L3 $id before=$want reproduces on $VERSION: $cmd" || bad "L3 incident $id before" "want $want, got $got ($r): $cmd"
+    done < <(incidents before)
+    skp "L3 egress after/must_allow/must_deny need enforcer $REQUIRES (this one is ${VERSION:-unknown}); switch per docs/runbooks/harness-cor-mirror.md (human gate) or run with HARNESS_FLOOR_BIN"
   fi
 
   INSTALLED="$HOME/.claude/plugins/installed_plugins.json"
