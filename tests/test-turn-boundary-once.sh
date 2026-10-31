@@ -81,7 +81,8 @@ seed nohup-g2 s8
 stop "$HOOK" s8 >/dev/null
 seen_ids="$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1])))))' "$AIDD_ASYNC_STATE.turn-boundary-seen/s8.json" 2>/dev/null)"
 [[ "$seen_ids" == "nohup-g2" ]] && ok "記録には今も未解決の id だけが残る ($seen_ids)" || bad "prune" "seen: '$seen_ids'"
-perm="$(stat -f '%Lp' "$AIDD_ASYNC_STATE.turn-boundary-seen/s8.json" 2>/dev/null || stat -c '%a' "$AIDD_ASYNC_STATE.turn-boundary-seen/s8.json")"
+# GNU `stat -f` is file-system status and succeeds, so read the mode the same way on every OS
+perm="$(python3 -c 'import os,sys; print(format(os.stat(sys.argv[1]).st_mode & 0o777, "o"))' "$AIDD_ASYNC_STATE.turn-boundary-seen/s8.json")"
 [[ "$perm" == 600 ]] && ok "記録の権限は 600" || bad "perm" "$perm"
 
 # 反証: 繰り返しの判定を外す
