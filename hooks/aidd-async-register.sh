@@ -55,6 +55,11 @@ esac
 
 input="$(cat 2>/dev/null || true)"
 command -v python3 >/dev/null 2>&1 || exit 0
+# 入力の全体を一時ファイルに置く。classify は実行結果（tool_response の rc と出力）も読む。
+# 出力は大きくなりうるので、環境変数や引数では渡さない。
+input_file="$(mktemp "${TMPDIR:-/tmp}/aidd-async-register.XXXXXX" 2>/dev/null)" || exit 0
+trap 'rm -f "$input_file"' EXIT
+printf '%s' "$input" >"$input_file"
 
 # コマンド文字列と、あれば実行結果テキストを取り出す。
 cmd="$(printf '%s' "$input" | python3 -c '
@@ -87,11 +92,39 @@ print(v if isinstance(v, str) and v and v == v.strip() else "")
 # heredoc は関数に入れる。$( ) の中に置くと、macOS の /bin/bash 3.2 は本文の Python のコメントにある
 # 対でない括弧まで構文として読み、hook ごと構文エラーになる（自動登録が黙って止まる）。
 classify() {
-  python3 - "$1" <<'PY'
-import hashlib, re, sys, time
+  python3 - "$1" "$2" <<'PY'
+import hashlib, json, re, shlex, sys, time
 
 cmd = sys.argv[1]
 out = []
+
+# 実行結果。終了コードの読み方は hooks/lib/aidd_cc.py の _exit_status（ADR-011）と同じにする:
+#   - tool_response に exit_code があればそれ。
+#   - Claude Code の PostToolUse は成功の event。前景で終わった呼び出しは rc 0。
+#   - 背景に送った・時間切れ・中断（backgroundTaskId / timedOutAfterMs / interrupted）は不明。
+#   - returnCodeInterpretation があるものは rc 1。
+#   - tool_response が無い入力（古い版・テスト）も不明。
+# 不明なときは、従来どおりコマンドの形だけで決める（見落とし 1 件より、毎ターン止まるほうの害が大きい）。
+rc, said = None, ""
+try:
+    payload = json.load(open(sys.argv[2], encoding="utf-8"))
+except (OSError, ValueError):
+    payload = {}
+resp = payload.get("tool_response") if isinstance(payload, dict) else None
+if isinstance(resp, dict):
+    said = "\n".join(str(resp.get(k) or "") for k in ("stdout", "stderr", "output"))
+    code = resp.get("exit_code", resp.get("exitCode", resp.get("rc")))
+    if isinstance(code, int) and not isinstance(code, bool):
+        rc = code
+    elif resp.get("backgroundTaskId") or resp.get("background_task_id") or resp.get("timedOutAfterMs") \
+            or resp.get("interrupted") is True:
+        rc = None
+    elif resp.get("returnCodeInterpretation"):
+        rc = 1
+    elif payload.get("hook_event_name") == "PostToolUse":
+        rc = 0
+elif isinstance(resp, str):
+    said = resp
 
 
 def ident(prefix, seed):
@@ -134,31 +167,67 @@ def strip_heredocs(text):
     return "\n".join(kept)
 
 
-# コマンド位置: 文頭、改行後、または ; & | ( { の直後（前後の空白は許す）。
-# 引用符やコロンの直後は含めない。`&&` / `||` は 2 文字目が [;&|] に入る。
-AT_COMMAND = r"(?:\A|[\n;&|(){}]\s*)"
+# コマンド位置は、引用を外した語で決める (#459, 2026-10-31)。それまでの正規表現
+# `(?:\A|[\n;&|(){}]\s*)` は引用を区別せず、`echo "--- commands (gh workflow run lines)"` の
+# 引用の中の `(` の直後をコマンド位置とみなし、`lines)"` を workflow 名とする cd-run を登録した。
+# shlex（punctuation_chars）で語に分け、区切り（; && || | & ( ) { } と改行）の直後の語だけを見る。
+# 引用が閉じていないコマンドは shell も実行しないので、何も登録しない。
+SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", "{", "}", ";;", "|&"}
+
+
+def simple_commands(text):
+    """引用を外した語のリストを、単純コマンドごとに返す（先頭の VAR=value は除く）。"""
+    lexer = shlex.shlex(text.replace("\n", " ; "), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:
+        return []
+    cmds, cur = [], []
+    for w in words:
+        if w in SEPARATORS or set(w) <= set(";&|()"):
+            if cur:
+                cmds.append(cur)
+            cur = []
+            continue
+        if not cur and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w):
+            continue
+        cur.append(w)
+    if cur:
+        cmds.append(cur)
+    return cmds
+
 
 scan = strip_heredocs(cmd)
+RUN_URL = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/actions/runs/(\d+)")
 
-for m in re.finditer(AT_COMMAND + r"gh\s+workflow\s+run\s+([^\s;|&]+)", scan):
-    wf = m.group(1)
-    out.append(("cd-run", ident("wf", wf + cmd), "gh workflow run %s" % wf))
-
-# gh run watch <id> — 完走待ち。待ちはツール呼び出しの寿命を超えうる。
-for m in re.finditer(AT_COMMAND + r"gh\s+run\s+watch\s+(\d+)", scan):
-    rid = m.group(1)
-    out.append(("cd-run", "run-%s" % rid, "gh run watch %s" % rid))
-
-# nohup — 明示的にツール呼び出しより長生きさせた。
-if re.search(AT_COMMAND + r"nohup\s", scan):
-    head = re.sub(r"\s+", " ", cmd).strip()[:120]
-    out.append(("generic", ident("nohup", cmd), "nohup: %s" % head))
+for words in simple_commands(scan):
+    # gh workflow run <wf> — 発射した。登録の根拠は実行結果にする (#459): 終了コードが分かれば 0 のときだけ、
+    # 出力があれば「Created workflow_dispatch event」か run の URL があるときだけ。run の URL があれば
+    # id は run-<run id> にして、後の `gh run watch <run id>` と同じ持ち越しにする。
+    if words[:3] == ["gh", "workflow", "run"] and len(words) > 3:
+        wf = words[3]
+        if rc is not None and rc != 0:
+            continue
+        if rc is not None and not (RUN_URL.search(said) or "Created workflow_dispatch event" in said):
+            continue
+        m = RUN_URL.search(said)
+        rid = m.group(1) if m else ""
+        out.append(("cd-run", "run-%s" % rid if rid else ident("wf", wf + cmd),
+                    "gh workflow run %s%s" % (wf, " (run %s)" % rid if rid else "")))
+    # gh run watch <id> — 完走待ち。待ちはツール呼び出しの寿命を超えうる。
+    elif words[:3] == ["gh", "run", "watch"] and len(words) > 3 and words[3].isdigit():
+        out.append(("cd-run", "run-%s" % words[3], "gh run watch %s" % words[3]))
+    # nohup — 明示的にツール呼び出しより長生きさせた。
+    elif words[0] == "nohup" and len(words) > 1:
+        head = re.sub(r"\s+", " ", cmd).strip()[:120]
+        out.append(("generic", ident("nohup", cmd), "nohup: %s" % head))
 
 for kind, ident_, detail in out:
     print("%s\t%s\t%s" % (kind, ident_, detail))
 PY
 }
-matches="$(classify "$cmd" 2>/dev/null || true)"
+matches="$(classify "$cmd" "$input_file" 2>/dev/null || true)"
 [ -n "$matches" ] || exit 0
 
 while IFS=$'\t' read -r kind ident detail; do

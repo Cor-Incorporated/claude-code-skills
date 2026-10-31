@@ -215,6 +215,7 @@ if deficit > 0:
 
 print(json.dumps({
     "block": bool(unowned) or bool(orphaned) or deficit > 0,
+    "ids": sorted(str(r.get("id") or "") for r in unowned + orphaned),
     "unowned": len(unowned),
     "owned": len(owned),
     "orphaned": len(orphaned),
@@ -276,6 +277,42 @@ if [ "$should_block" != "yes" ]; then
   if [ "${others_n:-0}" -gt 0 ]; then
     printf '%s\n' "$(printf '%s' "$verdict" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reason"])')" >&2
   fi
+  exit 0
+fi
+
+# 同じセッションで同じ持ち越しに止めるのは 1 回だけ (#458, 2026-10-31)。local-llm レーンは、レーン契約で
+# 台帳への書き込みを禁じられたまま、同じ nohup の持ち越しで 48 回止められた（書けないので宣言も解決も
+# できない）。1 回目で知らせれば足りる。2 回目からは止めずに出して台帳に残す。止める理由が目標並列度
+# （deficit）のときと、新しい持ち越しが増えたときは従来どおり止める。session が分からないときも従来どおり。
+# 台帳 CLI と同じ場所の横に置く（AIDD_ASYNC_STATE を切り替えれば一緒に切り替わる）。
+SEEN_DIR="${AIDD_TURN_BOUNDARY_STATE:-${AIDD_ASYNC_STATE:-$HOME/.claude/state/async-work}.turn-boundary-seen}"
+repeat="$(printf '%s' "$verdict" | python3 -c '
+import json, os, re, sys
+v = json.load(sys.stdin)
+session, seen_dir = sys.argv[1], sys.argv[2]
+ids = [i for i in v.get("ids", []) if i]
+if not session or v.get("deficit", 0) > 0 or not ids:
+    print("no"); raise SystemExit
+path = os.path.join(seen_dir, re.sub(r"[^A-Za-z0-9._-]", "_", session) + ".json")
+try:
+    seen = set(json.load(open(path, encoding="utf-8")))
+except (OSError, ValueError, TypeError):
+    seen = set()
+if set(ids) <= seen:
+    print("yes"); raise SystemExit
+try:
+    os.makedirs(seen_dir, exist_ok=True)
+    tmp = path + ".tmp"
+    json.dump(sorted(seen | set(ids)), open(tmp, "w", encoding="utf-8"))
+    os.replace(tmp, path)
+except OSError:
+    pass
+print("no")
+' "$session" "$SEEN_DIR" 2>/dev/null || echo no)"
+if [ "$repeat" = "yes" ]; then
+  append_ledger warn turn-boundary-repeat
+  printf '%s\n' "[turn-boundary] 同じ持ち越しで止めるのは 1 回だけ（2 回目以降は表示のみ）:" >&2
+  printf '%s\n' "$(printf '%s' "$verdict" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reason"])')" >&2
   exit 0
 fi
 

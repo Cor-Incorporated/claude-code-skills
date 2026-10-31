@@ -95,6 +95,12 @@ if isinstance(old, dict) and not old.get("resolved"):
     row["registered_ts"] = old.get("registered_ts") or now
     row["updated_by"] = session
     row["updated_ts"] = now
+    # 登録し直しで空の owner / check-cmd が来ても、宣言済みの値は消さない (2026-10-31)。
+    # `gh run watch <id>` の自動登録は run-<id> を owner なしで登録し直すので、統括が
+    # `register --owner` で宣言した確認主体を 3 回消し、Stop hook がまた宣言を求めた。
+    for key in ("owner", "check_cmd"):
+        if not row[key] and str(old.get(key) or "").strip():
+            row[key] = str(old.get(key))
 json.dump(row, open(path, "w"), ensure_ascii=False)
 # 登録元不明の持ち越しは、登録から時間がたつまでどのセッションの停止も止めない。黙ってそうならないよう言う
 if not row["session"]:
