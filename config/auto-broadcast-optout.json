@@ -1,0 +1,37 @@
+{
+  "schema": "auto-broadcast-optout.v1",
+  "declared": "2026-10-31",
+  "origin": "aidd-governance#230 F8 (owner approved 2026-10-31)",
+  "why": "The harness plugin's auto-broadcast writes every .md/.sh/.go edit into the repository's shared .claude/sessions/broadcast.md and tells the editing session it did so. On 2026-10-31 the four repositories below held 334-500 entries each, and 31-44 of them were Claude Code memory paths (~/.claude/projects/*/memory/) from other sessions.",
+  "file": ".claude/sessions/auto-broadcast.json",
+  "content": {
+    "enabled": false
+  },
+  "repos": [
+    "~/Developer/claude-code-skills",
+    "~/Developer/ai-cluster",
+    "~/Developer/corsweb",
+    "~/Developer/grift-cli"
+  ],
+  "worktrees": "The 5.16.0 plugin reads the file from the checkout it runs in, so a linked worktree keeps broadcasting until it has its own copy. From 5.16.0-cor.1 the main checkout's file covers its linked worktrees, and paths under ~/.claude/projects/ or outside the project are never broadcast.",
+  "applied_by": "scripts/apply-auto-broadcast-optout.py, run from setup.sh step 6b (a failure is reported and setup continues)",
+  "measured_2026_10_31": {
+    "~/Developer/claude-code-skills": {
+      "entries": 408,
+      "memory_paths": 31
+    },
+    "~/Developer/ai-cluster": {
+      "entries": 500,
+      "memory_paths": 44
+    },
+    "~/Developer/corsweb": {
+      "entries": 416,
+      "memory_paths": 32
+    },
+    "~/Developer/grift-cli": {
+      "entries": 334,
+      "memory_paths": 38
+    }
+  },
+  "constraints": "repos must be ~/Developer/<name>; file and content are fixed in the applier (a declaration that changes them is refused with rc=2)"
+}
