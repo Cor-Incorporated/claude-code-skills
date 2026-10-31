@@ -11,7 +11,7 @@ Cor-Incorporated/claude-code-harness の `docs/runtime-floor-egress-allowlist.md
 | marketplace の取得元 | `github` `Chachamaru127/claude-code-harness` | `github` `Cor-Incorporated/claude-code-harness`（private、既定 branch `cor`） |
 | marketplace 名 | `claude-code-harness-marketplace` | 同じ（変えない） |
 | plugin id | `harness@claude-code-harness-marketplace` | 同じ。settings.json の `enabledPlugins` は変わらない |
-| 版 / gitCommitSha | `5.16.0` / `c2304c325d4432f51d632e0586d886767b0f41ea` | `5.16.0-cor.1` / `a2e2a31b11d505df6fbf453c05a69e299814276b`（mirror #1 の merge） |
+| 版 / gitCommitSha | `5.16.0` / `c2304c325d4432f51d632e0586d886767b0f41ea` | `5.16.0-cor.1` / `b48c78b7e3c41f2b41994e5a67bd750617f5f44d`（mirror #2 の merge。#2 は docs だけで、binary は #1 の merge a2e2a31b と同じ） |
 | egress の宣言 env | なし | `HARNESS_RUNTIME_FLOOR_EGRESS_ALLOW` / `HARNESS_RUNTIME_FLOOR_EGRESS_READ_ALLOW`（claude-code-skills の settings.json が配る） |
 
 現在値は次で確かめる:
@@ -26,7 +26,7 @@ python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.claude/pl
 
 ## 前提（両方そろってから始める）
 
-1. mirror の `cor` の版が `5.16.0-cor.1` で、先頭が `a2e2a31b…`（2026-10-31T05:54:54Z に merge 済み）。
+1. mirror の `cor` の版が `5.16.0-cor.1` で、先頭が `b48c78b7…`（2026-10-31T06:41:08Z に merge 済み。claude-code-skills の `config/runtime-floor-allowlist.json` の `egress.requires_commit`）。
 
    ```bash
    gh api 'repos/Cor-Incorporated/claude-code-harness/contents/VERSION?ref=cor' --jq .content | base64 -d
@@ -36,7 +36,7 @@ python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.claude/pl
    gh api repos/Cor-Incorporated/claude-code-harness/branches/cor --jq .commit.sha
    ```
 
-   版が `5.16.0-cor.1` でなければ止める。先頭の sha が `a2e2a31b…` と違えば、mirror に後から入った変更がある（`COR-PATCHES.md` を見てから進む）。
+   版が `5.16.0-cor.1` でなければ止める。先頭の sha が `b48c78b7…` と違えば、mirror に後から入った変更がある（`COR-PATCHES.md` を見てから進む）。
    URL は引用符で囲む（zsh は `?` を glob として展開し、`no matches found` で止まる）。
 
 2. claude-code-skills の Cor-Incorporated/claude-code-skills#456（egress の宣言と settings.json env）と #457（F8 opt-out）が develop に merge 済みで、共有 checkout で `setup.sh` を流してある。live の env が宣言と一字一句一致すること:
@@ -102,13 +102,13 @@ hook は起動時の plugin パスで動く。走っているセッションは 
 python3 -c 'import json,os;d=json.load(open(os.path.expanduser("~/.claude/plugins/installed_plugins.json")));print([(e["version"],e["gitCommitSha"][:8]) for e in d["plugins"]["harness@claude-code-harness-marketplace"]])'
 ```
 
-`[('5.16.0-cor.1', 'a2e2a31b')]` であること（2026-10-31 15:24 の隔離リハーサルの値）。
+`[('5.16.0-cor.1', 'b48c78b7')]` であること（2026-10-31 15:47 の隔離リハーサルの値）。
 
 ```bash
 cd ~/Developer/claude-code-skills && bash tests/test-runtime-floor-allowlist.sh | tail -2
 ```
 
-`pass=70 fail=0 skip=0`（2026-10-31 14:54 JST に mirror の build f2f9926 で実測）。テストは `installed_plugins.json` の installPath の enforcer を使う。`skip=1` なら、installed はまだ 5.16.0。
+`pass=70 fail=0 skip=0`（2026-10-31 15:35 JST に mirror の build f2f9926 で実測。b48c78b7 の binary も同じ）。テストは `installed_plugins.json` の installPath の enforcer を使う。`skip=1` なら、installed はまだ 5.16.0。
 
 ```bash
 cd ~/Developer/claude-code-skills && bash tests/test-auto-broadcast-optout.sh | tail -2
@@ -166,3 +166,5 @@ settings.json の egress env は 5.16.0 では読まれないので、外さな�
 - 2026-10-31 15:24 JST: `cor` の merge 後に、同じことをやり直した。
   - upstream `5.16.0 c2304c32` → remove → mirror を add して install すると `5.16.0-cor.1 a2e2a31b`。marketplace 名と plugin id は同じまま。
   - 戻す側の add が clone の一時的な失敗で 1 回落ち、install も落ちた。再実行で `5.16.0 c2304c32` に戻った（上の失敗表の 1 行目）。
+- 2026-10-31 15:47 JST: mirror #2（docs だけ）の merge で `cor` が `b48c78b7` に進んだので、もう一度通した。
+  - upstream `5.16.0 c2304c32` → remove → mirror を add して install すると `5.16.0-cor.1 b48c78b7`。戻すと `5.16.0 c2304c32`。add と install は全部 1 回で通った。
