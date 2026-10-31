@@ -840,10 +840,16 @@ def _read_binding(cmd: str, out: str) -> tuple[str, list[str]] | None:
     except ValueError:
         return None
     while words and _ASSIGN.match(words[0]):
+        if not re.match(r"GH_(REPO|HOST)=", words[0]):
+            return None  # PATH=… could put a fake gh first (#470 review round 2)
         words = words[1:]
     if words[:2] == ["git", "-C"] and len(words) > 2:
         words = ["git"] + words[3:]
     out = out.strip()
+    # gh uses the LAST --jq / --template: a second one could print a literal (#470 review round 2)
+    for flag in ("--jq", "-q", "--json", "--template", "-t"):
+        if sum(1 for w in words if w == flag or w.startswith(flag + "=") or (len(flag) == 2 and w.startswith(flag) and w != flag and not w.startswith("--"))) > 1:
+            return None
     if words[:3] == ["gh", "pr", "view"] and len(words) > 3:
         if _opt(words, "--template", "-t") is not None or "--web" in words or "-w" in words:
             return None
@@ -859,6 +865,8 @@ def _read_binding(cmd: str, out: str) -> tuple[str, list[str]] | None:
             ok = "state" in fields.split(",") and isinstance(obj, dict) and obj.get("state") == "MERGED"
         return ("merge", ["#" + m.group(1), "/pull/" + m.group(1)]) if ok else None
     if words[:2] == ["gh", "api"] and len(words) > 2:
+        if _opt(words, "--template", "-t") is not None or any(w.startswith(("-X", "-f", "-F")) and len(w) > 2 for w in words):
+            return None
         if _opt(words, "--method", "-X") not in (None, "GET") or any(
                 w in ("-f", "-F", "--field", "--raw-field", "--input") or w.startswith(("--field=", "--raw-field="))
                 for w in words):
@@ -894,7 +902,7 @@ def _read_binding(cmd: str, out: str) -> tuple[str, list[str]] | None:
         if len(args) < 2:
             return None
         remote, ref = args[0], args[1]
-        if remote == "." or remote.startswith(("/", ".", "~", "file:")):
+        if remote == "." or remote.startswith(("/", ".", "~", "file:")) or "$" in remote:
             return None
         short = re.sub(r"^refs/heads/", "", ref)
         for line in out.splitlines():
@@ -905,12 +913,19 @@ def _read_binding(cmd: str, out: str) -> tuple[str, list[str]] | None:
     return None
 
 
+_BASE_REFS = {"main", "master", "develop", "trunk", "HEAD"}
+
+
 def _names(text: str, token: str) -> bool:
-    if not token:
+    """The answer names <token> as a whole token. A base branch never binds: a relay answer names its PR base
+    ('PR base is develop') while claiming another branch was pushed (#470 review round 2). A limit that stays: one
+    verified object binds every claim of the same kind in the answer ('#445 and #612 are merged' after reading only
+    #445) — splitting the answer into claims would classify prose, which ADR-009 rules out."""
+    if not token or token in _BASE_REFS:
         return False
     if token.startswith("#"):
         return bool(re.search(re.escape(token) + r"(?!\d)", text))
-    return token in text
+    return bool(re.search(r"(?<![\w./-])" + re.escape(token) + r"(?![\w./-])", text))
 
 
 def _push_read_verified(rows: list[dict], text: str = "") -> bool:

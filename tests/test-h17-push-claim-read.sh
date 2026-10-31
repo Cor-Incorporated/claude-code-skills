@@ -157,6 +157,36 @@ post "$HOOK" r23 "git ls-remote origin refs/heads/feat/l1-practical-bench" "$SHA
 o="$(stop "$HOOK" r23 "$BOTH")"
 blocked "$o" && bad "R23b both reads bind a push-and-merge claim" "$o" || ok "R23b both reads bind a push-and-merge claim"
 
+# --- #470 review round 2 -------------------------------------------------------------------------------------
+# N1 a read of the base branch does not bind a push of another branch the answer also names
+post "$HOOK" n1 "git ls-remote origin refs/heads/develop" "$SHA	refs/heads/develop"
+o="$(stop "$HOOK" n1 $'Lane L1 pushed feat/l1 to origin; PR base is develop.\nStatus: partial')"
+blocked "$o" && ok "N1 a read of develop does not bind 'pushed feat/l1 … base is develop'" || bad "N1 base branch" "$o"
+# N2 a ref inside a word does not count (main in 'remains')
+post "$HOOK" n2 "gh api repos/o/r/commits/release-x --jq .sha" "$SHA"
+o="$(stop "$HOOK" n2 $'Lane L1 pushed feat/l1. Nothing release-xremains.\nStatus: partial')"
+blocked "$o" && ok "N2 a ref inside a longer word does not bind" || bad "N2 substring" "$o"
+# N5 a second --jq (gh uses the last one) does not count
+post "$HOOK" n5 "gh pr view 606 --json state --jq .state --jq '\"MERGED\"'" "MERGED"
+o="$(stop "$HOOK" n5 "$REPORT")"
+blocked "$o" && ok "N5 a repeated --jq does not count" || bad "N5 jq twice" "$o"
+# N6 gh api --template does not count
+post "$HOOK" n6 "gh api repos/Cor-Incorporated/ai-cluster/pulls/606 --template '{\"merged\": true}'" '{"merged": true}'
+o="$(stop "$HOOK" n6 "$REPORT")"
+blocked "$o" && ok "N6 gh api --template does not count" || bad "N6 template" "$o"
+# N7 a repeated --jq on gh api does not count
+post "$HOOK" n7 "gh api repos/Cor-Incorporated/ai-cluster/pulls/606 --jq .merged --jq true" "true"
+o="$(stop "$HOOK" n7 "$REPORT")"
+blocked "$o" && ok "N7 gh api with a repeated --jq does not count" || bad "N7 api jq twice" "$o"
+# N8 a remote through a variable ($PWD, a local repo) does not count
+post "$HOOK" n8 'git ls-remote "$PWD" refs/heads/feat/l1-practical-bench' "$SHA	refs/heads/feat/l1-practical-bench"
+o="$(stop "$HOOK" n8 "$PUSHED")"
+blocked "$o" && ok "N8 git ls-remote \"\$PWD\" does not count" || bad "N8 PWD remote" "$o"
+# N9 a PATH= prefix (a planted gh) does not count; GH_REPO= still does (R22)
+post "$HOOK" n9 "PATH=/tmp/fake:/usr/bin gh pr view 606 --json state" '{"state":"MERGED"}'
+o="$(stop "$HOOK" n9 "$REPORT")"
+blocked "$o" && ok "N9 a PATH= prefix does not count" || bad "N9 PATH prefix" "$o"
+
 # --- link: the reporter case through a mutant without the read acceptance -----------------------------------
 MUT="$SB/mutant"
 mkdir -p "$MUT/lib"
