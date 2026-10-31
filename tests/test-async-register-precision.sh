@@ -129,9 +129,11 @@ nohup ./job.sh &' "$HOOK" "$CC_EMPTY"
 expect "env / timeout の前置き"           1 'env GH_REPO=o/r timeout 60 gh workflow run j.yml' "$HOOK" "$CC_EMPTY"
 expect "single quote の中の \$( ) は文字"  0 "echo '\$(gh workflow run k.yml)'" "$HOOK" "$CC_EMPTY"
 expect "2 本の発射に 2 本の URL"           2 'gh workflow run l.yml && gh workflow run m.yml' "$HOOK" '{"stdout":"https://github.com/o/r/actions/runs/1001\nhttps://github.com/o/r/actions/runs/1002\n","stderr":"","interrupted":false}'
+expect "後ろの gh run list の URL は使わない" 1 'gh workflow run n.yml && gh run list --limit 1 --json url --jq ".[0].url"' "$HOOK" '{"stdout":"https://github.com/o/r/actions/runs/3000\n","stderr":"","interrupted":false}'
+expect "nice -n / timeout -s / env -u の値" 3 'nice -n 10 gh workflow run o.yml; timeout -s KILL 60 gh workflow run p.yml; env -u FOO gh workflow run q.yml' "$HOOK" "$CC_EMPTY"
 ids_now="$(HOME="$SB" bash "$SB/.claude/scripts/async-work.sh" unresolved --include-test 2>/dev/null \
   | python3 -c 'import json,sys; print(" ".join(r.get("id","") for r in json.load(sys.stdin)))')"
-[[ " $ids_now " == *" run-1001 "* && " $ids_now " == *" run-1002 "* && " $ids_now " == *" run-555 "* ]] \
+[[ " $ids_now " == *" run-1001 "* && " $ids_now " == *" run-1002 "* && " $ids_now " == *" run-555 "* && " $ids_now " != *" run-3000 "* ]] \
   && ok "run の URL は発射ごとに順に割り当て、ホストを問わない" || bad "run ids" "ids: $ids_now"
 
 echo

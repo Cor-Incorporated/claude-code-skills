@@ -348,14 +348,17 @@ def strip_prefix(words):
     while w:
         if re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w[0]):
             w = w[1:]
-        elif w[0] in ("env", "command", "nice", "builtin"):
+        elif w[0] in ("env", "command", "nice", "builtin", "time", "!", "xargs", "sudo"):
+            # options that take a value: env -u NAME / -C DIR, nice -n N, xargs -I R / -n N / -P N
+            takes = {"env": {"-u", "-C", "-S"}, "nice": {"-n"}, "xargs": {"-I", "-n", "-P", "-L", "-s", "-E", "-d"},
+                     "sudo": {"-u", "-g", "-C", "-D"}}.get(w[0], set())
             w = w[1:]
             while w and (w[0].startswith("-") or re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w[0])):
-                w = w[1:]
+                w = w[2:] if w[0] in takes else w[1:]
         elif w[0] in ("timeout", "gtimeout"):
             w = w[1:]
             while w and w[0].startswith("-"):
-                w = w[1:]
+                w = w[2:] if w[0] in ("-s", "-k", "--signal", "--kill-after") else w[1:]
             w = w[1:]  # the duration
         else:
             break
@@ -424,7 +427,9 @@ for words in commands:
 # 数が合わなければ（別の run の URL が混じる・出力が無い）、URL は使わない。
 urls = RUN_URL.findall(said) if launches else []
 for k, wf in enumerate(launches):
-    rid = urls[k] if len(urls) == len(launches) else ""
+    # Only when every command on the line is a launch: `gh workflow run x && gh run list --limit 1 --json url`
+    # prints the PREVIOUS run's URL when the launch prints nothing (#471 review round 2).
+    rid = urls[k] if len(urls) == len(launches) == len(commands) else ""
     out.append(("cd-run", "run-%s" % rid if rid else ident("wf", "%s#%d#%s" % (wf, k, cmd)),
                 "gh workflow run %s%s" % (wf, " (run %s)" % rid if rid else "")))
 

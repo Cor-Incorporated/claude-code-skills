@@ -73,6 +73,12 @@ seed nohup-dead dead-session 10800
 f1="$(stop "$HOOK" s7)"; f2="$(stop "$HOOK" s7)"
 [[ "$f1" == 2 && "$f2" == 2 ]] && ok "持ち主のいない stale な持ち越しは毎回止める (rc=$f1, $f2)" || bad "orphan" "rc=$f1, $f2"
 
+reset h
+seed nohup-own s9
+seed nohup-dead2 dead-session 10800
+h1="$(stop "$HOOK" s9)"; h2="$(stop "$HOOK" s9)"
+[[ "$h1" == 2 && "$h2" == 2 ]] && ok "an own item plus a stale orphan stops every time (rc=$h1, $h2)" || bad "own+orphan" "rc=$h1, $h2"
+
 reset g
 seed nohup-g1 s8
 stop "$HOOK" s8 >/dev/null
