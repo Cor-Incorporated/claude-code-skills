@@ -70,6 +70,7 @@ if ! declare -F h1_init >/dev/null 2>&1; then
     # Library missing (partial install): run unguarded rather than failing.
     h1_init() { :; }
     h1_start_watchdog() { :; }
+    h1_watchdog_status() { printf 'H1 watchdog: NOT RUNNING (runtime library not installed)\n'; }
     h1_stop_watchdog() { :; }
     h1_summary() { printf 'H1: runtime library not installed\n'; }
 fi
@@ -166,11 +167,11 @@ run_codex_with_timeout() {
     runner="$(timeout_bin || true)"
 
     if [[ -n "$runner" ]]; then
-        "$runner" "${timeout_sec}s" "$@" 2>&1 | tee "$event_log"
+        "$runner" "${timeout_sec}s" "$@" </dev/null 2>&1 | tee "$event_log"
         local exit_code=${PIPESTATUS[0]}
     else
         warn "timeout/gtimeout not found; running Codex without an outer timeout."
-        "$@" 2>&1 | tee "$event_log"
+        "$@" </dev/null 2>&1 | tee "$event_log"
         local exit_code=${PIPESTATUS[0]}
     fi
 
@@ -236,6 +237,7 @@ CSVEOF
     H1_ID="${CODEX_H1_DELEGATION:-codex-csv:$(basename "$CSV_FILE")}"
     h1_init "$H1_ID" "$REPO_PATH"
     h1_start_watchdog "$H1_ID" "$$"
+    log "$(h1_watchdog_status)"
 
     set +e
     run_codex_with_timeout "$CODEX_TIMEOUT_SEC" "$CODEX_EVENT_LOG" "$CODEX_SNAPSHOT_FILE" \

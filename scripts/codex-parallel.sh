@@ -27,6 +27,10 @@
 #   CODEX_H1_BUDGET_USD      — 全モデルの推定予算 USD (default: 50 / session epoch)
 #   CODEX_H1_MAX_ITERATIONS  — 反復上限 (default: 10)
 #   CODEX_H1_NO_PROGRESS_SEC — 無進捗タイムアウト秒 (default: 2700 = 45分)
+#   CODEX_H1_START_IDLE_SEC  — 起動から tool call 0 のまま止める秒 (default: min(上, 900)。2026-10-31 の stdin 固着)
+#   CODEX_REPLACE_WORKTREE   — 1 のとき既存 worktree を差し替える。未 commit の作業は先に
+#                              wip(<branch>) commit（Agent-Lane: codex）として branch に残す
+#   CODEX_REPLACE_SAVE_WIP   — 0 のとき差し替えで未 commit の作業を捨てる (default: 1)
 #   CODEX_H1_DELEGATION      — 委任 ID (default: codex-parallel:<branch>)
 #   CODEX_H1_WRAPPER_ENFORCE — 0 で watchdog 無効化（hook 側の block は残る）
 #   Counters are written by hooks/codex/h1-stall-runtime.sh (PreToolUse) and
@@ -65,6 +69,7 @@ if ! declare -F h1_init >/dev/null 2>&1; then
     h1_stop_watchdog() { :; }
     h1_summary() { printf 'H1: runtime library not installed\n'; }
 fi
+declare -F h1_watchdog_status >/dev/null 2>&1 || h1_watchdog_status() { printf 'H1 watchdog: NOT RUNNING (runtime library has no status)\n'; }
 
 # --- Color ---
 RED='\033[0;31m'
@@ -234,12 +239,15 @@ run_codex_with_timeout() {
     local runner
     runner="$(timeout_bin || true)"
 
+    # stdin is always /dev/null. Codex's exec mode reads "additional input from stdin" until EOF, and the prompt is
+    # already an argument. 2026-10-31: launched from a background Bash whose stdin stayed open, the second L1 run
+    # printed "Reading additional input from stdin..." and waited 2 h 18 m with 0 tool calls.
     if [[ -n "$runner" ]]; then
-        "$runner" "${timeout_sec}s" "$@" 2>&1 | tee "$event_log"
+        "$runner" "${timeout_sec}s" "$@" </dev/null 2>&1 | tee "$event_log"
         local exit_code=${PIPESTATUS[0]}
     else
         warn "timeout/gtimeout not found; running Codex without an outer timeout."
-        "$@" 2>&1 | tee "$event_log"
+        "$@" </dev/null 2>&1 | tee "$event_log"
         local exit_code=${PIPESTATUS[0]}
     fi
 
@@ -288,6 +296,7 @@ if [[ "${1:-}" == "--review" ]]; then
     H1_ID="${CODEX_H1_DELEGATION:-codex-review:${REPO_NAME}}"
     h1_init "$H1_ID" "$REPO_PATH"
     h1_start_watchdog "$H1_ID" "$$"
+    log "$(h1_watchdog_status)"
 
     set +e
     run_codex_with_timeout "$CODEX_REVIEW_TIMEOUT_SEC" "$CODEX_EVENT_LOG" "$CODEX_SNAPSHOT_FILE" \
@@ -408,6 +417,26 @@ if [[ -d "$WORKTREE_PATH" ]]; then
         error "Review or remove it manually, or set CODEX_REPLACE_WORKTREE=1 to replace it."
         exit 1
     fi
+    # Uncommitted work is saved on the branch before the forced removal, unless CODEX_REPLACE_SAVE_WIP=0.
+    # 2026-10-31: every L1 relaunch with CODEX_REPLACE_WORKTREE=1 would have deleted the previous run's edits;
+    # the orchestrator committed them by hand each time.
+    if [[ -n "$(git -C "$WORKTREE_PATH" status --porcelain 2>/dev/null)" ]]; then
+        if [[ "${CODEX_REPLACE_SAVE_WIP:-1}" == "1" ]]; then
+            if git -C "$WORKTREE_PATH" add -A \
+                && git -C "$WORKTREE_PATH" commit -q \
+                    -m "wip(${BRANCH_NAME}): save uncommitted work before the worktree is replaced" \
+                    -m "Saved by codex-parallel.sh (CODEX_REPLACE_WORKTREE=1) before git worktree remove --force." \
+                    -m "Agent-Lane: codex"; then
+                log "Saved uncommitted work: $(git -C "$WORKTREE_PATH" rev-parse --short HEAD) on ${BRANCH_NAME}"
+            else
+                error "Could not commit the uncommitted work in ${WORKTREE_PATH}; not replacing it."
+                error "Commit or stash it yourself, or set CODEX_REPLACE_SAVE_WIP=0 to discard it."
+                exit 1
+            fi
+        else
+            warn "CODEX_REPLACE_SAVE_WIP=0: discarding uncommitted work in ${WORKTREE_PATH}"
+        fi
+    fi
     warn "Replacing existing worktree: ${WORKTREE_PATH}"
     git -C "$REPO_PATH" worktree remove --force "$WORKTREE_PATH" 2>/dev/null || rm -rf "$WORKTREE_PATH"
     git -C "$REPO_PATH" worktree prune 2>/dev/null || true
@@ -492,6 +521,7 @@ fi
 H1_ID="${CODEX_H1_DELEGATION:-codex-parallel:${BRANCH_NAME}}"
 h1_init "$H1_ID" "$WORKTREE_PATH"
 h1_start_watchdog "$H1_ID" "$$"
+log "$(h1_watchdog_status)"
 
 set +e
 run_codex_with_timeout "$CODEX_TIMEOUT_SEC" "$CODEX_EVENT_LOG" "$CODEX_SNAPSHOT_FILE" \

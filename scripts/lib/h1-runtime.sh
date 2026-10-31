@@ -79,6 +79,11 @@ if os.path.exists(path):
         s["max_iterations"] = int(float(max_iter))
         s["no_progress_sec"] = int(float(no_progress))
         s["watchdog_started_ts"] = now
+        # "idle from the start" is about THIS start: count tool calls from here, and drop a previous start's
+        # no-progress-from-start stop so a relaunch of the same delegation is not killed on its first poll.
+        s["tool_calls_at_start"] = int(s.get("tool_calls") or 0)
+        if s.get("forced_stop") == "no-progress-from-start":
+            s["forced_stop"] = None
         with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False) as f:
             json.dump(s, f)
             temp = f.name
@@ -95,7 +100,7 @@ json.dump({
     "last_cmd_sha256": "", "same_cmd_streak": 0, "last_warn_80": 0,
     "last_heartbeat_ts": 0, "last_block_rule": "", "last_block_ts": 0,
     "budget_epoch": 0, "budget_epoch_spend_usd": 0.0,
-    "watchdog_started_ts": now,
+    "watchdog_started_ts": now, "tool_calls_at_start": 0,
 }, open(path, "w"))
 PY
 }
@@ -118,6 +123,14 @@ no_progress = int(s.get("no_progress_sec") or 2700)
 forced = s.get("forced_stop")
 if forced and forced != "budget-cap":
     print(forced); raise SystemExit(0)
+# Idle from the start: no tool call has arrived since the wrapper started, so the model is not known yet (the hook
+# records it on the first tool call) and the model scope below cannot apply. 2026-10-31: the L1 run sat on
+# "Reading additional input from stdin..." for 2 h 18 m with tool_calls 0 and model None, and the idle check further
+# down was unreachable behind `if not restricted`. A run with no tool call is stuck whatever the model.
+start_idle = int(os.environ.get("CODEX_H1_START_IDLE_SEC") or min(no_progress, 900))
+if int(s.get("tool_calls") or 0) - int(s.get("tool_calls_at_start") or 0) <= 0 and \
+        now - max(int(os.path.getmtime(path)), int(s.get("watchdog_started_ts") or 0)) > start_idle:
+    print("no-progress-from-start"); raise SystemExit(0)
 # Budget caps apply to all models. Preserve no-progress / iteration model scope.
 restricted_tokens = [
     token.strip().lower()
@@ -270,6 +283,22 @@ h1_start_watchdog() {
     H1_WATCHDOG_PID=$!
 }
 
+# h1_watchdog_status — one line for the launch log saying whether the watchdog is alive and what it will stop on,
+# so a stuck run's log shows the watchdog was there (or was not). 2026-10-31: launch2.log had no H1 line at all and
+# nobody could tell whether the watchdog had run (aidd-governance#235 P4 / ADR-017, claude-code-skills#466).
+h1_watchdog_status() {
+    if ! h1_enabled; then
+        printf 'H1 watchdog: OFF (CODEX_H1_WRAPPER_ENFORCE=0); only the PreToolUse hook enforces\n'
+    elif [ -n "${H1_WATCHDOG_PID:-}" ] && kill -0 "$H1_WATCHDOG_PID" 2>/dev/null; then
+        printf 'H1 watchdog: alive pid %s, poll %ss, idle-from-start %ss, no-progress %ss\n' \
+            "$H1_WATCHDOG_PID" "${CODEX_H1_POLL_SEC:-30}" \
+            "${CODEX_H1_START_IDLE_SEC:-$(( ${CODEX_H1_NO_PROGRESS_SEC:-2700} < 900 ? ${CODEX_H1_NO_PROGRESS_SEC:-2700} : 900 ))}" \
+            "${CODEX_H1_NO_PROGRESS_SEC:-2700}"
+    else
+        printf 'H1 watchdog: NOT RUNNING (start failed); the run has only the wall-clock timeout\n'
+    fi
+}
+
 h1_stop_watchdog() {
     [ -n "${H1_WATCHDOG_PID:-}" ] || return 0
     kill "$H1_WATCHDOG_PID" 2>/dev/null || true
@@ -286,10 +315,11 @@ h1_summary() {
 import json, sys
 s = json.load(open(sys.argv[1]))
 print("H1: epoch spend $%.2f/$%.2f, total estimate $%.2f (%s) | tool_calls %s | iterations %s/%s | last block (history): %s"
+      " | watchdog stop: %s"
       % (float(s.get("budget_epoch_spend_usd", s.get("spend_usd") or 0)),
          float(s.get("budget_usd") or 0), float(s.get("spend_usd") or 0),
          s.get("budget_source", "unknown"), s.get("tool_calls", 0),
          s.get("iterations", 0), s.get("max_iterations", 0),
-         s.get("last_block_rule") or "none"))
+         s.get("last_block_rule") or "none", s.get("forced_stop") or "none"))
 PY
 }
