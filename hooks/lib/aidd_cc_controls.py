@@ -778,6 +778,50 @@ def _push_executed(rows: list[dict]) -> bool:
     return False
 
 
+# ADR-015 (aidd-governance#235, 2026-10-31): a session that REPORTS another lane's push/merge binds the claim by
+# reading it back, not by doing it (the orchestrator was blocked 5+ times for relaying a lane's merge). The subject of
+# the sentence is not classified (ADR-009): the read is accepted as evidence like the push itself. A read counts only
+# when it ran alone or after one `cd`, and only when its own output shows the state, so `gh pr view 1 && echo MERGED`
+# or an OPEN pull request does not count.
+_MERGE_READ_RE = re.compile(r"(gh pr (view|list)|gh api\s+\S*pulls/\d+)\b")
+_PUSH_READ_RE = re.compile(r"(git ls-remote|gh api\s+\S*(commits|branches|git/refs?)/)")
+_MERGED_OUT_RE = re.compile(
+    r'\bMERGED\b|"merged"\s*:\s*true|"merged_?[aA]t"\s*:\s*"\d{4}-'
+    r'|"mergeCommit"\s*:\s*\{\s*"oid"\s*:\s*"[0-9a-f]{40}"'
+)
+_SHA_OUT_RE = re.compile(r"\b[0-9a-f]{40}\b")
+
+
+def _push_read_verified(rows: list[dict]) -> bool:
+    """A successful read whose output shows a merged pull request or a pushed commit."""
+    for r in rows:
+        if r.get("event") != "post" or r.get("rc") != 0:
+            continue
+        parts = shell_segments_with_separators(str(r.get("cmd", "")))
+        segs = [seg.strip() for seg, _sep in parts]
+        if len(segs) == 2 and parts[1][1] == "&&" and re.match(r"cd\s", segs[0]):
+            segs = segs[1:]
+        if len(segs) != 1:
+            continue
+        out = str(r.get("out_sample", ""))
+        if _MERGE_READ_RE.match(segs[0]) and _MERGED_OUT_RE.search(out):
+            return True
+        if _PUSH_READ_RE.match(segs[0]) and _SHA_OUT_RE.search(out):
+            return True
+    return False
+
+
+def _push_bound(rows: list[dict]) -> bool:
+    """DOT-INC-026: the session pushed/merged itself, or read the result back (ADR-015)."""
+    return _push_executed(rows) or _push_read_verified(rows)
+
+
+PUSH_UNBOUND = (
+    "push/merge claimed but no successful push/merge command in the session ledger, nor a read that shows it "
+    "(gh pr view … MERGED, gh api …/commits/<ref>, git ls-remote) (DOT-INC-026)"
+)
+
+
 def stop_check(
     meta: dict, rows: list[dict], text: str, cwd: str, require_status: bool = True
 ) -> dict:
@@ -801,12 +845,10 @@ def stop_check(
         # review 2026-10-17 P2): those two bindings run even here; the evidence trailer is not required.
         if (
             has_push_claim(text)
-            and not _push_executed(rows)
+            and not _push_bound(rows)
             and not mutated("evidence.readback")
         ):
-            problems.append(
-                "push/merge claimed but no successful push/merge command in the session ledger (DOT-INC-026)"
-            )
+            problems.append(PUSH_UNBOUND)
         if has_persist_claim(text) and not mutated("evidence.readback"):
             problems.extend(_readback_problems(text, cwd, _touched_paths(rows)))
         v = _verdict(problems)
@@ -836,12 +878,10 @@ def stop_check(
         # vocabulary backstop is for sessions WITHOUT tool rows (ADR-009; independent review r2 P2)
         if (
             has_push_claim(text)
-            and not _push_executed(rows)
+            and not _push_bound(rows)
             and not mutated("evidence.readback")
         ):
-            problems.append(
-                "push/merge claimed but no successful push/merge command in the session ledger (DOT-INC-026)"
-            )
+            problems.append(PUSH_UNBOUND)
         if has_persist_claim(text) and not mutated("evidence.readback"):
             problems.extend(_readback_problems(text, cwd, _touched_paths(rows)))
         return _verdict(problems)
@@ -929,10 +969,8 @@ def stop_check(
     if has_persist_claim(text) and not mutated("evidence.readback"):
         problems.extend(_readback_problems(text, cwd, _touched_paths(rows)))
     if has_push_claim(text) and not mutated("evidence.readback"):
-        if not _push_executed(rows):
-            problems.append(
-                "push/merge claimed but no successful push/merge command in the session ledger (DOT-INC-026)"
-            )
+        if not _push_bound(rows):
+            problems.append(PUSH_UNBOUND)
     problems.extend(denominator_mismatch(text, meta.get("denominator")))
     problems.extend(source_set_problems(rows))
     return _verdict(problems)
