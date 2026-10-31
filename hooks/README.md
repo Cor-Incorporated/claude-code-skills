@@ -97,7 +97,7 @@ none of these block the session from starting.
 
 ### PostToolUse
 
-7 invocations across 4 matchers. Advisory only — informational context,
+8 invocations across 4 matchers. Advisory only — informational context,
 never a hard block. (`aidd-cc-claude.sh` on `Bash|Edit|Write|MultiEdit|AskUserQuestion`
 is the H17 common control, listed under PreToolUse.)
 
@@ -108,13 +108,14 @@ is the H17 common control, listed under PreToolUse.)
 | `verify-agent-output.sh` | Detect agent phantom completions (false "done" reports, #173) — informational |
 | `auto-commit-worktree-changes.sh` | Auto-commit worktree agent changes after merge to parent dir (#220) |
 
-#### Matcher: `Bash` (3)
+#### Matcher: `Bash` (4)
 
 | Hook | Purpose |
 |---|---|
 | `post-deploy-verify.sh` | Inject verification checklist after `gcloud run deploy`/`docker push`/`kubectl apply`. The words count anywhere except inside a heredoc body that is not run by a shell and the quoted text of grep/rg/echo/printf |
 | `enforce-hook-deploy-after-merge.sh` | Auto-deploy hooks after a PR merge that touched `hooks/` (#183) |
 | `aidd-async-register.sh` | Register background/async work so the turn boundary can reconcile it (aidd-governance#96) |
+| `harness-guardrail-ledger.sh` | Copy claude-code-harness plugin fires (RUNTIME_FLOOR / R01–R13) from `<project>/.claude/state/audit/guardrail-fires.jsonl` into `guard-ledger.jsonl` (ADR-006 req. 4; the floor deny fires no PostToolUseFailure). Rule id + category only, never the command |
 
 #### Matcher: `Edit\|Write` (1)
 
