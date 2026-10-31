@@ -50,7 +50,7 @@ Sources: `pi/launcher/pi`, `dsh/launcher/dsh`, `opencode/launcher/opencode2`. Ru
 ```
 claude-code-skills/
 ├── skills/           # 25 custom skill definitions (SKILL.md + scripts + references)
-├── rules/            # 6 global rule files (coding-style, git-workflow, quality, testing, delegation, hook-deployment)
+├── rules/            # 7 global rule files (coding-style, git-workflow, quality, testing, delegation, hook-deployment, runbook)
 ├── hooks/            # 17 hook scripts (4 blocking + 13 advisory/infra); hooks/_unused/ holds 62 retired scripts, 56 via ADR-006
 ├── scripts/          # 6 utility scripts (Codex orchestration, provider switching, context monitoring); scripts/_unused/ holds retired review-pipeline helpers
 ├── setup.sh          # One-command installation
