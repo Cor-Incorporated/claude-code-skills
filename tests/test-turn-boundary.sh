@@ -41,7 +41,7 @@ bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
 
 reset_state() {
   export AIDD_ASYNC_STATE="$SB/aw-$1"
-  rm -rf "$AIDD_ASYNC_STATE"
+  rm -rf "$AIDD_ASYNC_STATE" "$AIDD_ASYNC_STATE.turn-boundary-seen"
   mkdir -p "$AIDD_ASYNC_STATE"
 }
 
