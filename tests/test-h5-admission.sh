@@ -276,5 +276,64 @@ else
 fi
 rm -rf "$H8_FIX" "$H8_LEDGER"
 
+
+# --- PR template rows (origin: #444, 2026-10-31) ---
+# The template ships `- [ ] **H5-guard: no**` and `- [ ] **H5-guard: yes**` both
+# unchecked, plus a heading that says "block-capable guard". Before the fix the
+# self-declaration grep read the unchecked yes row (and the heading) as a yes,
+# so every PR that kept the template was a guard PR and `H5-guard: no` could
+# never exempt it. The fixtures below are the real template file.
+TPL="$ROOT/.github/pull_request_template.md"
+tpl_body="$(cat "$TPL")"
+# (a) template unmodified, docs-only diff → not a guard PR
+run_case "template-unmodified-docs-only" 0 \
+  env H5_DIFF_FILES="docs/x.md" H5_PR_BODY="$tpl_body" bash "$CHK"
+# (b) [x] no checked, yes row still unchecked (the #444 shape), docs-only → exempt
+tpl_no="$(printf '%s\n' "$tpl_body" | sed 's/^- \[ \] \*\*H5-guard: no\*\*/- [x] **H5-guard: no**/')"
+if [[ "$tpl_no" == "$tpl_body" ]]; then
+  echo "FAIL: template fixture: the sed for [x] no changed nothing (template wording moved?)"; fail=$((fail + 1))
+fi
+run_case "template-checked-no-docs-only" 0 \
+  env H5_DIFF_FILES="docs/x.md" H5_PR_BODY="$tpl_no" bash "$CHK"
+# (c) [x] yes checked, hook diff, fee missing → guard PR, red
+tpl_yes="$(printf '%s\n' "$tpl_body" | sed 's/^- \[ \] \*\*H5-guard: yes\*\*/- [x] **H5-guard: yes**/')"
+if [[ "$tpl_yes" == "$tpl_body" ]]; then
+  echo "FAIL: template fixture: the sed for [x] yes changed nothing (template wording moved?)"; fail=$((fail + 1))
+fi
+run_case "template-checked-yes-hook" 1 \
+  env H5_DIFF_FILES="hooks/x.sh" H5_PR_BODY="$tpl_yes" bash "$CHK"
+# (c') [x] yes checked, docs-only diff → still a guard PR by self-declaration
+run_case "template-checked-yes-docs-only" 1 \
+  env H5_DIFF_FILES="docs/x.md" H5_PR_BODY="$tpl_yes" bash "$CHK"
+# (b') [x] no checked but a structural path is touched → no self-exemption
+run_case "template-checked-no-structural-path" 1 \
+  env H5_DIFF_FILES="hooks/x.sh" H5_PR_BODY="$tpl_no" bash "$CHK"
+# (e) a heading is template text, not a declaration (docs-only) → not a guard PR
+run_case "heading-yes-is-not-a-declaration" 0 \
+  env H5_DIFF_FILES="docs/x.md" H5_PR_BODY="## H5-guard: yes
+docs only" bash "$CHK"
+# (f) prose still declares (docs-only) → guard PR, fee missing → red
+run_case "prose-yes-still-declares" 1 \
+  env H5_DIFF_FILES="docs/x.md" H5_PR_BODY="This PR adds a guard. H5-guard: yes
+H5-E2E: none" bash "$CHK"
+# (g) other bullet styles are unchecked rows too (docs-only) → not a declaration
+run_case "star-plus-unchecked-yes-is-not-a-declaration" 0 \
+  env H5_DIFF_FILES="docs/x.md" H5_PR_BODY="* [ ] **H5-guard: yes**
++ [ ] **H5-guard: yes**
+docs only" bash "$CHK"
+# (d) pair template↔detector: the unchecked-row strip exists because the template
+#     carries both rows unchecked. If the template drops them this row goes red,
+#     which is the retirement signal for the strip (H5-RETIRE of the fix PR).
+tpl_no_rows=$(grep -cE '^- \[ \] \*\*H5-guard: no\*\*' "$TPL" || true)
+tpl_yes_rows=$(grep -cE '^- \[ \] \*\*H5-guard: yes\*\*' "$TPL" || true)
+tpl_heading_rows=$(grep -cE '^#{1,6} .*block-capable guard' "$TPL" || true)
+if [[ "$tpl_no_rows" -eq 1 && "$tpl_yes_rows" -eq 1 && "$tpl_heading_rows" -eq 1 ]]; then
+  echo "PASS: pair template/detector: template carries both unchecked H5-guard rows and the block-capable-guard heading (no=${tpl_no_rows} yes=${tpl_yes_rows} heading=${tpl_heading_rows})"
+  pass=$((pass + 1))
+else
+  echo "FAIL: pair template/detector: template rows changed (no=${tpl_no_rows} yes=${tpl_yes_rows} heading=${tpl_heading_rows}, expected 1/1/1); retire or update the unchecked-row / heading strip in scripts/h5-admission-check.sh"
+  fail=$((fail + 1))
+fi
+
 echo "--- $pass passed, $fail failed ---"
 [[ "$fail" -eq 0 ]]
