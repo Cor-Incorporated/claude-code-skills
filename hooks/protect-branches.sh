@@ -56,6 +56,13 @@ _aidd_ask() {
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
+# --- Push destination resolver (F22, 2026-10-30): hooks/lib/push_dests.py, shared with
+# git-push-guard.sh (rules in its docstring). Missing python3 / file → explicit checks only.
+_PUSH_DESTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/push_dests.py"
+# The Bash tool's cwd, not the hook process cwd (which may be the session's start dir).
+_push_base=$(printf '%s' "$input" | jq -r '.cwd // ""' 2>/dev/null || true)
+[ -n "$_push_base" ] && [ -d "$_push_base" ] || _push_base="$PWD"
+
 # Skip ONLY a single read-only inspection command that merely MENTIONS the operation
 # (e.g. grep "gh pr create" ...). Requires a single-line command with NO shell operator,
 # so a real operation cannot be chained after a benign first token (prevents
@@ -471,7 +478,8 @@ check_force_push_segment() {
     # No explicit protected ref: fall back to current branch (implicit push).
     target_branch=$(extract_push_branch "$seg")
     if [ -z "$target_branch" ]; then
-      target_branch=$(git branch --show-current 2>/dev/null || echo "")
+      # .cwd, not the hook process cwd (F22). `-C` / `cd` forms are resolved by Check 3c.
+      target_branch=$(git -C "$_push_base" branch --show-current 2>/dev/null || echo "")
     fi
     for branch in $PROTECTED_BRANCHES; do
       if [ "$target_branch" = "$branch" ]; then
@@ -535,9 +543,11 @@ done
 # alone also blocks HEAD:refs/heads/main and refs/heads/main (Cursor/Codex parity).
 # False positives on feat/* and docs that merely mention main are excluded by
 # requiring a git push match + destination token equality (not bare substring).
+# F22: 素の `git push` では grep が 1 を返し、pipefail + set -e で rc=1（素通り）だった。
+# `|| true` で続け、暗黙の宛先は Check 3c へ。ここは python3 が無くても残る明示 ref 検査。
 if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE"; then
   push_target=$(echo "$cmd_norm" | grep -oE "push[[:space:]]+[^|;&)<>]*" | head -1 \
-    | sed 's/^push[[:space:]]*//' | sed -E 's/[[:space:]]+-(u|f|q|-force|-force-with-lease|--set-upstream|--quiet)([^[:space:]]*)?//g' | xargs)
+    | sed 's/^push[[:space:]]*//' | sed -E 's/[[:space:]]+-(u|f|q|-force|-force-with-lease|--set-upstream|--quiet)([^[:space:]]*)?//g' | xargs) || true
   refspec=$(echo "$push_target" | awk '{print $NF}')
   for branch in $PROTECTED_BRANCHES; do
     if [ "$refspec" = "$branch" ] \
@@ -546,10 +556,37 @@ if echo "$cmd_norm" | grep -qE "$_GIT_PUSH_RE"; then
       echo "[BLOCK] 保護ブランチ '${branch}' への直接 push を検出。" >&2
       echo "  WHY: 共有ブランチへの直接 push は禁止です（refs/heads/ 表記含む）。" >&2
       echo "  FIX: feature ブランチで作業し、PR 経由でマージしてください。" >&2
-      _aidd_block
+      _aidd_block "protected-push"
     fi
   done
 fi
+
+# --- Check 3c: every branch each `git push` updates, in the repo git reads (F22) ---
+# 宛先は lib/push_dests.py。python3 は git と push を両方含むときだけ起動する（全 Bash で
+# 走るため）。_GIT_PUSH_RE で絞らないのは `git -C "/a b" push` が一致しないから（B15）。
+_push_dest_lines=""
+if [[ "$cmd" == *git* && ( "$cmd" == *push* || "$cmd" == *send-pack* ) ]]; then
+  _push_dest_lines=$(python3 "$_PUSH_DESTS" "$cmd" "$_push_base" 2>/dev/null || true)
+fi
+while IFS=$'\t' read -r _dest _dest_dir _dest_how || [ -n "${_dest:-}" ]; do
+  if [ "${_dest_how:-}" = "computed" ]; then
+    echo "[BLOCK] push の宛先が置換・変数・--mirror/--prune で決まり保護ブランチでないと確かめられない（${_dest_dir}）。宛先名を明示すること。" >&2
+    _aidd_block "protected-push-computed"
+  fi
+  for branch in $PROTECTED_BRANCHES; do
+    [ "$_dest" = "$branch" ] || continue
+    if [ "$_dest_how" = "explicit" ]; then
+      echo "[BLOCK] 保護ブランチ '${branch}' への直接 push を検出。" >&2
+      _rule="protected-push"
+    else
+      echo "[BLOCK] 保護ブランチ '${branch}' への暗黙 push を検出（${_dest_dir} の ${_dest_how}）。" >&2
+      _rule="protected-push-implicit"
+    fi
+    echo "  WHY: 共有ブランチへの直接 push は禁止です（refspec 無し・HEAD・-C・cd を含む）。" >&2
+    echo "  FIX: feature ブランチで作業し、git push -u origin <feature> && gh pr create --base develop。" >&2
+    _aidd_block "$_rule"
+  done
+done <<< "$_push_dest_lines"
 
 # --- Check 4: gh pr merge --delete-branch (most dangerous!) ---
 # 旧実装は 1 本の正規表現だった:

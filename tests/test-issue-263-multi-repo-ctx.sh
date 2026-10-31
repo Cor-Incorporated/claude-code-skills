@@ -160,7 +160,12 @@ print("\\n".join(out) if out else lead_cd)"""
 assert t.count(old) == 1, f"変異対象が {t.count(old)} 件（1 件でなければ反証不能）"
 new = """# 変異: セグメント単位の解決を捨て、コマンド全体の最初の -C を 1 回だけ使う
 print(_resolve(re.search(r'git\\s+-C\\s+' + pat_val, cmd)) or lead_cd)"""
-pathlib.Path(dst).write_text(t.replace(old, new, 1), encoding="utf-8")
+# F22 (2026-10-30) 以降、§3 の宛先解決器も `git -C` を呼び出しごとに解決し、
+# ctx_dirs が壊れても保護 push を止める（多層）。ctx_dirs だけの効き目を測るため、
+# 解決器の呼び出しも外す。外さないと変異の反転が §3 に隠れて出ない。
+call = 'python3 "$_PUSH_DESTS"'
+assert t.count(call) == 1, f"解決器の呼び出しが {t.count(call)} 件（1 件でなければ反証不能）"
+pathlib.Path(dst).write_text(t.replace(old, new, 1).replace(call, "true"), encoding="utf-8")
 PY
 then
   ok "変異体を生成できた（変異対象がちょうど 1 件）"
