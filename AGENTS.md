@@ -123,7 +123,7 @@ truthful.
 |------|----------|----------|
 | `hooks/` | Shell hook scripts + gate-modes/ | Yes |
 | `hooks/_unused/` | Retired hooks | No (reference only) |
-| `rules/` | 6 global rule files (coding-style, git-workflow, quality, testing, delegation, hook-deployment) | Yes |
+| `rules/` | 7 global rule files (coding-style, git-workflow, quality, testing, delegation, hook-deployment, runbook) | Yes |
 | `skills/*/` | Repo-owned skill definitions | Yes |
 | `scripts/` | Utility scripts (codex orchestration, PR review, delivery scoring) | Yes |
 | `docs/adr/` | Architecture decision records (001–006) | Yes |
