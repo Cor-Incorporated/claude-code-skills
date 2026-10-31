@@ -316,6 +316,11 @@ docs only" bash "$CHK"
 run_case "prose-yes-still-declares" 1 \
   env H5_DIFF_FILES="docs/x.md" H5_PR_BODY="This PR adds a guard. H5-guard: yes
 H5-E2E: none" bash "$CHK"
+# (g) other bullet styles are unchecked rows too (docs-only) → not a declaration
+run_case "star-plus-unchecked-yes-is-not-a-declaration" 0 \
+  env H5_DIFF_FILES="docs/x.md" H5_PR_BODY="* [ ] **H5-guard: yes**
++ [ ] **H5-guard: yes**
+docs only" bash "$CHK"
 # (d) pair template↔detector: the unchecked-row strip exists because the template
 #     carries both rows unchecked. If the template drops them this row goes red,
 #     which is the retirement signal for the strip (H5-RETIRE of the fix PR).
