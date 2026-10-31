@@ -97,6 +97,10 @@ for bad_url in "http://api.cloudflare.com/client/v4/user/tokens/verify" "file://
   [[ $rc -eq 2 && ! -s "$SB/curl-argv" && ! -s "$SB/gh-argv" ]] || bad "destination $bad_url" "rc=$rc $out"
 done
 [[ ! -s "$SB/curl-argv" ]] && ok "http, file:, an unlisted host, a curl option and a URL with credentials are refused before any call"
+grep -q '"rule":"secret-host-not-allowed"' "$SB/ledger.jsonl" && ok "a refused verify host is a ledger row" \
+  || bad "host ledger" "no secret-host-not-allowed row"
+out="$(printf '%s' "$GOOD" | run CF_TOKEN o/r --verify-url 'https://[::1/')"; rc=$?
+[[ $rc -eq 2 && "$out" != *Traceback* ]] && ok "a malformed URL is a usage error (rc=2), not a traceback" || bad "malformed url" "rc=$rc $out"
 out="$(printf '%s' "$GOOD" | run CF_TOKEN o/r --verify-url "https://verify.example.org/v" --allow-host verify.example.org)"; rc=$?
 [[ $rc -eq 0 && "$(cat "$SB/curl-urls" 2>/dev/null)" == "https://verify.example.org/v" ]] \
   && grep -q 'allow-host verify.example.org' "$SB/ledger.jsonl" \
@@ -108,20 +112,28 @@ out="$(printf '%s' "$GOOD" | run CF_TOKEN o/r)"; rc=$?
 [[ $rc -eq 2 && ! -s "$SB/gh-argv" ]] && ok "without --verify-url the script refuses (rc=2)" || bad "no verify" "rc=$rc $out"
 out="$(printf '\n' | run CF_TOKEN o/r --cloudflare-account "$ACC")"; rc=$?
 [[ $rc -eq 1 && "$out" == *"is empty"* && ! -s "$SB/gh-argv" ]] && ok "an empty value is refused" || bad "empty" "rc=$rc $out"
+# the destination is named before the value is read: on a refusal of the read itself the host line is already out
+host_line="$(printf '%s\n' "$out" | grep -n 'will be sent to: api.cloudflare.com' | cut -d: -f1)"
+ng_line="$(printf '%s\n' "$out" | grep -n 'NG: the value is empty' | cut -d: -f1)"
+[[ -n "$host_line" && -n "$ng_line" && "$host_line" -lt "$ng_line" ]] && ok "the destination host is printed before the value is read" \
+  || bad "host first" "host line ${host_line:-none}, read result line ${ng_line:-none}"
+out="$(printf 'abc\rdef' | run CF_TOKEN o/r --cloudflare-account "$ACC")"; rc=$?
+[[ $rc -eq 1 && "$out" == *"multi-line"* && ! -s "$SB/curl-argv" ]] && ok "a carriage return inside the value is refused like a newline" || bad "cr" "rc=$rc $out"
 out="$(printf -- '-----BEGIN KEY-----\nabc\n-----END KEY-----\n' | run CF_TOKEN o/r --cloudflare-account "$ACC")"; rc=$?
 [[ $rc -eq 1 && "$out" == *"multi-line"* && ! -s "$SB/curl-argv" ]] && ok "a multi-line value is refused before any call" || bad "multi-line" "rc=$rc $out"
 
 # 6 dry run; gh failure; stale readback; --env
 reset
 out="$(printf '%s' "$GOOD" | run CF_TOKEN o/r --cloudflare-account "$ACC" --dry-run)"; rc=$?
-[[ $rc -eq 0 && "$out" == *"DRY RUN"* && ! -s "$SB/gh-argv" ]] && ok "--dry-run verifies and stores nothing" || bad "dry run" "rc=$rc $out"
+[[ $rc -eq 0 && "$out" == *"DRY RUN"* && ! -s "$SB/gh-argv" ]] && grep -q '"rule":"secret-dry-run-verified"' "$SB/ledger.jsonl" \
+  && ok "--dry-run verifies, stores nothing, and is a ledger row" || bad "dry run" "rc=$rc $out"
 out="$(printf '%s' "$GOOD" | FAKE_GH_SET_FAIL=1 run CF_TOKEN o/r --cloudflare-account "$ACC")"; rc=$?
 [[ $rc -eq 3 && "$out" == *"gh secret set failed"* ]] && grep -q '"rule":"secret-set-failed"' "$SB/ledger.jsonl" \
   && ok "a failing gh secret set is rc=3 with its own ledger row" || bad "gh failure" "rc=$rc $out"
 reset
 out="$(printf '%s' "$GOOD" | FAKE_GH_OLD=1 run CF_TOKEN o/r --cloudflare-account "$ACC")"; rc=$?
-[[ $rc -eq 4 && "$out" == *"readback is stale"* ]] && grep -q '"rule":"secret-readback-stale"' "$SB/ledger.jsonl" \
-  && ok "a stale readback is rc=4, not success" || bad "stale readback" "rc=$rc $out"
+[[ $rc -eq 4 && "$out" == *"readback is stale"* ]] && grep '"rule":"secret-readback-stale"' "$SB/ledger.jsonl" | grep -q '"decision":"warn"' \
+  && ok "a stale readback is rc=4, not success, and a warn row (the value was stored, not blocked)" || bad "stale readback" "rc=$rc $out"
 reset
 out="$(printf '%s' "$GOOD" | run CF_TOKEN o/r --cloudflare-account "$ACC" --env production)"; rc=$?
 [[ $rc -eq 0 && "$(grep -c -- '--env production' "$SB/gh-argv")" -eq 2 ]] && ok "--env reaches both secret set and secret list" \
@@ -133,6 +145,25 @@ grep -q '"rule":"secret-registered"' "$SB/ledger.jsonl" && ! grep -qF "$GOOD" "$
 reset
 out="$(printf '%s' "$GOOD" | bash -x "$SCRIPT" CF_TOKEN o/r --cloudflare-account "$ACC" --dry-run 2>&1)"
 [[ "$out" != *"$GOOD"* ]] && ok "bash -x shows no value" || bad "xtrace" "the value appeared under bash -x"
+
+# 8 a json.py in the caller's directory is never imported while the value is on disk (review round 2 M1: the ledger
+#   library's `python3 -` put the cwd on sys.path)
+reset
+mkdir -p "$SB/cwd"
+cat >"$SB/cwd/json.py" <<PYMOD
+import glob, os
+open("$SB/imported", "a").write("imported, value files on disk: %d\\n" % len(glob.glob(os.environ.get("TMPDIR", "/tmp") + "/register-secret.*/value")))
+import sys
+del sys.modules["json"]
+sys.path = [p for p in sys.path if p not in ("", os.getcwd())]
+import json as _real
+sys.modules["json"] = _real
+PYMOD
+(cd "$SB/cwd" && printf '%s' "$GOOD" | bash "$SCRIPT" CF_TOKEN o/r --cloudflare-account "$ACC" >/dev/null 2>&1)
+(cd "$SB/cwd" && printf 'cfut_wrong' | bash "$SCRIPT" CF_TOKEN o/r --cloudflare-account "$ACC" >/dev/null 2>&1)
+[[ ! -e "$SB/imported" ]] && ok "no Python the script starts imports a json.py from the caller's directory (success and refusal)" \
+  || bad "cwd import" "$(cat "$SB/imported")"
+rm -rf "$SB/cwd" "$SB/imported"
 
 # Mutant: the verify gate removed → a wrong value is stored. The real script refuses it (case 3).
 MUT="$SB/register-mutant.sh"

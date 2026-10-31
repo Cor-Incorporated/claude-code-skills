@@ -9,8 +9,8 @@
 #
 #   - The value comes from a hidden prompt (or stdin when stdin is not a terminal). Python reads it straight into a 0600
 #     file, so it is never an argument, a shell variable or a `set -x` line. Leading and trailing whitespace is dropped
-#     (a pasted value often ends in a newline); a value with a newline inside (a PEM key) is refused. Nothing else is
-#     assumed about its length or characters.
+#     (a pasted value often ends in a newline); a value with a newline inside (a PEM key) is refused when it comes on
+#     stdin, while the hidden prompt reads one line only. Nothing else is assumed about its length or characters.
 #   - Verify URLs must be https and their host must be allowed: api.cloudflare.com by default, others only with
 #     --allow-host (recorded in the ledger), because the value is sent to that host. The hosts are printed before the
 #     value is read. curl gets the header from a 0600 file (`-H @file`), ignores ~/.curlrc (-q), speaks https only and
@@ -21,8 +21,10 @@
 #     error codes, never the body.
 #   - `gh secret set` reads the value from stdin; then updatedAt is read back and must be fresh.
 #   - Exit codes: 0 stored (or verified with --dry-run), 1 refused (empty, multi-line or not verified), 2 usage,
-#     3 gh secret set failed, 4 stored but the readback is missing or stale. Every outcome but 2 is a guard-ledger row
-#     with the name and the repository, never the value.
+#     3 gh secret set failed, 4 stored but the readback is missing or stale. Every outcome is a guard-ledger row with the
+#     name and the repository, never the value, except a usage error (2) other than a refused verify host.
+#   - The script runs from / once its ledger library is found, so no file in the caller's directory (a json.py) is
+#     imported by any Python it starts while the value is on disk (claude-code-skills#473 review round 2).
 #
 # Origin (2026-10-31 22:4x–23:35, orchestrator incident note): registering cor-os' CLOUDFLARE_ACCESS_READ_API_TOKEN took
 # 5 attempts and about 50 minutes. Invalid values reached the GitHub secret twice (6111 Invalid format, 400
@@ -58,17 +60,6 @@ while [[ $# -gt 0 ]]; do
         *) die "unknown argument: $1" ;;
     esac
 done
-[[ ${#URLS[@]} -gt 0 ]] || die "no --verify-url / --cloudflare-account: a value is never stored without a check"
-for url in "${URLS[@]}"; do
-    host="$(python3 -I -c 'import sys, urllib.parse
-u = urllib.parse.urlsplit(sys.argv[1])
-print(u.hostname or "" if u.scheme == "https" and not u.username and not u.password else "")' "$url")"
-    [[ -n "$host" ]] || die "verify URL must be https with a host and no credentials: $url"
-    allowed=0
-    for h in "${HOSTS[@]}"; do [[ "$host" == "$h" ]] && allowed=1; done
-    [[ $allowed == 1 ]] || die "verify host $host is not allowed (default api.cloudflare.com; add --allow-host $host if you trust it — the value is sent there)"
-done
-
 _LEDGER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/hooks/lib/aidd-ledger.sh"
 [[ -f "$_LEDGER_LIB" ]] || _LEDGER_LIB="$HOME/.claude/hooks/lib/aidd-ledger.sh"
 # shellcheck source=/dev/null
@@ -79,12 +70,27 @@ ledger() {  # <decision> <rule>
     row="$(python3 -I -c 'import json,sys
 d, rule, name, repo, env, hosts = sys.argv[1:7]
 print(json.dumps({"component": "secret-register", "hook": "register-secret-verified",
-                  "event": "measure" if d == "allow" else "block", "decision": d, "rule": rule,
+                  "event": "block" if d == "deny" else "measure", "decision": d, "rule": rule,
                   "cmd_head": "register-secret-verified %s %s%s%s" % (
                       name, repo, " --env " + env if env else "", " --allow-host" + hosts if hosts else "")},
                  separators=(",", ":")))' "$1" "$2" "$NAME" "$REPO" "$ENVNAME" "$EXTRA_HOSTS")" || return 0
     aidd_ledger_append_record "$row" "${AIDD_LEDGER_AGENT:-claude-code}" >/dev/null 2>&1 || true
 }
+cd /  # see the header: nothing in the caller's directory is imported
+
+[[ ${#URLS[@]} -gt 0 ]] || die "no --verify-url / --cloudflare-account: a value is never stored without a check"
+for url in "${URLS[@]}"; do
+    host="$(python3 -I -c 'import sys, urllib.parse
+try:
+    u = urllib.parse.urlsplit(sys.argv[1])
+    print(u.hostname or "" if u.scheme == "https" and not u.username and not u.password else "")
+except ValueError:
+    print("")' "$url")"
+    [[ -n "$host" ]] || die "verify URL must be https with a host and no credentials: $url"
+    allowed=0
+    for h in "${HOSTS[@]}"; do [[ "$host" == "$h" ]] && allowed=1; done
+    [[ $allowed == 1 ]] || { ledger deny secret-host-not-allowed; die "verify host $host is not allowed (default api.cloudflare.com; add --allow-host $host if you trust it — the value is sent there)"; }
+done
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/register-secret.XXXXXX")"
 cleanup() { rm -P -f "$WORK"/* 2>/dev/null || rm -f "$WORK"/*; rm -rf "$WORK"; }
@@ -131,7 +137,8 @@ except Exception:
     v = None
 codes = [str(e.get("code")) for e in (doc.get("errors") or []) if isinstance(e, dict)] if isinstance(doc, dict) else []
 ok = v is not None and str(v).lower() == want.lower()
-print("%s=%s%s" % (path, json.dumps(v), " errors=" + ",".join(codes) if codes else ""))
+shown = "<%s>" % type(v).__name__ if isinstance(v, (dict, list)) else json.dumps(v)[:60]
+print("%s=%s%s" % (path, shown, " errors=" + ",".join(codes[:5]) if codes else ""))
 sys.exit(0 if ok else 1)' "$WORK/answer" "$EXPECT" 2>/dev/null)" && { ok="$url"; break; }
     seen="$seen
   $url: curl rc=$rc, ${verdict:-no answer}"
@@ -144,6 +151,7 @@ if [[ -z "$ok" ]]; then
 fi
 printf 'VERIFIED: %s by %s\n' "$EXPECT" "$ok"
 if [[ "$DRY" == 1 ]]; then
+    ledger allow secret-dry-run-verified
     printf 'DRY RUN: %s was not stored.\n' "$NAME"
     exit 0
 fi
@@ -164,7 +172,7 @@ for s in json.load(sys.stdin):
         print(("fresh " if age < 300 else "stale ") + s["updatedAt"])
 ' "$NAME" 2>/dev/null || true)"
 if [[ "$updated" != fresh* ]]; then
-    ledger deny secret-readback-stale
+    ledger warn secret-readback-stale
     printf 'NG: %s was sent to gh, but the readback is %s; check `gh secret list --repo %s`.\n' "$NAME" "${updated:-missing}" "$REPO" >&2
     exit 4
 fi

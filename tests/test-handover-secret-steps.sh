@@ -3,16 +3,21 @@
 # secret except through the verify-first script, and the rule's declarations point at that script and reach every
 # agent.
 #
-#   S1 a line with `gh secret set` passes only when the same line names register-secret-verified, or carries (or
-#      follows a line carrying) an explicit `<!-- secret-set-ok: <reason> -->`. A nearby word "verify" is not enough:
-#      the incident's own one-liner (`curl …/tokens/verify; gh secret set …`) had it. Scanned: docs/, skills/,
+#   S1 a line with `gh secret set` passes only when it carries (or follows a line carrying) an explicit
+#      `<!-- secret-set-ok: <reason> -->` with a non-empty reason. A step that stores a secret names
+#      register-secret-verified.sh and has no `gh secret set` of its own. A nearby word "verify" is not enough: the
+#      incident's own one-liner (`curl …/tokens/verify; gh secret set …`) had it. Naming the script on the line is not
+#      enough either: `register-secret-verified.sh … || gh secret set …` stores exactly when the check refuses (#473
+#      review round 2). Scanned: docs/, skills/,
 #      rules/, README.md, AGENTS.md, hooks/lib/aidd_cc_contract.md, and every directory in AIDD_HANDOVER_DIRS
 #      (colon-separated; e.g. the desktop-handoffs folders, which are outside the repository).
 #   S2 skills/handover/common-clauses.md and rules/runbook.md name register-secret-verified.sh; the contract text that
 #      hooks/lib/aidd_cc_contract.py delivers to each of codex / cursor / pi / dsh / opencode names it; and the script
 #      exists with its verify gate.
-#   S3 self-test: the incident one-liner, a check-less line, a `## 検証` heading nearby and prose saying verify is not
-#      needed are all red; the script line and a marked line are green.
+#   S3 self-test, file and directory mode: the incident one-liner, a check-less line, a `## 検証` heading nearby, prose
+#      saying verify is not needed, the script `|| gh secret set` fallback, the script named on the line before, a
+#      marker two lines up and a marker without a reason are red, and so are bare lines under .github/ and in a .json
+#      file of a scanned directory; the script line, a marked line and a marker on the same line are green.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 pass=0
@@ -25,8 +30,7 @@ scan() {
   python3 -I - "$@" <<'PY'
 import os, re, sys
 SET = re.compile(r"\bgh\s+secret\s+set\b")
-VIA = re.compile(r"register-secret-verified")
-MARK = re.compile(r"<!--\s*secret-set-ok:\s*\S")
+MARK = re.compile(r"<!--\s*secret-set-ok:\s*(?!-->)\S")
 EXT = (".md", ".sh", ".txt", ".yaml", ".yml", ".json")
 paths = []
 for a in sys.argv[1:]:
@@ -44,7 +48,7 @@ for p in sorted(paths):
     for i, line in enumerate(lines):
         if not SET.search(line):
             continue
-        if VIA.search(line) or MARK.search(line) or (i > 0 and MARK.search(lines[i - 1])):
+        if MARK.search(line) or (i > 0 and MARK.search(lines[i - 1])):
             continue
         print("%s:%d: %s" % (p, i + 1, line.strip()[:120]))
 PY
@@ -55,7 +59,7 @@ IFS=':' read -r -a extra <<<"${AIDD_HANDOVER_DIRS:-}"
 for d in "${extra[@]}"; do [[ -n "$d" && -e "$d" ]] && targets+=("$d"); done
 found="$(scan "${targets[@]}")"
 [[ -z "$found" ]] && ok "S1 no gh secret set outside register-secret-verified.sh in ${#targets[@]} scanned places" \
-  || bad "S1 gh secret set not through the script (use register-secret-verified.sh, or mark the line with a reason)" "$found"
+  || bad "S1 gh secret set not through the script (store with register-secret-verified.sh and write no gh secret set on its line, or mark the line with a reason)" "$found"
 
 missing=""
 for f in skills/handover/common-clauses.md rules/runbook.md; do
@@ -78,12 +82,22 @@ printf '1. run:\n\n    curl -s https://api.example/tokens/verify; gh secret set 
 printf '1. run:\n\n    gh secret set TOKEN --repo o/r < token.txt\n' >"$SB/bare.md"
 printf '## 検証\n\nnotes\n\n    gh secret set TOKEN --repo o/r < t\n' >"$SB/heading.md"
 printf 'verify は不要です。\n    gh secret set TOKEN --repo o/r < t\n' >"$SB/prose.md"
-printf '    bash ~/.claude/scripts/register-secret-verified.sh TOKEN o/r --cloudflare-account x  # wraps gh secret set\n' >"$SB/script.md"
+printf '    bash ~/.claude/scripts/register-secret-verified.sh TOKEN o/r --cloudflare-account x || gh secret set TOKEN --repo o/r < t\n' >"$SB/fallback.md"
+printf '    bash ~/.claude/scripts/register-secret-verified.sh TOKEN o/r --cloudflare-account x\n    gh secret set TOKEN --repo o/r < t\n' >"$SB/after.md"
+printf '<!-- secret-set-ok: a generated value -->\n\n    gh secret set TOKEN --repo o/r < t\n' >"$SB/far.md"
+printf '<!-- secret-set-ok: -->\n    gh secret set TOKEN --repo o/r < t\n' >"$SB/noreason.md"
+printf '    bash ~/.claude/scripts/register-secret-verified.sh TOKEN o/r --cloudflare-account x\n' >"$SB/script.md"
 printf '<!-- secret-set-ok: a generated value, no provider to verify -->\n    openssl rand -hex 32 | gh secret set SALT --repo o/r\n' >"$SB/marked.md"
-reds=""; for f in incident bare heading prose; do [[ -n "$(scan "$SB/$f.md")" ]] || reds="$reds $f"; done
-greens=""; for f in script marked; do [[ -z "$(scan "$SB/$f.md")" ]] || greens="$greens $f"; done
-[[ -z "$reds" && -z "$greens" ]] && ok "S3 the incident one-liner, a bare line, a nearby 検証 heading and 'verify は不要' are red; the script and a marked line are green" \
-  || bad "S3 self-test" "not red:${reds:- none}; not green:${greens:- none}"
+printf '    openssl rand -hex 32 | gh secret set SALT --repo o/r  <!-- secret-set-ok: a generated value -->\n' >"$SB/inline.md"
+reds=""; for f in incident bare heading prose fallback after far noreason; do [[ -n "$(scan "$SB/$f.md")" ]] || reds="$reds $f"; done
+greens=""; for f in script marked inline; do [[ -z "$(scan "$SB/$f.md")" ]] || greens="$greens $f"; done
+mkdir -p "$SB/tree/.github/workflows"
+printf 'run: gh secret set TOKEN --repo o/r < t\n' >"$SB/tree/.github/workflows/x.yml"
+printf '{"step": "gh secret set TOKEN --repo o/r < t"}\n' >"$SB/tree/steps.json"
+tree_hits="$(scan "$SB/tree" | grep -c .)"
+[[ -z "$reds" && -z "$greens" && "$tree_hits" -eq 2 ]] \
+  && ok "S3 the incident shapes, the || fallback, the script one line up, a far or empty marker, .github/ and .json are red; the script, a marked line and an inline marker are green" \
+  || bad "S3 self-test" "not red:${reds:- none}; not green:${greens:- none}; directory hits ${tree_hits} (want 2)"
 
 echo "--- $pass passed, $fail failed ---"
 [[ $fail -eq 0 ]]

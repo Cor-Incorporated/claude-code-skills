@@ -142,7 +142,7 @@ cor-os の `CLOUDFLARE_ACCESS_READ_API_TOKEN` の登録に、22:4x〜23:35 で 5
    3. 通ったときだけ GitHub secret に登録する（gh は値を stdin で受ける）。
    4. 一時ファイルを消す。
    順番やクリップボードを人に委ねない。script を通さない登録コマンドを手順に書かない
-   （`tests/test-handover-secret-steps.sh` が、script を名指ししない登録の行を落とす。どうしても要る行には理由つきの `<!-- secret-set-ok: <理由> -->` を同じ行か直前の行に置く）。
+   （`tests/test-handover-secret-steps.sh` が、登録コマンドを直接書いた行を落とす。script を名指ししても、同じ行に `|| <登録コマンド>` と書けば落ちる。どうしても要る行には理由つきの `<!-- secret-set-ok: <理由> -->` を同じ行か直前の行に置く）。
    例: `bash ~/.claude/scripts/register-secret-verified.sh CLOUDFLARE_ACCESS_READ_API_TOKEN Cor-Incorporated/cor-os --cloudflare-account <account id>`
    （account id は `wrangler whoami` の出力の 32 桁）
 2. **UI の操作は、スクショか実機で確かめた文言だけを書く。** 確かめていない画面名・ボタン名は「未確認」と書く。
