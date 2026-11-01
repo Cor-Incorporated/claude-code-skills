@@ -67,7 +67,8 @@ class Run:
         self.names, self.repo, self.env, self.params = [], "", "", {}
         self.repo_dir, self.keep_item, self.dry, self.resume = "", "", False, False
         self.detail = ""
-        self.kept = None  # (item name, item id) once the Bitwarden copy exists
+        self.created = None  # (item name, item id) once a Bitwarden item exists, verified or not
+        self.kept = None  # (item name, item id) once that item read back equal (or a resume read a valid copy)
         self.parse(argv)
 
     def parse(self, argv):
@@ -354,6 +355,12 @@ def keep_in_bitwarden(run, name, value):
         if len(existing) != 1 or existing[0].get("name") != item_name:
             raise Refused(1, "bitwarden-resume", "NG: --resume-from-bitwarden needs exactly one item %s (found %d); "
                           "nothing was stored." % (item_name, len(existing)))
+        if bw_field(existing[0], "_bw.variable") != name or (
+                run.env and bw_field(existing[0], "_bw.environment") != run.env):
+            raise Refused(1, "bitwarden-resume", "NG: the item %s is for _bw.variable=%s, _bw.environment=%s, not %s%s; "
+                          "nothing was stored." % (item_name, bw_field(existing[0], "_bw.variable"),
+                                                   bw_field(existing[0], "_bw.environment"), name,
+                                                   " in " + run.env if run.env else ""))
         got = subprocess.run(["bw", "get", "item", existing[0].get("id", "")], capture_output=True, text=True, env=env,
                              check=False)
         try:
@@ -363,6 +370,9 @@ def keep_in_bitwarden(run, name, value):
         if not isinstance(kept, str) or not kept:
             raise Refused(3, "bitwarden-readback", "NG: could not read %s back from Bitwarden; nothing was stored."
                           % item_name)
+        if not passes_check(run.recipe, kept):
+            raise Refused(1, "bitwarden-resume-check", "NG: the Bitwarden copy %s (length %d) fails the recipe's "
+                          "check; nothing was stored. Fix that item in Bitwarden by hand first." % (item_name, len(kept)))
         run.kept = (item_name, existing[0].get("id", ""))
         run.detail = "bitwarden %s resumed, length %d" % (item_name, len(kept))
         print("RESUMED %s from Bitwarden %s (length %d)" % (name, item_name, len(kept)))
@@ -383,7 +393,7 @@ def keep_in_bitwarden(run, name, value):
     except (ValueError, KeyError, TypeError):
         raise Refused(3, "bitwarden-failed", "NG: bw create item failed (rc=%d); check the env ledger for %s by "
                       "hand. GitHub was not touched." % (made.returncode, item_name)) from None
-    run.kept = (item_name, item_id)
+    run.created = (item_name, item_id)
     back = subprocess.run(["bw", "get", "item", item_id], capture_output=True, text=True, env=env, check=False)
     try:
         kept = bw_field(json.loads(back.stdout), "value")
@@ -391,11 +401,19 @@ def keep_in_bitwarden(run, name, value):
         kept = None
     if kept != value:
         raise Refused(3, "bitwarden-readback", "NG: the Bitwarden item %s (%s) did not read back equal (length %s, "
-                      "made %d); GitHub was not touched. Delete or fix that item by hand." % (
-                          item_name, item_id, len(kept) if isinstance(kept, str) else "none", len(value)))
+                      "made %d); GitHub was not touched. Fix or remove that item in Bitwarden by hand before any "
+                      "further run." % (item_name, item_id, len(kept) if isinstance(kept, str) else "none", len(value)))
+    run.kept = (item_name, item_id)
     run.detail = "bitwarden %s read back equal, length %d" % (item_name, len(value))
     print("KEPT %s in Bitwarden as %s (read back equal, length %d)" % (name, item_name, len(value)))
     return value
+
+
+def passes_check(rec, value):
+    chk = rec.get("check", {})
+    if chk.get("no_whitespace") and re.search(r"\s", value):
+        return False
+    return len(value.encode()) <= int(chk.get("max_bytes", 1 << 30))
 
 
 def generated(run):
@@ -411,8 +429,7 @@ def generated(run):
     if run.resume:
         return None  # the value comes from the Bitwarden copy
     value = secrets.token_urlsafe(int(gen["bytes"]))
-    chk = rec.get("check", {})
-    if (chk.get("no_whitespace") and re.search(r"\s", value)) or len(value.encode()) > int(chk.get("max_bytes", 1 << 30)):
+    if not passes_check(rec, value):
         raise Refused(1, "unverified", "NG: the generated value fails the consumer's rules; nothing was stored.")
     return {rec["values"][0]: value}
 
@@ -508,6 +525,9 @@ def store(run, values, work):
 def after_keep(run, message, rule):
     """A failure once the Bitwarden copy exists names that copy, what GitHub has, and the way back (#479 review)."""
     if not run.kept:
+        if run.created and rule != "bitwarden-readback":
+            return message + (" State: Bitwarden has an unverified item %s (id %s); GitHub was not touched. Fix or "
+                              "remove that item by hand before any further run." % run.created)
         return message
     item_name, item_id = run.kept
     github = {"set-failed": "GitHub does not have it",
