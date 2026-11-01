@@ -123,7 +123,7 @@ CONSUMER="$SB/cor-os"
 mkdir -p "$CONSUMER/scripts" && touch "$CONSUMER/scripts/release-secrets.mjs"
 git -C "$CONSUMER" init -q && git -C "$CONSUMER" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 reset() { rm -rf "$SB/gh/"* "$SB/vault/"* "$SB"/curl-argv "$SB"/curl-urls "$SB"/gh-argv "$SB"/bw-argv "$SB"/node-argv "$SB"/node-checked; }
-run() { bash "${SCRIPT_UNDER_TEST:-$SCRIPT}" "$@" 2>&1; }
+run() { bash "$SCRIPT" "$@" 2>&1; }
 row() { grep -c "\"rule\":\"$1\"" "$AIDD_LEDGER_PATH" 2>/dev/null || true; }
 
 # 1 GitHub OAuth: the right pair is stored, the control is measured and recorded
@@ -234,12 +234,12 @@ mkdir -p "$SB/cwd" && printf 'open("%s/imported","w").write("x")\nraise SystemEx
 (cd "$SB/cwd" && printf '%s\n%s\n' "$GID" "$GSEC" | bash "$SCRIPT" --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r >/dev/null 2>&1)
 [[ ! -e "$SB/imported" && -s "$SB/gh/COR_GITHUB_OAUTH_CLIENT_SECRET" ]] && ok "a json.py in the caller's directory is not imported" || bad "cwd" "imported or not stored"
 
-# Mutants (red side)
-mutant() {  # <name> <old> <new>: a copy of the script tree with one change to the helper
-  local d="$SB/mut-$1"
-  mkdir -p "$d/scripts/lib" "$d/hooks/lib"
-  cp "$SCRIPT" "$d/scripts/" && cp "$ROOT/scripts/lib/secret-verify-recipes.json" "$d/scripts/lib/" && cp "$ROOT/hooks/lib/aidd-ledger.sh" "$d/hooks/lib/"
-  python3 - "$ROOT/scripts/lib/secret_recipes.py" "$d/scripts/lib/secret_recipes.py" "$2" "$3" <<'PY'
+# Mutants (red side). Each writes a changed copy of the helper next to a copy of the recipe file and runs that copy
+# itself in this file (pair18: the variable written is the variable executed).
+cp "$ROOT/scripts/lib/secret-verify-recipes.json" "$SB/secret-verify-recipes.json"
+LEDGER_LIB="$ROOT/hooks/lib/aidd-ledger.sh"
+MUT1="$SB/mut_control.py"
+python3 - "$ROOT/scripts/lib/secret_recipes.py" "$MUT1" "        if not ok:" "        if False:" <<'PY'
 import sys
 src, dst, old, new = sys.argv[1:5]
 t = open(src).read()
@@ -247,20 +247,27 @@ if t.count(old) != 1:
     raise SystemExit("mutation target not found: " + old)
 open(dst, "w").write(t.replace(old, new))
 PY
-  [[ -f "$d/scripts/lib/secret_recipes.py" ]] && echo "$d/scripts/register-secret-verified.sh"
-}
-M1="$(mutant control "        if not ok:" "        if False:")"
-if [[ -n "$M1" ]]; then
+if [[ -f "$MUT1" ]]; then
   reset
-  printf '%s\n%s\n' "$GID" "wrong_secret" | FAKE_NODISCRIM=1 SCRIPT_UNDER_TEST="$M1" run --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r >/dev/null
+  printf '%s\n%s\n' "$GID" "wrong_secret" | FAKE_NODISCRIM=1 python3 "$MUT1" --ledger-lib "$LEDGER_LIB" \
+    --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r >/dev/null 2>&1
   [[ "$(cat "$SB/gh/COR_GITHUB_OAUTH_CLIENT_SECRET" 2>/dev/null)" == "wrong_secret" ]] \
     && ok "mutant (no control check) stores a wrong secret through a non-discriminating endpoint; the real script refuses (case 2)" \
     || bad "mutant control" "the mutant did not store — the control rows prove nothing"
 else bad "mutant control" "could not build"; fi
-M2="$(mutant check "    if chk.returncode != 0:" "    if False:")"
-if [[ -n "$M2" ]]; then
+MUT2="$SB/mut_check.py"
+python3 - "$ROOT/scripts/lib/secret_recipes.py" "$MUT2" "    if chk.returncode != 0:" "    if False:" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+t = open(src).read()
+if t.count(old) != 1:
+    raise SystemExit("mutation target not found: " + old)
+open(dst, "w").write(t.replace(old, new))
+PY
+if [[ -f "$MUT2" ]]; then
   reset
-  printf '' | FAKE_NODE_CHECK_FAIL=1 SCRIPT_UNDER_TEST="$M2" run --recipe intake-keys PUBLISHING_INTAKE_KEYS_JSON o/r --repo-dir "$CONSUMER" --param revision=r1 >/dev/null
+  printf '' | FAKE_NODE_CHECK_FAIL=1 python3 "$MUT2" --ledger-lib "$LEDGER_LIB" \
+    --recipe intake-keys PUBLISHING_INTAKE_KEYS_JSON o/r --repo-dir "$CONSUMER" --param revision=r1 >/dev/null 2>&1
   [[ -s "$SB/gh/PUBLISHING_INTAKE_KEYS_JSON" ]] \
     && ok "mutant (consumer check skipped) stores a value the check refuses; the real script refuses (case 7)" \
     || bad "mutant check" "the mutant did not store — the check row proves nothing"
