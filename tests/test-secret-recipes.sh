@@ -228,7 +228,7 @@ bwv="$(python3 -c 'import json,sys; print([f["value"] for f in json.load(open(sy
   && ok "mcp-token: one generated value lands in Bitwarden and GitHub, read back equal, never printed" || bad "mcp good" "rc=$rc $out"
 python3 -c 'import json,sys; f={x["name"]:x for x in json.load(open(sys.argv[1]))["fields"]}; assert f["_bw.variable"]["value"]=="MCP_TOKEN" and f["_bw.environment"]["value"]=="production" and f["value"]["type"]==1' "$SB/vault/item.json" 2>/dev/null \
   && ok "mcp-token: the Bitwarden item follows bwenv's layout (_bw.variable, _bw.environment, a hidden value field)" || bad "mcp layout" "$(cat "$SB/vault/item.json" 2>/dev/null | head -c 300)"
-! grep -qF "$bwv" "$SB/bw-argv" "$SB/gh-argv" "$AIDD_LEDGER_PATH" && ok "mcp-token: the value is in no argv and not in the ledger" || bad "mcp argv" "leaked"
+! grep -qF -- "$bwv" "$SB/bw-argv" "$SB/gh-argv" "$AIDD_LEDGER_PATH" && ok "mcp-token: the value is in no argv and not in the ledger" || bad "mcp argv" "leaked"
 reset
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os)"; rc=$?
 [[ $rc -eq 2 && -z "$(ls "$SB/gh")" ]] && ok "mcp-token: without --keep-in-bitwarden it refuses (the administrator needs the value)" || bad "mcp nokeep" "rc=$rc $out"
