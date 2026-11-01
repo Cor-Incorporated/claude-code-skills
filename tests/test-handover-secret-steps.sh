@@ -18,6 +18,11 @@
 #      saying verify is not needed, the script `|| gh secret set` fallback, the script named on the line before, a
 #      marker two lines up and a marker without a reason are red, and so are bare lines under .github/ and in a .json
 #      file of a scanned directory; the script line, a marked line and a marker on the same line are green.
+#   S4 the recipes (scripts/lib/secret-verify-recipes.json, claude-code-skills#478) keep their shape: a network recipe
+#      sends only to its https hosts and carries a negative control on one of its values; a generated recipe has a
+#      generator and a check; a consumer recipe pins the consumer's generate and check commands. Every
+#      `--recipe <name>` in the scanned places names a recipe that exists. Self-test: a recipe without a control and a
+#      step naming an unknown recipe are red.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 pass=0
@@ -98,6 +103,83 @@ tree_hits="$(scan "$SB/tree" | grep -c .)"
 [[ -z "$reds" && -z "$greens" && "$tree_hits" -eq 2 ]] \
   && ok "S3 the incident shapes, the || fallback, the script one line up, a far or empty marker, .github/ and .json are red; the script, a marked line and an inline marker are green" \
   || bad "S3 self-test" "not red:${reds:- none}; not green:${greens:- none}; directory hits ${tree_hits} (want 2)"
+
+# recipes <recipes.json> <dir|file>... → prints one line per defect
+recipes() {
+  python3 -I - "$@" <<'PY'
+import json, os, re, sys, urllib.parse
+path, places = sys.argv[1], sys.argv[2:]
+try:
+    book = json.load(open(path, encoding="utf-8"))["recipes"]
+except (OSError, ValueError, KeyError) as exc:
+    print("%s: unreadable (%s)" % (path, exc)); sys.exit(0)
+def bad_cond(c):
+    return (not isinstance(c, dict) or not c or set(c) - {"status", "json"}
+            or ("json" in c and (not isinstance(c["json"], dict) or not c["json"]))
+            or ("status" in c and not isinstance(c["status"], int)))
+for name, r in sorted(book.items()):
+    kind, values = r.get("kind"), r.get("values") or []
+    if kind == "network":
+        req, ctrl = r.get("request") or {}, r.get("control") or {}
+        u = urllib.parse.urlsplit(req.get("url", "").replace("{", "").replace("}", ""))
+        if u.scheme != "https" or u.hostname not in (r.get("hosts") or []):
+            print("%s: url %s is not https on its hosts" % (name, req.get("url")))
+        if ctrl.get("replace") not in values or len(set(ctrl) & {"fail_unless", "fail_unless_not"}) != 1:
+            print("%s: no negative control on one of its values" % name)
+        elif bad_cond(ctrl.get("fail_unless", ctrl.get("fail_unless_not"))):
+            print("%s: the control condition is empty or has unknown keys" % name)
+        if bad_cond(r.get("pass")):
+            print("%s: the pass condition is empty or has unknown keys" % name)
+    elif kind == "generated":
+        if not r.get("generate") or not r.get("check"):
+            print("%s: a generated recipe needs generate and check" % name)
+    elif kind == "consumer":
+        if not r.get("generate_cmd") or not r.get("check_cmd") or not r.get("repo_marker"):
+            print("%s: a consumer recipe needs generate_cmd, check_cmd and repo_marker" % name)
+    else:
+        print("%s: unknown kind %r" % (name, kind))
+USE = re.compile(r"--recipe\s+([A-Za-z0-9_.-]+)")
+files = []
+for a in places:
+    if os.path.isfile(a):
+        files.append(a)
+    elif os.path.isdir(a):
+        for d, subs, fs in os.walk(a):
+            subs[:] = [s for s in subs if s not in (".git", "_unused", "node_modules")]
+            files += [os.path.join(d, f) for f in fs if f.endswith((".md", ".sh", ".txt", ".yaml", ".yml", ".json"))]
+for f in sorted(files):
+    try:
+        lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        continue
+    for i, line in enumerate(lines):
+        for m in USE.finditer(line):
+            if m.group(1) not in book and m.group(1) not in ("<name>", "name"):
+                print("%s:%d: unknown recipe %s" % (f, i + 1, m.group(1)))
+PY
+}
+RECIPES="$ROOT/scripts/lib/secret-verify-recipes.json"
+defects="$(recipes "$RECIPES" "${targets[@]}")"
+[[ -z "$defects" ]] && ok "S4 every recipe keeps its shape (network recipes carry a negative control) and every --recipe in ${#targets[@]} places exists" \
+  || bad "S4 recipes" "$defects"
+python3 -I - "$RECIPES" "$SB/nocontrol.json" <<'PY'
+import json, sys
+book = json.load(open(sys.argv[1]))
+book["recipes"]["github-oauth"].pop("control")
+json.dump(book, open(sys.argv[2], "w"))
+book = json.load(open(sys.argv[1]))
+book["recipes"]["slack-oauth"]["control"]["fail_unless"] = {"jsno": {"error": "bad_client_secret"}}
+book["recipes"]["github-oauth"]["pass"] = {}
+json.dump(book, open(sys.argv[2].replace("nocontrol", "badcond"), "w"))
+PY
+printf '    bash ~/.claude/scripts/register-secret-verified.sh --recipe github-oauth-v9 A B o/r\n' >"$SB/unknown.md"
+r1="$(recipes "$SB/nocontrol.json" "$SB/none.md")"; r2="$(recipes "$RECIPES" "$SB/unknown.md")"; r3="$(recipes "$SB/badcond.json" "$SB/none.md")"
+[[ "$r1" == *"github-oauth: no negative control"* && "$r2" == *"unknown recipe github-oauth-v9"* \
+   && "$r3" == *"slack-oauth: the control condition is empty or has unknown keys"* && "$r3" == *"github-oauth: the pass condition is empty or has unknown keys"* ]] \
+  && ok "S4 self-test: a recipe without its negative control, a misspelled or empty condition, and a step naming an unknown recipe are red" \
+  || bad "S4 self-test" "no-control: ${r1:-green}; unknown: ${r2:-green}; bad conditions: ${r3:-green}"
+grep -q 'unknown recipe %r' "$ROOT/scripts/lib/secret_recipes.py" && grep -q 'if not ok:' "$ROOT/scripts/lib/secret_recipes.py" \
+  && ok "S4 the enforcing helper refuses an unknown recipe and has its control gate" || bad "S4 helper" "secret_recipes.py lost its gates"
 
 echo "--- $pass passed, $fail failed ---"
 [[ $fail -eq 0 ]]
