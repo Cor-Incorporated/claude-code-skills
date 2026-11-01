@@ -110,8 +110,10 @@ def _verify_grant(run, work, net, grant):
         run.slack_outcome_unknown = True
         result = net.ask(pair, form=form, received=lambda doc: tokens.update(token_values(doc)))
         status, doc = result
+        # Server errors can follow partial issuance, even with HTTP 200 and ok:false.
         definite = (status == 200 and isinstance(doc, dict) and
-                    (doc.get("ok") is False or (doc.get("ok") is True and bool(token_values(doc)))))
+                    ((doc.get("ok") is False and doc.get("error") in ("bad_client_secret", "invalid_code")) or
+                     (doc.get("ok") is True and bool(token_values(doc)))))
         run.slack_outcome_unknown = not definite
         return result
 

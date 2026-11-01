@@ -212,7 +212,8 @@ class CodeFlowTests(unittest.TestCase):
         self.assertIn("outcome is unknown", self.output.getvalue())
 
     def test_ambiguous_exchange_json_refuses_and_warns_about_unknown_outcome(self):
-        for doc in [{}, {"error": "invalid_code"}, {"ok": 1}, {"ok": True}]:
+        for doc in [{}, {"error": "invalid_code"}, {"ok": 1}, {"ok": True}, {"ok": False},
+                    {"ok": False, "error": "fatal_error"}, {"ok": False, "error": "internal_error"}]:
             with self.subTest(doc=doc):
                 self.assertEqual(self.execute(real=(200, doc)), 1)
                 self.assertNotIn("store", self.events)

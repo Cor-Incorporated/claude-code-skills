@@ -48,6 +48,7 @@ bash ~/.claude/scripts/register-secret-verified.sh --recipe slack-oauth-code SLA
   ファイルを開示・添付せず、本人がSlack管理画面でこの新規認可を取り消した後、private directoryを削除する。
   保持ファイルには一時tokenがある。runnerが終了しても認可の取消しまで作業は終わらない。
 - 交換中のtimeout、強制終了、ネットワーク断で発行結果が不明な場合も、GitHub登録は禁止。
+  HTTP200でも空のJSON・ok欠落・非boolean・fatal_error/internal_errorなど判定不能な応答は、発行結果不明として扱う。
   受信前に発行されたtokenはscriptから回収できないため、本人がSlack管理画面で新規認可を取り消す。
 - 成否にかかわらず、一時Redirect URLとUser Scopeを元の設定へ戻し、検証用ブラウザタブを閉じる。
   値を報告せず、登録成功ならsecret名/updated_at、失敗なら段階と固定判定だけを記録する。
