@@ -123,6 +123,11 @@ class Run:
         fixed = self.recipe.get("names")
         if fixed and fixed != self.names:
             usage("recipe %s is for %s only" % (self.recipe_name, " ".join(fixed)))
+        # a recipe that declares its repository is for that repository only; no argument widens it (#479 review 3)
+        declared = self.recipe.get("repo")
+        if declared and declared != self.repo:
+            usage("recipe %s is for %s only, not %s" % (self.recipe_name, declared, self.repo))
+        self.service = (declared or self.repo).split("/", 1)[1]
         for p in self.recipe.get("params", []):
             if not self.params.get(p):
                 usage("recipe %s needs --param %s=<value>" % (self.recipe_name, p))
@@ -355,12 +360,13 @@ def keep_in_bitwarden(run, name, value):
         if len(existing) != 1 or existing[0].get("name") != item_name:
             raise Refused(1, "bitwarden-resume", "NG: --resume-from-bitwarden needs exactly one item %s (found %d); "
                           "nothing was stored." % (item_name, len(existing)))
-        if bw_field(existing[0], "_bw.variable") != name or (
+        if bw_field(existing[0], "_bw.variable") != name or bw_field(existing[0], "_bw.service") != run.service or (
                 run.env and bw_field(existing[0], "_bw.environment") != run.env):
-            raise Refused(1, "bitwarden-resume", "NG: the item %s is for _bw.variable=%s, _bw.environment=%s, not %s%s; "
-                          "nothing was stored." % (item_name, bw_field(existing[0], "_bw.variable"),
-                                                   bw_field(existing[0], "_bw.environment"), name,
-                                                   " in " + run.env if run.env else ""))
+            raise Refused(1, "bitwarden-resume", "NG: the item %s is for _bw.variable=%s, _bw.service=%s, "
+                          "_bw.environment=%s, not %s of %s%s; nothing was stored." % (
+                              item_name, bw_field(existing[0], "_bw.variable"), bw_field(existing[0], "_bw.service"),
+                              bw_field(existing[0], "_bw.environment"), name, run.service,
+                              " in " + run.env if run.env else ""))
         got = subprocess.run(["bw", "get", "item", existing[0].get("id", "")], capture_output=True, text=True, env=env,
                              check=False)
         try:
@@ -384,7 +390,7 @@ def keep_in_bitwarden(run, name, value):
     item = {"type": 1, "name": item_name, "favorite": False, "reprompt": 0, "notes": None, "passwordHistory": [],
             "fields": [{"type": 0, "name": "_bw.variable", "value": name},
                        {"type": 0, "name": "_bw.environment", "value": m.group(1)},
-                       {"type": 0, "name": "_bw.service", "value": run.repo.split("/", 1)[1]},
+                       {"type": 0, "name": "_bw.service", "value": run.service},
                        {"type": 1, "name": "value", "value": value}]}
     encoded = base64.b64encode(json.dumps(item).encode()).decode()
     made = subprocess.run(["bw", "create", "item"], input=encoded, capture_output=True, text=True, env=env, check=False)

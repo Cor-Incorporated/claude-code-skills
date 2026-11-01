@@ -193,7 +193,7 @@ out="$(printf '%s\n' "$GID" | run --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_
 
 # 5 usage: unknown recipe, wrong name count, a fixed-name recipe with another name
 reset
-for args in "--recipe nope X o/r" "--recipe github-oauth ONLY_ONE o/r" "--recipe mcp-token OTHER_NAME o/r --keep-in-bitwarden env/production/OTHER_NAME" "--recipe github-oauth A B"; do
+for args in "--recipe nope X o/r" "--recipe github-oauth ONLY_ONE o/r" "--recipe mcp-token OTHER_NAME Cor-Incorporated/cor-os --keep-in-bitwarden env/production/OTHER_NAME" "--recipe github-oauth A B"; do
   out="$(printf '' | run $args)"; rc=$?
   [[ $rc -eq 2 && ! -s "$SB/curl-argv" ]] || bad "usage: $args" "rc=$rc $out"
 done
@@ -201,7 +201,7 @@ done
 
 # 6 MCP_TOKEN: generated, kept in Bitwarden, read back equal, then stored; the same value in both places
 reset
-out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --env production --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --env production --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 bwv="$(python3 -c 'import json,sys; print([f["value"] for f in json.load(open(sys.argv[1]))["fields"] if f["name"]=="value"][0])' "$SB/vault/item.json" 2>/dev/null)"
 [[ $rc -eq 0 && -n "$bwv" && "$(cat "$SB/gh/MCP_TOKEN" 2>/dev/null)" == "$bwv" && "$out" == *"KEPT MCP_TOKEN in Bitwarden as env/production/MCP_TOKEN (read back equal, length ${#bwv})"* && "$out" != *"$bwv"* ]] \
   && grep '"rule":"recipe-mcp-token-registered"' "$AIDD_LEDGER_PATH" | grep -q "read back equal, length ${#bwv}" \
@@ -210,23 +210,23 @@ python3 -c 'import json,sys; f={x["name"]:x for x in json.load(open(sys.argv[1])
   && ok "mcp-token: the Bitwarden item follows bwenv's layout (_bw.variable, _bw.environment, a hidden value field)" || bad "mcp layout" "$(cat "$SB/vault/item.json" 2>/dev/null | head -c 300)"
 ! grep -qF "$bwv" "$SB/bw-argv" "$SB/gh-argv" "$AIDD_LEDGER_PATH" && ok "mcp-token: the value is in no argv and not in the ledger" || bad "mcp argv" "leaked"
 reset
-out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r)"; rc=$?
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os)"; rc=$?
 [[ $rc -eq 2 && -z "$(ls "$SB/gh")" ]] && ok "mcp-token: without --keep-in-bitwarden it refuses (the administrator needs the value)" || bad "mcp nokeep" "rc=$rc $out"
-out="$(printf '' | FAKE_BW_EXISTING=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+out="$(printf '' | FAKE_BW_EXISTING=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 [[ $rc -eq 1 && -z "$(ls "$SB/gh")" && ! -s "$SB/vault/item.json" ]] && ok "mcp-token: an existing ledger item refuses (rotation is a separate step)" || bad "mcp exists" "rc=$rc $out"
 reset
-out="$(printf '' | FAKE_BW_TAMPER=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+out="$(printf '' | FAKE_BW_TAMPER=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 [[ $rc -eq 3 && -z "$(ls "$SB/gh")" && "$out" == *"did not read back equal"* ]] && ok "mcp-token: a Bitwarden readback that differs stops before GitHub (rc=3)" || bad "mcp tamper" "rc=$rc $out"
 [[ "$out" != *"resume"* && "$out" != *"Resume"* ]] && ok "a readback mismatch never suggests resuming that copy (#479 review 2)" || bad "tamper resume word" "$out"
 reset
-out="$(printf '' | FAKE_BW_LOCKED=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+out="$(printf '' | FAKE_BW_LOCKED=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 [[ $rc -eq 3 && -z "$(ls "$SB/gh")" && ! -s "$SB/bw-argv" ]] && ok "mcp-token: a locked vault refuses before a value is made" || bad "mcp locked" "rc=$rc $out"
 reset
-out="$(printf '' | FAKE_BW_STATUS=locked run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+out="$(printf '' | FAKE_BW_STATUS=locked run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 [[ $rc -eq 3 && -z "$(ls "$SB/gh")" && ! -e "$SB/vault/item.json" && "$(grep -c 'create item' "$SB/bw-argv" 2>/dev/null || true)" -eq 0 ]] \
   && ok "mcp-token: a session whose vault reports locked refuses with no item created (no empty item, 10-31)" || bad "mcp status locked" "rc=$rc $out"
 reset
-out="$(printf '' | FAKE_BW_LOCKED=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN --dry-run)"; rc=$?
+out="$(printf '' | FAKE_BW_LOCKED=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --dry-run)"; rc=$?
 [[ $rc -eq 0 && -z "$(ls "$SB/gh")" && ! -s "$SB/bw-argv" && "$out" == *"DRY RUN"* ]] && ok "mcp-token: a dry run touches neither Bitwarden nor GitHub" || bad "mcp dry" "rc=$rc $out"
 
 # 7 PUBLISHING_INTAKE_KEYS_JSON: the consumer's generator and check decide; a consumer without them refuses
@@ -294,40 +294,46 @@ out="$(printf '%s\n%s\n' "$GID" "$GSEC" | run --recipe github-oauth COR_GITHUB_O
 
 # 11 #479 review: Bitwarden written, GitHub failed → the message names the copy, and --resume-from-bitwarden stores it
 reset
-out="$(printf '' | FAKE_GH_SET_FAIL=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+out="$(printf '' | FAKE_GH_SET_FAIL=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 [[ $rc -eq 3 && -s "$SB/vault/item.json" && "$out" == *"State: Bitwarden has env/production/MCP_TOKEN (id id-1); GitHub does not have it"* && "$out" == *"--resume-from-bitwarden"* ]] \
   && ok "a gh failure after the Bitwarden write names the copy and the resume step" || bad "keep then gh fail" "rc=$rc $out"
-out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
 bwv="$(python3 -c 'import json,sys; print([f["value"] for f in json.load(open(sys.argv[1]))["fields"] if f["name"]=="value"][0])' "$SB/vault/item.json" 2>/dev/null)"
 [[ $rc -eq 0 && -n "$bwv" && "$(cat "$SB/gh/MCP_TOKEN" 2>/dev/null)" == "$bwv" && "$out" == *"RESUMED MCP_TOKEN"* && "$out" != *"$bwv"* \
    && "$(grep -c '^create item' "$SB/bw-argv")" -eq 1 && "$(grep -c '^delete' "$SB/bw-argv" || true)" -eq 0 ]] \
   && ok "gh failure, then --resume-from-bitwarden: stored from that same copy, one item created in all, none deleted, never printed" || bad "resume" "rc=$rc $out"
 reset
-out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
 [[ $rc -eq 1 && -z "$(ls "$SB/gh")" ]] && ok "--resume-from-bitwarden with no ledger item refuses" || bad "resume none" "rc=$rc $out"
 reset
-python3 -c 'import json,sys; json.dump({"id":"id-9","name":"env/production/MCP_TOKEN","fields":[{"type":0,"name":"_bw.variable","value":"MCP_TOKEN"},{"type":0,"name":"_bw.environment","value":"production"},{"type":1,"name":"value","value":"hand typed value with spaces"}]}, open(sys.argv[1],"w"))' "$SB/vault/item.json"
-out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+python3 -c 'import json,sys; json.dump({"id":"id-9","name":"env/production/MCP_TOKEN","fields":[{"type":0,"name":"_bw.variable","value":"MCP_TOKEN"},{"type":0,"name":"_bw.environment","value":"production"},{"type":0,"name":"_bw.service","value":"cor-os"},{"type":1,"name":"value","value":"hand typed value with spaces"}]}, open(sys.argv[1],"w"))' "$SB/vault/item.json"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
 [[ $rc -ne 0 && -z "$(ls "$SB/gh")" && "$out" == *"fails the recipe's check"* && "$out" != *"hand typed"* ]] \
   && ok "--resume-from-bitwarden refuses a copy with whitespace (the recipe's check), GitHub untouched" || bad "resume check" "rc=$rc $out"
 reset
-python3 -c 'import json,sys; json.dump({"id":"id-8","name":"env/staging/MCP_TOKEN","fields":[{"type":0,"name":"_bw.variable","value":"MCP_TOKEN"},{"type":0,"name":"_bw.environment","value":"staging"},{"type":1,"name":"value","value":"stagingValue_0123456789abcdefghijklmnopqrstu"}]}, open(sys.argv[1],"w"))' "$SB/vault/item.json"
-out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --env production --keep-in-bitwarden env/staging/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+python3 -c 'import json,sys; json.dump({"id":"id-8","name":"env/staging/MCP_TOKEN","fields":[{"type":0,"name":"_bw.variable","value":"MCP_TOKEN"},{"type":0,"name":"_bw.environment","value":"staging"},{"type":0,"name":"_bw.service","value":"cor-os"},{"type":1,"name":"value","value":"stagingValue_0123456789abcdefghijklmnopqrstu"}]}, open(sys.argv[1],"w"))' "$SB/vault/item.json"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --env production --keep-in-bitwarden env/staging/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
 [[ $rc -ne 0 && -z "$(ls "$SB/gh")" && "$out" == *"_bw.environment=staging"* ]] \
   && ok "--resume-from-bitwarden refuses an item whose _bw.environment differs from --env" || bad "resume env" "rc=$rc $out"
 reset
 python3 -c 'import json,sys; json.dump({"id":"id-7","name":"env/production/MCP_TOKEN","fields":[{"type":0,"name":"_bw.variable","value":"OTHER_TOKEN"},{"type":1,"name":"value","value":"otherValue_0123456789abcdefghijklmnopqrstuvw"}]}, open(sys.argv[1],"w"))' "$SB/vault/item.json"
-out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
 [[ $rc -ne 0 && -z "$(ls "$SB/gh")" && "$out" == *"_bw.variable=OTHER_TOKEN"* ]] \
   && ok "--resume-from-bitwarden refuses an item whose _bw.variable is another secret" || bad "resume variable" "rc=$rc $out"
 reset
-out="$(printf '' | FAKE_BW_LIST_FAIL=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+python3 -c 'import json,sys; json.dump({"id":"id-6","name":"env/production/MCP_TOKEN","fields":[{"type":0,"name":"_bw.variable","value":"MCP_TOKEN"},{"type":0,"name":"_bw.environment","value":"production"},{"type":0,"name":"_bw.service","value":"other-svc"},{"type":1,"name":"value","value":"otherSvcValue_0123456789abcdefghijklmnopqrs"}]}, open(sys.argv[1],"w"))' "$SB/vault/item.json"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+out2="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/other-svc --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc2=$?
+[[ $rc -ne 0 && $rc2 -eq 2 && -z "$(ls "$SB/gh")" && "$out" == *"_bw.service=other-svc"* && "$out2" == *"is for Cor-Incorporated/cor-os only"* ]] \
+  && ok "resume refuses an item of another service, and the recipe's declared repository cannot be widened by the argument" || bad "resume service" "rc=$rc $out / rc2=$rc2 $out2"
+reset
+out="$(printf '' | FAKE_BW_LIST_FAIL=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 [[ $rc -eq 3 && ! -e "$SB/vault/item.json" && -z "$(ls "$SB/gh")" ]] && ok "a failing bw list refuses (no duplicate is created blind)" || bad "bw list fail" "rc=$rc $out"
-out="$(printf '' | FAKE_BW_SYNC_FAIL=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+out="$(printf '' | FAKE_BW_SYNC_FAIL=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 [[ $rc -eq 3 && ! -e "$SB/vault/item.json" ]] && ok "a failing bw sync refuses before the duplicate check" || bad "bw sync fail" "rc=$rc $out"
-out="$(printf '' | FAKE_BW_OTHER_NAME=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+out="$(printf '' | FAKE_BW_OTHER_NAME=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 [[ $rc -eq 1 && ! -e "$SB/vault/item.json" ]] && ok "an item under another name with _bw.variable=MCP_TOKEN counts as a duplicate" || bad "dup by variable" "rc=$rc $out"
-out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/OTHER)"; rc=$?
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/OTHER)"; rc=$?
 [[ $rc -eq 2 && ! -e "$SB/vault/item.json" ]] && ok "a Bitwarden item name that does not end in the secret's name is a usage error" || bad "keep name" "rc=$rc $out"
 
 # 12 consumer: a check that echoes the value never prints it; a checkout without the marker is a usage error
