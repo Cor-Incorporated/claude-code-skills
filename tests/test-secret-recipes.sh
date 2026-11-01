@@ -31,9 +31,14 @@ cfg = sys.argv[sys.argv.index("-K") + 1]
 conf, headers = {}, []
 for line in open(cfg):
     m = re.match(r'(\S+) = "((?:[^"\\\\]|\\\\.)*)"', line.strip())
+    if not m:
+        conf.setdefault("flags", []).append(line.strip())
+        continue
     k, v = m.group(1), re.sub(r'\\\\(.)', r'\1', m.group(2))
     headers.append(v) if k == "header" else conf.__setitem__(k, v)
 open("$SB/curl-urls", "a").write(conf["url"] + "\n")
+if os.environ.get("FAKE_CURL_RC"):
+    sys.exit(int(os.environ["FAKE_CURL_RC"]))
 auth = next((h[len("Authorization: Basic "):] for h in headers if h.startswith("Authorization: Basic ")), "")
 user, _, pw = base64.b64decode(auth).decode().partition(":") if auth else ("", "", "")
 status, body = 200, "{}"
@@ -41,6 +46,8 @@ if "/applications/" in conf["url"]:
     good = user == "$GID" and pw == "$GSEC" and conf["url"].endswith("/applications/$GID/token")
     status = 404 if good or os.environ.get("FAKE_NODISCRIM") else int(os.environ.get("FAKE_GH_BAD", "401"))
     body = '{"message":"Not Found"}' if status == 404 else '{"message":"Bad credentials"}'
+    if status == 404 and os.environ.get("FAKE_HTML_404"):
+        body = "<html><body>Not Found</body></html>"
 elif "oauth.v2.access" in conf["url"]:
     if os.environ.get("FAKE_NODISCRIM"):
         err = "invalid_code"
@@ -60,6 +67,10 @@ import json, os, sys, datetime
 a = sys.argv[1:]
 open("$SB/gh-argv", "a").write(" ".join(a) + "\n")
 if a[:2] == ["secret", "set"]:
+    if os.environ.get("FAKE_GH_SLEEP"):
+        import time
+        time.sleep(float(os.environ["FAKE_GH_SLEEP"]))
+        sys.exit(1)
     if os.environ.get("FAKE_GH_SET_FAIL"):
         sys.exit(1)
     open("$SB/gh/" + a[2], "w").write(sys.stdin.read())
@@ -81,8 +92,14 @@ assert os.environ.get("BW_SESSION") == "SESSION-TEST", "no session"
 store = "$SB/vault/item.json"
 if a == ["status"]:
     print(json.dumps({"status": os.environ.get("FAKE_BW_STATUS", "unlocked")}))
+elif a == ["sync"]:
+    sys.exit(1 if os.environ.get("FAKE_BW_SYNC_FAIL") else 0)
 elif a[:2] == ["list", "items"]:
+    if os.environ.get("FAKE_BW_LIST_FAIL"):
+        sys.exit(1)
     items = [json.load(open(store))] if os.path.exists(store) else []
+    if os.environ.get("FAKE_BW_OTHER_NAME"):
+        items.append({"id": "other", "name": "env/production/computer-mcp-bearer", "fields": [{"name": "_bw.variable", "value": "MCP_TOKEN"}]})
     if os.environ.get("FAKE_BW_EXISTING"):
         items.append({"id": "old", "name": "env/production/MCP_TOKEN", "fields": [{"name": "_bw.variable", "value": "MCP_TOKEN"}]})
     print(json.dumps(items))
@@ -115,6 +132,9 @@ if a[1] == "generate":
 else:
     v = sys.stdin.read()
     open("$SB/node-checked", "w").write(v)
+    if os.environ.get("FAKE_NODE_CHECK_ECHO"):
+        print("invalid adapter key in " + v, file=sys.stderr)
+        sys.exit(1)
     sys.exit(1 if os.environ.get("FAKE_NODE_CHECK_FAIL") or v.endswith("\n") else 0)
 FAKE
 chmod +x "$SB/bin/"*
@@ -234,6 +254,80 @@ mkdir -p "$SB/cwd" && printf 'open("%s/imported","w").write("x")\nraise SystemEx
 (cd "$SB/cwd" && printf '%s\n%s\n' "$GID" "$GSEC" | bash "$SCRIPT" --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r >/dev/null 2>&1)
 [[ ! -e "$SB/imported" && -s "$SB/gh/COR_GITHUB_OAUTH_CLIENT_SECRET" ]] && ok "a json.py in the caller's directory is not imported" || bad "cwd" "imported or not stored"
 
+# 10 #479 review: an answer that is not a definite one never stands in for the control
+for code in 503 429 403; do
+  reset
+  out="$(printf '%s\n%s\n' "$GID" "$GSEC" | FAKE_GH_BAD=$code run --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r)"; rc=$?
+  [[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"not a definite one"* ]] || bad "inconclusive $code" "rc=$rc $out"
+done
+[[ "$(row recipe-github-oauth-inconclusive)" -ge 3 ]] && ok "a control answering 503, 429 or 403 refuses as inconclusive and stores nothing" || bad "inconclusive rows" "$(row recipe-github-oauth-inconclusive)"
+reset
+out="$(printf '%s\n%s\n' "$GID" "$GSEC" | FAKE_HTML_404=1 run --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r)"; rc=$?
+[[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"not a definite one"* ]] && ok "a 404 that is not a JSON object (an HTML page) is inconclusive" || bad "html 404" "rc=$rc $out"
+reset
+out="$(printf '%s\n%s\n' "$GID" "$GSEC" | FAKE_CURL_RC=7 run --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r)"; rc=$?
+[[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"curl rc=7"* ]] && ok "a curl failure refuses (rc=1) and stores nothing" || bad "curl rc" "rc=$rc $out"
+reset
+out="$(printf '%s\n%s\n' "$GID" "$GSEC" | run --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r --dry-run)"; rc=$?
+[[ $rc -eq 0 && ! -s "$SB/gh-argv" && "$out" == *"DRY RUN"* ]] && ok "a network dry run verifies and never calls gh" || bad "network dry" "rc=$rc $out"
+
+# 11 #479 review: Bitwarden written, GitHub failed → the message names the copy, and --resume-from-bitwarden stores it
+reset
+out="$(printf '' | FAKE_GH_SET_FAIL=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+[[ $rc -eq 3 && -s "$SB/vault/item.json" && "$out" == *"Bitwarden copy env/production/MCP_TOKEN (id id-1) exists"* && "$out" == *"--resume-from-bitwarden"* ]] \
+  && ok "a gh failure after the Bitwarden write names the copy and the resume step" || bad "keep then gh fail" "rc=$rc $out"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+bwv="$(python3 -c 'import json,sys; print([f["value"] for f in json.load(open(sys.argv[1]))["fields"] if f["name"]=="value"][0])' "$SB/vault/item.json" 2>/dev/null)"
+[[ $rc -eq 0 && -n "$bwv" && "$(cat "$SB/gh/MCP_TOKEN" 2>/dev/null)" == "$bwv" && "$out" == *"RESUMED MCP_TOKEN"* && "$out" != *"$bwv"* ]] \
+  && ok "--resume-from-bitwarden stores that same copy, never a new value, never printed" || bad "resume" "rc=$rc $out"
+reset
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+[[ $rc -eq 1 && -z "$(ls "$SB/gh")" ]] && ok "--resume-from-bitwarden with no ledger item refuses" || bad "resume none" "rc=$rc $out"
+reset
+out="$(printf '' | FAKE_BW_LIST_FAIL=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+[[ $rc -eq 3 && ! -e "$SB/vault/item.json" && -z "$(ls "$SB/gh")" ]] && ok "a failing bw list refuses (no duplicate is created blind)" || bad "bw list fail" "rc=$rc $out"
+out="$(printf '' | FAKE_BW_SYNC_FAIL=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+[[ $rc -eq 3 && ! -e "$SB/vault/item.json" ]] && ok "a failing bw sync refuses before the duplicate check" || bad "bw sync fail" "rc=$rc $out"
+out="$(printf '' | FAKE_BW_OTHER_NAME=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+[[ $rc -eq 1 && ! -e "$SB/vault/item.json" ]] && ok "an item under another name with _bw.variable=MCP_TOKEN counts as a duplicate" || bad "dup by variable" "rc=$rc $out"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/OTHER)"; rc=$?
+[[ $rc -eq 2 && ! -e "$SB/vault/item.json" ]] && ok "a Bitwarden item name that does not end in the secret's name is a usage error" || bad "keep name" "rc=$rc $out"
+
+# 12 consumer: a check that echoes the value never prints it; a checkout without the marker is a usage error
+reset
+out="$(printf '' | FAKE_NODE_CHECK_ECHO=1 run --recipe intake-keys PUBLISHING_INTAKE_KEYS_JSON o/r --repo-dir "$CONSUMER" --param revision=r1)"; rc=$?
+v="$(cat "$SB/node-checked" 2>/dev/null)"
+[[ $rc -eq 1 && -n "$v" && "$out" != *"$v"* && "$out" == *"<value>"* ]] && ok "a consumer check that prints the value is shown redacted" || bad "redact" "rc=$rc"
+reset
+mkdir -p "$SB/nomarker"
+out="$(printf '' | run --recipe intake-keys PUBLISHING_INTAKE_KEYS_JSON o/r --repo-dir "$SB/nomarker" --param revision=r1)"; rc=$?
+[[ $rc -eq 2 && ! -s "$SB/node-argv" ]] && ok "a checkout without the consumer's script is a usage error before any command runs" || bad "marker" "rc=$rc $out"
+
+# 13 the helper runs isolated (-I): a json.py on PYTHONPATH is not imported
+reset
+mkdir -p "$SB/pp" && printf 'import sys\nif sys.argv[0] == "-" or "secret_recipes" in sys.argv[0]:\n    open("%s/pp-imported","a").write(sys.argv[0] + "\\n")\ndel sys.modules["json"]\nsys.path = [p for p in sys.path if not p.endswith("/pp")]\nimport json as _j\nsys.modules["json"] = _j\n' "$SB" >"$SB/pp/json.py"
+printf '%s\n%s\n' "$GID" "$GSEC" | PYTHONPATH="$SB/pp" bash "$SCRIPT" --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r >/dev/null 2>&1
+[[ ! -e "$SB/pp-imported" && -s "$SB/gh/COR_GITHUB_OAUTH_CLIENT_SECRET" ]] \
+  && ok "a json.py on PYTHONPATH is imported neither by the helper nor by the ledger library's python" \
+  || bad "pythonpath" "imported by: $(cat "$SB/pp-imported" 2>/dev/null | tr '\n' ' ') stored=$(ls "$SB/gh")"
+
+# 14 a signal mid-run leaves no value file
+reset
+printf '%s\n%s\n' "$SID" "$SSEC" | FAKE_GH_SLEEP=5 bash "$SCRIPT" --recipe slack-oauth SLACK_OAUTH_CLIENT_ID SLACK_OAUTH_CLIENT_SECRET o/r >/dev/null 2>&1 &
+pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -n "$(ls "$TMPDIR" 2>/dev/null)" && -s "$SB/gh-argv" ]] && break; sleep 0.3; done
+kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+[[ -z "$(ls -A "$TMPDIR")" ]] && ok "SIGTERM during gh secret set leaves no temporary value file" || bad "sigterm" "$(ls -A "$TMPDIR")"
+
+# 15 a recipe whose condition is empty or misspelled refuses before any request
+reset
+mkdir -p "$SB/strict"
+cp "$ROOT/scripts/lib/secret_recipes.py" "$SB/strict/"
+python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); b["recipes"]["github-oauth"]["pass"]={"stauts":404}; json.dump(b,open(sys.argv[2],"w"))' \
+  "$ROOT/scripts/lib/secret-verify-recipes.json" "$SB/strict/secret-verify-recipes.json"
+out="$(printf '%s\n%s\n' "$GID" "$GSEC" | python3 -I "$SB/strict/secret_recipes.py" --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r 2>&1)"; rc=$?
+[[ $rc -eq 1 && ! -s "$SB/curl-argv" && "$out" == *"empty or has unknown keys"* ]] && ok "a misspelled pass condition refuses before any request" || bad "strict" "rc=$rc $out"
+
 # Mutants (red side). Each writes a changed copy of the helper next to a copy of the recipe file and runs that copy
 # itself in this file (pair18: the variable written is the variable executed).
 cp "$ROOT/scripts/lib/secret-verify-recipes.json" "$SB/secret-verify-recipes.json"
@@ -249,7 +343,7 @@ open(dst, "w").write(t.replace(old, new))
 PY
 if [[ -f "$MUT1" ]]; then
   reset
-  printf '%s\n%s\n' "$GID" "wrong_secret" | FAKE_NODISCRIM=1 python3 "$MUT1" --ledger-lib "$LEDGER_LIB" \
+  printf '%s\n%s\n' "$GID" "wrong_secret" | FAKE_NODISCRIM=1 AIDD_SECRET_LEDGER_LIB="$LEDGER_LIB" python3 "$MUT1" \
     --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r >/dev/null 2>&1
   [[ "$(cat "$SB/gh/COR_GITHUB_OAUTH_CLIENT_SECRET" 2>/dev/null)" == "wrong_secret" ]] \
     && ok "mutant (no control check) stores a wrong secret through a non-discriminating endpoint; the real script refuses (case 2)" \
@@ -266,7 +360,7 @@ open(dst, "w").write(t.replace(old, new))
 PY
 if [[ -f "$MUT2" ]]; then
   reset
-  printf '' | FAKE_NODE_CHECK_FAIL=1 python3 "$MUT2" --ledger-lib "$LEDGER_LIB" \
+  printf '' | FAKE_NODE_CHECK_FAIL=1 AIDD_SECRET_LEDGER_LIB="$LEDGER_LIB" python3 "$MUT2" \
     --recipe intake-keys PUBLISHING_INTAKE_KEYS_JSON o/r --repo-dir "$CONSUMER" --param revision=r1 >/dev/null 2>&1
   [[ -s "$SB/gh/PUBLISHING_INTAKE_KEYS_JSON" ]] \
     && ok "mutant (consumer check skipped) stores a value the check refuses; the real script refuses (case 7)" \

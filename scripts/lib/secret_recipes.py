@@ -1,16 +1,20 @@
 """register-secret-verified.sh --recipe: check secrets with a reviewed recipe, then store them as GitHub secrets.
 
-usage (through the wrapper):
+usage (through the wrapper; the wrapper passes the ledger library in AIDD_SECRET_LEDGER_LIB):
   register-secret-verified.sh --recipe <name> <NAME>... <owner/repo> [--env <environment>] [--param k=v]...
-      [--repo-dir <consumer checkout>] [--keep-in-bitwarden env/<environment>/<NAME>] [--dry-run]
+      [--repo-dir <consumer checkout>] [--keep-in-bitwarden env/<environment>/<NAME>] [--resume-from-bitwarden]
+      [--dry-run]
 
 Recipes live in secret-verify-recipes.json next to this file and land only by PR (claude-code-skills#478). Kinds:
   network    the values are pasted (a hidden prompt each, or one per stdin line) and sent to the recipe's https host.
              The same request with one value replaced by a random string is the negative control: it must answer
-             differently, so each run proves the endpoint tells a right value from a wrong one. Nothing in argv: the
-             URL, the headers and the body go to curl through a 0600 config file.
+             differently, so each run proves the endpoint tells a right value from a wrong one. An answer that is not
+             a definite one (no answer, 403, 429, 5xx, or a body that is not a JSON object) refuses as inconclusive:
+             a transient error must never stand in for the control (#479 review). Nothing in argv: the URL, the
+             headers and the body go to curl through a 0600 config file.
   generated  the value is made here (CSPRNG) and never shown. With keep=bitwarden it is first written to the env
              ledger (Bitwarden item env/<environment>/<NAME>) and read back equal, because someone else needs it.
+             If GitHub then fails, --resume-from-bitwarden stores that same copy instead of making a new one.
   consumer   the consumer's own generator and check, run in its checkout, decide the value (cor-os#126). A missing
              command refuses.
 Exit codes: 0 stored (or verified with --dry-run), 1 refused, 2 usage, 3 gh or Bitwarden failed, 4 stored but the
@@ -23,6 +27,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -33,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RECIPES = os.path.join(HERE, "secret-verify-recipes.json")
 NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+CONDITION_KEYS = {"status", "json"}
 
 
 class Refused(Exception):
@@ -45,13 +51,23 @@ def usage(message):
     raise Refused(2, "", "register-secret-verified: " + message)
 
 
+def check_condition(cond, where):
+    """A pass / control condition: a non-empty object of status and/or a non-empty json map, nothing else."""
+    if (not isinstance(cond, dict) or not cond or set(cond) - CONDITION_KEYS
+            or ("json" in cond and (not isinstance(cond["json"], dict) or not cond["json"]))
+            or ("status" in cond and not isinstance(cond["status"], int))):
+        raise Refused(1, "recipe-invalid", "NG: the recipe's %s condition %r is empty or has unknown keys; nothing "
+                      "was sent." % (where, cond))
+
+
 class Run:
     def __init__(self, argv):
-        self.ledger_lib = ""
+        self.ledger_lib = os.environ.get("AIDD_SECRET_LEDGER_LIB", "")
         self.recipe_name = ""
         self.names, self.repo, self.env, self.params = [], "", "", {}
-        self.repo_dir, self.keep_item, self.dry = "", "", False
+        self.repo_dir, self.keep_item, self.dry, self.resume = "", "", False, False
         self.detail = ""
+        self.kept = None  # (item name, item id) once the Bitwarden copy exists
         self.parse(argv)
 
     def parse(self, argv):
@@ -59,13 +75,11 @@ class Run:
         positional = []
         while args:
             a = args.pop(0)
-            if a in ("--ledger-lib", "--recipe", "--env", "--param", "--repo-dir", "--keep-in-bitwarden"):
+            if a in ("--recipe", "--env", "--param", "--repo-dir", "--keep-in-bitwarden"):
                 if not args:
                     usage(a + " needs a value")
                 v = args.pop(0)
-                if a == "--ledger-lib":
-                    self.ledger_lib = v
-                elif a == "--recipe":
+                if a == "--recipe":
                     self.recipe_name = v
                 elif a == "--env":
                     self.env = v
@@ -80,6 +94,8 @@ class Run:
                     self.keep_item = v
             elif a == "--dry-run":
                 self.dry = True
+            elif a == "--resume-from-bitwarden":
+                self.resume = True
             elif a.startswith("-"):
                 usage("unknown argument: " + a)
             else:
@@ -109,6 +125,8 @@ class Run:
         for p in self.recipe.get("params", []):
             if not self.params.get(p):
                 usage("recipe %s needs --param %s=<value>" % (self.recipe_name, p))
+        if self.resume and self.recipe.get("keep") != "bitwarden":
+            usage("--resume-from-bitwarden is only for a recipe that keeps a Bitwarden copy")
 
     # --- ledger ------------------------------------------------------------------------------------------------
     def ledger(self, decision, rule):
@@ -143,15 +161,13 @@ class Run:
         for n, v in zip(self.names, values):
             if not v:
                 raise Refused(1, "empty", "NG: %s is empty; nothing was stored." % n)
-            if any(c in v for c in "\r\n"):
-                raise Refused(1, "multi-line", "NG: %s has a line break inside; nothing was stored." % n)
         return dict(zip(roles, values))
 
 
 def write_private(path, data):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(data)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data.encode("utf-8") if isinstance(data, str) else data)
 
 
 def curl_quote(s):
@@ -181,9 +197,21 @@ def observed(status, doc):
     return "status=%s%s" % (status, " error=%s" % err if isinstance(err, str) else "")
 
 
+def inconclusive(status, doc):
+    """No definite answer: nothing came back, a rate limit or a server error, or a body that is not a JSON object."""
+    return status == 0 or status in (403, 429) or status >= 500 or not isinstance(doc, dict)
+
+
 class Network:
     def __init__(self, run, work):
         self.run, self.work, self.n = run, work, 0
+        rec = run.recipe
+        check_condition(rec.get("pass"), "pass")
+        ctrl = rec.get("control") or {}
+        if ctrl.get("replace") not in rec["values"] or len(set(ctrl) & {"fail_unless", "fail_unless_not"}) != 1:
+            raise Refused(1, "recipe-invalid", "NG: recipe %s has no negative control on one of its values."
+                          % run.recipe_name)
+        check_condition(ctrl.get("fail_unless", ctrl.get("fail_unless_not")), "control")
 
     def hosts(self):
         req = self.run.recipe["request"]
@@ -205,7 +233,7 @@ class Network:
             raise Refused(1, "recipe-host", "NG: the request left the recipe's hosts; nothing was stored.")
         cfg, body, answer = (os.path.join(self.work, "%s%d" % (k, self.n)) for k in ("curl", "body", "answer"))
         lines = ["url = " + curl_quote(url), "request = " + curl_quote(req.get("method", "GET")),
-                 "output = " + curl_quote(answer), "write-out = " + curl_quote("%{http_code}")]
+                 "output = " + curl_quote(answer), "write-out = " + curl_quote("%{http_code}"), "globoff"]
         if req.get("basic"):
             user, pw = (values[r] for r in req["basic"])
             token = base64.b64encode(("%s:%s" % (user, pw)).encode()).decode()
@@ -213,16 +241,21 @@ class Network:
         for h in req.get("headers", []):
             lines.append("header = " + curl_quote(h))
         if "json_body" in req:
-            payload = json.loads(substitute(json.dumps(req["json_body"]), values, rnd))
+            payload = json.loads(substitute(json.dumps(req["json_body"]), {}, rnd))
             write_private(body, json.dumps(payload))
             lines += ["header = " + curl_quote("Content-Type: application/json"), "data-binary = " + curl_quote("@" + body)]
         elif "form" in req:
-            form = {k: substitute(v, values, rnd) for k, v in req["form"].items()}
+            form = {k: substitute(v, {}, rnd) for k, v in req["form"].items()}
             write_private(body, urllib.parse.urlencode(form))
             lines.append("data-binary = " + curl_quote("@" + body))
         write_private(cfg, "\n".join(lines) + "\n")
-        p = subprocess.run(["curl", "-q", "-sS", "--proto", "=https", "--proto-redir", "=https", "--max-time", "20",
-                            "-K", cfg], capture_output=True, text=True, check=False)
+        try:
+            p = subprocess.run(["curl", "-q", "-sS", "--proto", "=https", "--proto-redir", "=https", "--max-time", "20",
+                                "-K", cfg], capture_output=True, text=True, check=False)
+        finally:
+            for f in (cfg, body):
+                if os.path.exists(f):
+                    os.unlink(f)
         try:
             status = int((p.stdout or "0").strip()[-3:])
         except ValueError:
@@ -233,9 +266,8 @@ class Network:
                 doc = json.load(fh)
         except (OSError, ValueError):
             pass
-        for f in (cfg, body, answer):
-            if os.path.exists(f):
-                os.unlink(f)
+        if os.path.exists(answer):
+            os.unlink(answer)
         if p.returncode != 0:
             raise Refused(1, "unreachable", "NG: curl rc=%d to %s; nothing was stored." % (p.returncode, parts.hostname))
         return status, doc
@@ -249,6 +281,10 @@ class Network:
         cstatus, cdoc = self.ask(control)
         ctrl = observed(cstatus, cdoc)
         self.run.detail = "real %s; control %s" % (real, ctrl)
+        if inconclusive(status, doc) or inconclusive(cstatus, cdoc):
+            raise Refused(1, "inconclusive", "NG: %s got an answer that is not a definite one (%s; control %s): a "
+                          "rate limit, a server error or a non-JSON body. Nothing was stored; run it again later."
+                          % (self.run.recipe_name, real, ctrl))
         if not matches(rec["pass"], status, doc):
             raise Refused(1, "unverified", "NG: %s did not answer as a valid pair (%s; control %s); nothing was stored."
                           % (self.run.recipe_name, real, ctrl))
@@ -274,16 +310,36 @@ def bw_session():
     try:
         if json.loads(st.stdout).get("status") != "unlocked":
             raise ValueError
-    except ValueError:
+    except (ValueError, AttributeError, TypeError):
         raise Refused(3, "bitwarden-locked", "NG: Bitwarden is not unlocked; nothing was generated.") from None
     return env
 
 
 def bw_field(item, name):
-    for f in item.get("fields") or []:
-        if f.get("name") == name:
+    for f in (item.get("fields") if isinstance(item, dict) else None) or []:
+        if isinstance(f, dict) and f.get("name") == name:
             return f.get("value")
     return None
+
+
+def bw_ledger_items(env, name, item_name):
+    """Every env-ledger item for <name>, read after a sync and searched the way bwenv searches (env/, then fields)."""
+    sync = subprocess.run(["bw", "sync"], capture_output=True, text=True, env=env, check=False)
+    if sync.returncode != 0:
+        raise Refused(3, "bitwarden-failed", "NG: bw sync failed (rc=%d); nothing was stored." % sync.returncode)
+    listed = subprocess.run(["bw", "list", "items", "--search", "env/"], capture_output=True, text=True, env=env,
+                            check=False)
+    try:
+        if listed.returncode != 0 or not listed.stdout.strip():
+            raise ValueError
+        items = json.loads(listed.stdout)
+        if not isinstance(items, list):
+            raise ValueError
+    except ValueError:
+        raise Refused(3, "bitwarden-failed", "NG: could not list the env ledger (rc=%d); nothing was stored."
+                      % listed.returncode) from None
+    return [i for i in items if isinstance(i, dict)
+            and (bw_field(i, "_bw.variable") == name or i.get("name") == item_name)]
 
 
 def keep_in_bitwarden(run, name, value):
@@ -293,16 +349,28 @@ def keep_in_bitwarden(run, name, value):
         raise Refused(2, "", "register-secret-verified: recipe %s needs --keep-in-bitwarden env/<environment>/%s"
                       % (run.recipe_name, name))
     env = bw_session()
-    listed = subprocess.run(["bw", "list", "items", "--search", name], capture_output=True, text=True, env=env,
-                            check=False)
-    try:
-        existing = [i for i in json.loads(listed.stdout or "[]") if bw_field(i, "_bw.variable") == name
-                    or i.get("name") == item_name]
-    except ValueError:
-        raise Refused(3, "bitwarden-failed", "NG: could not list Bitwarden items; nothing was stored.") from None
+    existing = bw_ledger_items(env, name, item_name)
+    if run.resume:
+        if len(existing) != 1 or existing[0].get("name") != item_name:
+            raise Refused(1, "bitwarden-resume", "NG: --resume-from-bitwarden needs exactly one item %s (found %d); "
+                          "nothing was stored." % (item_name, len(existing)))
+        got = subprocess.run(["bw", "get", "item", existing[0].get("id", "")], capture_output=True, text=True, env=env,
+                             check=False)
+        try:
+            kept = bw_field(json.loads(got.stdout), "value")
+        except ValueError:
+            kept = None
+        if not isinstance(kept, str) or not kept:
+            raise Refused(3, "bitwarden-readback", "NG: could not read %s back from Bitwarden; nothing was stored."
+                          % item_name)
+        run.kept = (item_name, existing[0].get("id", ""))
+        run.detail = "bitwarden %s resumed, length %d" % (item_name, len(kept))
+        print("RESUMED %s from Bitwarden %s (length %d)" % (name, item_name, len(kept)))
+        return kept
     if existing:
         raise Refused(1, "bitwarden-exists", "NG: the env ledger already has %s (%d item); rotating is a separate "
-                      "step. Nothing was stored." % (name, len(existing)))
+                      "step. If an earlier run kept it and GitHub failed, re-run with --resume-from-bitwarden. "
+                      "Nothing was stored." % (name, len(existing)))
     item = {"type": 1, "name": item_name, "favorite": False, "reprompt": 0, "notes": None, "passwordHistory": [],
             "fields": [{"type": 0, "name": "_bw.variable", "value": name},
                        {"type": 0, "name": "_bw.environment", "value": m.group(1)},
@@ -313,8 +381,9 @@ def keep_in_bitwarden(run, name, value):
     try:
         item_id = json.loads(made.stdout)["id"]
     except (ValueError, KeyError, TypeError):
-        raise Refused(3, "bitwarden-failed", "NG: bw create item failed (rc=%d); nothing was stored." % made.returncode) \
-            from None
+        raise Refused(3, "bitwarden-failed", "NG: bw create item failed (rc=%d); check the env ledger for %s by "
+                      "hand. GitHub was not touched." % (made.returncode, item_name)) from None
+    run.kept = (item_name, item_id)
     back = subprocess.run(["bw", "get", "item", item_id], capture_output=True, text=True, env=env, check=False)
     try:
         kept = bw_field(json.loads(back.stdout), "value")
@@ -326,6 +395,7 @@ def keep_in_bitwarden(run, name, value):
                           item_name, item_id, len(kept) if isinstance(kept, str) else "none", len(value)))
     run.detail = "bitwarden %s read back equal, length %d" % (item_name, len(value))
     print("KEPT %s in Bitwarden as %s (read back equal, length %d)" % (name, item_name, len(value)))
+    return value
 
 
 def generated(run):
@@ -338,11 +408,21 @@ def generated(run):
                       % (run.recipe_name, run.names[0]))
     if rec.get("keep") == "bitwarden" and not run.dry:
         bw_session()  # refuse before making a value nobody can keep (a dry run keeps nothing)
+    if run.resume:
+        return None  # the value comes from the Bitwarden copy
     value = secrets.token_urlsafe(int(gen["bytes"]))
     chk = rec.get("check", {})
     if (chk.get("no_whitespace") and re.search(r"\s", value)) or len(value.encode()) > int(chk.get("max_bytes", 1 << 30)):
         raise Refused(1, "unverified", "NG: the generated value fails the consumer's rules; nothing was stored.")
     return {rec["values"][0]: value}
+
+
+def redacted_tail(text, value):
+    tail = (text or "").strip().splitlines()[-1:] or [""]
+    line = tail[0]
+    if value and value in line:
+        line = line.replace(value, "<value>")
+    return line[:160]
 
 
 def consumer(run, work):
@@ -355,29 +435,36 @@ def consumer(run, work):
     commit = head.stdout.strip()[:12]
     if head.returncode != 0 or not commit:
         raise Refused(1, "consumer-checkout", "NG: %s is not a git checkout; nothing was stored." % repo_dir)
-    run.detail = "consumer %s@%s" % (os.path.basename(repo_dir), commit)
+    dirty = subprocess.run(["git", "-C", repo_dir, "status", "--porcelain", "--untracked-files=no"],
+                           capture_output=True, text=True, check=False).stdout.strip()
+    run.detail = "consumer %s@%s%s" % (os.path.basename(repo_dir), commit, " (dirty)" if dirty else "")
     cmd = list(rec["generate_cmd"])
     for k in rec.get("params", []):
         cmd = [a.replace("{%s}" % k, run.params[k]) for a in cmd]
     out = os.path.join(work, "generated")
-    with open(os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as fh:
-        gen = subprocess.run(cmd, cwd=repo_dir, stdout=fh, stderr=subprocess.PIPE, text=True, check=False)
+    with open(os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as fh:
+        gen = subprocess.run(cmd, cwd=repo_dir, stdout=fh, stderr=subprocess.PIPE, check=False)
+    raw = open(out, "rb").read()
+    err = gen.stderr.decode("utf-8", "replace")
     if gen.returncode != 0:
-        tail = (gen.stderr or "").strip().splitlines()[-1:] or [""]
         raise Refused(1, "consumer-generate", "NG: the consumer's generator failed (rc=%d at %s: %s); nothing was "
-                      "stored. cor-os needs this command (cor-os#126)." % (gen.returncode, commit, tail[0][:160]))
-    value = open(out, encoding="utf-8").read()
-    if value.endswith("\n"):
-        value = value[:-1]
-    with open(out, "w", encoding="utf-8") as fh:
-        fh.write(value)
-    with open(out, encoding="utf-8") as fh:
-        chk = subprocess.run(rec["check_cmd"], cwd=repo_dir, stdin=fh, capture_output=True, text=True, check=False)
+                      "stored. cor-os needs this command (cor-os#126)." % (gen.returncode, commit,
+                                                                          redacted_tail(err, raw.decode("utf-8", "replace"))))
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+    try:
+        value = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused(1, "consumer-generate", "NG: the consumer's generator wrote non-UTF-8 output; nothing was "
+                      "stored.") from None
+    with open(out, "wb") as fh:
+        fh.write(raw)
+    with open(out, "rb") as fh:
+        chk = subprocess.run(rec["check_cmd"], cwd=repo_dir, stdin=fh, capture_output=True, check=False)
     if chk.returncode != 0:
-        tail = (chk.stderr or chk.stdout or "").strip().splitlines()[-1:] or [""]
         raise Refused(1, "consumer-check", "NG: the consumer's check refused the value (rc=%d at %s: %s); nothing was "
-                      "stored." % (chk.returncode, commit, tail[0][:160]))
-    print("VERIFIED %s: the consumer's check passed at %s" % (run.recipe_name, commit))
+                      "stored." % (chk.returncode, commit, redacted_tail(chk.stderr.decode("utf-8", "replace"), value)))
+    print("VERIFIED %s: the consumer's check passed at %s%s" % (run.recipe_name, commit, " (dirty tree)" if dirty else ""))
     return {rec["values"][0]: value}
 
 
@@ -387,10 +474,12 @@ def store(run, values, work):
     for name, role in zip(run.names, run.recipe["values"]):
         path = os.path.join(work, "set-" + name)
         write_private(path, values[role])
-        with open(path, encoding="utf-8") as fh:
-            p = subprocess.run(["gh", "secret", "set", name, "--repo", run.repo] + envargs, stdin=fh,
-                               capture_output=True, text=True, check=False)
-        os.unlink(path)
+        try:
+            with open(path, "rb") as fh:
+                p = subprocess.run(["gh", "secret", "set", name, "--repo", run.repo] + envargs, stdin=fh,
+                                   capture_output=True, check=False)
+        finally:
+            os.unlink(path)
         if p.returncode != 0:
             raise Refused(3, "set-failed", "NG: gh secret set failed for %s in %s (stored before it: %s)."
                           % (name, run.repo, ", ".join(stored) or "none"))
@@ -416,12 +505,31 @@ def store(run, values, work):
     print("REGISTERED: %s in %s%s" % (", ".join(run.names), run.repo, " (environment %s)" % run.env if run.env else ""))
 
 
+def after_keep(run, message):
+    """A failure once the Bitwarden copy exists names that copy and the way back (#479 review)."""
+    if not run.kept:
+        return message
+    item_name, item_id = run.kept
+    return (message + " The Bitwarden copy %s (id %s) exists and GitHub may not have it. To store that same copy, "
+            "re-run with --resume-from-bitwarden; do not make a new value." % (item_name, item_id))
+
+
 def main(argv):
+    # children (the ledger library's `python3 -`, consumer commands) must not load code from the caller's Python
+    # settings while a value file exists; this helper itself runs with -I (#477, #479 review)
+    for var in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE", "PYTHONSAFEPATH"):
+        os.environ.pop(var, None)
     try:
         run = Run(argv)
     except Refused as r:
         print(r.message, file=sys.stderr)
         return r.code
+
+    def on_signal(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(s, on_signal)
     work = tempfile.mkdtemp(prefix="register-secret.")
     try:
         kind = run.recipe["kind"]
@@ -441,15 +549,21 @@ def main(argv):
             print("DRY RUN: %s were not stored." % ", ".join(run.names))
             return 0
         if run.recipe.get("keep") == "bitwarden":
-            keep_in_bitwarden(run, run.names[0], values[run.recipe["values"][0]])
+            role = run.recipe["values"][0]
+            values = {role: keep_in_bitwarden(run, run.names[0], values[role] if values else "")}
         store(run, values, work)
         run.ledger("allow", "registered")
         return 0
     except Refused as r:
         if r.rule:
             run.ledger("warn" if r.code == 4 else "deny", r.rule)
-        print(r.message, file=sys.stderr)
+        print(after_keep(run, r.message), file=sys.stderr)
         return r.code
+    except Exception as exc:  # an unexpected failure is still a ledger row, and says whether Bitwarden was written
+        run.detail = (run.detail + "; " if run.detail else "") + type(exc).__name__
+        run.ledger("deny", "internal-error")
+        print(after_keep(run, "NG: unexpected %s; nothing more was stored." % type(exc).__name__), file=sys.stderr)
+        return 1
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

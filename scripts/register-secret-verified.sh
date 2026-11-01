@@ -61,7 +61,7 @@ if [[ "${1:-}" == "--recipe" ]]; then
         fi
     done
     cd /
-    exec python3 -I "$_HERE/lib/secret_recipes.py" --ledger-lib "$_LEDGER_LIB" "${_ARGS[@]}"
+    AIDD_SECRET_LEDGER_LIB="$_LEDGER_LIB" exec python3 -I "$_HERE/lib/secret_recipes.py" "${_ARGS[@]}"
 fi
 
 NAME="${1:-}"; REPO="${2:-}"

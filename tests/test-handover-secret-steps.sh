@@ -113,6 +113,10 @@ try:
     book = json.load(open(path, encoding="utf-8"))["recipes"]
 except (OSError, ValueError, KeyError) as exc:
     print("%s: unreadable (%s)" % (path, exc)); sys.exit(0)
+def bad_cond(c):
+    return (not isinstance(c, dict) or not c or set(c) - {"status", "json"}
+            or ("json" in c and (not isinstance(c["json"], dict) or not c["json"]))
+            or ("status" in c and not isinstance(c["status"], int)))
 for name, r in sorted(book.items()):
     kind, values = r.get("kind"), r.get("values") or []
     if kind == "network":
@@ -120,10 +124,12 @@ for name, r in sorted(book.items()):
         u = urllib.parse.urlsplit(req.get("url", "").replace("{", "").replace("}", ""))
         if u.scheme != "https" or u.hostname not in (r.get("hosts") or []):
             print("%s: url %s is not https on its hosts" % (name, req.get("url")))
-        if ctrl.get("replace") not in values or not ("fail_unless" in ctrl or "fail_unless_not" in ctrl):
+        if ctrl.get("replace") not in values or len(set(ctrl) & {"fail_unless", "fail_unless_not"}) != 1:
             print("%s: no negative control on one of its values" % name)
-        if not r.get("pass"):
-            print("%s: no pass condition" % name)
+        elif bad_cond(ctrl.get("fail_unless", ctrl.get("fail_unless_not"))):
+            print("%s: the control condition is empty or has unknown keys" % name)
+        if bad_cond(r.get("pass")):
+            print("%s: the pass condition is empty or has unknown keys" % name)
     elif kind == "generated":
         if not r.get("generate") or not r.get("check"):
             print("%s: a generated recipe needs generate and check" % name)
@@ -161,12 +167,17 @@ import json, sys
 book = json.load(open(sys.argv[1]))
 book["recipes"]["github-oauth"].pop("control")
 json.dump(book, open(sys.argv[2], "w"))
+book = json.load(open(sys.argv[1]))
+book["recipes"]["slack-oauth"]["control"]["fail_unless"] = {"jsno": {"error": "bad_client_secret"}}
+book["recipes"]["github-oauth"]["pass"] = {}
+json.dump(book, open(sys.argv[2].replace("nocontrol", "badcond"), "w"))
 PY
 printf '    bash ~/.claude/scripts/register-secret-verified.sh --recipe github-oauth-v9 A B o/r\n' >"$SB/unknown.md"
-r1="$(recipes "$SB/nocontrol.json" "$SB/none.md")"; r2="$(recipes "$RECIPES" "$SB/unknown.md")"
-[[ "$r1" == *"github-oauth: no negative control"* && "$r2" == *"unknown recipe github-oauth-v9"* ]] \
-  && ok "S4 self-test: a recipe without its negative control and a step naming an unknown recipe are red" \
-  || bad "S4 self-test" "no-control: ${r1:-green}; unknown: ${r2:-green}"
+r1="$(recipes "$SB/nocontrol.json" "$SB/none.md")"; r2="$(recipes "$RECIPES" "$SB/unknown.md")"; r3="$(recipes "$SB/badcond.json" "$SB/none.md")"
+[[ "$r1" == *"github-oauth: no negative control"* && "$r2" == *"unknown recipe github-oauth-v9"* \
+   && "$r3" == *"slack-oauth: the control condition is empty or has unknown keys"* && "$r3" == *"github-oauth: the pass condition is empty or has unknown keys"* ]] \
+  && ok "S4 self-test: a recipe without its negative control, a misspelled or empty condition, and a step naming an unknown recipe are red" \
+  || bad "S4 self-test" "no-control: ${r1:-green}; unknown: ${r2:-green}; bad conditions: ${r3:-green}"
 grep -q 'unknown recipe %r' "$ROOT/scripts/lib/secret_recipes.py" && grep -q 'if not ok:' "$ROOT/scripts/lib/secret_recipes.py" \
   && ok "S4 the enforcing helper refuses an unknown recipe and has its control gate" || bad "S4 helper" "secret_recipes.py lost its gates"
 
