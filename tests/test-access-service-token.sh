@@ -56,7 +56,7 @@ PY
     exit 1
   else
     rc=$?
-    if [[ "$rc" != 1 ]] || ! rg -q 'FAIL:' "$SB/$CASE.log"; then
+    if [[ "$rc" != 1 ]] || ! grep -q 'FAIL:' "$SB/$CASE.log"; then
       cat "$SB/$CASE.log" >&2
       echo "FAIL: $CASE mutant did not reach the expected assertion" >&2
       exit 1
