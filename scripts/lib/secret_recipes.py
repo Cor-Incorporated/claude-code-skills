@@ -317,13 +317,15 @@ def keep_in_bitwarden(run, name, value):
             from None
     back = subprocess.run(["bw", "get", "item", item_id], capture_output=True, text=True, env=env, check=False)
     try:
-        same = bw_field(json.loads(back.stdout), "value") == value
+        kept = bw_field(json.loads(back.stdout), "value")
     except ValueError:
-        same = False
-    if not same:
-        raise Refused(3, "bitwarden-readback", "NG: the Bitwarden item %s (%s) did not read back equal; GitHub was "
-                      "not touched. Delete or fix that item by hand." % (item_name, item_id))
-    print("KEPT %s in Bitwarden as %s (read back equal)" % (name, item_name))
+        kept = None
+    if kept != value:
+        raise Refused(3, "bitwarden-readback", "NG: the Bitwarden item %s (%s) did not read back equal (length %s, "
+                      "made %d); GitHub was not touched. Delete or fix that item by hand." % (
+                          item_name, item_id, len(kept) if isinstance(kept, str) else "none", len(value)))
+    run.detail = "bitwarden %s read back equal, length %d" % (item_name, len(value))
+    print("KEPT %s in Bitwarden as %s (read back equal, length %d)" % (name, item_name, len(value)))
 
 
 def generated(run):

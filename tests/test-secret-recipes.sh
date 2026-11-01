@@ -80,7 +80,7 @@ open("$SB/bw-argv", "a").write(" ".join(a) + "\n")
 assert os.environ.get("BW_SESSION") == "SESSION-TEST", "no session"
 store = "$SB/vault/item.json"
 if a == ["status"]:
-    print(json.dumps({"status": "unlocked"}))
+    print(json.dumps({"status": os.environ.get("FAKE_BW_STATUS", "unlocked")}))
 elif a[:2] == ["list", "items"]:
     items = [json.load(open(store))] if os.path.exists(store) else []
     if os.environ.get("FAKE_BW_EXISTING"):
@@ -179,7 +179,8 @@ done
 reset
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --env production --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 bwv="$(python3 -c 'import json,sys; print([f["value"] for f in json.load(open(sys.argv[1]))["fields"] if f["name"]=="value"][0])' "$SB/vault/item.json" 2>/dev/null)"
-[[ $rc -eq 0 && -n "$bwv" && "$(cat "$SB/gh/MCP_TOKEN" 2>/dev/null)" == "$bwv" && "$out" == *"KEPT MCP_TOKEN in Bitwarden as env/production/MCP_TOKEN"* && "$out" != *"$bwv"* ]] \
+[[ $rc -eq 0 && -n "$bwv" && "$(cat "$SB/gh/MCP_TOKEN" 2>/dev/null)" == "$bwv" && "$out" == *"KEPT MCP_TOKEN in Bitwarden as env/production/MCP_TOKEN (read back equal, length ${#bwv})"* && "$out" != *"$bwv"* ]] \
+  && grep '"rule":"recipe-mcp-token-registered"' "$AIDD_LEDGER_PATH" | grep -q "read back equal, length ${#bwv}" \
   && ok "mcp-token: one generated value lands in Bitwarden and GitHub, read back equal, never printed" || bad "mcp good" "rc=$rc $out"
 python3 -c 'import json,sys; f={x["name"]:x for x in json.load(open(sys.argv[1]))["fields"]}; assert f["_bw.variable"]["value"]=="MCP_TOKEN" and f["_bw.environment"]["value"]=="production" and f["value"]["type"]==1' "$SB/vault/item.json" 2>/dev/null \
   && ok "mcp-token: the Bitwarden item follows bwenv's layout (_bw.variable, _bw.environment, a hidden value field)" || bad "mcp layout" "$(cat "$SB/vault/item.json" 2>/dev/null | head -c 300)"
@@ -195,6 +196,10 @@ out="$(printf '' | FAKE_BW_TAMPER=1 run --recipe mcp-token MCP_TOKEN o/r --keep-
 reset
 out="$(printf '' | FAKE_BW_LOCKED=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
 [[ $rc -eq 3 && -z "$(ls "$SB/gh")" && ! -s "$SB/bw-argv" ]] && ok "mcp-token: a locked vault refuses before a value is made" || bad "mcp locked" "rc=$rc $out"
+reset
+out="$(printf '' | FAKE_BW_STATUS=locked run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+[[ $rc -eq 3 && -z "$(ls "$SB/gh")" && ! -e "$SB/vault/item.json" && "$(grep -c 'create item' "$SB/bw-argv" 2>/dev/null || true)" -eq 0 ]] \
+  && ok "mcp-token: a session whose vault reports locked refuses with no item created (no empty item, 10-31)" || bad "mcp status locked" "rc=$rc $out"
 reset
 out="$(printf '' | FAKE_BW_LOCKED=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN --dry-run)"; rc=$?
 [[ $rc -eq 0 && -z "$(ls "$SB/gh")" && ! -s "$SB/bw-argv" && "$out" == *"DRY RUN"* ]] && ok "mcp-token: a dry run touches neither Bitwarden nor GitHub" || bad "mcp dry" "rc=$rc $out"
