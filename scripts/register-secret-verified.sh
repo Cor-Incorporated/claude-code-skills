@@ -6,6 +6,12 @@
 #   register-secret-verified.sh <SECRET_NAME> <owner/repo> --verify-url <https URL> [--verify-url …]
 #       [--cloudflare-account <account id>] [--allow-host <host>] [--expect <json.path>=<value>]
 #       [--auth '<header line with %s>'] [--env <environment>] [--dry-run]
+#   register-secret-verified.sh --recipe <name> <NAME>... <owner/repo> [--env <environment>] [--param k=v]...
+#       [--repo-dir <consumer checkout>] [--keep-in-bitwarden env/<environment>/<NAME>] [--dry-run]
+#
+#   --recipe runs a reviewed recipe from scripts/lib/secret-verify-recipes.json through scripts/lib/secret_recipes.py
+#   (claude-code-skills#478): an OAuth client pair checked by its provider with a negative control on every run, a value
+#   generated here, or a value made and checked by the consumer's own commands. The rules below hold for both modes.
 #
 #   - The value comes from a hidden prompt (or stdin when stdin is not a terminal). Python reads it straight into a 0600
 #     file, so it is never an argument, a shell variable or a `set -x` line. Leading and trailing whitespace is dropped
@@ -37,6 +43,26 @@ set -euo pipefail
 umask 077
 
 die() { printf 'register-secret-verified: %s\n' "$*" >&2; exit 2; }
+
+# Paths the caller gave relative to its directory stay where they were after `cd /` (#477).
+case "${TMPDIR:-}" in ""|/*) ;; *) export TMPDIR="$PWD/$TMPDIR" ;; esac
+case "${AIDD_LEDGER_PATH:-}" in ""|/*) ;; *) export AIDD_LEDGER_PATH="$PWD/$AIDD_LEDGER_PATH" ;; esac
+
+if [[ "${1:-}" == "--recipe" ]]; then
+    _HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    _LEDGER_LIB="$(cd "$_HERE/.." 2>/dev/null && pwd)/hooks/lib/aidd-ledger.sh"
+    [[ -f "$_LEDGER_LIB" ]] || _LEDGER_LIB="$HOME/.claude/hooks/lib/aidd-ledger.sh"
+    [[ -f "$_HERE/lib/secret_recipes.py" ]] || die "missing $_HERE/lib/secret_recipes.py"
+    _ARGS=("$@")
+    for ((i = 0; i < ${#_ARGS[@]}; i++)); do
+        # a consumer checkout given relative to the caller's directory
+        if [[ "${_ARGS[i]}" == "--repo-dir" && $((i + 1)) -lt ${#_ARGS[@]} && "${_ARGS[i + 1]}" != /* ]]; then
+            _ARGS[i + 1]="$PWD/${_ARGS[i + 1]}"
+        fi
+    done
+    cd /
+    exec python3 -I "$_HERE/lib/secret_recipes.py" --ledger-lib "$_LEDGER_LIB" "${_ARGS[@]}"
+fi
 
 NAME="${1:-}"; REPO="${2:-}"
 [[ -n "$NAME" && -n "$REPO" && "$NAME" != -* && "$REPO" == */* ]] || die "usage: $0 <SECRET_NAME> <owner/repo> --verify-url <URL> …"

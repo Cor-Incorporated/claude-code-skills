@@ -78,6 +78,12 @@ cor-os の `CLOUDFLARE_ACCESS_READ_API_TOKEN` の登録に 5 回・約 50 分か
 - verify が通らなくても登録まで走る 1 行を渡していた。
 
 - 渡すのは `bash ~/.claude/scripts/register-secret-verified.sh <NAME> <owner/repo> --verify-url <URL>`（Cloudflare なら `--cloudflare-account <id>`。id は `wrangler whoami` の 32 桁）。値は表示しない入力で受け、verify が通ったときだけ登録する。script を通さない登録コマンドを手順に書かない（`tests/test-handover-secret-steps.sh`）。
+- JSON の verify URL がない秘密は、査読済みの recipe（`scripts/lib/secret-verify-recipes.json`）で渡す: `register-secret-verified.sh --recipe <名前> <NAME>... <owner/repo>`。recipe の種類は 3 つ。
+  - OAuth client の組は、提供元が組を受け入れ、かつ誤った secret での陰性対照が別の答えを返すときだけ登録する。
+  - 生成値は script が作り、人に見せない。
+  - 消費側の生成器と検査は、その repository のコマンドを固定して使う。
+  
+  recipe のない秘密は手順に書かない。recipe を追加する PR で、良い値と悪い値をそれぞれ 1 回ずつ実測する（claude-code-skills#478）。
 - UI 操作は、スクショか実機で確かめた文言だけを書く。確かめていないものは「未確認」と書く。
 - 値の形式（長さ・文字種）を決め打ちしない。形式は提供元の verify が決める。
 

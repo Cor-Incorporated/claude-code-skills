@@ -145,6 +145,12 @@ cor-os の `CLOUDFLARE_ACCESS_READ_API_TOKEN` の登録に、22:4x〜23:35 で 5
    （`tests/test-handover-secret-steps.sh` が、登録コマンドを直接書いた行を落とす。script を名指ししても、同じ行に `|| <登録コマンド>` と書けば落ちる。どうしても要る行には理由つきの `<!-- secret-set-ok: <理由> -->` を同じ行か直前の行に置く）。
    例: `bash ~/.claude/scripts/register-secret-verified.sh CLOUDFLARE_ACCESS_READ_API_TOKEN Cor-Incorporated/cor-os --cloudflare-account <account id>`
    （account id は `wrangler whoami` の出力の 32 桁）
+   JSON の verify URL がない秘密は、査読済みの recipe で渡す（claude-code-skills#478）。
+   - OAuth client の組: `--recipe github-oauth` / `--recipe slack-oauth`。2 行入力し、誤った secret での陰性対照を毎回送る。
+   - 生成する `MCP_TOKEN`: `--recipe mcp-token --keep-in-bitwarden env/<環境>/MCP_TOKEN`。
+   - 消費側が作る値: `--recipe intake-keys --repo-dir <checkout> --param revision=<rev>`。
+
+   recipe のない秘密（Access service token など）は、手順に書かず保留にする。
 2. **UI の操作は、スクショか実機で確かめた文言だけを書く。** 確かめていない画面名・ボタン名は「未確認」と書く。
 3. **値の形式（長さ・文字種・接頭辞）を決め打ちしない。** 形式を確かめるのは提供元の verify であって、手順書の推測ではない。
 
