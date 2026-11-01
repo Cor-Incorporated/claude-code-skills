@@ -17,11 +17,15 @@ Recipes live in secret-verify-recipes.json next to this file and land only by PR
              If GitHub then fails, --resume-from-bitwarden stores that same copy instead of making a new one.
   consumer   the consumer's own generator and check, run in its checkout, decide the value (cor-os#126). A missing
              command refuses.
+  access-service-token  read back the fixed Access app/policy, rotate its existing service token with the old
+             expiry preserved, and require four wrong-secret controls and four real origin probes before storage.
+             --dry-run is read-only preflight, not evidence of a generated or verified pair.
 Exit codes: 0 stored (or verified with --dry-run), 1 refused, 2 usage, 3 gh or Bitwarden failed, 4 stored but the
 readback is missing or stale. Every outcome but a usage error is a guard-ledger row; no row carries a value.
 """
 import base64
 import getpass
+import importlib.util
 import json
 import os
 import re
@@ -133,6 +137,11 @@ class Run:
                 usage("recipe %s needs --param %s=<value>" % (self.recipe_name, p))
         if self.resume and self.recipe.get("keep") != "bitwarden":
             usage("--resume-from-bitwarden is only for a recipe that keeps a Bitwarden copy")
+        if self.recipe["kind"] == "access-service-token":
+            if self.env or self.keep_item or self.repo_dir or self.resume:
+                usage("access-service-token only registers the fixed repository-level pair")
+            if set(self.params) != {"rotate-confirmed"} or self.params["rotate-confirmed"] != "yes":
+                usage("access-service-token requires only --param rotate-confirmed=yes")
 
     # --- ledger ------------------------------------------------------------------------------------------------
     def ledger(self, decision, rule):
@@ -543,6 +552,22 @@ def after_keep(run, message, rule):
                 item_name, item_id, github))
 
 
+def access_service_verify(run, work):
+    # -I intentionally excludes this directory from sys.path; load only the adjacent reviewed source.
+    spec = importlib.util.spec_from_file_location("access_service_token", os.path.join(HERE, "access_service_token.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.verify(run, work, Refused)
+
+
+def access_recovery_notice(run, work):
+    if run.recipe["kind"] == "access-service-token" and getattr(run, "preserve_work", False):
+        print("Access rotation or GitHub storage is incomplete. Private recovery directory: " + work,
+              file=sys.stderr)
+        print("Keep the old secret valid. Do not rotate again; inspect this attempt before a reviewed recovery.",
+              file=sys.stderr)
+
+
 def main(argv):
     # children (the ledger library's `python3 -`, consumer commands) must not load code from the caller's Python
     # settings while a value file exists; this helper itself runs with -I (#477, #479 review)
@@ -571,6 +596,12 @@ def main(argv):
             values = generated(run)
         elif kind == "consumer":
             values = consumer(run, work)
+        elif kind == "access-service-token":
+            values = access_service_verify(run, work)
+            if run.dry:
+                run.ledger("allow", "preflight-only")
+                print("PREFLIGHT ONLY: Access settings matched; no rotation, pair verification or GitHub storage.")
+                return 0
         else:
             raise Refused(1, "recipe-invalid", "NG: recipe %s has an unknown kind %r" % (run.recipe_name, kind))
         if run.dry:
@@ -582,20 +613,31 @@ def main(argv):
             values = {role: keep_in_bitwarden(run, run.names[0], values[role] if values else "")}
         store(run, values, work)
         run.ledger("allow", "registered")
+        if kind == "access-service-token":
+            run.preserve_work = False
         return 0
     except Refused as r:
         if r.rule:
             run.ledger("warn" if r.code == 4 else "deny", r.rule)
         print(after_keep(run, r.message, r.rule), file=sys.stderr)
+        access_recovery_notice(run, work)
         return r.code
+    except SystemExit:
+        if run.recipe["kind"] == "access-service-token":
+            run.detail = "interrupted; inspect rotation and GitHub metadata before any retry"
+            run.ledger("deny", "interrupted")
+            access_recovery_notice(run, work)
+        raise
     except Exception as exc:  # an unexpected failure is still a ledger row, and says whether Bitwarden was written
         run.detail = (run.detail + "; " if run.detail else "") + type(exc).__name__
         run.ledger("deny", "internal-error")
         print(after_keep(run, "NG: unexpected %s; nothing more was stored." % type(exc).__name__, "internal-error"),
               file=sys.stderr)
+        access_recovery_notice(run, work)
         return 1
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        if not getattr(run, "preserve_work", False):
+            shutil.rmtree(work, ignore_errors=True)
 
 
 if __name__ == "__main__":
