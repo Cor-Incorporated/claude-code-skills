@@ -386,6 +386,7 @@ kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 reset
 mkdir -p "$SB/strict"
 cp "$ROOT/scripts/lib/secret_recipes.py" "$SB/strict/"
+cp "$ROOT/scripts/lib/slack_oauth_code.py" "$SB/strict/"
 python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); b["recipes"]["github-oauth"]["pass"]={"stauts":404}; json.dump(b,open(sys.argv[2],"w"))' \
   "$ROOT/scripts/lib/secret-verify-recipes.json" "$SB/strict/secret-verify-recipes.json"
 out="$(printf '%s\n%s\n' "$GID" "$GSEC" | python3 -I "$SB/strict/secret_recipes.py" --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r 2>&1)"; rc=$?
@@ -394,6 +395,7 @@ out="$(printf '%s\n%s\n' "$GID" "$GSEC" | python3 -I "$SB/strict/secret_recipes.
 # Mutants (red side). Each writes a changed copy of the helper next to a copy of the recipe file and runs that copy
 # itself in this file (pair18: the variable written is the variable executed).
 cp "$ROOT/scripts/lib/secret-verify-recipes.json" "$SB/secret-verify-recipes.json"
+cp "$ROOT/scripts/lib/slack_oauth_code.py" "$SB/slack_oauth_code.py"
 LEDGER_LIB="$ROOT/hooks/lib/aidd-ledger.sh"
 MUT1="$SB/mut_control.py"
 python3 - "$ROOT/scripts/lib/secret_recipes.py" "$MUT1" "        if not ok:" "        if False:" <<'PY'
