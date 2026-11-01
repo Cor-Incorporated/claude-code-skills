@@ -45,7 +45,9 @@ status, body = 200, "{}"
 if "/applications/" in conf["url"]:
     good = user == "$GID" and pw == "$GSEC" and conf["url"].endswith("/applications/$GID/token")
     status = 404 if good or os.environ.get("FAKE_NODISCRIM") else int(os.environ.get("FAKE_GH_BAD", "401"))
-    body = '{"message":"Not Found"}' if status == 404 else '{"message":"Bad credentials"}'
+    if good and os.environ.get("FAKE_GH_GOOD"):
+        status = int(os.environ["FAKE_GH_GOOD"])
+    body = {404: '{"message":"Not Found"}', 401: '{"message":"Bad credentials"}'}.get(status, '{"message":"other"}')
     if status == 404 and os.environ.get("FAKE_HTML_404"):
         body = "<html><body>Not Found</body></html>"
 elif "oauth.v2.access" in conf["url"]:
@@ -58,6 +60,8 @@ elif "oauth.v2.access" in conf["url"]:
     else:
         err = "invalid_code"
     body = json.dumps({"ok": False, "error": err})
+    if os.environ.get("FAKE_SLACK_STATUS"):
+        status = int(os.environ["FAKE_SLACK_STATUS"])
 open(conf["output"], "w").write(body)
 sys.stdout.write(str(status))
 FAKE
@@ -261,6 +265,22 @@ for code in 503 429 403; do
   [[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"not a definite one"* ]] || bad "inconclusive $code" "rc=$rc $out"
 done
 [[ "$(row recipe-github-oauth-inconclusive)" -ge 3 ]] && ok "a control answering 503, 429 or 403 refuses as inconclusive and stores nothing" || bad "inconclusive rows" "$(row recipe-github-oauth-inconclusive)"
+for code in 503 429 403; do
+  reset
+  out="$(printf '%s\n%s\n' "$GID" "$GSEC" | FAKE_GH_GOOD=$code run --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r)"; rc=$?
+  [[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"not a definite one"* ]] || bad "real inconclusive $code" "rc=$rc $out"
+done
+[[ "$(row recipe-github-oauth-inconclusive)" -ge 6 ]] && ok "the real request answering 503, 429 or 403 is held to the same rule: inconclusive, nothing stored" || bad "real inconclusive rows" "$(row recipe-github-oauth-inconclusive)"
+reset
+out="$(printf '%s\n%s\n' "$GID" "$GSEC" | FAKE_GH_BAD=422 run --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r)"; rc=$?
+[[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"does not discriminate"* ]] \
+  && ok "a control that answers a definite 422 (not an authentication failure) refuses: only 401 counts" || bad "control 422" "rc=$rc $out"
+for code in 503 429 403; do
+  reset
+  out="$(printf '%s\n%s\n' "$SID" "$SSEC" | FAKE_SLACK_STATUS=$code run --recipe slack-oauth SLACK_OAUTH_CLIENT_ID SLACK_OAUTH_CLIENT_SECRET o/r)"; rc=$?
+  [[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"not a definite one"* ]] || bad "slack inconclusive $code" "rc=$rc $out"
+done
+[[ "$(row recipe-slack-oauth-inconclusive)" -ge 3 ]] && ok "slack-oauth answering 503, 429 or 403 refuses as inconclusive" || bad "slack inconclusive rows" "$(row recipe-slack-oauth-inconclusive)"
 reset
 out="$(printf '%s\n%s\n' "$GID" "$GSEC" | FAKE_HTML_404=1 run --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r)"; rc=$?
 [[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"not a definite one"* ]] && ok "a 404 that is not a JSON object (an HTML page) is inconclusive" || bad "html 404" "rc=$rc $out"
@@ -274,12 +294,13 @@ out="$(printf '%s\n%s\n' "$GID" "$GSEC" | run --recipe github-oauth COR_GITHUB_O
 # 11 #479 review: Bitwarden written, GitHub failed → the message names the copy, and --resume-from-bitwarden stores it
 reset
 out="$(printf '' | FAKE_GH_SET_FAIL=1 run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
-[[ $rc -eq 3 && -s "$SB/vault/item.json" && "$out" == *"Bitwarden copy env/production/MCP_TOKEN (id id-1) exists"* && "$out" == *"--resume-from-bitwarden"* ]] \
+[[ $rc -eq 3 && -s "$SB/vault/item.json" && "$out" == *"State: Bitwarden has env/production/MCP_TOKEN (id id-1); GitHub does not have it"* && "$out" == *"--resume-from-bitwarden"* ]] \
   && ok "a gh failure after the Bitwarden write names the copy and the resume step" || bad "keep then gh fail" "rc=$rc $out"
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
 bwv="$(python3 -c 'import json,sys; print([f["value"] for f in json.load(open(sys.argv[1]))["fields"] if f["name"]=="value"][0])' "$SB/vault/item.json" 2>/dev/null)"
-[[ $rc -eq 0 && -n "$bwv" && "$(cat "$SB/gh/MCP_TOKEN" 2>/dev/null)" == "$bwv" && "$out" == *"RESUMED MCP_TOKEN"* && "$out" != *"$bwv"* ]] \
-  && ok "--resume-from-bitwarden stores that same copy, never a new value, never printed" || bad "resume" "rc=$rc $out"
+[[ $rc -eq 0 && -n "$bwv" && "$(cat "$SB/gh/MCP_TOKEN" 2>/dev/null)" == "$bwv" && "$out" == *"RESUMED MCP_TOKEN"* && "$out" != *"$bwv"* \
+   && "$(grep -c '^create item' "$SB/bw-argv")" -eq 1 && "$(grep -c '^delete' "$SB/bw-argv" || true)" -eq 0 ]] \
+  && ok "gh failure, then --resume-from-bitwarden: stored from that same copy, one item created in all, none deleted, never printed" || bad "resume" "rc=$rc $out"
 reset
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN o/r --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
 [[ $rc -eq 1 && -z "$(ls "$SB/gh")" ]] && ok "--resume-from-bitwarden with no ledger item refuses" || bad "resume none" "rc=$rc $out"

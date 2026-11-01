@@ -505,13 +505,16 @@ def store(run, values, work):
     print("REGISTERED: %s in %s%s" % (", ".join(run.names), run.repo, " (environment %s)" % run.env if run.env else ""))
 
 
-def after_keep(run, message):
-    """A failure once the Bitwarden copy exists names that copy and the way back (#479 review)."""
+def after_keep(run, message, rule):
+    """A failure once the Bitwarden copy exists names that copy, what GitHub has, and the way back (#479 review)."""
     if not run.kept:
         return message
     item_name, item_id = run.kept
-    return (message + " The Bitwarden copy %s (id %s) exists and GitHub may not have it. To store that same copy, "
-            "re-run with --resume-from-bitwarden; do not make a new value." % (item_name, item_id))
+    github = {"set-failed": "GitHub does not have it",
+              "readback-stale": "GitHub was sent it but its readback is stale"}.get(rule, "GitHub may not have it")
+    return (message + " State: Bitwarden has %s (id %s); %s. To store that same copy, re-run the same command with "
+            "--resume-from-bitwarden. Do not make a new value, a second item, or delete this one." % (
+                item_name, item_id, github))
 
 
 def main(argv):
@@ -557,12 +560,13 @@ def main(argv):
     except Refused as r:
         if r.rule:
             run.ledger("warn" if r.code == 4 else "deny", r.rule)
-        print(after_keep(run, r.message), file=sys.stderr)
+        print(after_keep(run, r.message, r.rule), file=sys.stderr)
         return r.code
     except Exception as exc:  # an unexpected failure is still a ledger row, and says whether Bitwarden was written
         run.detail = (run.detail + "; " if run.detail else "") + type(exc).__name__
         run.ledger("deny", "internal-error")
-        print(after_keep(run, "NG: unexpected %s; nothing more was stored." % type(exc).__name__), file=sys.stderr)
+        print(after_keep(run, "NG: unexpected %s; nothing more was stored." % type(exc).__name__, "internal-error"),
+              file=sys.stderr)
         return 1
     finally:
         shutil.rmtree(work, ignore_errors=True)
