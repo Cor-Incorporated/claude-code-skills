@@ -12,7 +12,10 @@ cor-osの実ログインやコネクタ認証とは別の、Client ID/Secretの�
 - 一時的にUser Scope `users:read`（ワークスペースの利用者情報の閲覧）を設定し、本人が同意する。
   メッセージ・ファイル・投稿・メールアドレスの権限は要求しない。実際のデータ閲覧APIは呼ばない。
 - 一時Redirect URL `https://127.0.0.1:8765/slack-register` を追加する。既存の本番callbackは変更しない。
-  このポートにはサーバーを起動しない。ブラウザの接続失敗画面のURLからcode/stateをhidden promptへ直接渡す。
+  runnerはこのTCPポートをlistenせず予約し、他のサービスが使用中なら値入力前に拒否する。
+  サーバーは起動しない。callbackは接続失敗または待ち状態になる。
+  **URLを取得 → callbackのロードを停止またはタブを閉じる → hidden promptへURLを渡す**順を守る。
+  予約解放後のブラウザ再試行を残さない。中断時も先にcallbackタブを閉じる。
   Slackがこのcallbackを受理するか・失敗画面のURLを取得できるかは実値フローで未検証。不可なら止める。
 - token rotationは無効の状態を確認する。refresh tokenやbot tokenが返れば保存を拒否して後始末へ進む。
 - 以上の権限・本人同意・後始末を示して実行GOを得る。設計・実装の承認だけで実行しない。
@@ -29,7 +32,8 @@ bash ~/.claude/scripts/register-secret-verified.sh --recipe slack-oauth-code SLA
 1. TTYのhidden promptへClient ID/Secretを入れる。値をチャット・argv・履歴・ログへ渡さない。
 2. scriptが示すowner-only HTMLをローカルで開き、一時認可に本人が同意する。
    HTMLはClient IDとstateを含むため共有・添付しない。自動でブラウザを開く処理やURLの標準出力はない。
-3. 接続失敗画面のcallback URL全体をhidden promptへ直接渡す。origin/path、state、code、10分上限を検査する。
+3. callback URL全体を取得し、ロードを停止またはcallbackタブを閉じてからhidden promptへ直接渡す。
+   origin/path、state、code、10分上限を検査する。URL取得後にタブのロードを残してはいけない。
 4. 同一code＋誤secretを先に送る。HTTP200 / ok:false / bad_client_secret以外は実pairを送らず停止する。
 5. 同一code＋実pairの交換がHTTP200 / ok:trueで成功し、app/team/user/scopeが一致することを確認する。
    誤secretの試行でcodeが消費される場合も保存しない。自動の取り直し・再試行はない。

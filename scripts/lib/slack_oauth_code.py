@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import sys
 import time
 import urllib.parse
@@ -64,6 +65,18 @@ def verify(run, work, net):
         refuse("grant-precondition", "confirm a new grant with --param fresh-grant=yes and the allowed --param user-id")
     if not sys.stdin.isatty():
         refuse("hidden-input-required", "this code recipe requires a terminal and hidden prompts")
+    # Reserve the exact TCP endpoint without accepting connections or reading HTTP/TLS.
+    # An existing listener must not receive the callback's code; do not enable address/port reuse.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        try:
+            reservation.bind(("127.0.0.1", 8765))
+        except OSError:
+            refuse("callback-port-busy", "the private loopback callback port is unavailable")
+        return _verify_grant(run, work, net, grant)
+
+
+def _verify_grant(run, work, net, grant):
+    params = run.params
     values = hidden_read(run.read_values)
     state = secrets.token_urlsafe(32)
     query = urllib.parse.urlencode({"client_id": values["client_id"], "user_scope": grant["user_scope"],
@@ -74,10 +87,11 @@ def verify(run, work, net):
                  '<a rel="noreferrer" href="' + html.escape("https://slack.com/oauth/v2/authorize?" + query, quote=True)
                  + '">Authorize the temporary verification grant</a>')
     print("Private authorization page: " + path, flush=True)
-    print("Open that file locally. After consent the unused HTTPS loopback URL will fail to load. "
-          "Paste its full URL into the hidden prompt, never into chat or a shell command.", flush=True)
+    print("Open that file locally. After consent capture the full loopback URL, then STOP navigation or CLOSE "
+          "the callback tab BEFORE submitting the hidden prompt (no queued browser retries). "
+          "The loopback page cannot load and may time out. Never paste its URL into chat or a shell command.", flush=True)
     started = time.monotonic()
-    callback = hidden_read(lambda: getpass.getpass("Paste the full callback URL (hidden): ")).strip()
+    callback = hidden_read(lambda: getpass.getpass("After stopping/closing the callback tab, paste its full URL (hidden): ")).strip()
     try:
         parsed = urllib.parse.urlsplit(callback)
         fields = urllib.parse.parse_qs(parsed.query, strict_parsing=True, keep_blank_values=True)
@@ -96,8 +110,9 @@ def verify(run, work, net):
         run.slack_outcome_unknown = True
         result = net.ask(pair, form=form, received=lambda doc: tokens.update(token_values(doc)))
         status, doc = result
-        run.slack_outcome_unknown = (status != 200 or not isinstance(doc, dict) or
-                                     (doc.get("ok") is True and not token_values(doc)))
+        definite = (status == 200 and isinstance(doc, dict) and
+                    (doc.get("ok") is False or (doc.get("ok") is True and bool(token_values(doc)))))
+        run.slack_outcome_unknown = not definite
         return result
 
     try:

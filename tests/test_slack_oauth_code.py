@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import stat
+import socket
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -28,11 +29,12 @@ GOOD = {"ok": True, "app_id": "A0CDE0UUC79", "team": {"id": "T062U0CS2RJ"},
 class CodeFlowTests(unittest.TestCase):
     def execute(self, *, control=None, real=None, revoke=None, callback="good", fresh=True, tty=True, dry=False,
                 interrupted=False, mutation=None, expired=False, journal_error=False, echo_warning=None, ledger=False,
-                transport_failure=False, unexpected_failure=False):
+                transport_failure=False, unexpected_failure=False, port_busy=False):
         control = (200, {"ok": False, "error": "bad_client_secret"}) if control is None else control
         real = (200, copy.deepcopy(GOOD)) if real is None else real
         revoke = (200, {"ok": True, "revoked": True}) if revoke is None else revoke
         self.events, self.requests, self.work = [], [], None
+        self.values_read = False
         self.output = io.StringIO()
         with tempfile.TemporaryDirectory() as parent:
             mkdir = recipes.tempfile.mkdtemp
@@ -87,6 +89,7 @@ class CodeFlowTests(unittest.TestCase):
                     mutation(run.recipe)
 
             def read_values(run):
+                self.values_read = True
                 if echo_warning == "pair":
                     warnings.warn("echo unavailable", recipes.getpass.GetPassWarning)
                 return dict(PAIR)
@@ -110,6 +113,7 @@ class CodeFlowTests(unittest.TestCase):
                   mock.patch.object(recipes.sys, "stdin", mock.Mock(isatty=lambda: tty)),
                   mock.patch.object(recipes._slack_code.getpass, "getpass", side_effect=hidden),
                   mock.patch.object(recipes._slack_code, "private_file", side_effect=private),
+                  mock.patch.object(recipes._slack_code.socket, "socket") as reservation,
                   mock.patch.object(recipes.Network, "ask", autospec=True, side_effect=ask),
                   mock.patch.object(recipes._slack_code.time, "monotonic", side_effect=[0, 601] if expired else [0, 1]),
                   mock.patch.object(recipes, "store", side_effect=lambda *_: self.events.append("store")),
@@ -118,10 +122,15 @@ class CodeFlowTests(unittest.TestCase):
                       "AIDD_LEDGER_PATH": str(Path(parent) / "ledger.jsonl"),
                       "AIDD_LEDGER_SOURCE": "test", "AIDD_LEDGER_AGENT": "codex"}),
                   contextlib.redirect_stdout(self.output), contextlib.redirect_stderr(self.output)):
+                if port_busy:
+                    reservation.return_value.__enter__.return_value.bind.side_effect = OSError("busy")
                 try:
                     result = recipes.main(args)
                 except SystemExit as exc:
                     result = exc.code
+                reservation.return_value.__enter__.return_value.listen.assert_not_called()
+                if self.values_read:
+                    reservation.return_value.__exit__.assert_called_once()
             self.journal = self.work / "cleanup-pending.json"
             self.preserved = self.work.exists()
             self.pending = json.loads(self.journal.read_text()) if self.journal.exists() else None
@@ -166,6 +175,11 @@ class CodeFlowTests(unittest.TestCase):
                 self.assertEqual(self.execute(**kwargs), 1)
                 self.assertEqual(self.events, [])
 
+    def test_busy_callback_port_refuses_before_values(self):
+        self.assertEqual(self.execute(port_busy=True), 1)
+        self.assertFalse(self.values_read)
+        self.assertEqual(self.events, [])
+
     def test_echo_fallback_is_refused_before_it_can_read_input(self):
         for stage in ["pair", "callback"]:
             self.assertEqual(self.execute(echo_warning=stage), 1)
@@ -196,6 +210,13 @@ class CodeFlowTests(unittest.TestCase):
         self.assertEqual(self.events[-1], "auth.revoke")
         self.assertNotIn("store", self.events)
         self.assertIn("outcome is unknown", self.output.getvalue())
+
+    def test_ambiguous_exchange_json_refuses_and_warns_about_unknown_outcome(self):
+        for doc in [{}, {"error": "invalid_code"}, {"ok": 1}, {"ok": True}]:
+            with self.subTest(doc=doc):
+                self.assertEqual(self.execute(real=(200, doc)), 1)
+                self.assertNotIn("store", self.events)
+                self.assertIn("outcome is unknown", self.output.getvalue())
 
     def test_real_ledger_receives_the_failed_control_without_values(self):
         self.assertEqual(self.execute(control=(200, {"ok": False, "error": "invalid_code"}), ledger=True), 1)
@@ -296,6 +317,37 @@ class TransportTests(unittest.TestCase):
             with self.assertRaises(recipes.Refused):
                 recipes.Network(run, work).ask({}, request={"url": "https://evil.example/"}, form={"token": TOKEN})
             command.assert_not_called()
+
+
+class LoopbackReservationTests(unittest.TestCase):
+    def test_non_listening_reservation_excludes_other_binds_and_refuses_connections(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            endpoint = reservation.getsockname()
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as other:
+                with self.assertRaises(OSError):
+                    other.bind(endpoint)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.settimeout(1)
+                self.assertNotEqual(client.connect_ex(endpoint), 0)
+
+    def test_later_reused_wildcard_listener_cannot_receive_the_reserved_callback(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            endpoint = reservation.getsockname()
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as other:
+                other.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    other.bind(("0.0.0.0", endpoint[1]))
+                    other.listen(1)
+                except OSError:
+                    return  # OS denied the overlap altogether, also safe.
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                    client.settimeout(0.1)
+                    self.assertNotEqual(client.connect_ex(endpoint), 0)
+                other.settimeout(0.1)
+                with self.assertRaises(socket.timeout):
+                    other.accept()
 
 
 if __name__ == "__main__":
