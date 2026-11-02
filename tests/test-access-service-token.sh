@@ -10,7 +10,8 @@ SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 MUTANT="$SB/tests/test-access-service-token.py"
 run_mutant() { python3 -B -I "$@"; }
-for CASE in control old-expiry token-scope declaration; do
+for CASE in control old-expiry token-scope declaration recovery-declaration; do
+  MUTANT="$SB/tests/test-access-service-token.py"
   python3 - "$ROOT" "$MUTANT" "$CASE" <<'PY'
 from pathlib import Path
 import shutil, sys
@@ -34,9 +35,10 @@ else:
     docs.mkdir(parents=True, exist_ok=True)
     shutil.copy2(root / "docs/runbooks/access-service-token-registration.md", docs)
     book = json.loads((root / "scripts/lib/secret-verify-recipes.json").read_text())
-    book["recipes"]["access-service-token"]["origins"][0] = "unreviewed.example.com"
+    name = "access-service-token-recovery" if case == "recovery-declaration" else "access-service-token"
+    book["recipes"][name]["origins"][0] = "unreviewed.example.com"
     (lib / "secret-verify-recipes.json").write_text(json.dumps(book))
-if case != "declaration":
+if case not in ("declaration", "recovery-declaration"):
     assert source.count(old) == 1, "mutation target must be unique"
     source = source.replace(old, new)
 (lib / "access_service_token.py").write_text(source)

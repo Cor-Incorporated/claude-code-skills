@@ -622,6 +622,210 @@ class VerifyTests(unittest.TestCase):
         self.assertEqual(stages[8:], [SECRET] * 4)
 
 
+class RecoveryTests(unittest.TestCase):
+    call, refused = VerifyTests.call, VerifyTests.refused
+    rotations, reals = VerifyTests.rotations, VerifyTests.reals
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.work, self.source = tempfile.mkdtemp(dir=self.tmp.name), tempfile.mkdtemp(dir=self.tmp.name)
+        self.run = SimpleNamespace(recipe=dict(copy.deepcopy(CONFIG), operation="recover"), repo="Cor-Incorporated/cor-os", env="",
+                                   names=["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"], params={"recovery-dir": self.source},
+                                   dry=False, preserve_work=False, detail="")
+        self.net, self.out = FakeTransport(self.work), io.StringIO()
+        self.net.token.update(updated_at="2026-11-01T15:05:00Z", previous_client_secret_expires_at=self.net.token["expires_at"])
+        self.state = dict(phase="rotation-outcome-pending", service_token_id=CONFIG["service_token_id"],
+                          previous_client_secret_expires_at=self.net.token["expires_at"],
+                          preflight_updated_at="2026-08-15T00:12:15Z", started_at="2026-11-01T15:05:00.123456+00:00")
+        self.response = dict(success=True, result=dict(self.net.token, client_secret=SECRET))
+        for name, value in (("rotation-state.json", self.state), ("rotation-result.json", self.response)):
+            ACCESS.private_file(os.path.join(self.source, name), json.dumps(value))
+
+    def snapshot(self):
+        result = {}
+        for path in [Path(self.source)] + sorted(Path(self.source).iterdir()):
+            info = path.lstat()
+            result[path.name] = ((info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink, info.st_size, info.st_mtime_ns),
+                                 path.read_bytes() if stat.S_ISREG(info.st_mode) else None)
+        return result
+
+    def write_source(self):
+        for name, value in (("rotation-state.json", self.state), ("rotation-result.json", self.response)):
+            Path(self.source, name).write_text(json.dumps(value))
+
+    def checked_refusal(self, rule=None):
+        before = self.snapshot()
+        self.refused(rule)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.rotations())
+        self.assertTrue(all(request["payload"] is None for request in self.net.requests))
+
+    def test_same_pair_recovery_never_rotates_and_copies_raw_without_changing_source(self):
+        before = self.snapshot()
+        self.assertEqual(self.call(), {"client_id": CLIENT, "client_secret": SECRET})
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.rotations())
+        self.assertTrue(all(request["payload"] is None for request in self.net.requests))
+        self.assertTrue(self.run.preserve_work)
+        self.assertEqual(len(self.reals()), 4)
+        for name in ("rotation-state.json", "rotation-result.json"):
+            copy_path = Path(self.work, name)
+            self.assertEqual(copy_path.read_bytes(), Path(self.source, name).read_bytes())
+            self.assertEqual(stat.S_IMODE(copy_path.stat().st_mode), 0o600)
+
+    def test_recovery_dry_run_only_checks_binding_preflight_and_baseline(self):
+        self.run.dry = True
+        before = self.snapshot()
+        self.assertIsNone(self.call())
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.rotations() or self.reals() or self.run.preserve_work)
+        self.assertEqual(list(Path(self.work).iterdir()), [])
+        self.assertFalse(any("CF-Access-Client-Secret" in request["headers"] for request in self.net.requests))
+
+    def test_recovery_cannot_mutate_even_through_an_internal_callback(self):
+        for payload in (None, {}):
+            with self.subTest(payload=payload), patch.object(ACCESS, "preflight", side_effect=lambda rec, api, fail, **kwargs:
+                    api("/access/service_tokens/" + CONFIG["service_token_id"] + "/rotate", payload=payload)):
+                self.checked_refusal("recovery")
+                self.assertFalse(self.net.requests)
+
+    def test_recovery_and_rotation_parameter_sets_are_disjoint(self):
+        for params in ({}, {"rotate-confirmed": "yes"}, {"recovery-dir": "relative"}, {"recovery-dir": None},
+                       {"recovery-dir": self.source, "rotate-confirmed": "yes"}):
+            with self.subTest(params=params):
+                self.run.params = params; self.checked_refusal("contract")
+        self.run.recipe["operation"] = "unknown"; self.run.params = {"recovery-dir": self.source}
+        self.checked_refusal("contract")
+
+    def test_directory_mode_owner_symlink_and_same_work_are_refused(self):
+        os.chmod(self.source, 0o755); self.checked_refusal("recovery"); os.chmod(self.source, 0o700)
+        link = Path(self.tmp.name, "source-link"); link.symlink_to(self.source, target_is_directory=True)
+        self.run.params["recovery-dir"] = str(link); self.checked_refusal("recovery")
+        self.run.params["recovery-dir"] = str(link) + "/"; self.checked_refusal("recovery")
+        self.run.params["recovery-dir"] = self.source
+        self.check_wrong_owner(Path(self.source).stat().st_ino)
+        self.work = self.source; self.net.work = self.work
+        self.checked_refusal("recovery")
+        self.assertTrue(self.run.preserve_work)
+
+    def check_wrong_owner(self, inode):
+        original = os.fstat
+        def wrong_owner(fd):
+            info = original(fd)
+            if info.st_ino == inode:
+                fields = {key: getattr(info, key) for key in dir(info) if key.startswith("st_")}
+                fields["st_uid"] = os.getuid() + 1
+                return SimpleNamespace(**fields)
+            return info
+        with patch.object(os, "fstat", side_effect=wrong_owner):
+            self.checked_refusal("recovery")
+
+    def test_each_source_file_refuses_symlink_hardlink_mode_nonregular_or_oversize(self):
+        for name in ("rotation-state.json", "rotation-result.json"):
+            for kind in ("symlink", "hardlink", "mode", "directory", "fifo", "oversize"):
+                with self.subTest(name=name, kind=kind):
+                    path = Path(self.source, name); original = path.read_bytes(); alias = Path(self.tmp.name, "alias")
+                    if kind == "symlink":
+                        path.rename(alias); path.symlink_to(alias)
+                    elif kind == "hardlink":
+                        os.link(path, alias)
+                    elif kind == "mode":
+                        path.chmod(0o644)
+                    elif kind == "directory":
+                        path.unlink(); path.mkdir(mode=0o700)
+                    elif kind == "fifo":
+                        path.unlink(); os.mkfifo(path, mode=0o600)
+                    else:
+                        path.write_bytes(b" " * (ACCESS.LIMIT + 1))
+                    self.checked_refusal("recovery")
+                    if kind == "directory":
+                        path.rmdir()
+                    else:
+                        path.unlink()
+                    if alias.exists():
+                        alias.unlink()
+                    ACCESS.private_file(str(path), original)
+
+    def test_each_source_file_refuses_a_different_owner(self):
+        for name in ("rotation-state.json", "rotation-result.json"):
+            with self.subTest(name=name):
+                self.check_wrong_owner(Path(self.source, name).stat().st_ino)
+
+    def test_source_snapshot_change_is_refused_before_copying(self):
+        original = os.stat
+        def changed(path, **kwargs):
+            info = original(path, **kwargs)
+            if kwargs.get("dir_fd") is not None and path == "rotation-state.json":
+                fields = {key: getattr(info, key) for key in dir(info) if key.startswith("st_")}
+                fields["st_mtime_ns"] += 1
+                return SimpleNamespace(**fields)
+            return info
+        with patch.object(os, "stat", side_effect=changed):
+            self.checked_refusal("recovery")
+        self.assertFalse(Path(self.work, "rotation-result.json").exists())
+
+    def test_missing_or_duplicate_json_source_is_not_consumed(self):
+        for name in ("rotation-state.json", "rotation-result.json"):
+            with self.subTest(name=name):
+                path = Path(self.source, name); original = path.read_bytes(); path.unlink()
+                self.checked_refusal("recovery")
+                ACCESS.private_file(str(path), original)
+                path.write_bytes(b'{"success":false,"success":true}'); self.checked_refusal("recovery")
+                path.write_bytes(original)
+
+    def test_required_timestamps_cannot_be_missing_none_malformed_or_naive(self):
+        missing = object()
+        for place, fields in (("state", ("started_at", "preflight_updated_at", "previous_client_secret_expires_at")), ("result", ("updated_at",))):
+            for field in fields:
+                for value in (missing, None, "", "not-a-date", "2026-11-01T15:05:00"):
+                    with self.subTest(place=place, field=field, value="missing" if value is missing else value):
+                        target = self.state if place == "state" else self.response["result"]; old = target[field]
+                        if value is missing:
+                            target.pop(field)
+                        else:
+                            target[field] = value
+                        self.write_source(); self.checked_refusal()
+                        target[field] = old; self.write_source()
+
+    def test_state_times_and_old_expiry_must_bind_to_current_metadata(self):
+        for field, value in (("preflight_updated_at", "2026-11-01T15:05:00Z"), ("started_at", "2026-11-01T15:05:01Z"),
+                             ("previous_client_secret_expires_at", "2028-08-15T00:11:26Z"), ("service_token_id", "other-token"), ("phase", "unreviewed")):
+            with self.subTest(field=field):
+                old = self.state[field]; self.state[field] = value; self.write_source(); self.checked_refusal("recovery")
+                self.state[field] = old; self.write_source()
+        self.net.token["previous_client_secret_expires_at"] = "2026-08-15T00:12:15Z"
+        self.checked_refusal("recovery")
+
+    def test_saved_pair_identity_updated_at_and_envelope_must_match(self):
+        for field, value in (("id", "other-token"), ("name", "other-name"), ("client_id", "other-client"), ("updated_at", "2026-11-01T15:04:59Z"),
+                             ("client_secret", ""), ("enabled", False), ("duration", "1h"), ("expires_at", "2028-08-15T00:11:26Z")):
+            with self.subTest(field=field):
+                old = self.response["result"][field]; self.response["result"][field] = value
+                self.write_source(); self.checked_refusal(); self.response["result"][field] = old; self.write_source()
+        self.response["success"] = 1; self.write_source(); self.checked_refusal("recovery")
+
+    def test_failed_control_or_real_probe_keeps_original_and_new_copy(self):
+        for stage, outcome, rule in (("control", (200, {"object": "list", "data": []}), "control"), ("real", (530, None), "probe"), ("real", (200, None), "probe")):
+            with self.subTest(stage=stage, outcome=outcome):
+                self.work = tempfile.mkdtemp(dir=self.tmp.name); self.run.preserve_work = False; self.net = FakeTransport(self.work)
+                self.net.token.update(updated_at="2026-11-01T15:05:00Z", previous_client_secret_expires_at=self.net.token["expires_at"])
+                self.net.responses[stage, "https://" + CONFIG["origins"][-1] + "/v1/models"] = outcome
+                self.checked_refusal(rule)
+                self.assertTrue(self.run.preserve_work)
+                self.assertTrue(Path(self.work, "rotation-result.json").exists())
+
+    def test_recovery_runs_the_same_final_full_preflight(self):
+        original = self.net.request
+        def drift(url, headers, **kwargs):
+            result = original(url, headers, **kwargs)
+            if url.endswith(CONFIG["origins"][-1] + "/v1/models") and headers.get("CF-Access-Client-Secret") == SECRET:
+                self.net.policy["include"] = [{"everyone": {}}]
+            return result
+        self.net.request = drift; self.checked_refusal("policy")
+        self.assertEqual(len(self.reals()), 4)
+        self.assertTrue(self.run.preserve_work)
+
+
 class TransportTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)

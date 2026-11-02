@@ -140,7 +140,13 @@ class Run:
         if self.recipe["kind"] == "access-service-token":
             if self.env or self.keep_item or self.repo_dir or self.resume:
                 usage("access-service-token only registers the fixed repository-level pair")
-            if set(self.params) != {"rotate-confirmed"} or self.params["rotate-confirmed"] != "yes":
+            operation = self.recipe.get("operation", "rotate")
+            if operation == "recover":
+                if set(self.params) != {"recovery-dir"} or not self.params["recovery-dir"]:
+                    usage("access-service-token recovery requires only --param recovery-dir=<private-directory>")
+            elif operation != "rotate":
+                usage("access-service-token operation is not reviewed")
+            elif set(self.params) != {"rotate-confirmed"} or self.params["rotate-confirmed"] != "yes":
                 usage("access-service-token requires only --param rotate-confirmed=yes")
 
     # --- ledger ------------------------------------------------------------------------------------------------

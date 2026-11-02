@@ -146,9 +146,11 @@ for name, r in sorted(book.items()):
             spec.loader.exec_module(module)
             def refuse(*_):
                 raise ValueError("invalid-access-contract")
+            recovering = r.get("operation", "rotate") == "recover"
+            params = {"recovery-dir": "/absolute/owner-only/register-secret.attempt"} if recovering else {"rotate-confirmed": "yes"}
             module.config(SimpleNamespace(recipe=r, repo=r.get("repo"), env="", names=r.get("names"),
-                                          params={"rotate-confirmed": "yes"}), refuse)
-            if r.get("params") != ["rotate-confirmed"]:
+                                          params=params), refuse)
+            if r.get("params") != (["recovery-dir"] if recovering else ["rotate-confirmed"]):
                 refuse()
         except Exception:
             print("%s: Access recipe differs from its enforcing four-origin contract" % name)

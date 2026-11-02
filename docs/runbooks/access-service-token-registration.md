@@ -74,6 +74,28 @@ GitHubは2本の登録をatomicに行えない。片方だけ保存された場�
 同じpairを再検証して使うレビュー済み復旧手順を作る。単独のsecret-setコマンドや、
 未検証のrecovery fileの手渡しで迂回しない。値を報告書やartifactに添付しない。
 
+### 保存した同じ組を使う復旧
+
+停止原因を解消し、recovery recipeをレビュー・develop配備してから行う。管理tokenは
+再取得してよいが、Service Tokenは再Rotateしない。原本directoryは絶対pathで指定し、
+owner-onlyの`rotation-state.json`と`rotation-result.json`をそのまま使う。
+
+```bash
+bash ~/.claude/scripts/register-secret-verified.sh --recipe access-service-token-recovery CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET Cor-Incorporated/cor-os --param recovery-dir=/absolute/owner-only/register-secret.attempt --dry-run
+```
+
+dry-runは設定・原本と現在metadataの対応・未認証拒否だけの確認で、pair検証ではない。
+
+```bash
+bash ~/.claude/scripts/register-secret-verified.sh --recipe access-service-token-recovery CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET Cor-Incorporated/cor-os --param recovery-dir=/absolute/owner-only/register-secret.attempt
+```
+
+復旧ではPOSTを禁止し、原本の対象ID・更新日時・開始日時・旧期限を現在metadataと
+照合する。同じ4接続先で毎回4陰性対照→4実probe→最終設定確認を通した組だけを
+既存storeへ渡す。失敗・中断・部分保存時は原本と新しいprivate workを保持する。
+成功時は新しいworkだけを削除し、原本は変更しない。2本のGitHub更新日時と成功台帳を
+読み戻した後、作業者が原本の対象2ファイルと空directoryを削除する。
+
 旧secretはRouter配備後のsmokeが成功するまで失効させない。検証が失敗しても
 既存secretを残せるので、既存Routerを新しい資格情報へ直接切り替えてはならない。
 一時管理tokenの取消しは本人に案内し、private入力fileと表示タブも片付ける。
