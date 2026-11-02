@@ -146,12 +146,14 @@ for name, r in sorted(book.items()):
             spec.loader.exec_module(module)
             def refuse(*_):
                 raise ValueError("invalid-access-contract")
+            recovering = r.get("operation", "rotate") == "recover"
+            params = {"recovery-dir": "/absolute/owner-only/register-secret.attempt"} if recovering else {"rotate-confirmed": "yes"}
             module.config(SimpleNamespace(recipe=r, repo=r.get("repo"), env="", names=r.get("names"),
-                                          params={"rotate-confirmed": "yes"}), refuse)
-            if r.get("params") != ["rotate-confirmed"]:
+                                          params=params), refuse)
+            if r.get("params") != (["recovery-dir"] if recovering else ["rotate-confirmed"]):
                 refuse()
         except Exception:
-            print("%s: Access recipe differs from its enforcing four-origin contract" % name)
+            print("%s: Access recipe differs from its enforcing three-origin/retired-f contract" % name)
     else:
         print("%s: unknown kind %r" % (name, kind))
 USE = re.compile(r"--recipe\s+([A-Za-z0-9_.-]+)")
@@ -196,7 +198,7 @@ r1="$(recipes "$SB/nocontrol.json" "$SB/none.md")"; r2="$(recipes "$RECIPES" "$S
 r4="$(recipes "$SB/badaccess.json" "$SB/none.md")"
 [[ "$r1" == *"github-oauth: no negative control"* && "$r2" == *"unknown recipe github-oauth-v9"* \
    && "$r3" == *"slack-oauth: the control condition is empty or has unknown keys"* && "$r3" == *"github-oauth: the pass condition is empty or has unknown keys"* \
-   && "$r4" == *"access-service-token: Access recipe differs from its enforcing four-origin contract"* ]] \
+   && "$r4" == *"access-service-token: Access recipe differs from its enforcing three-origin/retired-f contract"* ]] \
   && ok "S4 self-test: missing control, misspelled/empty condition, missing Access origin and unknown recipe are red" \
   || bad "S4 self-test" "no-control: ${r1:-green}; unknown: ${r2:-green}; bad conditions: ${r3:-green}; bad Access: ${r4:-green}"
 grep -q 'unknown recipe %r' "$ROOT/scripts/lib/secret_recipes.py" && grep -q 'if not ok:' "$ROOT/scripts/lib/secret_recipes.py" \

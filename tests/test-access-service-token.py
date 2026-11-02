@@ -22,7 +22,7 @@ SPEC.loader.exec_module(ACCESS)
 CONFIG = dict(account_id="9973f2d2304b58a1f90d4d9409e9f8cc", service_token_id="00e4af01-4b7b-4f77-a6c7-2038d2c26050",
               service_token_name="cor-os-llm-router", app_id="07144d8d-0512-4ce1-943a-a72def65aac0", app_name="Cor OS Ollama Origins",
               policy_id="c0fcff31-7e27-441c-bdc2-a454fb7ab062", policy_name="LLMルーターのみ",
-              origins=["llm-origin-" + x + ".cor-jp.com" for x in "abcf"], probe_path="/v1/models", values=["client_id", "client_secret"])
+              origins=["llm-origin-" + x + ".cor-jp.com" for x in "abc"], retired_origins=["llm-origin-f.cor-jp.com"], probe_path="/v1/models", values=["client_id", "client_secret"])
 BASE = "https://api.cloudflare.com/client/v4/accounts/" + CONFIG["account_id"]
 MANAGER, CLIENT, SECRET = "offline-management-credential", "offline-access-client", "offline-new-secret"
 
@@ -159,9 +159,9 @@ class VerifyTests(unittest.TestCase):
         self.assertEqual(self.call(), {"client_id": CLIENT, "client_secret": SECRET})
         self.assertEqual(len(self.rotations()), 1)
         self.assertEqual(self.rotations()[0]["payload"], {"previous_client_secret_expires_at": "2027-08-15T00:11:26Z"})
-        self.assertEqual(len(self.reals()), 4)
+        self.assertEqual(len(self.reals()), 3)
         self.assertTrue(self.run.preserve_work)
-        self.assertIn("control=4/4 denied; real=4/4", self.run.detail)
+        self.assertIn("control=3/3 denied; real=3/3", self.run.detail)
         self.assertIn("old-expiry-preserved", self.run.detail)
         for name in ("rotation-state.json", "rotation-result.json"):
             path = Path(self.work, name)
@@ -185,10 +185,23 @@ class VerifyTests(unittest.TestCase):
                 self.assertFalse(self.net.requests)
 
     def test_recipe_resource_and_host_contracts(self):
-        for key, value in (("account_id", "../account"), ("app_id", "wrong"), ("origins", CONFIG["origins"][:3]),
-                           ("origins", CONFIG["origins"] + ["extra.example"]), ("origins", [CONFIG["origins"][0]] * 4),
+        for key, value in (("account_id", "../account"), ("app_id", "wrong"), ("origins", CONFIG["origins"][:-1]),
+                           ("origins", CONFIG["origins"] + ["extra.example"]), ("origins", [CONFIG["origins"][0]] * 3),
                            ("origins", ["https://evil.example"] + CONFIG["origins"][1:]), ("probe_path", "/v1/chat/completions")):
             with self.subTest(key=key):
+                self.reset(); self.run.recipe[key] = value
+                self.refused("contract")
+                self.assertFalse(self.net.requests)
+
+    def test_active_and_retired_origin_declarations_cannot_be_omitted_or_reassigned(self):
+        for key, value in (("origins", ["llm-origin-f.cor-jp.com"] + CONFIG["origins"][1:]),
+                           ("origins", ["unreviewed.example"] + CONFIG["origins"][1:]),
+                           ("origins", list(reversed(CONFIG["origins"]))),
+                           ("retired_origins", None), ("retired_origins", []),
+                           ("retired_origins", ["unreviewed.example"]),
+                           ("retired_origins", CONFIG["origins"][:1]),
+                           ("retired_origins", CONFIG["retired_origins"] * 2)):
+            with self.subTest(key=key, value=value):
                 self.reset(); self.run.recipe[key] = value
                 self.refused("contract")
                 self.assertFalse(self.net.requests)
@@ -246,8 +259,8 @@ class VerifyTests(unittest.TestCase):
         self.assertFalse(self.rotations())
 
     def test_origin_and_destination_difference_blocks_rotation(self):
-        for field, value in (("self_hosted_domains", CONFIG["origins"][:3]), ("self_hosted_domains", CONFIG["origins"] + ["extra.example"]),
-                             ("destinations", [{"type": "public", "uri": x} for x in CONFIG["origins"][:3]]), ("domain", "*.cor-jp.com"), ("type", "saas")):
+        for field, value in (("self_hosted_domains", CONFIG["origins"][:-1]), ("self_hosted_domains", CONFIG["origins"] + ["extra.example"]),
+                             ("destinations", [{"type": "public", "uri": x} for x in CONFIG["origins"][:-1]]), ("domain", "*.cor-jp.com"), ("type", "saas")):
             with self.subTest(field=field):
                 self.reset(); self.net.app[field] = value
                 self.refused("app")
@@ -269,6 +282,47 @@ class VerifyTests(unittest.TestCase):
         self.reset(); self.net.apps[-1]["destinations"].append({"type": "public", "uri": "extra.example"})
         self.refused("fleet")
         self.assertFalse(self.rotations())
+
+    def test_retired_origin_in_any_public_app_field_blocks_before_rotation(self):
+        retired = CONFIG["retired_origins"][0]
+        for field, value in (("domain", retired), ("domain", retired.upper() + "."),
+                             ("domain", retired + "/v1/models"),
+                             ("domain", "llm-origin-f.*"),
+                             ("self_hosted_domains", [retired]),
+                             ("destinations", [{"type": "public", "uri": retired}])):
+            with self.subTest(field=field, value=value):
+                self.reset(); self.net.apps[0][field] = value
+                self.refused("retired-origin")
+                self.assertFalse(self.rotations() or self.reals())
+                self.assertFalse(any(not request["url"].startswith(BASE) for request in self.net.requests))
+
+    def test_retired_origin_on_later_inventory_page_is_not_ignored(self):
+        self.net.apps += [dict(id="extra-%d" % i, domain="unused-%d.example" % i) for i in range(97)]
+        self.net.fleet_info = dict(page=1, per_page=100, count=100, total_count=101, total_pages=2)
+        self.net.extra_pages["/access/apps?per_page=100&page=2"] = dict(success=True,
+            result=[dict(id="retired-app", domain=CONFIG["retired_origins"][0])],
+            result_info=dict(page=2, per_page=100, count=1, total_count=101, total_pages=2))
+        self.refused("retired-origin")
+        self.assertFalse(self.rotations() or self.reals())
+
+    def test_retired_origin_restored_after_rotation_or_probes_blocks_the_pair(self):
+        for phase in ("after-rotation", "after-probes"):
+            with self.subTest(phase=phase):
+                self.reset()
+                original = self.net.request
+                def drift(url, headers, **kwargs):
+                    result = original(url, headers, **kwargs)
+                    if ((phase == "after-rotation" and url.endswith("/rotate")) or
+                            (phase == "after-probes" and url.endswith(CONFIG["origins"][-1] + "/v1/models") and
+                             headers.get("CF-Access-Client-Secret") == SECRET)):
+                        self.net.apps[0]["domain"] = CONFIG["retired_origins"][0]
+                    return result
+                self.net.request = drift
+                self.refused("retired-origin")
+                self.assertEqual(len(self.rotations()), 1)
+                self.assertEqual(len(self.reals()), 3 if phase == "after-probes" else 0)
+                self.assertTrue(self.run.preserve_work)
+                self.assertTrue(Path(self.work, "rotation-result.json").exists())
 
     def another_policy(self, selectors=None, reusable=False):
         return dict(id="11111111-1111-4111-8111-111111111111", decision="non_identity", name="offline unrelated",
@@ -369,7 +423,7 @@ class VerifyTests(unittest.TestCase):
                     self.net.app_policies["other-app"] = [policy]
                 self.assertEqual(self.call(), {"client_id": CLIENT, "client_secret": SECRET})
                 self.assertEqual(len(self.rotations()), 1)
-                self.assertEqual(len(self.reals()), 4)
+                self.assertEqual(len(self.reals()), 3)
 
     def test_group_or_any_valid_token_is_rejected_without_groups_api(self):
         for scope in ("global", "attached"):
@@ -489,7 +543,7 @@ class VerifyTests(unittest.TestCase):
                 self.net.request = drift
                 self.refused("token-use")
                 self.assertEqual(len(self.rotations()), 1)
-                self.assertEqual(len(self.reals()), 4 if phase == "after-probes" else 0)
+                self.assertEqual(len(self.reals()), 3 if phase == "after-probes" else 0)
                 self.assertTrue(self.run.preserve_work)
 
     def test_incomplete_or_unstable_pagination_blocks_rotation(self):
@@ -523,7 +577,7 @@ class VerifyTests(unittest.TestCase):
     def test_unauthenticated_success_or_unknown_status_blocks_before_rotation(self):
         for status in (200, 302, 401, 429, 500, 0):
             with self.subTest(status=status):
-                self.reset(); self.net.responses["baseline", "https://" + CONFIG["origins"][3] + "/v1/models"] = (status, None)
+                self.reset(); self.net.responses["baseline", "https://" + CONFIG["origins"][-1] + "/v1/models"] = (status, None)
                 self.refused("baseline")
                 self.assertFalse(self.rotations())
 
@@ -568,7 +622,7 @@ class VerifyTests(unittest.TestCase):
                     return result
                 self.net.request = drifting
                 self.refused("policy" if drift == "policy" else "readback")
-                self.assertEqual(len(self.reals()), 4)
+                self.assertEqual(len(self.reals()), 3)
                 self.assertTrue(self.run.preserve_work)
 
     def test_rotation_timeout_or_interrupt_retains_outcome_without_retry(self):
@@ -583,7 +637,7 @@ class VerifyTests(unittest.TestCase):
                 self.assertFalse(self.reals())
 
     def test_wrong_secret_success_is_refused_before_any_real_probe(self):
-        self.net.responses["control", "https://" + CONFIG["origins"][3] + "/v1/models"] = (200, {"object": "list", "data": []})
+        self.net.responses["control", "https://" + CONFIG["origins"][-1] + "/v1/models"] = (200, {"object": "list", "data": []})
         self.refused("control")
         self.assertTrue(self.run.preserve_work)
         self.assertFalse(self.reals())
@@ -600,9 +654,9 @@ class VerifyTests(unittest.TestCase):
                          (200, {"object": "list", "data": "wrong"}), (200, {"object": "list", "data": ["wrong"]}),
                          (200, {"object": "list", "data": [{"id": ""}]})):
             with self.subTest(response=response):
-                self.reset(); self.net.responses["real", "https://" + CONFIG["origins"][3] + "/v1/models"] = response
+                self.reset(); self.net.responses["real", "https://" + CONFIG["origins"][-1] + "/v1/models"] = response
                 self.refused("probe")
-                self.assertEqual(len(self.reals()), 4)
+                self.assertEqual(len(self.reals()), 3)
                 self.assertTrue(self.run.preserve_work)
 
     def test_controls_precede_real_and_no_inference_or_cross_target_auth(self):
@@ -616,10 +670,287 @@ class VerifyTests(unittest.TestCase):
                 self.assertIsNone(request["payload"])
                 self.assertNotIn("Authorization", request["headers"])
                 stages.append(request["headers"].get("CF-Access-Client-Secret"))
-        self.assertEqual(stages[:4], [None] * 4)
-        self.assertEqual(len(stages), 12)
-        self.assertTrue(all(x not in (None, SECRET) for x in stages[4:8]))
-        self.assertEqual(stages[8:], [SECRET] * 4)
+        self.assertEqual(stages[:3], [None] * 3)
+        self.assertEqual(len(stages), 9)
+        self.assertTrue(all(x not in (None, SECRET) for x in stages[3:6]))
+        self.assertEqual(stages[6:], [SECRET] * 3)
+        self.assertFalse(any("https://" + CONFIG["retired_origins"][0] in request["url"] for request in self.net.requests))
+
+
+class RecoveryTests(unittest.TestCase):
+    call, refused = VerifyTests.call, VerifyTests.refused
+    rotations, reals = VerifyTests.rotations, VerifyTests.reals
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.work, self.source = tempfile.mkdtemp(dir=self.tmp.name), tempfile.mkdtemp(dir=self.tmp.name)
+        self.run = SimpleNamespace(recipe=dict(copy.deepcopy(CONFIG), operation="recover"), repo="Cor-Incorporated/cor-os", env="",
+                                   names=["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"], params={"recovery-dir": self.source},
+                                   dry=False, preserve_work=False, detail="")
+        self.net, self.out = FakeTransport(self.work), io.StringIO()
+        self.net.token.update(updated_at="2026-11-01T15:05:00Z", previous_client_secret_expires_at=self.net.token["expires_at"])
+        self.state = dict(phase="rotation-outcome-pending", service_token_id=CONFIG["service_token_id"],
+                          previous_client_secret_expires_at=self.net.token["expires_at"],
+                          preflight_updated_at="2026-08-15T00:12:15Z", started_at="2026-11-01T15:05:00.123456+00:00")
+        self.response = dict(success=True, result=dict(self.net.token, client_secret=SECRET))
+        for name, value in (("rotation-state.json", self.state), ("rotation-result.json", self.response)):
+            ACCESS.private_file(os.path.join(self.source, name), json.dumps(value))
+
+    def snapshot(self):
+        result = {}
+        for path in [Path(self.source)] + sorted(Path(self.source).iterdir()):
+            info = path.lstat()
+            result[path.name] = ((info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink, info.st_size, info.st_mtime_ns),
+                                 path.read_bytes() if stat.S_ISREG(info.st_mode) else None)
+        return result
+
+    def write_source(self):
+        for name, value in (("rotation-state.json", self.state), ("rotation-result.json", self.response)):
+            Path(self.source, name).write_text(json.dumps(value))
+
+    def checked_refusal(self, rule=None):
+        before = self.snapshot()
+        self.refused(rule)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.rotations())
+        self.assertTrue(all(request["payload"] is None for request in self.net.requests))
+
+    def test_same_pair_recovery_never_rotates_and_copies_raw_without_changing_source(self):
+        before = self.snapshot()
+        self.assertEqual(self.call(), {"client_id": CLIENT, "client_secret": SECRET})
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.rotations())
+        self.assertTrue(all(request["payload"] is None for request in self.net.requests))
+        self.assertTrue(self.run.preserve_work)
+        self.assertEqual(len(self.reals()), 3)
+        for name in ("rotation-state.json", "rotation-result.json"):
+            copy_path = Path(self.work, name)
+            self.assertEqual(copy_path.read_bytes(), Path(self.source, name).read_bytes())
+            self.assertEqual(stat.S_IMODE(copy_path.stat().st_mode), 0o600)
+
+    def test_recovery_dry_run_only_checks_binding_preflight_and_baseline(self):
+        self.run.dry = True
+        before = self.snapshot()
+        self.assertIsNone(self.call())
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.rotations() or self.reals() or self.run.preserve_work)
+        self.assertEqual(list(Path(self.work).iterdir()), [])
+        self.assertFalse(any("CF-Access-Client-Secret" in request["headers"] for request in self.net.requests))
+
+    def test_recovery_refuses_retired_origin_before_reading_or_copying_source(self):
+        self.net.apps[0]["domain"] = CONFIG["retired_origins"][0]
+        with patch.object(ACCESS, "recovery_files") as read:
+            self.checked_refusal("retired-origin")
+        read.assert_not_called()
+        self.assertFalse(self.reals() or self.run.preserve_work)
+        self.assertEqual(list(Path(self.work).iterdir()), [])
+
+    def test_recovery_rechecks_retired_origin_after_real_probes(self):
+        original = self.net.request
+        def drift(url, headers, **kwargs):
+            result = original(url, headers, **kwargs)
+            if url.endswith(CONFIG["origins"][-1] + "/v1/models") and headers.get("CF-Access-Client-Secret") == SECRET:
+                self.net.apps[0]["domain"] = CONFIG["retired_origins"][0]
+            return result
+        self.net.request = drift
+        self.checked_refusal("retired-origin")
+        self.assertEqual(len(self.reals()), 3)
+        self.assertTrue(self.run.preserve_work)
+        self.assertTrue(Path(self.work, "rotation-result.json").exists())
+        self.assertFalse(any("https://" + CONFIG["retired_origins"][0] in request["url"] for request in self.net.requests))
+
+    def test_recovery_cannot_mutate_even_through_an_internal_callback(self):
+        for payload in (None, {}):
+            with self.subTest(payload=payload), patch.object(ACCESS, "preflight", side_effect=lambda rec, api, fail, **kwargs:
+                    api("/access/service_tokens/" + CONFIG["service_token_id"] + "/rotate", payload=payload)):
+                self.checked_refusal("recovery")
+                self.assertFalse(self.net.requests)
+
+    def test_recovery_and_rotation_parameter_sets_are_disjoint(self):
+        for params in ({}, {"rotate-confirmed": "yes"}, {"recovery-dir": "relative"}, {"recovery-dir": None},
+                       {"recovery-dir": self.source, "rotate-confirmed": "yes"}):
+            with self.subTest(params=params):
+                self.run.params = params; self.checked_refusal("contract")
+        self.run.recipe["operation"] = "unknown"; self.run.params = {"recovery-dir": self.source}
+        self.checked_refusal("contract")
+
+    def test_directory_mode_owner_symlink_and_same_work_are_refused(self):
+        os.chmod(self.source, 0o755); self.checked_refusal("recovery"); os.chmod(self.source, 0o700)
+        link = Path(self.tmp.name, "source-link"); link.symlink_to(self.source, target_is_directory=True)
+        self.run.params["recovery-dir"] = str(link); self.checked_refusal("recovery")
+        self.run.params["recovery-dir"] = str(link) + "/"; self.checked_refusal("recovery")
+        self.run.params["recovery-dir"] = self.source
+        self.check_wrong_owner(Path(self.source).stat().st_ino)
+        self.work = self.source; self.net.work = self.work
+        self.checked_refusal("recovery")
+        self.assertTrue(self.run.preserve_work)
+
+    def check_wrong_owner(self, inode):
+        original = os.fstat
+        def wrong_owner(fd):
+            info = original(fd)
+            if info.st_ino == inode:
+                fields = {key: getattr(info, key) for key in dir(info) if key.startswith("st_")}
+                fields["st_uid"] = os.getuid() + 1
+                return SimpleNamespace(**fields)
+            return info
+        with patch.object(os, "fstat", side_effect=wrong_owner):
+            self.checked_refusal("recovery")
+
+    def test_each_source_file_refuses_symlink_hardlink_mode_nonregular_or_oversize(self):
+        for name in ("rotation-state.json", "rotation-result.json"):
+            for kind in ("symlink", "hardlink", "mode", "directory", "fifo", "oversize"):
+                with self.subTest(name=name, kind=kind):
+                    path = Path(self.source, name); original = path.read_bytes(); alias = Path(self.tmp.name, "alias")
+                    if kind == "symlink":
+                        path.rename(alias); path.symlink_to(alias)
+                    elif kind == "hardlink":
+                        os.link(path, alias)
+                    elif kind == "mode":
+                        path.chmod(0o644)
+                    elif kind == "directory":
+                        path.unlink(); path.mkdir(mode=0o700)
+                    elif kind == "fifo":
+                        path.unlink(); os.mkfifo(path, mode=0o600)
+                    else:
+                        path.write_bytes(b" " * (ACCESS.LIMIT + 1))
+                    self.checked_refusal("recovery")
+                    if kind == "directory":
+                        path.rmdir()
+                    else:
+                        path.unlink()
+                    if alias.exists():
+                        alias.unlink()
+                    ACCESS.private_file(str(path), original)
+
+    def test_each_source_file_refuses_a_different_owner(self):
+        for name in ("rotation-state.json", "rotation-result.json"):
+            with self.subTest(name=name):
+                self.check_wrong_owner(Path(self.source, name).stat().st_ino)
+
+    def test_source_snapshot_change_is_refused_before_copying(self):
+        original = os.stat
+        def changed(path, **kwargs):
+            info = original(path, **kwargs)
+            if kwargs.get("dir_fd") is not None and path == "rotation-state.json":
+                fields = {key: getattr(info, key) for key in dir(info) if key.startswith("st_")}
+                fields["st_mtime_ns"] += 1
+                return SimpleNamespace(**fields)
+            return info
+        with patch.object(os, "stat", side_effect=changed):
+            self.checked_refusal("recovery")
+        self.assertFalse(Path(self.work, "rotation-result.json").exists())
+
+    def test_cross_file_atomic_replacement_is_refused_before_copying(self):
+        parse = ACCESS.parse_json
+        state_path = Path(self.source, "rotation-state.json")
+        original_inode = state_path.stat().st_ino
+        original_data = state_path.read_bytes()
+        def replace_during_result(raw):
+            doc = parse(raw)
+            if isinstance(doc, dict) and "result" in doc:
+                replacement = Path(self.source, "replacement")
+                ACCESS.private_file(str(replacement), original_data)
+                os.replace(replacement, state_path)
+            return doc
+        with patch.object(ACCESS, "parse_json", side_effect=replace_during_result):
+            self.refused("recovery")
+        self.assertNotEqual(state_path.stat().st_ino, original_inode)
+        self.assertEqual(state_path.read_bytes(), original_data)
+        self.assertFalse(self.rotations())
+        self.assertFalse(Path(self.work, "rotation-result.json").exists())
+
+    def test_directory_path_replacement_is_refused_before_copying(self):
+        parse = ACCESS.parse_json
+        held = self.source + "-held"
+        def replace_directory_during_result(raw):
+            doc = parse(raw)
+            if isinstance(doc, dict) and "result" in doc:
+                os.rename(self.source, held)
+                os.mkdir(self.source, mode=0o700)
+                for name in ("rotation-state.json", "rotation-result.json"):
+                    ACCESS.private_file(os.path.join(self.source, name), Path(held, name).read_bytes())
+            return doc
+        with patch.object(ACCESS, "parse_json", side_effect=replace_directory_during_result):
+            self.refused("recovery")
+        self.assertNotEqual(Path(self.source).stat().st_ino, Path(held).stat().st_ino)
+        self.assertFalse(self.rotations())
+        self.assertFalse(Path(self.work, "rotation-result.json").exists())
+
+    def test_directory_change_with_same_identity_is_refused_before_copying(self):
+        parse = ACCESS.parse_json
+        initial = Path(self.source).stat()
+        def change_directory_during_result(raw):
+            doc = parse(raw)
+            if isinstance(doc, dict) and "result" in doc:
+                os.utime(self.source, ns=(initial.st_atime_ns, initial.st_mtime_ns + 1000000000))
+            return doc
+        with patch.object(ACCESS, "parse_json", side_effect=change_directory_during_result):
+            self.refused("recovery")
+        self.assertEqual(Path(self.source).stat().st_ino, initial.st_ino)
+        self.assertFalse(self.rotations())
+        self.assertFalse(Path(self.work, "rotation-result.json").exists())
+
+    def test_missing_or_duplicate_json_source_is_not_consumed(self):
+        for name in ("rotation-state.json", "rotation-result.json"):
+            with self.subTest(name=name):
+                path = Path(self.source, name); original = path.read_bytes(); path.unlink()
+                self.checked_refusal("recovery")
+                ACCESS.private_file(str(path), original)
+                path.write_bytes(b'{"success":false,"success":true}'); self.checked_refusal("recovery")
+                path.write_bytes(original)
+
+    def test_required_timestamps_cannot_be_missing_none_malformed_or_naive(self):
+        missing = object()
+        for place, fields in (("state", ("started_at", "preflight_updated_at", "previous_client_secret_expires_at")), ("result", ("updated_at",))):
+            for field in fields:
+                for value in (missing, None, "", "not-a-date", "2026-11-01T15:05:00"):
+                    with self.subTest(place=place, field=field, value="missing" if value is missing else value):
+                        target = self.state if place == "state" else self.response["result"]; old = target[field]
+                        if value is missing:
+                            target.pop(field)
+                        else:
+                            target[field] = value
+                        self.write_source(); self.checked_refusal()
+                        target[field] = old; self.write_source()
+
+    def test_state_times_and_old_expiry_must_bind_to_current_metadata(self):
+        for field, value in (("preflight_updated_at", "2026-11-01T15:05:00Z"), ("started_at", "2026-11-01T15:05:01Z"),
+                             ("previous_client_secret_expires_at", "2028-08-15T00:11:26Z"), ("service_token_id", "other-token"), ("phase", "unreviewed")):
+            with self.subTest(field=field):
+                old = self.state[field]; self.state[field] = value; self.write_source(); self.checked_refusal("recovery")
+                self.state[field] = old; self.write_source()
+        self.net.token["previous_client_secret_expires_at"] = "2026-08-15T00:12:15Z"
+        self.checked_refusal("recovery")
+
+    def test_saved_pair_identity_updated_at_and_envelope_must_match(self):
+        for field, value in (("id", "other-token"), ("name", "other-name"), ("client_id", "other-client"), ("updated_at", "2026-11-01T15:04:59Z"),
+                             ("client_secret", ""), ("enabled", False), ("duration", "1h"), ("expires_at", "2028-08-15T00:11:26Z")):
+            with self.subTest(field=field):
+                old = self.response["result"][field]; self.response["result"][field] = value
+                self.write_source(); self.checked_refusal(); self.response["result"][field] = old; self.write_source()
+        self.response["success"] = 1; self.write_source(); self.checked_refusal("recovery")
+
+    def test_failed_control_or_real_probe_keeps_original_and_new_copy(self):
+        for stage, outcome, rule in (("control", (200, {"object": "list", "data": []}), "control"), ("real", (530, None), "probe"), ("real", (200, None), "probe")):
+            with self.subTest(stage=stage, outcome=outcome):
+                self.work = tempfile.mkdtemp(dir=self.tmp.name); self.run.preserve_work = False; self.net = FakeTransport(self.work)
+                self.net.token.update(updated_at="2026-11-01T15:05:00Z", previous_client_secret_expires_at=self.net.token["expires_at"])
+                self.net.responses[stage, "https://" + CONFIG["origins"][-1] + "/v1/models"] = outcome
+                self.checked_refusal(rule)
+                self.assertTrue(self.run.preserve_work)
+                self.assertTrue(Path(self.work, "rotation-result.json").exists())
+
+    def test_recovery_runs_the_same_final_full_preflight(self):
+        original = self.net.request
+        def drift(url, headers, **kwargs):
+            result = original(url, headers, **kwargs)
+            if url.endswith(CONFIG["origins"][-1] + "/v1/models") and headers.get("CF-Access-Client-Secret") == SECRET:
+                self.net.policy["include"] = [{"everyone": {}}]
+            return result
+        self.net.request = drift; self.checked_refusal("policy")
+        self.assertEqual(len(self.reals()), 3)
+        self.assertTrue(self.run.preserve_work)
 
 
 class TransportTests(unittest.TestCase):

@@ -140,7 +140,13 @@ class Run:
         if self.recipe["kind"] == "access-service-token":
             if self.env or self.keep_item or self.repo_dir or self.resume:
                 usage("access-service-token only registers the fixed repository-level pair")
-            if set(self.params) != {"rotate-confirmed"} or self.params["rotate-confirmed"] != "yes":
+            operation = self.recipe.get("operation", "rotate")
+            if operation == "recover":
+                if set(self.params) != {"recovery-dir"} or not self.params["recovery-dir"]:
+                    usage("access-service-token recovery requires only --param recovery-dir=<private-directory>")
+            elif operation != "rotate":
+                usage("access-service-token operation is not reviewed")
+            elif set(self.params) != {"rotate-confirmed"} or self.params["rotate-confirmed"] != "yes":
                 usage("access-service-token requires only --param rotate-confirmed=yes")
 
     # --- ledger ------------------------------------------------------------------------------------------------
@@ -518,6 +524,9 @@ def store(run, values, work):
         stored.append(name)
     listing = subprocess.run(["gh", "secret", "list", "--repo", run.repo] + envargs + ["--json", "name,updatedAt"],
                              capture_output=True, text=True, check=False)
+    if listing.returncode != 0:
+        raise Refused(4, "readback-failed", "NG: sent to gh, but GitHub metadata readback failed (rc=%d); "
+                      "registration is unconfirmed." % listing.returncode)
     try:
         rows = {s["name"]: s["updatedAt"] for s in json.loads(listing.stdout or "[]")}
     except (ValueError, KeyError, TypeError):

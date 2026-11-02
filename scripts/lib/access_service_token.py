@@ -1,4 +1,4 @@
-"""One approved Access service-token rotation; no storage and no automatic retry.
+"""One approved Access service-token rotation or recovery; no storage or retry.
 
 The caller keeps the private work directory after any attempted rotation until
 GitHub storage/readback succeeds. Only the reviewed recipe supplies resources.
@@ -19,7 +19,8 @@ from urllib.parse import quote as path_quote, urlsplit
 LIMIT = 1024 * 1024
 UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
 ACCOUNT = re.compile(r"[0-9a-f]{32}\Z")
-HOST = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\Z")
+ORIGINS = ("llm-origin-a.cor-jp.com", "llm-origin-b.cor-jp.com", "llm-origin-c.cor-jp.com")
+RETIRED_ORIGINS = ("llm-origin-f.cor-jp.com",)
 
 
 def private_file(path, data):
@@ -106,19 +107,27 @@ def config(run, fail):
     rec = run.recipe
     if (run.repo != "Cor-Incorporated/cor-os" or run.env or
             run.names != ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"] or
-            rec.get("values") != ["client_id", "client_secret"] or
-            set(run.params) != {"rotate-confirmed"} or run.params.get("rotate-confirmed") != "yes"):
-        fail("contract", "Access recipe requires its fixed repository, names and explicit rotation confirmation")
+            rec.get("values") != ["client_id", "client_secret"]):
+        fail("contract", "Access recipe requires its fixed repository and names")
+    operation = rec.get("operation", "rotate")
+    if operation == "rotate":
+        if set(run.params) != {"rotate-confirmed"} or run.params.get("rotate-confirmed") != "yes":
+            fail("contract", "Access rotation requires explicit confirmation and no other parameters")
+    elif operation == "recover":
+        path = run.params.get("recovery-dir")
+        if set(run.params) != {"recovery-dir"} or not isinstance(path, str) or not os.path.isabs(path) or "\0" in path:
+            fail("contract", "Access recovery requires an absolute recovery directory and no other parameters")
+    else:
+        fail("contract", "Access recipe operation is outside the reviewed operations")
     if (not isinstance(rec.get("account_id"), str) or not ACCOUNT.fullmatch(rec["account_id"]) or
             any(not isinstance(rec.get(k), str) or not UUID.fullmatch(rec[k])
                 for k in ("service_token_id", "app_id", "policy_id"))):
         fail("contract", "Access recipe resource IDs are invalid")
     origins = rec.get("origins")
-    if (not isinstance(origins, list) or len(origins) != 4 or
-            any(not isinstance(host, str) or not HOST.fullmatch(host) for host in origins) or len(set(origins)) != 4 or
+    if (origins != list(ORIGINS) or rec.get("retired_origins") != list(RETIRED_ORIGINS) or
             rec.get("probe_path") != "/v1/models" or
             any(not isinstance(rec.get(k), str) or not rec[k] for k in ("service_token_name", "app_name", "policy_name"))):
-        fail("contract", "Access recipe requires four fixed origins and a read-only models probe")
+        fail("contract", "Access recipe requires the three fixed origins, the retired origin, and a read-only models probe")
     return rec
 
 
@@ -158,9 +167,9 @@ def app_contract(app, rec, fail):
             sorted(app["self_hosted_domains"]) != sorted(hosts) or
             not isinstance(app.get("destinations"), list) or
             sorted((d.get("type"), d.get("uri")) for d in app["destinations"] if isinstance(d, dict)) !=
-            sorted(("public", host) for host in hosts) or len(app["destinations"]) != 4 or
+            sorted(("public", host) for host in hosts) or len(app["destinations"]) != len(ORIGINS) or
             not isinstance(app.get("policies"), list) or len(app["policies"]) != 1):
-        fail("app", "Access application differs from the reviewed four-origin application")
+        fail("app", "Access application differs from the reviewed three-origin application")
     policy_contract(app["policies"][0], rec, fail)
 
 
@@ -296,9 +305,11 @@ def preflight(rec, api, fail, allow_active_previous=False):
         fail("policy", "Access app policy inventory is incomplete")
     policy_contract(policies[0], rec, fail)
     apps = paged(api, "/access/apps", fail)
-    matches = []
+    matches, retired_matches = [], []
     for app in apps:
         patterns = resource_hosts(app, fail)
+        if any(fnmatch.fnmatchcase(host, pattern) for host in rec["retired_origins"] for pattern in patterns):
+            retired_matches.append(app["id"])
         if any(fnmatch.fnmatchcase(host, pattern) for host in rec["origins"] for pattern in patterns):
             matches.append(app["id"])
             if app["id"] == rec["app_id"]:
@@ -306,6 +317,8 @@ def preflight(rec, api, fail, allow_active_previous=False):
                     fail("fleet", "Access target app inventory differs from the reviewed origins")
     if matches != [rec["app_id"]]:
         fail("fleet", "Access origins have missing or overlapping applications")
+    if retired_matches:
+        fail("retired-origin", "The retired origin is still covered by an Access application")
     policy_fleet(rec, apps, api, fail)
     return token
 
@@ -325,12 +338,93 @@ def management_token(fail):
     return header_value(value.strip(), fail)
 
 
+def recovery_files(run, work, fail):
+    """Read an immutable source snapshot through pinned directory/file descriptors."""
+    def owned(info, directory=False):
+        return (info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == (0o700 if directory else 0o600) and
+                (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= LIMIT))
+
+    def same(before, after):
+        return all(getattr(before, key) == getattr(after, key) for key in
+                   ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"))
+
+    path = os.path.normpath(run.params["recovery-dir"])
+    directory_fd = None
+    descriptors, initial = {}, {}
+    try:
+        directory_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        directory_before = os.fstat(directory_fd)
+        directory_path = os.stat(path, follow_symlinks=False)
+        if (not owned(directory_before, directory=True) or not owned(directory_path, directory=True) or
+                not same(directory_before, directory_path)):
+            fail("recovery", "Access recovery directory must be owner-only")
+        if os.path.commonpath((os.path.realpath(path), os.path.realpath(work))) == os.path.realpath(work):
+            # The caller must not delete the source as its temporary-work cleanup.
+            run.preserve_work = True
+            fail("recovery", "Access recovery source must be outside the new work directory")
+        raw, documents = {}, {}
+        for name in ("rotation-state.json", "rotation-result.json"):
+            descriptors[name] = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+            initial[name] = os.fstat(descriptors[name])
+            if not owned(initial[name]):
+                fail("recovery", "Access recovery files must be private regular single-link files")
+        for name, fd in descriptors.items():
+            with os.fdopen(fd, "rb", closefd=False) as handle:
+                value = handle.read(LIMIT + 1)
+            if len(value) > LIMIT or len(value) != initial[name].st_size:
+                fail("recovery", "Access recovery files changed during the read")
+            raw[name], documents[name] = value, parse_json(value)
+        # Both descriptors remain pinned until both files have been read and parsed.
+        for name, fd in descriptors.items():
+            after = os.fstat(fd)
+            current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if not owned(after) or not owned(current) or not same(initial[name], after) or not same(initial[name], current):
+                fail("recovery", "Access recovery files changed during the read")
+        directory_after = os.fstat(directory_fd)
+        directory_path = os.stat(path, follow_symlinks=False)
+        if (not owned(directory_after, directory=True) or not owned(directory_path, directory=True) or
+                not same(directory_before, directory_after) or not same(directory_before, directory_path)):
+            fail("recovery", "Access recovery directory changed during the read")
+        return documents["rotation-state.json"], documents["rotation-result.json"], raw
+    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
+        fail("recovery", "Access recovery files could not be read as the reviewed private snapshot")
+    finally:
+        for fd in descriptors.values():
+            os.close(fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def recovery_pair(state, response, current, rec, fail):
+    required = {"phase", "service_token_id", "previous_client_secret_expires_at", "preflight_updated_at", "started_at"}
+    if (not isinstance(state, dict) or set(state) != required or state.get("phase") != "rotation-outcome-pending" or
+            state.get("service_token_id") != rec["service_token_id"] or
+            not isinstance(response, dict) or response.get("success") is not True or not isinstance(response.get("result"), dict)):
+        fail("recovery", "Access recovery state or response did not match the reviewed rotation")
+    rotated = response["result"]
+    started = timestamp(state.get("started_at"), fail)
+    previous = timestamp(state.get("previous_client_secret_expires_at"), fail)
+    preflight_updated = timestamp(state.get("preflight_updated_at"), fail)
+    updated = timestamp(rotated.get("updated_at"), fail)
+    if (rotated.get("id") != current["id"] or rotated.get("name") != current["name"] or
+            rotated.get("client_id") != current["client_id"] or rotated.get("updated_at") != current["updated_at"] or
+            ("enabled" in rotated and rotated["enabled"] is not True) or
+            any(key in rotated and rotated[key] != current[key] for key in ("created_at", "duration", "expires_at")) or
+            ("previous_client_secret_expires_at" in rotated and rotated["previous_client_secret_expires_at"] != current["expires_at"]) or
+            state["previous_client_secret_expires_at"] != current["expires_at"] or
+            current.get("previous_client_secret_expires_at") != current["expires_at"] or
+            previous <= datetime.now(timezone.utc) or updated <= preflight_updated or updated < started.replace(microsecond=0)):
+        fail("recovery", "Access recovery pair is not bound to the current token and preserved old-secret expiry")
+    return {key: header_value(rotated.get(key), fail) for key in ("client_id", "client_secret")}
+
+
 def verify(run, work, Refused, transport_factory=None):
     def fail(rule, text):
         run.detail = "access service-token " + rule + "; no automatic retry"
         raise Refused(1, "access-" + rule, "NG: " + text)
 
     rec = config(run, fail)
+    operation = rec.get("operation", "rotate")
     fd = os.open(work, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         info = os.fstat(fd)
@@ -343,6 +437,8 @@ def verify(run, work, Refused, transport_factory=None):
     base = "https://api.cloudflare.com/client/v4/accounts/" + rec["account_id"]
 
     def api(path, envelope=False, payload=None, result_path=None):
+        if operation == "recover" and (payload is not None or path.endswith("/rotate")):
+            fail("recovery", "Access recovery cannot rotate or mutate the provider")
         status, doc = net.request(base + path, {"Authorization": "Bearer " + manager, "Accept": "application/json"},
                                   payload=payload, result_path=result_path)
         if status != 200 or not isinstance(doc, dict) or doc.get("success") is not True or "result" not in doc:
@@ -350,8 +446,11 @@ def verify(run, work, Refused, transport_factory=None):
         return doc if envelope else doc["result"]
 
     try:
-        before = preflight(rec, api, fail)
-        # Read-only baseline before any mutation; the four hosts must deny a request without credentials.
+        before = preflight(rec, api, fail, allow_active_previous=operation == "recover")
+        if operation == "recover":
+            state, response, raw = recovery_files(run, work, fail)
+            pair = recovery_pair(state, response, before, rec, fail)
+        # Read-only baseline before any mutation; all three hosts must deny a request without credentials.
         for host in rec["origins"]:
             status, _ = net.request("https://" + host + rec["probe_path"], {"Accept": "application/json"})
             if status != 403:
@@ -360,29 +459,34 @@ def verify(run, work, Refused, transport_factory=None):
             run.detail = "read-only Access preflight passed; no rotation or pair verification attempted"
             return None
         run.preserve_work = True
-        started = datetime.now(timezone.utc)
-        state = {"phase": "rotation-outcome-pending", "service_token_id": rec["service_token_id"],
-                 "previous_client_secret_expires_at": before["expires_at"], "preflight_updated_at": before["updated_at"],
-                 "started_at": started.isoformat()}
-        private_file(os.path.join(work, "rotation-state.json"), json.dumps(state, separators=(",", ":")))
-        result_path = os.path.join(work, "rotation-result.json")
-        rotated = api("/access/service_tokens/" + rec["service_token_id"] + "/rotate",
-                      payload={"previous_client_secret_expires_at": before["expires_at"]}, result_path=result_path)
-        if (not isinstance(rotated, dict) or rotated.get("id") != before["id"] or
-                rotated.get("client_id") != before["client_id"] or rotated.get("name") != before["name"] or
-                ("enabled" in rotated and rotated["enabled"] is not True) or
-                any(k in rotated and rotated[k] != before[k] for k in ("created_at", "duration", "expires_at")) or
-                ("previous_client_secret_expires_at" in rotated and rotated["previous_client_secret_expires_at"] != before["expires_at"])):
-            fail("rotation", "Cloudflare rotation response differs from the reviewed token")
-        pair = {key: header_value(rotated.get(key), fail) for key in ("client_id", "client_secret")}
-        updated = timestamp(rotated.get("updated_at"), fail)
-        if updated <= timestamp(before["updated_at"], fail) or updated < started.replace(microsecond=0):
-            fail("rotation", "Cloudflare rotation timestamp is stale")
-        after = preflight(rec, api, fail, allow_active_previous=True)
-        if (after.get("updated_at") != rotated["updated_at"] or after.get("client_id") != pair["client_id"] or
-                any(after.get(k) != before.get(k) for k in ("id", "name", "created_at", "duration", "expires_at")) or
-                after.get("previous_client_secret_expires_at") != before["expires_at"]):
-            fail("readback", "Cloudflare token readback did not confirm preserved old-secret expiry")
+        if operation == "recover":
+            for name, value in raw.items():
+                private_file(os.path.join(work, name), value)
+            after = before
+        else:
+            started = datetime.now(timezone.utc)
+            state = {"phase": "rotation-outcome-pending", "service_token_id": rec["service_token_id"],
+                     "previous_client_secret_expires_at": before["expires_at"], "preflight_updated_at": before["updated_at"],
+                     "started_at": started.isoformat()}
+            private_file(os.path.join(work, "rotation-state.json"), json.dumps(state, separators=(",", ":")))
+            result_path = os.path.join(work, "rotation-result.json")
+            rotated = api("/access/service_tokens/" + rec["service_token_id"] + "/rotate",
+                          payload={"previous_client_secret_expires_at": before["expires_at"]}, result_path=result_path)
+            if (not isinstance(rotated, dict) or rotated.get("id") != before["id"] or
+                    rotated.get("client_id") != before["client_id"] or rotated.get("name") != before["name"] or
+                    ("enabled" in rotated and rotated["enabled"] is not True) or
+                    any(k in rotated and rotated[k] != before[k] for k in ("created_at", "duration", "expires_at")) or
+                    ("previous_client_secret_expires_at" in rotated and rotated["previous_client_secret_expires_at"] != before["expires_at"])):
+                fail("rotation", "Cloudflare rotation response differs from the reviewed token")
+            pair = {key: header_value(rotated.get(key), fail) for key in ("client_id", "client_secret")}
+            updated = timestamp(rotated.get("updated_at"), fail)
+            if updated <= timestamp(before["updated_at"], fail) or updated < started.replace(microsecond=0):
+                fail("rotation", "Cloudflare rotation timestamp is stale")
+            after = preflight(rec, api, fail, allow_active_previous=True)
+            if (after.get("updated_at") != rotated["updated_at"] or after.get("client_id") != pair["client_id"] or
+                    any(after.get(k) != before.get(k) for k in ("id", "name", "created_at", "duration", "expires_at")) or
+                    after.get("previous_client_secret_expires_at") != before["expires_at"]):
+                fail("readback", "Cloudflare token readback did not confirm preserved old-secret expiry")
         wrong = secrets.token_urlsafe(32)
         if secrets.compare_digest(wrong, pair["client_secret"]):
             fail("control", "Negative control did not differ from the generated secret")
@@ -405,8 +509,8 @@ def verify(run, work, Refused, transport_factory=None):
         if any(final.get(k) != after.get(k) for k in
                ("id", "name", "client_id", "created_at", "updated_at", "duration", "expires_at", "previous_client_secret_expires_at")):
             fail("readback", "Cloudflare token changed during the origin probes")
-        run.detail = "four origins: unauthenticated=4/4 denied; control=4/4 denied; real=4/4 HTTP200 models JSON; old-expiry-preserved"
-        print("VERIFIED access-service-token: four origins denied controls and accepted the new pair; old expiry preserved")
+        run.detail = "three origins: unauthenticated=3/3 denied; control=3/3 denied; real=3/3 HTTP200 models JSON; retired-origin-absent; old-expiry-preserved"
+        print("VERIFIED access-service-token: three origins denied controls and accepted the pair; retired origin absent; old expiry preserved")
         return pair
     finally:
         manager = ""
