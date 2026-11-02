@@ -764,6 +764,56 @@ class RecoveryTests(unittest.TestCase):
             self.checked_refusal("recovery")
         self.assertFalse(Path(self.work, "rotation-result.json").exists())
 
+    def test_cross_file_atomic_replacement_is_refused_before_copying(self):
+        parse = ACCESS.parse_json
+        state_path = Path(self.source, "rotation-state.json")
+        original_inode = state_path.stat().st_ino
+        original_data = state_path.read_bytes()
+        def replace_during_result(raw):
+            doc = parse(raw)
+            if isinstance(doc, dict) and "result" in doc:
+                replacement = Path(self.source, "replacement")
+                ACCESS.private_file(str(replacement), original_data)
+                os.replace(replacement, state_path)
+            return doc
+        with patch.object(ACCESS, "parse_json", side_effect=replace_during_result):
+            self.refused("recovery")
+        self.assertNotEqual(state_path.stat().st_ino, original_inode)
+        self.assertEqual(state_path.read_bytes(), original_data)
+        self.assertFalse(self.rotations())
+        self.assertFalse(Path(self.work, "rotation-result.json").exists())
+
+    def test_directory_path_replacement_is_refused_before_copying(self):
+        parse = ACCESS.parse_json
+        held = self.source + "-held"
+        def replace_directory_during_result(raw):
+            doc = parse(raw)
+            if isinstance(doc, dict) and "result" in doc:
+                os.rename(self.source, held)
+                os.mkdir(self.source, mode=0o700)
+                for name in ("rotation-state.json", "rotation-result.json"):
+                    ACCESS.private_file(os.path.join(self.source, name), Path(held, name).read_bytes())
+            return doc
+        with patch.object(ACCESS, "parse_json", side_effect=replace_directory_during_result):
+            self.refused("recovery")
+        self.assertNotEqual(Path(self.source).stat().st_ino, Path(held).stat().st_ino)
+        self.assertFalse(self.rotations())
+        self.assertFalse(Path(self.work, "rotation-result.json").exists())
+
+    def test_directory_change_with_same_identity_is_refused_before_copying(self):
+        parse = ACCESS.parse_json
+        initial = Path(self.source).stat()
+        def change_directory_during_result(raw):
+            doc = parse(raw)
+            if isinstance(doc, dict) and "result" in doc:
+                os.utime(self.source, ns=(initial.st_atime_ns, initial.st_mtime_ns + 1000000000))
+            return doc
+        with patch.object(ACCESS, "parse_json", side_effect=change_directory_during_result):
+            self.refused("recovery")
+        self.assertEqual(Path(self.source).stat().st_ino, initial.st_ino)
+        self.assertFalse(self.rotations())
+        self.assertFalse(Path(self.work, "rotation-result.json").exists())
+
     def test_missing_or_duplicate_json_source_is_not_consumed(self):
         for name in ("rotation-state.json", "rotation-result.json"):
             with self.subTest(name=name):

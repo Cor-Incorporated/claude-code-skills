@@ -340,11 +340,19 @@ def recovery_files(run, work, fail):
         return (info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == (0o700 if directory else 0o600) and
                 (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= LIMIT))
 
+    def same(before, after):
+        return all(getattr(before, key) == getattr(after, key) for key in
+                   ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"))
+
     path = os.path.normpath(run.params["recovery-dir"])
     directory_fd = None
+    descriptors, initial = {}, {}
     try:
         directory_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        if not owned(os.fstat(directory_fd), directory=True):
+        directory_before = os.fstat(directory_fd)
+        directory_path = os.stat(path, follow_symlinks=False)
+        if (not owned(directory_before, directory=True) or not owned(directory_path, directory=True) or
+                not same(directory_before, directory_path)):
             fail("recovery", "Access recovery directory must be owner-only")
         if os.path.commonpath((os.path.realpath(path), os.path.realpath(work))) == os.path.realpath(work):
             # The caller must not delete the source as its temporary-work cleanup.
@@ -352,30 +360,33 @@ def recovery_files(run, work, fail):
             fail("recovery", "Access recovery source must be outside the new work directory")
         raw, documents = {}, {}
         for name in ("rotation-state.json", "rotation-result.json"):
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
-            try:
-                before = os.fstat(fd)
-                if not owned(before):
-                    fail("recovery", "Access recovery files must be private regular single-link files")
-                with os.fdopen(fd, "rb", closefd=False) as handle:
-                    value = handle.read(LIMIT + 1)
-                after = os.fstat(fd)
-                current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-                if (not owned(after) or not owned(current) or len(value) > LIMIT or len(value) != before.st_size or
-                        any(getattr(before, key) != getattr(after, key) for key in
-                            ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")) or
-                        any(getattr(before, key) != getattr(current, key) for key in
-                            ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"))):
-                    fail("recovery", "Access recovery files changed during the read")
-                raw[name], documents[name] = value, parse_json(value)
-            finally:
-                os.close(fd)
-        if not owned(os.fstat(directory_fd), directory=True):
+            descriptors[name] = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+            initial[name] = os.fstat(descriptors[name])
+            if not owned(initial[name]):
+                fail("recovery", "Access recovery files must be private regular single-link files")
+        for name, fd in descriptors.items():
+            with os.fdopen(fd, "rb", closefd=False) as handle:
+                value = handle.read(LIMIT + 1)
+            if len(value) > LIMIT or len(value) != initial[name].st_size:
+                fail("recovery", "Access recovery files changed during the read")
+            raw[name], documents[name] = value, parse_json(value)
+        # Both descriptors remain pinned until both files have been read and parsed.
+        for name, fd in descriptors.items():
+            after = os.fstat(fd)
+            current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if not owned(after) or not owned(current) or not same(initial[name], after) or not same(initial[name], current):
+                fail("recovery", "Access recovery files changed during the read")
+        directory_after = os.fstat(directory_fd)
+        directory_path = os.stat(path, follow_symlinks=False)
+        if (not owned(directory_after, directory=True) or not owned(directory_path, directory=True) or
+                not same(directory_before, directory_after) or not same(directory_before, directory_path)):
             fail("recovery", "Access recovery directory changed during the read")
         return documents["rotation-state.json"], documents["rotation-result.json"], raw
     except (OSError, ValueError, UnicodeDecodeError, RecursionError):
         fail("recovery", "Access recovery files could not be read as the reviewed private snapshot")
     finally:
+        for fd in descriptors.values():
+            os.close(fd)
         if directory_fd is not None:
             os.close(directory_fd)
 
