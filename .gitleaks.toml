@@ -1,0 +1,13 @@
+# APIパスに使う公開resource UUIDだけを限定する。Client ID/Secretは除外しない。
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Cloudflare Access service resource UUID in its recipe and offline contract fixture"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^00e4af01-4b7b-4f77-a6c7-2038d2c26050$''']
+paths = ['''^scripts/lib/secret-verify-recipes\.json$''', '''^tests/test-access-service-token\.py$''']
