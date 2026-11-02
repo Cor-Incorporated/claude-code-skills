@@ -19,7 +19,8 @@ from urllib.parse import quote as path_quote, urlsplit
 LIMIT = 1024 * 1024
 UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
 ACCOUNT = re.compile(r"[0-9a-f]{32}\Z")
-HOST = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\Z")
+ORIGINS = ("llm-origin-a.cor-jp.com", "llm-origin-b.cor-jp.com", "llm-origin-c.cor-jp.com")
+RETIRED_ORIGINS = ("llm-origin-f.cor-jp.com",)
 
 
 def private_file(path, data):
@@ -123,11 +124,10 @@ def config(run, fail):
                 for k in ("service_token_id", "app_id", "policy_id"))):
         fail("contract", "Access recipe resource IDs are invalid")
     origins = rec.get("origins")
-    if (not isinstance(origins, list) or len(origins) != 4 or
-            any(not isinstance(host, str) or not HOST.fullmatch(host) for host in origins) or len(set(origins)) != 4 or
+    if (origins != list(ORIGINS) or rec.get("retired_origins") != list(RETIRED_ORIGINS) or
             rec.get("probe_path") != "/v1/models" or
             any(not isinstance(rec.get(k), str) or not rec[k] for k in ("service_token_name", "app_name", "policy_name"))):
-        fail("contract", "Access recipe requires four fixed origins and a read-only models probe")
+        fail("contract", "Access recipe requires the three fixed origins, the retired origin, and a read-only models probe")
     return rec
 
 
@@ -167,9 +167,9 @@ def app_contract(app, rec, fail):
             sorted(app["self_hosted_domains"]) != sorted(hosts) or
             not isinstance(app.get("destinations"), list) or
             sorted((d.get("type"), d.get("uri")) for d in app["destinations"] if isinstance(d, dict)) !=
-            sorted(("public", host) for host in hosts) or len(app["destinations"]) != 4 or
+            sorted(("public", host) for host in hosts) or len(app["destinations"]) != len(ORIGINS) or
             not isinstance(app.get("policies"), list) or len(app["policies"]) != 1):
-        fail("app", "Access application differs from the reviewed four-origin application")
+        fail("app", "Access application differs from the reviewed three-origin application")
     policy_contract(app["policies"][0], rec, fail)
 
 
@@ -305,9 +305,11 @@ def preflight(rec, api, fail, allow_active_previous=False):
         fail("policy", "Access app policy inventory is incomplete")
     policy_contract(policies[0], rec, fail)
     apps = paged(api, "/access/apps", fail)
-    matches = []
+    matches, retired_matches = [], []
     for app in apps:
         patterns = resource_hosts(app, fail)
+        if any(fnmatch.fnmatchcase(host, pattern) for host in rec["retired_origins"] for pattern in patterns):
+            retired_matches.append(app["id"])
         if any(fnmatch.fnmatchcase(host, pattern) for host in rec["origins"] for pattern in patterns):
             matches.append(app["id"])
             if app["id"] == rec["app_id"]:
@@ -315,6 +317,8 @@ def preflight(rec, api, fail, allow_active_previous=False):
                     fail("fleet", "Access target app inventory differs from the reviewed origins")
     if matches != [rec["app_id"]]:
         fail("fleet", "Access origins have missing or overlapping applications")
+    if retired_matches:
+        fail("retired-origin", "The retired origin is still covered by an Access application")
     policy_fleet(rec, apps, api, fail)
     return token
 
@@ -446,7 +450,7 @@ def verify(run, work, Refused, transport_factory=None):
         if operation == "recover":
             state, response, raw = recovery_files(run, work, fail)
             pair = recovery_pair(state, response, before, rec, fail)
-        # Read-only baseline before any mutation; the four hosts must deny a request without credentials.
+        # Read-only baseline before any mutation; all three hosts must deny a request without credentials.
         for host in rec["origins"]:
             status, _ = net.request("https://" + host + rec["probe_path"], {"Accept": "application/json"})
             if status != 403:
@@ -505,8 +509,8 @@ def verify(run, work, Refused, transport_factory=None):
         if any(final.get(k) != after.get(k) for k in
                ("id", "name", "client_id", "created_at", "updated_at", "duration", "expires_at", "previous_client_secret_expires_at")):
             fail("readback", "Cloudflare token changed during the origin probes")
-        run.detail = "four origins: unauthenticated=4/4 denied; control=4/4 denied; real=4/4 HTTP200 models JSON; old-expiry-preserved"
-        print("VERIFIED access-service-token: four origins denied controls and accepted the pair; old expiry preserved")
+        run.detail = "three origins: unauthenticated=3/3 denied; control=3/3 denied; real=3/3 HTTP200 models JSON; retired-origin-absent; old-expiry-preserved"
+        print("VERIFIED access-service-token: three origins denied controls and accepted the pair; retired origin absent; old expiry preserved")
         return pair
     finally:
         manager = ""

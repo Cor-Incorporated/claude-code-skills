@@ -10,7 +10,7 @@ SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 MUTANT="$SB/tests/test-access-service-token.py"
 run_mutant() { python3 -B -I "$@"; }
-for CASE in control old-expiry token-scope declaration recovery-declaration readback-returncode; do
+for CASE in control old-expiry token-scope retired-origin declaration recovery-declaration retired-declaration readback-returncode; do
   MUTANT="$SB/tests/test-access-service-token.py"
   python3 - "$ROOT" "$MUTANT" "$CASE" <<'PY'
 from pathlib import Path
@@ -27,6 +27,8 @@ elif case == "old-expiry":
     old, new = 'payload={"previous_client_secret_expires_at": before["expires_at"]}', 'payload={}'
 elif case == "token-scope":
     old, new = '    policy_fleet(rec, apps, api, fail)', '    pass  # missing policy-use inspection'
+elif case == "retired-origin":
+    old, new = '    if retired_matches:', '    if False:  # retired-origin check removed'
 else:
     import json
     shutil.copy2(root / "tests/test-access-service-runner.py", driver.parent / "test-access-service-runner.py")
@@ -41,11 +43,13 @@ else:
         check = '    if listing.returncode != 0:\n        raise Refused(4, "readback-failed", "NG: sent to gh, but GitHub metadata readback failed (rc=%d); "\n                      "registration is unconfirmed." % listing.returncode)\n'
         assert text.count(check) == 1, "readback mutation target must be unique"
         runner.write_text(text.replace(check, ""))
+    elif case == "retired-declaration":
+        book["recipes"]["access-service-token-recovery"]["retired_origins"] = []
     else:
         name = "access-service-token-recovery" if case == "recovery-declaration" else "access-service-token"
         book["recipes"][name]["origins"][0] = "unreviewed.example.com"
     (lib / "secret-verify-recipes.json").write_text(json.dumps(book))
-if case not in ("declaration", "recovery-declaration", "readback-returncode"):
+if case not in ("declaration", "recovery-declaration", "retired-declaration", "readback-returncode"):
     assert source.count(old) == 1, "mutation target must be unique"
     source = source.replace(old, new)
 (lib / "access_service_token.py").write_text(source)
@@ -56,6 +60,8 @@ PY
     TARGET=VerifyTests.test_success_preserves_old_expiry_and_recovery_until_storage
   elif [[ "$CASE" == token-scope ]]; then
     TARGET=VerifyTests.test_service_token_on_another_app_distinct_policy_blocks_before_rotation
+  elif [[ "$CASE" == retired-origin ]]; then
+    TARGET=VerifyTests.test_retired_origin_in_any_public_app_field_blocks_before_rotation
   elif [[ "$CASE" == readback-returncode ]]; then
     MUTANT="$SB/tests/test-access-service-runner.py"
     TARGET=RunnerBoundaryTests.test_failed_github_readback_with_fresh_stdout_keeps_recovery

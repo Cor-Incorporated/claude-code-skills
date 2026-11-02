@@ -22,7 +22,7 @@ SPEC.loader.exec_module(ACCESS)
 CONFIG = dict(account_id="9973f2d2304b58a1f90d4d9409e9f8cc", service_token_id="00e4af01-4b7b-4f77-a6c7-2038d2c26050",
               service_token_name="cor-os-llm-router", app_id="07144d8d-0512-4ce1-943a-a72def65aac0", app_name="Cor OS Ollama Origins",
               policy_id="c0fcff31-7e27-441c-bdc2-a454fb7ab062", policy_name="LLMルーターのみ",
-              origins=["llm-origin-" + x + ".cor-jp.com" for x in "abcf"], probe_path="/v1/models", values=["client_id", "client_secret"])
+              origins=["llm-origin-" + x + ".cor-jp.com" for x in "abc"], retired_origins=["llm-origin-f.cor-jp.com"], probe_path="/v1/models", values=["client_id", "client_secret"])
 BASE = "https://api.cloudflare.com/client/v4/accounts/" + CONFIG["account_id"]
 MANAGER, CLIENT, SECRET = "offline-management-credential", "offline-access-client", "offline-new-secret"
 
@@ -159,9 +159,9 @@ class VerifyTests(unittest.TestCase):
         self.assertEqual(self.call(), {"client_id": CLIENT, "client_secret": SECRET})
         self.assertEqual(len(self.rotations()), 1)
         self.assertEqual(self.rotations()[0]["payload"], {"previous_client_secret_expires_at": "2027-08-15T00:11:26Z"})
-        self.assertEqual(len(self.reals()), 4)
+        self.assertEqual(len(self.reals()), 3)
         self.assertTrue(self.run.preserve_work)
-        self.assertIn("control=4/4 denied; real=4/4", self.run.detail)
+        self.assertIn("control=3/3 denied; real=3/3", self.run.detail)
         self.assertIn("old-expiry-preserved", self.run.detail)
         for name in ("rotation-state.json", "rotation-result.json"):
             path = Path(self.work, name)
@@ -185,10 +185,23 @@ class VerifyTests(unittest.TestCase):
                 self.assertFalse(self.net.requests)
 
     def test_recipe_resource_and_host_contracts(self):
-        for key, value in (("account_id", "../account"), ("app_id", "wrong"), ("origins", CONFIG["origins"][:3]),
-                           ("origins", CONFIG["origins"] + ["extra.example"]), ("origins", [CONFIG["origins"][0]] * 4),
+        for key, value in (("account_id", "../account"), ("app_id", "wrong"), ("origins", CONFIG["origins"][:-1]),
+                           ("origins", CONFIG["origins"] + ["extra.example"]), ("origins", [CONFIG["origins"][0]] * 3),
                            ("origins", ["https://evil.example"] + CONFIG["origins"][1:]), ("probe_path", "/v1/chat/completions")):
             with self.subTest(key=key):
+                self.reset(); self.run.recipe[key] = value
+                self.refused("contract")
+                self.assertFalse(self.net.requests)
+
+    def test_active_and_retired_origin_declarations_cannot_be_omitted_or_reassigned(self):
+        for key, value in (("origins", ["llm-origin-f.cor-jp.com"] + CONFIG["origins"][1:]),
+                           ("origins", ["unreviewed.example"] + CONFIG["origins"][1:]),
+                           ("origins", list(reversed(CONFIG["origins"]))),
+                           ("retired_origins", None), ("retired_origins", []),
+                           ("retired_origins", ["unreviewed.example"]),
+                           ("retired_origins", CONFIG["origins"][:1]),
+                           ("retired_origins", CONFIG["retired_origins"] * 2)):
+            with self.subTest(key=key, value=value):
                 self.reset(); self.run.recipe[key] = value
                 self.refused("contract")
                 self.assertFalse(self.net.requests)
@@ -246,8 +259,8 @@ class VerifyTests(unittest.TestCase):
         self.assertFalse(self.rotations())
 
     def test_origin_and_destination_difference_blocks_rotation(self):
-        for field, value in (("self_hosted_domains", CONFIG["origins"][:3]), ("self_hosted_domains", CONFIG["origins"] + ["extra.example"]),
-                             ("destinations", [{"type": "public", "uri": x} for x in CONFIG["origins"][:3]]), ("domain", "*.cor-jp.com"), ("type", "saas")):
+        for field, value in (("self_hosted_domains", CONFIG["origins"][:-1]), ("self_hosted_domains", CONFIG["origins"] + ["extra.example"]),
+                             ("destinations", [{"type": "public", "uri": x} for x in CONFIG["origins"][:-1]]), ("domain", "*.cor-jp.com"), ("type", "saas")):
             with self.subTest(field=field):
                 self.reset(); self.net.app[field] = value
                 self.refused("app")
@@ -269,6 +282,47 @@ class VerifyTests(unittest.TestCase):
         self.reset(); self.net.apps[-1]["destinations"].append({"type": "public", "uri": "extra.example"})
         self.refused("fleet")
         self.assertFalse(self.rotations())
+
+    def test_retired_origin_in_any_public_app_field_blocks_before_rotation(self):
+        retired = CONFIG["retired_origins"][0]
+        for field, value in (("domain", retired), ("domain", retired.upper() + "."),
+                             ("domain", retired + "/v1/models"),
+                             ("domain", "llm-origin-f.*"),
+                             ("self_hosted_domains", [retired]),
+                             ("destinations", [{"type": "public", "uri": retired}])):
+            with self.subTest(field=field, value=value):
+                self.reset(); self.net.apps[0][field] = value
+                self.refused("retired-origin")
+                self.assertFalse(self.rotations() or self.reals())
+                self.assertFalse(any(not request["url"].startswith(BASE) for request in self.net.requests))
+
+    def test_retired_origin_on_later_inventory_page_is_not_ignored(self):
+        self.net.apps += [dict(id="extra-%d" % i, domain="unused-%d.example" % i) for i in range(97)]
+        self.net.fleet_info = dict(page=1, per_page=100, count=100, total_count=101, total_pages=2)
+        self.net.extra_pages["/access/apps?per_page=100&page=2"] = dict(success=True,
+            result=[dict(id="retired-app", domain=CONFIG["retired_origins"][0])],
+            result_info=dict(page=2, per_page=100, count=1, total_count=101, total_pages=2))
+        self.refused("retired-origin")
+        self.assertFalse(self.rotations() or self.reals())
+
+    def test_retired_origin_restored_after_rotation_or_probes_blocks_the_pair(self):
+        for phase in ("after-rotation", "after-probes"):
+            with self.subTest(phase=phase):
+                self.reset()
+                original = self.net.request
+                def drift(url, headers, **kwargs):
+                    result = original(url, headers, **kwargs)
+                    if ((phase == "after-rotation" and url.endswith("/rotate")) or
+                            (phase == "after-probes" and url.endswith(CONFIG["origins"][-1] + "/v1/models") and
+                             headers.get("CF-Access-Client-Secret") == SECRET)):
+                        self.net.apps[0]["domain"] = CONFIG["retired_origins"][0]
+                    return result
+                self.net.request = drift
+                self.refused("retired-origin")
+                self.assertEqual(len(self.rotations()), 1)
+                self.assertEqual(len(self.reals()), 3 if phase == "after-probes" else 0)
+                self.assertTrue(self.run.preserve_work)
+                self.assertTrue(Path(self.work, "rotation-result.json").exists())
 
     def another_policy(self, selectors=None, reusable=False):
         return dict(id="11111111-1111-4111-8111-111111111111", decision="non_identity", name="offline unrelated",
@@ -369,7 +423,7 @@ class VerifyTests(unittest.TestCase):
                     self.net.app_policies["other-app"] = [policy]
                 self.assertEqual(self.call(), {"client_id": CLIENT, "client_secret": SECRET})
                 self.assertEqual(len(self.rotations()), 1)
-                self.assertEqual(len(self.reals()), 4)
+                self.assertEqual(len(self.reals()), 3)
 
     def test_group_or_any_valid_token_is_rejected_without_groups_api(self):
         for scope in ("global", "attached"):
@@ -489,7 +543,7 @@ class VerifyTests(unittest.TestCase):
                 self.net.request = drift
                 self.refused("token-use")
                 self.assertEqual(len(self.rotations()), 1)
-                self.assertEqual(len(self.reals()), 4 if phase == "after-probes" else 0)
+                self.assertEqual(len(self.reals()), 3 if phase == "after-probes" else 0)
                 self.assertTrue(self.run.preserve_work)
 
     def test_incomplete_or_unstable_pagination_blocks_rotation(self):
@@ -523,7 +577,7 @@ class VerifyTests(unittest.TestCase):
     def test_unauthenticated_success_or_unknown_status_blocks_before_rotation(self):
         for status in (200, 302, 401, 429, 500, 0):
             with self.subTest(status=status):
-                self.reset(); self.net.responses["baseline", "https://" + CONFIG["origins"][3] + "/v1/models"] = (status, None)
+                self.reset(); self.net.responses["baseline", "https://" + CONFIG["origins"][-1] + "/v1/models"] = (status, None)
                 self.refused("baseline")
                 self.assertFalse(self.rotations())
 
@@ -568,7 +622,7 @@ class VerifyTests(unittest.TestCase):
                     return result
                 self.net.request = drifting
                 self.refused("policy" if drift == "policy" else "readback")
-                self.assertEqual(len(self.reals()), 4)
+                self.assertEqual(len(self.reals()), 3)
                 self.assertTrue(self.run.preserve_work)
 
     def test_rotation_timeout_or_interrupt_retains_outcome_without_retry(self):
@@ -583,7 +637,7 @@ class VerifyTests(unittest.TestCase):
                 self.assertFalse(self.reals())
 
     def test_wrong_secret_success_is_refused_before_any_real_probe(self):
-        self.net.responses["control", "https://" + CONFIG["origins"][3] + "/v1/models"] = (200, {"object": "list", "data": []})
+        self.net.responses["control", "https://" + CONFIG["origins"][-1] + "/v1/models"] = (200, {"object": "list", "data": []})
         self.refused("control")
         self.assertTrue(self.run.preserve_work)
         self.assertFalse(self.reals())
@@ -600,9 +654,9 @@ class VerifyTests(unittest.TestCase):
                          (200, {"object": "list", "data": "wrong"}), (200, {"object": "list", "data": ["wrong"]}),
                          (200, {"object": "list", "data": [{"id": ""}]})):
             with self.subTest(response=response):
-                self.reset(); self.net.responses["real", "https://" + CONFIG["origins"][3] + "/v1/models"] = response
+                self.reset(); self.net.responses["real", "https://" + CONFIG["origins"][-1] + "/v1/models"] = response
                 self.refused("probe")
-                self.assertEqual(len(self.reals()), 4)
+                self.assertEqual(len(self.reals()), 3)
                 self.assertTrue(self.run.preserve_work)
 
     def test_controls_precede_real_and_no_inference_or_cross_target_auth(self):
@@ -616,10 +670,11 @@ class VerifyTests(unittest.TestCase):
                 self.assertIsNone(request["payload"])
                 self.assertNotIn("Authorization", request["headers"])
                 stages.append(request["headers"].get("CF-Access-Client-Secret"))
-        self.assertEqual(stages[:4], [None] * 4)
-        self.assertEqual(len(stages), 12)
-        self.assertTrue(all(x not in (None, SECRET) for x in stages[4:8]))
-        self.assertEqual(stages[8:], [SECRET] * 4)
+        self.assertEqual(stages[:3], [None] * 3)
+        self.assertEqual(len(stages), 9)
+        self.assertTrue(all(x not in (None, SECRET) for x in stages[3:6]))
+        self.assertEqual(stages[6:], [SECRET] * 3)
+        self.assertFalse(any("https://" + CONFIG["retired_origins"][0] in request["url"] for request in self.net.requests))
 
 
 class RecoveryTests(unittest.TestCase):
@@ -667,7 +722,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(self.rotations())
         self.assertTrue(all(request["payload"] is None for request in self.net.requests))
         self.assertTrue(self.run.preserve_work)
-        self.assertEqual(len(self.reals()), 4)
+        self.assertEqual(len(self.reals()), 3)
         for name in ("rotation-state.json", "rotation-result.json"):
             copy_path = Path(self.work, name)
             self.assertEqual(copy_path.read_bytes(), Path(self.source, name).read_bytes())
@@ -681,6 +736,28 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(self.rotations() or self.reals() or self.run.preserve_work)
         self.assertEqual(list(Path(self.work).iterdir()), [])
         self.assertFalse(any("CF-Access-Client-Secret" in request["headers"] for request in self.net.requests))
+
+    def test_recovery_refuses_retired_origin_before_reading_or_copying_source(self):
+        self.net.apps[0]["domain"] = CONFIG["retired_origins"][0]
+        with patch.object(ACCESS, "recovery_files") as read:
+            self.checked_refusal("retired-origin")
+        read.assert_not_called()
+        self.assertFalse(self.reals() or self.run.preserve_work)
+        self.assertEqual(list(Path(self.work).iterdir()), [])
+
+    def test_recovery_rechecks_retired_origin_after_real_probes(self):
+        original = self.net.request
+        def drift(url, headers, **kwargs):
+            result = original(url, headers, **kwargs)
+            if url.endswith(CONFIG["origins"][-1] + "/v1/models") and headers.get("CF-Access-Client-Secret") == SECRET:
+                self.net.apps[0]["domain"] = CONFIG["retired_origins"][0]
+            return result
+        self.net.request = drift
+        self.checked_refusal("retired-origin")
+        self.assertEqual(len(self.reals()), 3)
+        self.assertTrue(self.run.preserve_work)
+        self.assertTrue(Path(self.work, "rotation-result.json").exists())
+        self.assertFalse(any("https://" + CONFIG["retired_origins"][0] in request["url"] for request in self.net.requests))
 
     def test_recovery_cannot_mutate_even_through_an_internal_callback(self):
         for payload in (None, {}):
@@ -872,7 +949,7 @@ class RecoveryTests(unittest.TestCase):
                 self.net.policy["include"] = [{"everyone": {}}]
             return result
         self.net.request = drift; self.checked_refusal("policy")
-        self.assertEqual(len(self.reals()), 4)
+        self.assertEqual(len(self.reals()), 3)
         self.assertTrue(self.run.preserve_work)
 
 
