@@ -60,8 +60,10 @@ PY
 }
 
 targets=("$ROOT/docs" "$ROOT/skills" "$ROOT/rules" "$ROOT/README.md" "$ROOT/AGENTS.md" "$ROOT/hooks/lib/aidd_cc_contract.md")
-IFS=':' read -r -a extra <<<"${AIDD_HANDOVER_DIRS:-}"
-for d in "${extra[@]}"; do [[ -n "$d" && -e "$d" ]] && targets+=("$d"); done
+if [[ -n "${AIDD_HANDOVER_DIRS:-}" ]]; then
+  IFS=':' read -r -a extra <<<"$AIDD_HANDOVER_DIRS"
+  for d in "${extra[@]}"; do [[ -n "$d" && -e "$d" ]] && targets+=("$d"); done
+fi
 found="$(scan "${targets[@]}")"
 [[ -z "$found" ]] && ok "S1 no gh secret set outside register-secret-verified.sh in ${#targets[@]} scanned places" \
   || bad "S1 gh secret set not through the script (store with register-secret-verified.sh and write no gh secret set on its line, or mark the line with a reason)" "$found"
@@ -106,9 +108,10 @@ tree_hits="$(scan "$SB/tree" | grep -c .)"
 
 # recipes <recipes.json> <dir|file>... → prints one line per defect
 recipes() {
-  python3 -I - "$@" <<'PY'
-import json, os, re, sys, urllib.parse
-path, places = sys.argv[1], sys.argv[2:]
+  python3 -I - "$ROOT/scripts/lib/access_service_token.py" "$@" <<'PY'
+import importlib.util, json, os, re, sys, urllib.parse
+from types import SimpleNamespace
+module_path, path, places = sys.argv[1], sys.argv[2], sys.argv[3:]
 try:
     book = json.load(open(path, encoding="utf-8"))["recipes"]
 except (OSError, ValueError, KeyError) as exc:
@@ -136,6 +139,21 @@ for name, r in sorted(book.items()):
     elif kind == "consumer":
         if not r.get("generate_cmd") or not r.get("check_cmd") or not r.get("repo_marker"):
             print("%s: a consumer recipe needs generate_cmd, check_cmd and repo_marker" % name)
+    elif kind == "access-service-token":
+        try:
+            spec = importlib.util.spec_from_file_location("access_contract", module_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            def refuse(*_):
+                raise ValueError("invalid-access-contract")
+            recovering = r.get("operation", "rotate") == "recover"
+            params = {"recovery-dir": "/absolute/owner-only/register-secret.attempt"} if recovering else {"rotate-confirmed": "yes"}
+            module.config(SimpleNamespace(recipe=r, repo=r.get("repo"), env="", names=r.get("names"),
+                                          params=params), refuse)
+            if r.get("params") != (["recovery-dir"] if recovering else ["rotate-confirmed"]):
+                refuse()
+        except Exception:
+            print("%s: Access recipe differs from its enforcing three-origin/retired-f contract" % name)
     else:
         print("%s: unknown kind %r" % (name, kind))
 USE = re.compile(r"--recipe\s+([A-Za-z0-9_.-]+)")
@@ -171,13 +189,18 @@ book = json.load(open(sys.argv[1]))
 book["recipes"]["slack-oauth"]["control"]["fail_unless"] = {"jsno": {"error": "bad_client_secret"}}
 book["recipes"]["github-oauth"]["pass"] = {}
 json.dump(book, open(sys.argv[2].replace("nocontrol", "badcond"), "w"))
+book = json.load(open(sys.argv[1]))
+book["recipes"]["access-service-token"]["origins"].pop()
+json.dump(book, open(sys.argv[2].replace("nocontrol", "badaccess"), "w"))
 PY
 printf '    bash ~/.claude/scripts/register-secret-verified.sh --recipe github-oauth-v9 A B o/r\n' >"$SB/unknown.md"
 r1="$(recipes "$SB/nocontrol.json" "$SB/none.md")"; r2="$(recipes "$RECIPES" "$SB/unknown.md")"; r3="$(recipes "$SB/badcond.json" "$SB/none.md")"
+r4="$(recipes "$SB/badaccess.json" "$SB/none.md")"
 [[ "$r1" == *"github-oauth: no negative control"* && "$r2" == *"unknown recipe github-oauth-v9"* \
-   && "$r3" == *"slack-oauth: the control condition is empty or has unknown keys"* && "$r3" == *"github-oauth: the pass condition is empty or has unknown keys"* ]] \
-  && ok "S4 self-test: a recipe without its negative control, a misspelled or empty condition, and a step naming an unknown recipe are red" \
-  || bad "S4 self-test" "no-control: ${r1:-green}; unknown: ${r2:-green}; bad conditions: ${r3:-green}"
+   && "$r3" == *"slack-oauth: the control condition is empty or has unknown keys"* && "$r3" == *"github-oauth: the pass condition is empty or has unknown keys"* \
+   && "$r4" == *"access-service-token: Access recipe differs from its enforcing three-origin/retired-f contract"* ]] \
+  && ok "S4 self-test: missing control, misspelled/empty condition, missing Access origin and unknown recipe are red" \
+  || bad "S4 self-test" "no-control: ${r1:-green}; unknown: ${r2:-green}; bad conditions: ${r3:-green}; bad Access: ${r4:-green}"
 grep -q 'unknown recipe %r' "$ROOT/scripts/lib/secret_recipes.py" && grep -q 'if not ok:' "$ROOT/scripts/lib/secret_recipes.py" \
   && ok "S4 the enforcing helper refuses an unknown recipe and has its control gate" || bad "S4 helper" "secret_recipes.py lost its gates"
 

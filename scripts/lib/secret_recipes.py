@@ -19,6 +19,9 @@ Recipes live in secret-verify-recipes.json next to this file and land only by PR
              command refuses.
   slack-oauth-code  a new, operator-approved temporary user grant; wrong-secret control first, then real code
              exchange, exact app/team/user/scope, and token revocation before storage. Hidden terminal input only.
+  access-service-token  read back the fixed Access app/policy, rotate its existing service token with the old
+             expiry preserved, and require four wrong-secret controls and four real origin probes before storage.
+             --dry-run is read-only preflight, not evidence of a generated or verified pair.
 Exit codes: 0 stored (or verified with --dry-run), 1 refused, 2 usage, 3 gh or Bitwarden failed, 4 stored but the
 readback is missing or stale. Every outcome but a usage error is a guard-ledger row; no row carries a value.
 """
@@ -141,6 +144,17 @@ class Run:
                 usage("recipe %s needs --param %s=<value>" % (self.recipe_name, p))
         if self.resume and self.recipe.get("keep") != "bitwarden":
             usage("--resume-from-bitwarden is only for a recipe that keeps a Bitwarden copy")
+        if self.recipe["kind"] == "access-service-token":
+            if self.env or self.keep_item or self.repo_dir or self.resume:
+                usage("access-service-token only registers the fixed repository-level pair")
+            operation = self.recipe.get("operation", "rotate")
+            if operation == "recover":
+                if set(self.params) != {"recovery-dir"} or not self.params["recovery-dir"]:
+                    usage("access-service-token recovery requires only --param recovery-dir=<private-directory>")
+            elif operation != "rotate":
+                usage("access-service-token operation is not reviewed")
+            elif set(self.params) != {"rotate-confirmed"} or self.params["rotate-confirmed"] != "yes":
+                usage("access-service-token requires only --param rotate-confirmed=yes")
 
     # --- ledger ------------------------------------------------------------------------------------------------
     def ledger(self, decision, rule):
@@ -519,6 +533,9 @@ def store(run, values, work):
         stored.append(name)
     listing = subprocess.run(["gh", "secret", "list", "--repo", run.repo] + envargs + ["--json", "name,updatedAt"],
                              capture_output=True, text=True, check=False)
+    if listing.returncode != 0:
+        raise Refused(4, "readback-failed", "NG: sent to gh, but GitHub metadata readback failed (rc=%d); "
+                      "registration is unconfirmed." % listing.returncode)
     try:
         rows = {s["name"]: s["updatedAt"] for s in json.loads(listing.stdout or "[]")}
     except (ValueError, KeyError, TypeError):
@@ -551,6 +568,22 @@ def after_keep(run, message, rule):
     return (message + " State: Bitwarden has %s (id %s); %s. To store that same copy, re-run the same command with "
             "--resume-from-bitwarden. Do not make a new value, a second item, or delete this one." % (
                 item_name, item_id, github))
+
+
+def access_service_verify(run, work):
+    # -I intentionally excludes this directory from sys.path; load only the adjacent reviewed source.
+    spec = importlib.util.spec_from_file_location("access_service_token", os.path.join(HERE, "access_service_token.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.verify(run, work, Refused)
+
+
+def access_recovery_notice(run, work):
+    if run.recipe["kind"] == "access-service-token" and getattr(run, "preserve_work", False):
+        print("Access rotation or GitHub storage is incomplete. Private recovery directory: " + work,
+              file=sys.stderr)
+        print("Keep the old secret valid. Do not rotate again; inspect this attempt before a reviewed recovery.",
+              file=sys.stderr)
 
 
 def main(argv):
@@ -588,6 +621,12 @@ def main(argv):
             values = generated(run)
         elif kind == "consumer":
             values = consumer(run, work)
+        elif kind == "access-service-token":
+            values = access_service_verify(run, work)
+            if run.dry:
+                run.ledger("allow", "preflight-only")
+                print("PREFLIGHT ONLY: Access settings matched; no rotation, pair verification or GitHub storage.")
+                return 0
         else:
             raise Refused(1, "recipe-invalid", "NG: recipe %s has an unknown kind %r" % (run.recipe_name, kind))
         if run.dry:
@@ -599,6 +638,8 @@ def main(argv):
             values = {role: keep_in_bitwarden(run, run.names[0], values[role] if values else "")}
         store(run, values, work)
         run.ledger("allow", "registered")
+        if kind == "access-service-token":
+            run.preserve_work = False
         return 0
     except Refused as r:
         if r.rule:
@@ -606,12 +647,17 @@ def main(argv):
         print(after_keep(run, r.message, r.rule), file=sys.stderr)
         if getattr(run, "slack_outcome_unknown", False):
             print("Slack exchange outcome is unknown: revoke the new grant in Slack before any retry.", file=sys.stderr)
+        access_recovery_notice(run, work)
         return r.code
     except SystemExit:
         if run.recipe["kind"] == "slack-oauth-code":
             run.detail = "interrupted; check new Slack grant and GitHub secret metadata before retry"
             run.ledger("deny", "interrupted")
             print("Interrupted: check the new Slack grant and GitHub secret metadata before any retry.", file=sys.stderr)
+        elif run.recipe["kind"] == "access-service-token":
+            run.detail = "interrupted; inspect rotation and GitHub metadata before any retry"
+            run.ledger("deny", "interrupted")
+            access_recovery_notice(run, work)
         raise
     except Exception as exc:  # an unexpected failure is still a ledger row, and says whether Bitwarden was written
         run.detail = (run.detail + "; " if run.detail else "") + type(exc).__name__
@@ -620,6 +666,7 @@ def main(argv):
               file=sys.stderr)
         if getattr(run, "slack_outcome_unknown", False):
             print("Slack exchange outcome is unknown: revoke the new grant in Slack before any retry.", file=sys.stderr)
+        access_recovery_notice(run, work)
         return 1
     finally:
         if not getattr(run, "preserve_work", False):
