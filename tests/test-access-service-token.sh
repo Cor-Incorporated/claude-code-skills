@@ -10,7 +10,7 @@ SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 MUTANT="$SB/tests/test-access-service-token.py"
 run_mutant() { python3 -B -I "$@"; }
-for CASE in control old-expiry token-scope declaration recovery-declaration; do
+for CASE in control old-expiry token-scope declaration recovery-declaration readback-returncode; do
   MUTANT="$SB/tests/test-access-service-token.py"
   python3 - "$ROOT" "$MUTANT" "$CASE" <<'PY'
 from pathlib import Path
@@ -35,10 +35,17 @@ else:
     docs.mkdir(parents=True, exist_ok=True)
     shutil.copy2(root / "docs/runbooks/access-service-token-registration.md", docs)
     book = json.loads((root / "scripts/lib/secret-verify-recipes.json").read_text())
-    name = "access-service-token-recovery" if case == "recovery-declaration" else "access-service-token"
-    book["recipes"][name]["origins"][0] = "unreviewed.example.com"
+    if case == "readback-returncode":
+        runner = lib / "secret_recipes.py"
+        text = runner.read_text()
+        check = '    if listing.returncode != 0:\n        raise Refused(4, "readback-failed", "NG: sent to gh, but GitHub metadata readback failed (rc=%d); "\n                      "registration is unconfirmed." % listing.returncode)\n'
+        assert text.count(check) == 1, "readback mutation target must be unique"
+        runner.write_text(text.replace(check, ""))
+    else:
+        name = "access-service-token-recovery" if case == "recovery-declaration" else "access-service-token"
+        book["recipes"][name]["origins"][0] = "unreviewed.example.com"
     (lib / "secret-verify-recipes.json").write_text(json.dumps(book))
-if case not in ("declaration", "recovery-declaration"):
+if case not in ("declaration", "recovery-declaration", "readback-returncode"):
     assert source.count(old) == 1, "mutation target must be unique"
     source = source.replace(old, new)
 (lib / "access_service_token.py").write_text(source)
@@ -49,6 +56,9 @@ PY
     TARGET=VerifyTests.test_success_preserves_old_expiry_and_recovery_until_storage
   elif [[ "$CASE" == token-scope ]]; then
     TARGET=VerifyTests.test_service_token_on_another_app_distinct_policy_blocks_before_rotation
+  elif [[ "$CASE" == readback-returncode ]]; then
+    MUTANT="$SB/tests/test-access-service-runner.py"
+    TARGET=RunnerBoundaryTests.test_failed_github_readback_with_fresh_stdout_keeps_recovery
   else
     MUTANT="$SB/tests/test-access-service-runner.py"
     TARGET=RunnerBoundaryTests.test_recipe_declaration_and_runbook_match_the_provider_contract_fixture

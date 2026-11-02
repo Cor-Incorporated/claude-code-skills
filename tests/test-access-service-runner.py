@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import shlex
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -161,6 +162,29 @@ class RunnerBoundaryTests(unittest.TestCase):
         self.assertEqual(code, 0)
         saved.assert_not_called()
         self.assertEqual(self.rows, [('allow', 'preflight-only')])
+
+    def test_failed_github_readback_with_fresh_stdout_keeps_recovery(self):
+        calls = []
+        fresh = RUNNER.datetime.now(RUNNER.timezone.utc).isoformat()
+
+        def gh(argv, **kwargs):
+            calls.append(argv)
+            if argv[:3] == ['gh', 'secret', 'set']:
+                self.assertIn(kwargs['stdin'].read().decode(), PAIR.values())
+                return subprocess.CompletedProcess(argv, 0, b'', b'')
+            self.assertEqual(argv[:3], ['gh', 'secret', 'list'])
+            stdout = json.dumps([{'name': name, 'updatedAt': fresh} for name in RECOVERY_ARGS[2:4]])
+            return subprocess.CompletedProcess(argv, 1, stdout, PAIR['client_secret'])
+
+        with patch.object(RUNNER.subprocess, 'run', side_effect=gh):
+            code, saved = self.run_case(self.rotated, store=RUNNER.store, argv=RECOVERY_ARGS)
+        self.assertEqual(code, 4)
+        saved.assert_called_once()
+        self.assertEqual(len(calls), 3)
+        self.assertTrue((self.work / 'rotation-result.json').is_file())
+        self.assertEqual(self.rows, [('warn', 'readback-failed')])
+        self.assertNotIn('REGISTERED:', self.output.getvalue())
+        self.assertNotIn(PAIR['client_secret'], self.output.getvalue())
 
     def test_recipe_declaration_and_runbook_match_the_provider_contract_fixture(self):
         spec = importlib.util.spec_from_file_location('access_contract_fixture', ROOT / 'tests/test-access-service-token.py')

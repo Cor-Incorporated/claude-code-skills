@@ -524,6 +524,9 @@ def store(run, values, work):
         stored.append(name)
     listing = subprocess.run(["gh", "secret", "list", "--repo", run.repo] + envargs + ["--json", "name,updatedAt"],
                              capture_output=True, text=True, check=False)
+    if listing.returncode != 0:
+        raise Refused(4, "readback-failed", "NG: sent to gh, but GitHub metadata readback failed (rc=%d); "
+                      "registration is unconfirmed." % listing.returncode)
     try:
         rows = {s["name"]: s["updatedAt"] for s in json.loads(listing.stdout or "[]")}
     except (ValueError, KeyError, TypeError):
