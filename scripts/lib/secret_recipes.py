@@ -17,6 +17,8 @@ Recipes live in secret-verify-recipes.json next to this file and land only by PR
              If GitHub then fails, --resume-from-bitwarden stores that same copy instead of making a new one.
   consumer   the consumer's own generator and check, run in its checkout, decide the value (cor-os#126). A missing
              command refuses.
+  slack-oauth-code  a new, operator-approved temporary user grant; wrong-secret control first, then real code
+             exchange, exact app/team/user/scope, and token revocation before storage. Hidden terminal input only.
   access-service-token  read back the fixed Access app/policy, rotate its existing service token with the old
              expiry preserved, and require four wrong-secret controls and four real origin probes before storage.
              --dry-run is read-only preflight, not evidence of a generated or verified pair.
@@ -39,6 +41,10 @@ import urllib.parse
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# -I excludes the script directory too. Load only this reviewed sibling, never cwd/PYTHONPATH.
+_slack_spec = importlib.util.spec_from_file_location("slack_oauth_code", os.path.join(HERE, "slack_oauth_code.py"))
+_slack_code = importlib.util.module_from_spec(_slack_spec)
+_slack_spec.loader.exec_module(_slack_code)
 RECIPES = os.path.join(HERE, "secret-verify-recipes.json")
 NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -114,7 +120,8 @@ class Run:
         if bad or not self.names:
             usage("secret names must be UPPER_SNAKE: %s" % (" ".join(bad) or "(none)"))
         try:
-            book = json.load(open(RECIPES, encoding="utf-8"))["recipes"]
+            with open(RECIPES, encoding="utf-8") as source:
+                book = json.load(source)["recipes"]
         except (OSError, ValueError, KeyError) as exc:
             usage("cannot read the recipe file %s: %s" % (RECIPES, exc))
         if self.recipe_name not in book:
@@ -243,10 +250,10 @@ class Network:
                           % (self.run.recipe_name, scheme, host))
         return host
 
-    def ask(self, values):
+    def ask(self, values, *, request=None, form=None, received=None):
         """One request with <values>; returns (status, json doc or None)."""
         self.n += 1
-        req = self.run.recipe["request"]
+        req = self.run.recipe["request"] if request is None else request
         rnd = secrets.token_hex(16)
         url = substitute(req["url"], values, rnd)
         parts = urllib.parse.urlsplit(url)
@@ -265,9 +272,9 @@ class Network:
             payload = json.loads(substitute(json.dumps(req["json_body"]), {}, rnd))
             write_private(body, json.dumps(payload))
             lines += ["header = " + curl_quote("Content-Type: application/json"), "data-binary = " + curl_quote("@" + body)]
-        elif "form" in req:
-            form = {k: substitute(v, {}, rnd) for k, v in req["form"].items()}
-            write_private(body, urllib.parse.urlencode(form))
+        elif form is not None or "form" in req:
+            payload = form if form is not None else {k: substitute(v, {}, rnd) for k, v in req["form"].items()}
+            write_private(body, urllib.parse.urlencode(payload))
             lines.append("data-binary = " + curl_quote("@" + body))
         write_private(cfg, "\n".join(lines) + "\n")
         try:
@@ -287,6 +294,8 @@ class Network:
                 doc = json.load(fh)
         except (OSError, ValueError):
             pass
+        if received is not None:
+            received(doc)
         if os.path.exists(answer):
             os.unlink(answer)
         if p.returncode != 0:
@@ -601,6 +610,13 @@ def main(argv):
             print("The values of %s will be sent to: %s" % (", ".join(run.names), net.hosts()), file=sys.stderr)
             values = run.read_values()
             net.verify(values)
+        elif kind == "slack-oauth-code":
+            net = Network(run, work)
+            print("The values of %s will be sent to: %s" % (", ".join(run.names), net.hosts()), file=sys.stderr)
+            try:
+                values = _slack_code.verify(run, work, net)
+            except _slack_code.SlackOAuthRefused as exc:
+                raise Refused(1, exc.rule, str(exc)) from None
         elif kind == "generated":
             values = generated(run)
         elif kind == "consumer":
@@ -629,10 +645,16 @@ def main(argv):
         if r.rule:
             run.ledger("warn" if r.code == 4 else "deny", r.rule)
         print(after_keep(run, r.message, r.rule), file=sys.stderr)
+        if getattr(run, "slack_outcome_unknown", False):
+            print("Slack exchange outcome is unknown: revoke the new grant in Slack before any retry.", file=sys.stderr)
         access_recovery_notice(run, work)
         return r.code
     except SystemExit:
-        if run.recipe["kind"] == "access-service-token":
+        if run.recipe["kind"] == "slack-oauth-code":
+            run.detail = "interrupted; check new Slack grant and GitHub secret metadata before retry"
+            run.ledger("deny", "interrupted")
+            print("Interrupted: check the new Slack grant and GitHub secret metadata before any retry.", file=sys.stderr)
+        elif run.recipe["kind"] == "access-service-token":
             run.detail = "interrupted; inspect rotation and GitHub metadata before any retry"
             run.ledger("deny", "interrupted")
             access_recovery_notice(run, work)
@@ -642,6 +664,8 @@ def main(argv):
         run.ledger("deny", "internal-error")
         print(after_keep(run, "NG: unexpected %s; nothing more was stored." % type(exc).__name__, "internal-error"),
               file=sys.stderr)
+        if getattr(run, "slack_outcome_unknown", False):
+            print("Slack exchange outcome is unknown: revoke the new grant in Slack before any retry.", file=sys.stderr)
         access_recovery_notice(run, work)
         return 1
     finally:

@@ -33,6 +33,7 @@ else:
     import json
     shutil.copy2(root / "tests/test-access-service-runner.py", driver.parent / "test-access-service-runner.py")
     shutil.copy2(root / "scripts/lib/secret_recipes.py", lib / "secret_recipes.py")
+    shutil.copy2(root / "scripts/lib/slack_oauth_code.py", lib / "slack_oauth_code.py")
     docs = driver.parent.parent / "docs/runbooks"
     docs.mkdir(parents=True, exist_ok=True)
     shutil.copy2(root / "docs/runbooks/access-service-token-registration.md", docs)

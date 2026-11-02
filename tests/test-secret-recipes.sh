@@ -51,6 +51,7 @@ if "/applications/" in conf["url"]:
     if status == 404 and os.environ.get("FAKE_HTML_404"):
         body = "<html><body>Not Found</body></html>"
 elif "oauth.v2.access" in conf["url"]:
+    side = "REAL" if user == "$SID" and pw == "$SSEC" else "CONTROL"
     if os.environ.get("FAKE_NODISCRIM"):
         err = "invalid_code"
     elif user != "$SID":
@@ -59,9 +60,12 @@ elif "oauth.v2.access" in conf["url"]:
         err = "bad_client_secret"
     else:
         err = "invalid_code"
-    body = json.dumps({"ok": False, "error": err})
-    if os.environ.get("FAKE_SLACK_STATUS"):
-        status = int(os.environ["FAKE_SLACK_STATUS"])
+    doc = {"error": os.environ.get("FAKE_SLACK_" + side + "_ERROR", err)}
+    ok_value = os.environ.get("FAKE_SLACK_" + side + "_OK", "false")
+    if ok_value != "missing":
+        doc["ok"] = json.loads(ok_value)
+    body = json.dumps(doc)
+    status = int(os.environ.get("FAKE_SLACK_" + side + "_STATUS", os.environ.get("FAKE_SLACK_STATUS", "200")))
 open(conf["output"], "w").write(body)
 sys.stdout.write(str(status))
 FAKE
@@ -172,18 +176,34 @@ out="$(printf '%s\n%s\n' "$GID" "wrong_secret" | FAKE_NODISCRIM=1 run --recipe g
 [[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"does not discriminate"* ]] && [[ "$(row recipe-github-oauth-control-failed)" -ge 1 ]] \
   && ok "github-oauth: when the wrong-secret control also answers 404, the run refuses and records control-failed" || bad "github nodiscrim" "rc=$rc $out"
 
-# 3 Slack OAuth: invalid_code for the pair, bad_client_secret for the control
+# 3 Slack OAuth: simulate discriminating answers; real Slack may answer invalid_code to both (M2).
 reset
 out="$(printf '%s\n%s\n' "$SID" "$SSEC" | run --recipe slack-oauth SLACK_OAUTH_CLIENT_ID SLACK_OAUTH_CLIENT_SECRET o/r --env production)"; rc=$?
 [[ $rc -eq 0 && "$(cat "$SB/gh/SLACK_OAUTH_CLIENT_SECRET" 2>/dev/null)" == "$SSEC" && "$out" == *"error=invalid_code, control status=200 error=bad_client_secret"* \
    && "$(grep -c -- '--env production' "$SB/gh-argv")" -eq 3 ]] \
-  && ok "slack-oauth: a valid pair is stored (invalid_code), the control says bad_client_secret, --env reaches set and list" || bad "slack good" "rc=$rc $out"
+  && ok "slack-oauth: simulated invalid_code/bad_client_secret stores the fixture pair, --env reaches set and list" || bad "slack good" "rc=$rc $out"
 reset
 out="$(printf '%s\n%s\n' "$SID" "nope" | run --recipe slack-oauth SLACK_OAUTH_CLIENT_ID SLACK_OAUTH_CLIENT_SECRET o/r)"; rc=$?
 [[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"error=bad_client_secret"* ]] && ok "slack-oauth: a wrong secret is refused" || bad "slack wrong" "rc=$rc $out"
 reset
 out="$(printf '%s\n%s\n' "$SID" "nope" | FAKE_NODISCRIM=1 run --recipe slack-oauth SLACK_OAUTH_CLIENT_ID SLACK_OAUTH_CLIENT_SECRET o/r)"; rc=$?
 [[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"does not discriminate"* ]] && ok "slack-oauth: a control that also says invalid_code refuses" || bad "slack nodiscrim" "rc=$rc $out"
+reset
+before="$(row recipe-slack-oauth-control-failed)"
+out="$(printf '%s\n%s\n' "$SID" "$SSEC" | FAKE_NODISCRIM=1 run --recipe slack-oauth SLACK_OAUTH_CLIENT_ID SLACK_OAUTH_CLIENT_SECRET o/r)"; rc=$?
+[[ $rc -eq 1 && ! -s "$SB/gh-argv" && -z "$(ls "$SB/gh")" && "$(row recipe-slack-oauth-control-failed)" -eq $((before + 1)) ]] \
+  && tail -n 1 "$AIDD_LEDGER_PATH" | grep -q 'real status=200 error=invalid_code; control status=200 error=invalid_code' \
+  && ok "slack-oauth: the measured invalid_code/invalid_code pair refuses before any gh call and records both answers" \
+  || bad "slack measured nodiscrim" "rc=$rc $out"
+for fault in FAKE_SLACK_REAL_STATUS=400 FAKE_SLACK_CONTROL_STATUS=400 \
+             FAKE_SLACK_CONTROL_OK=true FAKE_SLACK_CONTROL_OK=missing \
+             FAKE_SLACK_REAL_ERROR=undocumented_error FAKE_SLACK_CONTROL_ERROR=undocumented_error \
+             FAKE_SLACK_REAL_ERROR=invalid_client_id FAKE_SLACK_CONTROL_ERROR=invalid_client_id; do
+  reset
+  out="$(printf '%s\n%s\n' "$SID" "$SSEC" | env "$fault" bash "$SCRIPT" --recipe slack-oauth SLACK_OAUTH_CLIENT_ID SLACK_OAUTH_CLIENT_SECRET o/r 2>&1)"; rc=$?
+  [[ $rc -eq 1 && ! -s "$SB/gh-argv" && -z "$(ls "$SB/gh")" && "$out" == *"nothing was stored"* ]] \
+    && ok "slack-oauth: $fault refuses before any gh call" || bad "slack $fault" "rc=$rc $out"
+done
 
 # 4 values: the line count must match; an empty value is refused; the host is named before any value is read
 reset
@@ -208,7 +228,7 @@ bwv="$(python3 -c 'import json,sys; print([f["value"] for f in json.load(open(sy
   && ok "mcp-token: one generated value lands in Bitwarden and GitHub, read back equal, never printed" || bad "mcp good" "rc=$rc $out"
 python3 -c 'import json,sys; f={x["name"]:x for x in json.load(open(sys.argv[1]))["fields"]}; assert f["_bw.variable"]["value"]=="MCP_TOKEN" and f["_bw.environment"]["value"]=="production" and f["value"]["type"]==1' "$SB/vault/item.json" 2>/dev/null \
   && ok "mcp-token: the Bitwarden item follows bwenv's layout (_bw.variable, _bw.environment, a hidden value field)" || bad "mcp layout" "$(cat "$SB/vault/item.json" 2>/dev/null | head -c 300)"
-! grep -qF "$bwv" "$SB/bw-argv" "$SB/gh-argv" "$AIDD_LEDGER_PATH" && ok "mcp-token: the value is in no argv and not in the ledger" || bad "mcp argv" "leaked"
+! grep -qF -- "$bwv" "$SB/bw-argv" "$SB/gh-argv" "$AIDD_LEDGER_PATH" && ok "mcp-token: the value is in no argv and not in the ledger" || bad "mcp argv" "leaked"
 reset
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os)"; rc=$?
 [[ $rc -eq 2 && -z "$(ls "$SB/gh")" ]] && ok "mcp-token: without --keep-in-bitwarden it refuses (the administrator needs the value)" || bad "mcp nokeep" "rc=$rc $out"
@@ -366,6 +386,7 @@ kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 reset
 mkdir -p "$SB/strict"
 cp "$ROOT/scripts/lib/secret_recipes.py" "$SB/strict/"
+cp "$ROOT/scripts/lib/slack_oauth_code.py" "$SB/strict/"
 python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); b["recipes"]["github-oauth"]["pass"]={"stauts":404}; json.dump(b,open(sys.argv[2],"w"))' \
   "$ROOT/scripts/lib/secret-verify-recipes.json" "$SB/strict/secret-verify-recipes.json"
 out="$(printf '%s\n%s\n' "$GID" "$GSEC" | python3 -I "$SB/strict/secret_recipes.py" --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r 2>&1)"; rc=$?
@@ -374,6 +395,7 @@ out="$(printf '%s\n%s\n' "$GID" "$GSEC" | python3 -I "$SB/strict/secret_recipes.
 # Mutants (red side). Each writes a changed copy of the helper next to a copy of the recipe file and runs that copy
 # itself in this file (pair18: the variable written is the variable executed).
 cp "$ROOT/scripts/lib/secret-verify-recipes.json" "$SB/secret-verify-recipes.json"
+cp "$ROOT/scripts/lib/slack_oauth_code.py" "$SB/slack_oauth_code.py"
 LEDGER_LIB="$ROOT/hooks/lib/aidd-ledger.sh"
 MUT1="$SB/mut_control.py"
 python3 - "$ROOT/scripts/lib/secret_recipes.py" "$MUT1" "        if not ok:" "        if False:" <<'PY'

@@ -122,7 +122,7 @@ def bad_cond(c):
             or ("status" in c and not isinstance(c["status"], int)))
 for name, r in sorted(book.items()):
     kind, values = r.get("kind"), r.get("values") or []
-    if kind == "network":
+    if kind in ("network", "slack-oauth-code"):
         req, ctrl = r.get("request") or {}, r.get("control") or {}
         u = urllib.parse.urlsplit(req.get("url", "").replace("{", "").replace("}", ""))
         if u.scheme != "https" or u.hostname not in (r.get("hosts") or []):
