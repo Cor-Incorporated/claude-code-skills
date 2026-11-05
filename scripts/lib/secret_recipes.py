@@ -14,7 +14,10 @@ Recipes live in secret-verify-recipes.json next to this file and land only by PR
              headers and the body go to curl through a 0600 config file.
   generated  the value is made here (CSPRNG) and never shown. With keep=bitwarden it is first written to the env
              ledger (Bitwarden item env/<environment>/<NAME>) and read back equal, because someone else needs it.
-             If GitHub then fails, --resume-from-bitwarden stores that same copy instead of making a new one.
+             The item is created with _bw.status=unverified and set to active only after that readback (#480).
+             If GitHub then fails, --resume-from-bitwarden stores that same copy instead of making a new one; it
+             takes only an active item whose path, _bw.environment, _bw.variable and _bw.service all match and
+             whose value has the generator's shape. keep is allowed only on a generated recipe with one value.
   consumer   the consumer's own generator and check, run in its checkout, decide the value (cor-os#126). A missing
              command refuses.
   slack-oauth-code  a new, operator-approved temporary user grant; wrong-secret control first, then real code
@@ -48,7 +51,10 @@ _slack_spec.loader.exec_module(_slack_code)
 RECIPES = os.path.join(HERE, "secret-verify-recipes.json")
 NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+KEEP_RE = re.compile(r"^env/([A-Za-z0-9._-]+)/([A-Z_][A-Z0-9_]*)$")
 CONDITION_KEYS = {"status", "json"}
+# bwenv lists _bw.status; the env ledger already uses "unverified" and "active" (ENV-INDEX.md, #480)
+BW_UNVERIFIED, BW_ACTIVE = "unverified", "active"
 
 
 class Refused(Exception):
@@ -142,8 +148,18 @@ class Run:
         for p in self.recipe.get("params", []):
             if not self.params.get(p):
                 usage("recipe %s needs --param %s=<value>" % (self.recipe_name, p))
-        if self.resume and self.recipe.get("keep") != "bitwarden":
+        keep = self.recipe.get("keep")
+        if keep is not None and (keep != "bitwarden" or self.recipe.get("kind") != "generated" or len(roles) != 1):
+            # a kept copy of a network or consumer value would be resumed without its check (#480)
+            raise Refused(1, "recipe-invalid", "NG: recipe %s keeps a copy (keep=%r), but keep=bitwarden is only "
+                          "for a generated recipe with one value; nothing was sent." % (self.recipe_name, keep))
+        if self.resume and keep != "bitwarden":
             usage("--resume-from-bitwarden is only for a recipe that keeps a Bitwarden copy")
+        kept_path = KEEP_RE.match(self.keep_item or "")
+        if kept_path and self.env and kept_path.group(1) != self.env:
+            # refuse before a value is made: the create path would write an item resume can never take (#480)
+            usage("--env %s does not match the Bitwarden item %s (environment %s); nothing was generated"
+                  % (self.env, self.keep_item, kept_path.group(1)))
         if self.recipe["kind"] == "access-service-token":
             if self.env or self.keep_item or self.repo_dir or self.resume:
                 usage("access-service-token only registers the fixed repository-level pair")
@@ -372,6 +388,31 @@ def bw_ledger_items(env, name, item_name):
             and (bw_field(i, "_bw.variable") == name or i.get("name") == item_name)]
 
 
+def bw_read(env, item_id):
+    """(item, its value field) as `bw get item` returns it; (None, None) when the answer is not an item."""
+    got = subprocess.run(["bw", "get", "item", item_id], capture_output=True, text=True, env=env, check=False)
+    try:
+        item = json.loads(got.stdout)
+    except ValueError:
+        return None, None
+    return (item, bw_field(item, "value")) if isinstance(item, dict) else (None, None)
+
+
+def mark_active(env, item, item_name, item_id, value):
+    """Set _bw.status=active on a copy that read back equal, then read it back again (#480)."""
+    fields = [dict(f, value=BW_ACTIVE) if isinstance(f, dict) and f.get("name") == "_bw.status" else f
+              for f in item.get("fields") or []]
+    encoded = base64.b64encode(json.dumps(dict(item, fields=fields)).encode()).decode()
+    edit = subprocess.run(["bw", "edit", "item", item_id], input=encoded, capture_output=True, text=True, env=env,
+                          check=False)
+    after, kept = bw_read(env, item_id)
+    if edit.returncode != 0 or kept != value or bw_field(after, "_bw.status") != BW_ACTIVE:
+        raise Refused(3, "bitwarden-status", "NG: the Bitwarden item %s (%s) read back equal, but marking it %s "
+                      "failed (bw edit rc=%d); GitHub was not touched. Check that item and set _bw.status=%s by "
+                      "hand before --resume-from-bitwarden." % (item_name, item_id, BW_ACTIVE, edit.returncode,
+                                                                 BW_ACTIVE))
+
+
 def keep_in_bitwarden(run, name, value):
     item_name = run.keep_item
     m = re.match(r"^env/([A-Za-z0-9._-]+)/%s$" % re.escape(name), item_name or "")
@@ -384,13 +425,20 @@ def keep_in_bitwarden(run, name, value):
         if len(existing) != 1 or existing[0].get("name") != item_name:
             raise Refused(1, "bitwarden-resume", "NG: --resume-from-bitwarden needs exactly one item %s (found %d); "
                           "nothing was stored." % (item_name, len(existing)))
+        # the field must agree with the item's own path, not only with --env (#480): without --env a copy whose
+        # field names another environment would otherwise resume into the repository-level secret
         if bw_field(existing[0], "_bw.variable") != name or bw_field(existing[0], "_bw.service") != run.service or (
+                bw_field(existing[0], "_bw.environment") != m.group(1)) or (
                 run.env and bw_field(existing[0], "_bw.environment") != run.env):
             raise Refused(1, "bitwarden-resume", "NG: the item %s is for _bw.variable=%s, _bw.service=%s, "
-                          "_bw.environment=%s, not %s of %s%s; nothing was stored." % (
+                          "_bw.environment=%s, not %s of %s in %s; nothing was stored." % (
                               item_name, bw_field(existing[0], "_bw.variable"), bw_field(existing[0], "_bw.service"),
-                              bw_field(existing[0], "_bw.environment"), name, run.service,
-                              " in " + run.env if run.env else ""))
+                              bw_field(existing[0], "_bw.environment"), name, run.service, run.env or m.group(1)))
+        if bw_field(existing[0], "_bw.status") != BW_ACTIVE:
+            # a copy whose readback never matched stays unverified; only a verified copy may reach GitHub (#480)
+            raise Refused(1, "bitwarden-resume-unverified", "NG: the item %s has _bw.status=%s, not %s: this tool "
+                          "marks a copy active only after it read back equal. Nothing was stored. Check that item "
+                          "by hand first." % (item_name, bw_field(existing[0], "_bw.status"), BW_ACTIVE))
         got = subprocess.run(["bw", "get", "item", existing[0].get("id", "")], capture_output=True, text=True, env=env,
                              check=False)
         try:
@@ -403,6 +451,10 @@ def keep_in_bitwarden(run, name, value):
         if not passes_check(run.recipe, kept):
             raise Refused(1, "bitwarden-resume-check", "NG: the Bitwarden copy %s (length %d) fails the recipe's "
                           "check; nothing was stored. Fix that item in Bitwarden by hand first." % (item_name, len(kept)))
+        if not generated_shape(run.recipe, kept):
+            raise Refused(1, "bitwarden-resume-shape", "NG: the Bitwarden copy %s (length %d) is not the shape the "
+                          "recipe's generator makes (%s); nothing was stored." % (
+                              item_name, len(kept), shape_text(run.recipe)))
         run.kept = (item_name, existing[0].get("id", ""))
         run.detail = "bitwarden %s resumed, length %d" % (item_name, len(kept))
         print("RESUMED %s from Bitwarden %s (length %d)" % (name, item_name, len(kept)))
@@ -415,6 +467,7 @@ def keep_in_bitwarden(run, name, value):
             "fields": [{"type": 0, "name": "_bw.variable", "value": name},
                        {"type": 0, "name": "_bw.environment", "value": m.group(1)},
                        {"type": 0, "name": "_bw.service", "value": run.service},
+                       {"type": 0, "name": "_bw.status", "value": BW_UNVERIFIED},
                        {"type": 1, "name": "value", "value": value}]}
     encoded = base64.b64encode(json.dumps(item).encode()).decode()
     made = subprocess.run(["bw", "create", "item"], input=encoded, capture_output=True, text=True, env=env, check=False)
@@ -424,15 +477,12 @@ def keep_in_bitwarden(run, name, value):
         raise Refused(3, "bitwarden-failed", "NG: bw create item failed (rc=%d); check the env ledger for %s by "
                       "hand. GitHub was not touched." % (made.returncode, item_name)) from None
     run.created = (item_name, item_id)
-    back = subprocess.run(["bw", "get", "item", item_id], capture_output=True, text=True, env=env, check=False)
-    try:
-        kept = bw_field(json.loads(back.stdout), "value")
-    except ValueError:
-        kept = None
+    back_item, kept = bw_read(env, item_id)
     if kept != value:
         raise Refused(3, "bitwarden-readback", "NG: the Bitwarden item %s (%s) did not read back equal (length %s, "
                       "made %d); GitHub was not touched. Fix or remove that item in Bitwarden by hand before any "
                       "further run." % (item_name, item_id, len(kept) if isinstance(kept, str) else "none", len(value)))
+    mark_active(env, back_item, item_name, item_id, value)
     run.kept = (item_name, item_id)
     run.detail = "bitwarden %s read back equal, length %d" % (item_name, len(value))
     print("KEPT %s in Bitwarden as %s (read back equal, length %d)" % (name, item_name, len(value)))
@@ -444,6 +494,25 @@ def passes_check(rec, value):
     if chk.get("no_whitespace") and re.search(r"\s", value):
         return False
     return len(value.encode()) <= int(chk.get("max_bytes", 1 << 30))
+
+
+def shape_length(rec):
+    """token_urlsafe(n) is the unpadded URL-safe base64 of n bytes: 43 characters for 32 bytes."""
+    gen = rec.get("generate") or {}
+    if gen.get("type") != "token_urlsafe":
+        return None
+    return len(base64.urlsafe_b64encode(bytes(int(gen["bytes"]))).rstrip(b"="))
+
+
+def shape_text(rec):
+    n = shape_length(rec)
+    return "%d URL-safe characters" % n if n else "no known generator"
+
+
+def generated_shape(rec, value):
+    """The value has exactly the shape the recipe's own generator makes (#480: resume must not take less)."""
+    n = shape_length(rec)
+    return n is not None and re.fullmatch(r"[A-Za-z0-9_-]{%d}" % n, value) is not None
 
 
 def generated(run):
@@ -459,16 +528,48 @@ def generated(run):
     if run.resume:
         return None  # the value comes from the Bitwarden copy
     value = secrets.token_urlsafe(int(gen["bytes"]))
-    if not passes_check(rec, value):
+    if not passes_check(rec, value) or not generated_shape(rec, value):
         raise Refused(1, "unverified", "NG: the generated value fails the consumer's rules; nothing was stored.")
     return {rec["values"][0]: value}
 
 
+TOKENISH = re.compile(r"[A-Za-z0-9+/_=-]{20,}")
+
+
+def json_leaves(value):
+    """Every string leaf of <value> when it is JSON (each adapter key of PUBLISHING_INTAKE_KEYS_JSON)."""
+    try:
+        doc = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    leaves, stack = [], [doc]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+        elif isinstance(node, str):
+            leaves.append(node)
+    return leaves
+
+
+def looks_random(token):
+    """A run that reads like key material (mixed case and a digit, or long hex), not a name or a path (#480)."""
+    if re.fullmatch(r"[0-9a-fA-F]{32,}", token):
+        return True
+    return bool(re.search(r"[0-9]", token) and re.search(r"[a-z]", token) and re.search(r"[A-Z]", token))
+
+
 def redacted_tail(text, value):
+    """The last line of the consumer's output with the value, each JSON leaf of it, and any other run that reads
+    like key material replaced: the generator's own failure output may print a key it never wrote (#480)."""
     tail = (text or "").strip().splitlines()[-1:] or [""]
     line = tail[0]
-    if value and value in line:
-        line = line.replace(value, "<value>")
+    for known in sorted({s for s in [value] + json_leaves(value) if isinstance(s, str) and len(s) >= 8},
+                        key=len, reverse=True):
+        line = line.replace(known, "<value>")
+    line = TOKENISH.sub(lambda m: "<redacted>" if looks_random(m.group(0)) else m.group(0), line)
     return line[:160]
 
 
@@ -658,6 +759,11 @@ def main(argv):
             run.detail = "interrupted; inspect rotation and GitHub metadata before any retry"
             run.ledger("deny", "interrupted")
             access_recovery_notice(run, work)
+        elif run.created or run.kept:
+            # a signal once the Bitwarden item exists still names that item and what GitHub has (#480)
+            run.detail = "interrupted after the Bitwarden write"
+            run.ledger("deny", "interrupted")
+            print(after_keep(run, "NG: interrupted.", "interrupted"), file=sys.stderr)
         raise
     except Exception as exc:  # an unexpected failure is still a ledger row, and says whether Bitwarden was written
         run.detail = (run.detail + "; " if run.detail else "") + type(exc).__name__

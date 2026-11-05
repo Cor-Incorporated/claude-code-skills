@@ -21,8 +21,9 @@
 #   S4 the recipes (scripts/lib/secret-verify-recipes.json, claude-code-skills#478) keep their shape: a network recipe
 #      sends only to its https hosts and carries a negative control on one of its values; a generated recipe has a
 #      generator and a check; a consumer recipe pins the consumer's generate and check commands. Every
-#      `--recipe <name>` in the scanned places names a recipe that exists. Self-test: a recipe without a control and a
-#      step naming an unknown recipe are red.
+#      `--recipe <name>` in the scanned places names a recipe that exists; keep is only on a generated recipe with one
+#      value (#480). Self-test: a recipe without a control, keep on a network recipe and a step naming an unknown
+#      recipe are red.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 pass=0
@@ -156,6 +157,9 @@ for name, r in sorted(book.items()):
             print("%s: Access recipe differs from its enforcing three-origin/retired-f contract" % name)
     else:
         print("%s: unknown kind %r" % (name, kind))
+    if "keep" in r and (r.get("keep") != "bitwarden" or kind != "generated" or len(values) != 1):
+        # a kept copy of a network or consumer value would resume without its check (#480)
+        print("%s: keep is only for a generated recipe with one value" % name)
 USE = re.compile(r"--recipe\s+([A-Za-z0-9_.-]+)")
 files = []
 for a in places:
@@ -192,15 +196,19 @@ json.dump(book, open(sys.argv[2].replace("nocontrol", "badcond"), "w"))
 book = json.load(open(sys.argv[1]))
 book["recipes"]["access-service-token"]["origins"].pop()
 json.dump(book, open(sys.argv[2].replace("nocontrol", "badaccess"), "w"))
+book = json.load(open(sys.argv[1]))
+book["recipes"]["github-oauth"]["keep"] = "bitwarden"
+json.dump(book, open(sys.argv[2].replace("nocontrol", "badkeep"), "w"))
 PY
 printf '    bash ~/.claude/scripts/register-secret-verified.sh --recipe github-oauth-v9 A B o/r\n' >"$SB/unknown.md"
 r1="$(recipes "$SB/nocontrol.json" "$SB/none.md")"; r2="$(recipes "$RECIPES" "$SB/unknown.md")"; r3="$(recipes "$SB/badcond.json" "$SB/none.md")"
-r4="$(recipes "$SB/badaccess.json" "$SB/none.md")"
+r4="$(recipes "$SB/badaccess.json" "$SB/none.md")"; r5="$(recipes "$SB/badkeep.json" "$SB/none.md")"
 [[ "$r1" == *"github-oauth: no negative control"* && "$r2" == *"unknown recipe github-oauth-v9"* \
    && "$r3" == *"slack-oauth: the control condition is empty or has unknown keys"* && "$r3" == *"github-oauth: the pass condition is empty or has unknown keys"* \
-   && "$r4" == *"access-service-token: Access recipe differs from its enforcing three-origin/retired-f contract"* ]] \
-  && ok "S4 self-test: missing control, misspelled/empty condition, missing Access origin and unknown recipe are red" \
-  || bad "S4 self-test" "no-control: ${r1:-green}; unknown: ${r2:-green}; bad conditions: ${r3:-green}; bad Access: ${r4:-green}"
+   && "$r4" == *"access-service-token: Access recipe differs from its enforcing three-origin/retired-f contract"* \
+   && "$r5" == *"github-oauth: keep is only for a generated recipe with one value"* ]] \
+  && ok "S4 self-test: missing control, misspelled/empty condition, missing Access origin, keep on a network recipe and unknown recipe are red" \
+  || bad "S4 self-test" "no-control: ${r1:-green}; unknown: ${r2:-green}; bad conditions: ${r3:-green}; bad Access: ${r4:-green}; bad keep: ${r5:-green}"
 grep -q 'unknown recipe %r' "$ROOT/scripts/lib/secret_recipes.py" && grep -q 'if not ok:' "$ROOT/scripts/lib/secret_recipes.py" \
   && ok "S4 the enforcing helper refuses an unknown recipe and has its control gate" || bad "S4 helper" "secret_recipes.py lost its gates"
 

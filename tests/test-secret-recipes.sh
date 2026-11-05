@@ -116,7 +116,18 @@ elif a[:2] == ["create", "item"]:
     item["id"] = "id-1"
     json.dump(item, open(store, "w"))
     print(json.dumps(item))
+elif a[:2] == ["edit", "item"]:
+    if os.environ.get("FAKE_BW_EDIT_FAIL"):
+        sys.exit(1)
+    item = json.loads(base64.b64decode(sys.stdin.read()))
+    item["id"] = a[2]
+    json.dump(item, open(store, "w"))
+    print(json.dumps(item))
 elif a[:2] == ["get", "item"]:
+    if os.environ.get("FAKE_BW_GET_SLEEP"):
+        import time
+        open("$SB/bw-get-started", "w").write("x")
+        time.sleep(float(os.environ["FAKE_BW_GET_SLEEP"]))
     item = json.load(open(store))
     if os.environ.get("FAKE_BW_TAMPER"):
         for f in item["fields"]:
@@ -136,12 +147,20 @@ if a[1] == "generate":
     rev = a[3].split("=", 1)[1]
     doc = {k: {"key": base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("="), "revision": rev}
            for k in ["cms-v1", "drive-approved-v1", "official-export-v1", "rss-v1"]}
+    if os.environ.get("FAKE_NODE_GEN_FAIL_ECHO"):
+        # the generator's own failure output names a key it never wrote to stdout
+        open("$SB/node-gen-leaked", "w").write(doc["rss-v1"]["key"])
+        print("adapter rss-v1 rejected key " + doc["rss-v1"]["key"], file=sys.stderr)
+        sys.exit(1)
     print(json.dumps(doc, separators=(",", ":")))
 else:
     v = sys.stdin.read()
     open("$SB/node-checked", "w").write(v)
     if os.environ.get("FAKE_NODE_CHECK_ECHO"):
         print("invalid adapter key in " + v, file=sys.stderr)
+        sys.exit(1)
+    if os.environ.get("FAKE_NODE_CHECK_ECHO_LEAF"):
+        print("release_secret=ng detail=duplicate key " + json.loads(v)["cms-v1"]["key"], file=sys.stderr)
         sys.exit(1)
     sys.exit(1 if os.environ.get("FAKE_NODE_CHECK_FAIL") or v.endswith("\n") else 0)
 FAKE
@@ -150,7 +169,7 @@ export PATH="$SB/bin:$PATH"
 CONSUMER="$SB/cor-os"
 mkdir -p "$CONSUMER/scripts" && touch "$CONSUMER/scripts/release-secrets.mjs"
 git -C "$CONSUMER" init -q && git -C "$CONSUMER" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
-reset() { rm -rf "$SB/gh/"* "$SB/vault/"* "$SB"/curl-argv "$SB"/curl-urls "$SB"/gh-argv "$SB"/bw-argv "$SB"/node-argv "$SB"/node-checked; }
+reset() { rm -rf "$SB/gh/"* "$SB/vault/"* "$SB"/curl-argv "$SB"/curl-urls "$SB"/gh-argv "$SB"/bw-argv "$SB"/node-argv "$SB"/node-checked "$SB"/bw-get-started "$SB"/node-gen-leaked; }
 run() { bash "$SCRIPT" "$@" 2>&1; }
 row() { grep -c "\"rule\":\"$1\"" "$AIDD_LEDGER_PATH" 2>/dev/null || true; }
 
@@ -226,8 +245,9 @@ bwv="$(python3 -c 'import json,sys; print([f["value"] for f in json.load(open(sy
 [[ $rc -eq 0 && -n "$bwv" && "$(cat "$SB/gh/MCP_TOKEN" 2>/dev/null)" == "$bwv" && "$out" == *"KEPT MCP_TOKEN in Bitwarden as env/production/MCP_TOKEN (read back equal, length ${#bwv})"* && "$out" != *"$bwv"* ]] \
   && grep '"rule":"recipe-mcp-token-registered"' "$AIDD_LEDGER_PATH" | grep -q "read back equal, length ${#bwv}" \
   && ok "mcp-token: one generated value lands in Bitwarden and GitHub, read back equal, never printed" || bad "mcp good" "rc=$rc $out"
-python3 -c 'import json,sys; f={x["name"]:x for x in json.load(open(sys.argv[1]))["fields"]}; assert f["_bw.variable"]["value"]=="MCP_TOKEN" and f["_bw.environment"]["value"]=="production" and f["value"]["type"]==1' "$SB/vault/item.json" 2>/dev/null \
-  && ok "mcp-token: the Bitwarden item follows bwenv's layout (_bw.variable, _bw.environment, a hidden value field)" || bad "mcp layout" "$(cat "$SB/vault/item.json" 2>/dev/null | head -c 300)"
+python3 -c 'import json,sys; f={x["name"]:x for x in json.load(open(sys.argv[1]))["fields"]}; assert f["_bw.variable"]["value"]=="MCP_TOKEN" and f["_bw.environment"]["value"]=="production" and f["_bw.status"]["value"]=="active" and f["value"]["type"]==1' "$SB/vault/item.json" 2>/dev/null \
+  && grep -q '^create item' "$SB/bw-argv" && grep -q '^edit item id-1' "$SB/bw-argv" \
+  && ok "mcp-token: the Bitwarden item follows bwenv's layout (_bw.variable, _bw.environment, a hidden value field), created unverified and set active after the readback" || bad "mcp layout" "$(python3 -c 'import json,sys; print([(f["name"], f["value"]) for f in json.load(open(sys.argv[1]))["fields"] if f["name"] != "value"])' "$SB/vault/item.json" 2>/dev/null)"
 ! grep -qF -- "$bwv" "$SB/bw-argv" "$SB/gh-argv" "$AIDD_LEDGER_PATH" && ok "mcp-token: the value is in no argv and not in the ledger" || bad "mcp argv" "leaked"
 reset
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os)"; rc=$?
@@ -326,15 +346,15 @@ reset
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
 [[ $rc -eq 1 && -z "$(ls "$SB/gh")" ]] && ok "--resume-from-bitwarden with no ledger item refuses" || bad "resume none" "rc=$rc $out"
 reset
-python3 -c 'import json,sys; json.dump({"id":"id-9","name":"env/production/MCP_TOKEN","fields":[{"type":0,"name":"_bw.variable","value":"MCP_TOKEN"},{"type":0,"name":"_bw.environment","value":"production"},{"type":0,"name":"_bw.service","value":"cor-os"},{"type":1,"name":"value","value":"hand typed value with spaces"}]}, open(sys.argv[1],"w"))' "$SB/vault/item.json"
+python3 -c 'import json,sys; json.dump({"id":"id-9","name":"env/production/MCP_TOKEN","fields":[{"type":0,"name":"_bw.variable","value":"MCP_TOKEN"},{"type":0,"name":"_bw.environment","value":"production"},{"type":0,"name":"_bw.service","value":"cor-os"},{"type":0,"name":"_bw.status","value":"active"},{"type":1,"name":"value","value":"hand typed value with spaces"}]}, open(sys.argv[1],"w"))' "$SB/vault/item.json"
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
 [[ $rc -ne 0 && -z "$(ls "$SB/gh")" && "$out" == *"fails the recipe's check"* && "$out" != *"hand typed"* ]] \
   && ok "--resume-from-bitwarden refuses a copy with whitespace (the recipe's check), GitHub untouched" || bad "resume check" "rc=$rc $out"
 reset
 python3 -c 'import json,sys; json.dump({"id":"id-8","name":"env/staging/MCP_TOKEN","fields":[{"type":0,"name":"_bw.variable","value":"MCP_TOKEN"},{"type":0,"name":"_bw.environment","value":"staging"},{"type":0,"name":"_bw.service","value":"cor-os"},{"type":1,"name":"value","value":"stagingValue_0123456789abcdefghijklmnopqrstu"}]}, open(sys.argv[1],"w"))' "$SB/vault/item.json"
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --env production --keep-in-bitwarden env/staging/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
-[[ $rc -ne 0 && -z "$(ls "$SB/gh")" && "$out" == *"_bw.environment=staging"* ]] \
-  && ok "--resume-from-bitwarden refuses an item whose _bw.environment differs from --env" || bad "resume env" "rc=$rc $out"
+[[ $rc -eq 2 && -z "$(ls "$SB/gh")" && "$out" == *"--env production does not match the Bitwarden item env/staging/MCP_TOKEN (environment staging)"* ]] \
+  && ok "--resume-from-bitwarden with --env other than the item path's environment is a usage error before Bitwarden is read" || bad "resume env" "rc=$rc $out"
 reset
 python3 -c 'import json,sys; json.dump({"id":"id-7","name":"env/production/MCP_TOKEN","fields":[{"type":0,"name":"_bw.variable","value":"OTHER_TOKEN"},{"type":1,"name":"value","value":"otherValue_0123456789abcdefghijklmnopqrstuvw"}]}, open(sys.argv[1],"w"))' "$SB/vault/item.json"
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
@@ -391,6 +411,85 @@ python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); b["recipes"]["githu
   "$ROOT/scripts/lib/secret-verify-recipes.json" "$SB/strict/secret-verify-recipes.json"
 out="$(printf '%s\n%s\n' "$GID" "$GSEC" | python3 -I "$SB/strict/secret_recipes.py" --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r 2>&1)"; rc=$?
 [[ $rc -eq 1 && ! -s "$SB/curl-argv" && "$out" == *"empty or has unknown keys"* ]] && ok "a misspelled pass condition refuses before any request" || bad "strict" "rc=$rc $out"
+
+# 16 #480: the residuals of the #479 reviews. Each row fails on the helper before #480 (see the PR's H5-NEGATIVE).
+item() {  # item <path> <environment field> <status field or -> <value>
+  python3 -c 'import json,sys; p,e,s,v=sys.argv[2:6]; f=[{"type":0,"name":"_bw.variable","value":"MCP_TOKEN"},{"type":0,"name":"_bw.environment","value":e},{"type":0,"name":"_bw.service","value":"cor-os"}]; f+=([{"type":0,"name":"_bw.status","value":s}] if s!="-" else []); f.append({"type":1,"name":"value","value":v}); json.dump({"id":"id-5","name":p,"fields":f}, open(sys.argv[1],"w"))' "$SB/vault/item.json" "$@"
+}
+SHAPED="abcdefghijABCDEFGHIJ0123456789_-abcdefghijk"  # 43 URL-safe characters: the shape of token_urlsafe(32)
+# 16.1 MEDIUM: on the create path, --env is compared with the item path before any value is made
+reset
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --env production --keep-in-bitwarden env/staging/MCP_TOKEN)"; rc=$?
+[[ $rc -eq 2 && ! -s "$SB/bw-argv" && ! -e "$SB/vault/item.json" && -z "$(ls "$SB/gh")" && "$out" == *"does not match the Bitwarden item env/staging/MCP_TOKEN"* ]] \
+  && ok "#480-1 create path: --env production with env/staging/MCP_TOKEN refuses before Bitwarden is touched (no dead-end item)" || bad "#480-1 create env" "rc=$rc $out"
+# 16.2 LOW: a copy whose readback did not match stays unverified, and resume refuses it
+reset
+printf '' | FAKE_BW_TAMPER=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN >/dev/null; rc1=$?
+st="$(python3 -c 'import json,sys; print([f["value"] for f in json.load(open(sys.argv[1]))["fields"] if f["name"]=="_bw.status"][0])' "$SB/vault/item.json" 2>/dev/null)"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+[[ $rc1 -eq 3 && "$st" == "unverified" && $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"_bw.status=unverified, not active"* ]] \
+  && ok "#480-2 a readback mismatch leaves the item _bw.status=unverified, and a later resume by hand refuses it" || bad "#480-2 unverified" "rc1=$rc1 status=$st rc=$rc $out"
+reset
+item env/production/MCP_TOKEN production - "$SHAPED"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+[[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"_bw.status=None, not active"* ]] \
+  && ok "#480-2 resume also refuses an item with no _bw.status (it was never marked verified)" || bad "#480-2 no status" "rc=$rc $out"
+# 16.3 LOW: resume requires the generator's shape, not only the format rules
+reset
+item env/production/MCP_TOKEN production active "short_but_no_space"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+[[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"is not the shape the recipe's generator makes (43 URL-safe characters)"* && "$out" != *"short_but"* ]] \
+  && ok "#480-3 resume refuses a copy that passes the format rules but is not token_urlsafe(32)'s 43 URL-safe characters" || bad "#480-3 shape" "rc=$rc $out"
+reset
+item env/production/MCP_TOKEN production active "$SHAPED"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+[[ $rc -eq 0 && "$(cat "$SB/gh/MCP_TOKEN" 2>/dev/null)" == "$SHAPED" && "$out" != *"$SHAPED"* ]] \
+  && ok "#480-3 a verified copy of the generator's shape still resumes (green side of the shape rule)" || bad "#480-3 shaped" "rc=$rc $out"
+# 16.4 LOW: the environment field must agree with the item's own path even without --env
+reset
+item env/production/MCP_TOKEN staging active "$SHAPED"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+[[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"_bw.environment=staging"* && "$out" == *"in production"* ]] \
+  && ok "#480-4 without --env, an item at env/production/ whose _bw.environment says staging does not resume into the repo-level secret" || bad "#480-4 path env" "rc=$rc $out"
+# 16.5 LOW (test gaps): the state message for a created but unverified item on rules other than the readback; two items
+reset
+out="$(printf '' | FAKE_BW_EDIT_FAIL=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+[[ $rc -eq 3 && -z "$(ls "$SB/gh")" && "$out" == *"marking it active failed"* && "$out" == *"State: Bitwarden has an unverified item env/production/MCP_TOKEN (id id-1); GitHub was not touched."* && "$out" != *"re-run the same command with --resume"* ]] \
+  && ok "#480-5 a failed status update (rule bitwarden-status) names the unverified item, GitHub untouched, no resume offered" || bad "#480-5 edit fail" "rc=$rc $out"
+reset
+printf '' | FAKE_BW_GET_SLEEP=5 bash "$SCRIPT" --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN >"$SB/sig-out" 2>&1 &
+pid=$!
+for _ in $(seq 1 30); do [[ -e "$SB/bw-get-started" ]] && break; sleep 0.2; done
+kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+out="$(cat "$SB/sig-out")"
+[[ -e "$SB/bw-get-started" && -z "$(ls "$SB/gh")" && "$out" == *"State: Bitwarden has an unverified item env/production/MCP_TOKEN (id id-1); GitHub was not touched."* ]] \
+  && grep -q '"rule":"recipe-mcp-token-interrupted"' "$AIDD_LEDGER_PATH" \
+  && ok "#480-5 a signal between the Bitwarden create and its readback (rule interrupted) still names the unverified item" || bad "#480-5 signal" "$out"
+reset
+item env/production/MCP_TOKEN production active "$SHAPED"
+out="$(printf '' | FAKE_BW_EXISTING=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN --resume-from-bitwarden)"; rc=$?
+[[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"needs exactly one item env/production/MCP_TOKEN (found 2)"* ]] \
+  && ok "#480-5 resume refuses when two items match the secret (no guess between copies)" || bad "#480-5 two items" "rc=$rc $out"
+# 16.6 keep is allowed only on a generated recipe with one value
+reset
+mkdir -p "$SB/keep"
+cp "$ROOT/scripts/lib/secret_recipes.py" "$ROOT/scripts/lib/slack_oauth_code.py" "$SB/keep/"
+python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); b["recipes"]["github-oauth"]["keep"]="bitwarden"; json.dump(b,open(sys.argv[2],"w"))' \
+  "$ROOT/scripts/lib/secret-verify-recipes.json" "$SB/keep/secret-verify-recipes.json"
+out="$(printf '%s\n%s\n' "$GID" "$GSEC" | python3 -I "$SB/keep/secret_recipes.py" --recipe github-oauth COR_GITHUB_OAUTH_CLIENT_ID COR_GITHUB_OAUTH_CLIENT_SECRET o/r --keep-in-bitwarden env/production/COR_GITHUB_OAUTH_CLIENT_ID 2>&1)"; rc=$?
+[[ $rc -eq 1 && ! -s "$SB/curl-argv" && ! -s "$SB/bw-argv" && -z "$(ls "$SB/gh")" && "$out" == *"only for a generated recipe with one value"* ]] \
+  && ok "#480-6 a network recipe that declares keep=bitwarden refuses before any request or Bitwarden call" || bad "#480-6 keep kind" "rc=$rc $out"
+# 16.7 the consumer's output never shows a JSON leaf of the value or a key the generator printed on failure
+reset
+out="$(printf '' | FAKE_NODE_CHECK_ECHO_LEAF=1 run --recipe intake-keys PUBLISHING_INTAKE_KEYS_JSON o/r --repo-dir "$CONSUMER" --param revision=r1)"; rc=$?
+leaf="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cms-v1"]["key"])' "$SB/node-checked" 2>/dev/null)"
+[[ $rc -eq 1 && -n "$leaf" && "$out" != *"$leaf"* && "$out" == *"duplicate key <value>"* ]] \
+  && ok "#480-7 a consumer check that prints one adapter key (a JSON leaf) is shown redacted" || bad "#480-7 leaf" "rc=$rc $out"
+reset
+out="$(printf '' | FAKE_NODE_GEN_FAIL_ECHO=1 run --recipe intake-keys PUBLISHING_INTAKE_KEYS_JSON o/r --repo-dir "$CONSUMER" --param revision=r1)"; rc=$?
+leaked="$(cat "$SB/node-gen-leaked" 2>/dev/null)"
+[[ $rc -eq 1 && -n "$leaked" && "$out" != *"$leaked"* && "$out" == *"rejected key <redacted>"* && "$out" == *"cor-os#126"* ]] \
+  && ok "#480-7 a generator that fails and prints a key it never wrote to stdout is shown redacted" || bad "#480-7 gen fail" "rc=$rc $out"
 
 # Mutants (red side). Each writes a changed copy of the helper next to a copy of the recipe file and runs that copy
 # itself in this file (pair18: the variable written is the variable executed).
