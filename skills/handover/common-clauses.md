@@ -73,6 +73,26 @@
   「実行時点で未追跡 → `git ls-files` に出ない → ローカル緑 / CI 赤」だった。
   **CI は最後の確認であって最初の確認ではない**（#90）。
 
+### merge — 最終レビューが判定した head で固定する（2026-11-05 の同型 2 件）
+
+- **`--match-head-commit` には、最終レビューが判定した head の sha を渡す。PR の今の head を渡さない。**
+  レビュー記録（PR コメントやレビュー報告）には `Reviewed-Head: <40 桁の sha>` を必ず書き、その値をそのまま使う。
+
+  ```
+  gh pr merge <PR> --merge --match-head-commit <Reviewed-Head の sha>
+  gh pr view <PR> --json state,mergeCommit     # MERGED と merge commit を読み戻す
+  ```
+
+- レビューの後に commit が 1 本でも足されていれば、head が食い違うので GitHub が merge を拒否する
+  （expectedHeadOid）。拒否されたら、足した差分だけを独立レビューに回し、新しい `Reviewed-Head` で打ち直す。
+- base を取り込んだだけで head が変わったとき（branch protection の up-to-date 要件など）は、
+  patch-id（`git diff origin/<base>...<head> | git patch-id --stable`）が `Reviewed-Head` のときと同じであることを
+  示してから、新しい head を渡す。
+- 2026-11-05 に同じ型が 2 件あった。
+  - cor-os #135 は、GitHub 上の review が無いまま merge した。
+  - ccs #486、claude-code-harness#6、aidd-governance#237 は、PR の今の head を渡したので、レビュー後の commit が照合をすり抜けた。
+  - 事後レビューは 3 本とも CRITICAL/HIGH 0 だった。
+
 ### 撤収 — マージを確認してから消す
 
 - **worktree とブランチを消す前に、その成果が着地したことを確認する。**
