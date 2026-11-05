@@ -7,7 +7,10 @@
 #       [--cloudflare-account <account id>] [--allow-host <host>] [--expect <json.path>=<value>]
 #       [--auth '<header line with %s>'] [--env <environment>] [--dry-run]
 #   register-secret-verified.sh --recipe <name> <NAME>... <owner/repo> [--env <environment>] [--param k=v]...
-#       [--repo-dir <consumer checkout>] [--keep-in-bitwarden env/<environment>/<NAME>] [--dry-run]
+#       [--repo-dir <consumer checkout>] [--keep-in-bitwarden env/<environment>/<NAME>] [--resume-from-bitwarden]
+#       [--dry-run]
+#   A kept Bitwarden copy is created with _bw.status=unverified and set active only after it reads back equal;
+#   --resume-from-bitwarden stores only an active copy of the generator's shape (#480).
 #
 #   --recipe runs a reviewed recipe from scripts/lib/secret-verify-recipes.json through scripts/lib/secret_recipes.py
 #   (claude-code-skills#478): an OAuth client pair checked by its provider with a negative control on every run, a value
