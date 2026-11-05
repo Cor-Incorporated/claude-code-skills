@@ -34,8 +34,8 @@ Access の Rotate は、実行の前に本人の確認が要る操作である�
 | # | 操作 | 誰が | 前提 | 今の状態 |
 |---|---|---|---|---|
 | R1 | 一時管理 token 2 本の取り消し | 本人（Cloudflare の画面） | なし | **実行できる** |
-| R2 | 旧 secret の失効（`previous_client_secret_expires_at` を前倒しする） | 本人が同席し、レビュー済みの経路で | §3 の P1〜P5 | **実行できない**。経路が未実装で、recipe の origin も合っていない |
-| R3 | 次の再 Rotate（定期や漏洩時） | 本人が同席し、`--recipe access-service-token` で | R2 の目標時刻を過ぎている、recipe の origin を Access app に合わせる、develop の配備 | **実行できない**（§4） |
+| R2 | 旧 secret の失効（`previous_client_secret_expires_at` を前倒しする） | 本人の確認を得て、レビュー済みの経路で | §3 の P1〜P5 | **実行できない**。経路が未実装で、recipe の origin も合っていない |
+| R3 | 次の再 Rotate（定期や漏洩時） | 本人の確認を得て、`--recipe access-service-token` で | R2 の目標時刻を過ぎている、recipe の origin を Access app に合わせる、develop の配備 | **実行できない**（§4） |
 
 ## 2. R1 一時管理 token の取り消し
 
@@ -54,7 +54,7 @@ Access の Rotate は、実行の前に本人の確認が要る操作である�
 
 | # | 前提 | 現在値 | 必要な値 / 確かめ方 |
 |---|---|---|---|
-| P1 | 配備中の Router が、GitHub にある今の pair（新しい secret）を持っている | 満たす（§0 の配備の行） | 実行の直前に、下の「配備の証跡」で 3 点を確かめる。(a) 最新の deploy-workbench の run が `completed` / `success` で、その `createdAt` が `CF_ACCESS_CLIENT_SECRET` の今の updatedAt より後。(b) その run の「Deploy all twelve Workers」step が success。(c) 実行中・待機中の run が無い。workflow の外で行った `wrangler rollback` は、この方法では見えない。**bearer probe ではこれを確かめられない。** probe は fn-b のモデルしか通らず、猶予の間は旧 secret も新 secret も受け付けられる |
+| P1 | 配備中の Router が、GitHub にある今の pair（新しい secret）を持っている | 満たす（§0 の配備の行） | 実行の直前に、下の「配備の証跡」で 3 点を確かめる。(a) 最新の deploy-workbench の run が `completed` / `success` で、その `createdAt` が `CF_ACCESS_CLIENT_SECRET` の今の updatedAt より後。(b) その run の「Deploy all twelve Workers」step が success。(c) `status` が `completed` 以外の run（in_progress / queued / waiting / pending / requested）が無い。workflow の外で行った `wrangler rollback` は、この方法では見えない。**bearer probe ではこれを確かめられない。** probe は fn-b のモデルしか通らず、猶予の間は旧 secret も新 secret も受け付けられる |
 | P2 | 旧 secret の利用者が他にいない | **未確認** | 確かめる手段が無い（Access の記録は secret ごとに分かれていない）。そこで猶予つきで失効させる（下の手順 2） |
 | P3 | 管理 token に `Access: Service Tokens Write` と `Access: Apps and Policies Read` がある | 発行していない | 本人が短い期限で発行する。update API が受け付ける権限は `Access: Service Tokens Write`（一次資料 2） |
 | P4 | 実行経路がレビュー済みで、develop から配備されている | **無い** | 下の「実行経路」 |
@@ -76,7 +76,7 @@ gh run view <最新の completed run の databaseId> --repo Cor-Incorporated/cor
 
 - 1 本目の時刻より後に作られた、最新の `completed` の run が `success` であること。
 - 3 本目が `["success"]` であること（失敗した run では `skipped` になる）。
-- 2 本目の一覧に、`in_progress` / `queued` / `waiting` の run が無いこと。
+- 2 本目の一覧に、`status` が `completed` 以外の run が無いこと（concurrency 待ちの run は `pending` と出る）。
 
 ### 実行経路（未実装。提案して停止）
 
