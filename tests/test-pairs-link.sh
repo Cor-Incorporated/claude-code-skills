@@ -188,8 +188,16 @@ else:
     )
 
 # pair10: opencode team.ts blanket allow must be 0 (comments excluded)
-oc_team = home / "Developer" / "opencode" / "packages" / "guardrails" / "profile" / "plugins" / "team.ts"
-if not oc_team.is_file():
+# opencode 0338dd2063 (2026-10-19) renamed profile/plugins/team.ts to profile/src/team.ts; plugins/team/ is now a
+# 14-line 2.x bridge that imports it. Read the factory where it is, and fall back to the 1.x path for an older checkout.
+oc_profile = home / "Developer" / "opencode" / "packages" / "guardrails" / "profile"
+oc_team = next((p for p in (oc_profile / "src" / "team.ts", oc_profile / "plugins" / "team.ts") if p.is_file()),
+               oc_profile / "src" / "team.ts")
+if not oc_team.is_file() and oc_profile.is_dir():
+    # a checkout without the factory at either path is a moved file, not a missing checkout (#486 review)
+    bad("pair10 opencode team.ts not found in an existing checkout",
+        f"looked at {oc_profile / 'src' / 'team.ts'} and {oc_profile / 'plugins' / 'team.ts'}")
+elif not oc_team.is_file():
     skip("pair10 opencode team.ts skipped (no opencode checkout)")
 else:
     text = oc_team.read_text()
