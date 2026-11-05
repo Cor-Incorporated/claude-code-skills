@@ -193,7 +193,11 @@ else:
 oc_profile = home / "Developer" / "opencode" / "packages" / "guardrails" / "profile"
 oc_team = next((p for p in (oc_profile / "src" / "team.ts", oc_profile / "plugins" / "team.ts") if p.is_file()),
                oc_profile / "src" / "team.ts")
-if not oc_team.is_file():
+if not oc_team.is_file() and oc_profile.is_dir():
+    # a checkout without the factory at either path is a moved file, not a missing checkout (#486 review)
+    bad("pair10 opencode team.ts not found in an existing checkout",
+        f"looked at {oc_profile / 'src' / 'team.ts'} and {oc_profile / 'plugins' / 'team.ts'}")
+elif not oc_team.is_file():
     skip("pair10 opencode team.ts skipped (no opencode checkout)")
 else:
     text = oc_team.read_text()
