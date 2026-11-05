@@ -415,6 +415,13 @@ def mark_active(env, item, item_name, item_id, value):
     status = bw_field(after, "_bw.status")
     if edit.returncode != 0 or kept != value or status != BW_ACTIVE:
         same = "unreadable" if not isinstance(kept, str) else ("equal" if kept == value else "different")
+        if same != "equal" and status == BW_ACTIVE:
+            # an active item whose value changed must not be resumable (#480 review 2): mark it unverified again
+            back = [dict(f, value=BW_UNVERIFIED) if isinstance(f, dict) and f.get("name") == "_bw.status" else f
+                    for f in after.get("fields") or []]
+            subprocess.run(["bw", "edit", "item", item_id], capture_output=True, text=True, env=env, check=False,
+                           input=base64.b64encode(json.dumps(dict(after, fields=back)).encode()).decode())
+            status = bw_field(bw_read(env, item_id)[0], "_bw.status")
         step = ("Set _bw.status=active on it by hand, then re-run with --resume-from-bitwarden." if same == "equal"
                 else "Delete that item by hand and run again without --resume-from-bitwarden; do not resume it.")
         raise Refused(3, "bitwarden-status", "NG: the Bitwarden item %s (%s) read back equal, but marking it %s "
@@ -422,16 +429,22 @@ def mark_active(env, item, item_name, item_id, value):
                           item_name, item_id, BW_ACTIVE, edit.returncode, status, same, step))
 
 
-def next_step(status):
-    """What to do with an existing ledger item, by its _bw.status (#480 review)."""
+def next_step(status, name, repo):
+    """What to do with an existing ledger item, by its _bw.status (#480 reviews). Never deletion by default: the
+    item may be the copy the administrator uses, and a new value would overwrite the GitHub secret."""
+    check = "`gh secret list --repo %s --json name,updatedAt` for %s" % (repo, name)
     if status == BW_ACTIVE:
-        return "If an earlier run kept it and GitHub failed, re-run the same command with --resume-from-bitwarden."
+        return ("If an earlier run kept it and GitHub failed (see %s), re-run the same command with "
+                "--resume-from-bitwarden." % check)
     if status == BW_UNVERIFIED:
-        return ("Its copy never read back equal: delete that item by hand, then run again without "
+        return ("It was not marked active. If the run that made it printed 'did not read back equal', delete that "
+                "item by hand and run again without --resume-from-bitwarden. If it printed 'marking it active did "
+                "not hold ... value now equal', set _bw.status=active on it by hand and re-run with "
                 "--resume-from-bitwarden.")
-    return ("It has no _bw.status (an item made before #480, or by hand). If the run that made it printed "
-            "'KEPT ... (read back equal ...)', set _bw.status=active on it by hand and re-run with "
-            "--resume-from-bitwarden; otherwise delete it and run again without --resume-from-bitwarden.")
+    return ("It has no _bw.status (an item made before #480, or by hand). Do not delete it: it may be the copy the "
+            "administrator uses. Check %s: if GitHub has it, nothing is left to do. If GitHub does not have it "
+            "and the run that made the item printed 'KEPT ... (read back equal ...)', set _bw.status=active on it "
+            "by hand and re-run with --resume-from-bitwarden. Rotating the value is a separate step." % check)
 
 
 def keep_in_bitwarden(run, name, value):
@@ -461,7 +474,7 @@ def keep_in_bitwarden(run, name, value):
                           "stored. A copy this tool makes is set active only after it read back equal, and an item "
                           "marked active by hand is taken as checked by whoever marked it. %s" % (
                               item_name, bw_field(existing[0], "_bw.status"), BW_ACTIVE,
-                              next_step(bw_field(existing[0], "_bw.status"))))
+                              next_step(bw_field(existing[0], "_bw.status"), name, run.repo)))
         got = subprocess.run(["bw", "get", "item", existing[0].get("id", "")], capture_output=True, text=True, env=env,
                              check=False)
         try:
@@ -484,8 +497,13 @@ def keep_in_bitwarden(run, name, value):
         return kept
     if existing:
         statuses = ", ".join("%s (_bw.status=%s)" % (i.get("name"), bw_field(i, "_bw.status")) for i in existing)
-        hint = (next_step(bw_field(existing[0], "_bw.status")) if len(existing) == 1 else
-                "Leave exactly one item for %s by hand first." % name)
+        if len(existing) != 1:
+            hint = "Leave exactly one item for %s by hand first." % name
+        elif existing[0].get("name") != item_name:
+            hint = ("The existing item is %s, not %s: name that path with --keep-in-bitwarden if it is the copy you "
+                    "mean, or leave it." % (existing[0].get("name"), item_name))
+        else:
+            hint = next_step(bw_field(existing[0], "_bw.status"), name, run.repo)
         raise Refused(1, "bitwarden-exists", "NG: the env ledger already has %s: %s. Rotating is a separate step. "
                       "%s Nothing was stored." % (name, statuses, hint))
     item = {"type": 1, "name": item_name, "favorite": False, "reprompt": 0, "notes": None, "passwordHistory": [],

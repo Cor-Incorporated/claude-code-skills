@@ -155,6 +155,11 @@ if a[1] == "generate":
     rev = a[3].split("=", 1)[1]
     doc = {k: {"key": base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("="), "revision": rev}
            for k in ["cms-v1", "drive-approved-v1", "official-export-v1", "rss-v1"]}
+    if os.environ.get("FAKE_NODE_GEN_FAIL_FIXED"):
+        # a key of the generator's length that by chance has no digit
+        open("$SB/node-gen-leaked", "w").write("abcdefghijABCDEFGHIJabcdefghijABCDEFGHIJabc")
+        print("adapter rss-v1 rejected key abcdefghijABCDEFGHIJabcdefghijABCDEFGHIJabc", file=sys.stderr)
+        sys.exit(1)
     if os.environ.get("FAKE_NODE_GEN_FAIL_ECHO"):
         # the generator's own failure output names a key it never wrote to stdout
         open("$SB/node-gen-leaked", "w").write(doc["rss-v1"]["key"])
@@ -446,13 +451,18 @@ out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --ke
 reset
 item env/production/MCP_TOKEN production - "$SHAPED"
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
-[[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"(_bw.status=None)"* && "$out" == *"set _bw.status=active on it by hand"* && "$(grep -c '^create item' "$SB/bw-argv" 2>/dev/null || true)" -eq 0 ]] \
+[[ $rc -eq 1 && -z "$(ls "$SB/gh")" && "$out" == *"(_bw.status=None)"* && "$out" == *"Do not delete it"* && "$out" == *"if GitHub has it, nothing is left to do"* && "$out" != *"otherwise delete"* && "$(grep -c '^create item' "$SB/bw-argv" 2>/dev/null || true)" -eq 0 ]] \
   && ok "#480 review: re-running the create on an item made before #480 names its status and the way forward (no dead end)" || bad "#480 exists legacy" "rc=$rc $out"
 reset
 item env/production/MCP_TOKEN production unverified "$SHAPED"
 out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
-[[ $rc -eq 1 && "$out" == *"(_bw.status=unverified)"* && "$out" == *"delete that item by hand, then run again without --resume-from-bitwarden"* ]] \
-  && ok "#480 review: an existing unverified item is to be deleted, not resumed" || bad "#480 exists unverified" "rc=$rc $out"
+[[ $rc -eq 1 && "$out" == *"(_bw.status=unverified)"* && "$out" == *"'did not read back equal', delete that item by hand"* && "$out" == *"'marking it active did not hold ... value now equal', set _bw.status=active"* ]] \
+  && ok "#480 review: an existing unverified item gets the step for each way it can have been left" || bad "#480 exists unverified" "rc=$rc $out"
+reset
+item env/staging/MCP_TOKEN staging active "$SHAPED"
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+[[ $rc -eq 1 && "$out" == *"The existing item is env/staging/MCP_TOKEN, not env/production/MCP_TOKEN"* && "$out" != *"re-run the same command with --resume-from-bitwarden"* ]] \
+  && ok "#480 review 2: an existing item at another path is named, and resume is not offered for the wrong path" || bad "#480 exists other path" "rc=$rc $out"
 # 16.3 LOW: resume requires the generator's shape, not only the format rules
 reset
 item env/production/MCP_TOKEN production active "short_but_no_space"
@@ -473,12 +483,13 @@ out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --ke
 # 16.5 LOW (test gaps): the state message for a created but unverified item on rules other than the readback; two items
 reset
 out="$(printf '' | FAKE_BW_EDIT_FAIL=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
-[[ $rc -eq 3 && -z "$(ls "$SB/gh")" && "$out" == *"marking it active did not hold: bw edit rc=1, _bw.status now unverified, value now equal"* && "$out" == *"Set _bw.status=active on it by hand"* ]] \
+[[ $rc -eq 3 && -z "$(ls "$SB/gh")" && "$out" == *"marking it active did not hold: bw edit rc=1, _bw.status now unverified, value now equal"* && "$out" == *"Set _bw.status=active on it by hand"* && "$out" != *"State: Bitwarden has an unverified item"* ]] \
   && ok "#480-5 a failed status update (rule bitwarden-status) says what it observed, GitHub untouched" || bad "#480-5 edit fail" "rc=$rc $out"
 reset
 out="$(printf '' | FAKE_BW_EDIT_TAMPER=1 run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
-[[ $rc -eq 3 && -z "$(ls "$SB/gh")" && "$out" == *"value now different"* && "$out" == *"do not resume it"* && "$out" != *"re-run with --resume-from-bitwarden"* ]] \
-  && ok "#480 review: an edit that changed the value says so and never offers resume" || bad "#480 edit tamper" "rc=$rc $out"
+st="$(python3 -c 'import json,sys; print([f["value"] for f in json.load(open(sys.argv[1]))["fields"] if f["name"]=="_bw.status"][0])' "$SB/vault/item.json" 2>/dev/null)"
+[[ $rc -eq 3 && -z "$(ls "$SB/gh")" && "$out" == *"value now different"* && "$out" == *"do not resume it"* && "$out" != *"re-run with --resume-from-bitwarden"* && "$out" != *"State: Bitwarden has an unverified item"* && "$st" == "unverified" ]] \
+  && ok "#480 review: an edit that changed the value says so, never offers resume, and leaves the item unverified" || bad "#480 edit tamper" "rc=$rc status=$st $out"
 reset
 printf '' | FAKE_BW_CREATE_SLEEP=5 bash "$SCRIPT" --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --keep-in-bitwarden env/production/MCP_TOKEN >"$SB/sig-out" 2>&1 &
 pid=$!
@@ -528,6 +539,10 @@ out="$(printf '' | FAKE_NODE_GEN_FAIL_ECHO=1 run --recipe intake-keys PUBLISHING
 leaked="$(cat "$SB/node-gen-leaked" 2>/dev/null)"
 [[ $rc -eq 1 && -n "$leaked" && "$out" != *"$leaked"* && "$out" == *"rejected key <redacted>"* && "$out" == *"cor-os#126"* ]] \
   && ok "#480-7 a generator that fails and prints a key it never wrote to stdout is shown redacted" || bad "#480-7 gen fail" "rc=$rc $out"
+reset
+out="$(printf '' | FAKE_NODE_GEN_FAIL_FIXED=1 run --recipe intake-keys PUBLISHING_INTAKE_KEYS_JSON o/r --repo-dir "$CONSUMER" --param revision=r1)"; rc=$?
+[[ $rc -eq 1 && "$out" != *"abcdefghijABCDEFGHIJabcdefghijABCDEFGHIJabc"* && "$out" == *"rejected key <redacted>"* ]] \
+  && ok "#480 review: a printed key with no digit (43 letters) is still redacted by the 40+ rule" || bad "#480 gen fail no digit" "rc=$rc $out"
 
 # Mutants (red side). Each writes a changed copy of the helper next to a copy of the recipe file and runs that copy
 # itself in this file (pair18: the variable written is the variable executed).
