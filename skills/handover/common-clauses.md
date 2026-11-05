@@ -73,25 +73,31 @@
   「実行時点で未追跡 → `git ls-files` に出ない → ローカル緑 / CI 赤」だった。
   **CI は最後の確認であって最初の確認ではない**（#90）。
 
-### merge — 最終レビューが判定した head で固定する（2026-11-05 の同型 2 件）
+### merge — 最終レビューの記録と head で固定する（2026-11-05 の 2 つの型）
 
-- **`--match-head-commit` には、最終レビューが判定した head の sha を渡す。PR の今の head を渡さない。**
-  レビュー記録（PR コメントやレビュー報告）には `Reviewed-Head: <40 桁の sha>` を必ず書き、その値をそのまま使う。
+- **最終レビューの記録が無い PR は merge しない。** レビュー記録（PR コメントやレビュー報告）には `Reviewed-Head: <40 桁の sha>` を必ず書く。
+- **`--match-head-commit` には、その `Reviewed-Head` の sha を渡す。PR の今の head を渡さない。**
 
   ```
-  gh pr merge <PR> --merge --match-head-commit <Reviewed-Head の sha>
-  gh pr view <PR> --json state,mergeCommit     # MERGED と merge commit を読み戻す
+  gh pr view <PR> -R <owner/repo> --json headRefOid -q .headRefOid   # 今の head。Reviewed-Head と比べる
+  gh pr merge <PR> -R <owner/repo> --merge --match-head-commit <Reviewed-Head の sha>
+  gh pr view <PR> -R <owner/repo> --json state,mergeCommit            # MERGED と merge commit を読み戻す
   ```
 
 - レビューの後に commit が 1 本でも足されていれば、head が食い違うので GitHub が merge を拒否する
-  （expectedHeadOid）。拒否されたら、足した差分だけを独立レビューに回し、新しい `Reviewed-Head` で打ち直す。
-- base を取り込んだだけで head が変わったとき（branch protection の up-to-date 要件など）は、
-  patch-id（`git diff origin/<base>...<head> | git patch-id --stable`）が `Reviewed-Head` のときと同じであることを
-  示してから、新しい head を渡す。
-- 2026-11-05 に同じ型が 2 件あった。
-  - cor-os #135 は、GitHub 上の review が無いまま merge した。
-  - ccs #486、claude-code-harness#6、aidd-governance#237 は、PR の今の head を渡したので、レビュー後の commit が照合をすり抜けた。
-  - 事後レビューは 3 本とも CRITICAL/HIGH 0 だった。
+  （gh の help:「Commit SHA that the pull request head must match to allow merge」）。
+  拒否されたら、足した差分だけを独立レビューに回し、新しい `Reviewed-Head` で打ち直す。
+- base を取り込んだだけで head が変わったとき（branch protection の up-to-date 要件など）は、同じ `origin/<base>` に対して
+  `git diff origin/<base>...<Reviewed-Head の sha> | git patch-id --stable` と
+  `git diff origin/<base>...<新しい head> | git patch-id --stable` が一致することを示し、CI が緑になってから新しい head を渡す。
+  - patch-id は空白だけの変更を区別しない。
+  - 取り込みの衝突を手で解いた変更は見えない。
+  - base が新しく得たものとの組み合わせも見ない。
+  - 衝突を手で解いたとき、または空白に意味があるファイル（YAML、Makefile）が変わったときは、patch-id に頼らず差分をレビューし直す。
+- 2026-11-05 に、型の違う事故が 2 つあった。
+  - cor-os #135 は、レビュー記録が無いまま merge した（GitHub 上の review は 0 件）。上の 1 項目めが防ぐ。
+  - ccs #486、claude-code-harness#6、aidd-governance#237 は、PR の今の head を渡したので、レビュー後の commit が照合をすり抜けた。2 項目めが防ぐ。
+  - 事後レビューは 3 本とも CRITICAL/HIGH 0 だった。記録は `~/Documents/Codex/2026-11-05/reports/harness-family--harness-{ccs,mirror,aidd}.md` の「事後レビュー」の節にある。
 
 ### 撤収 — マージを確認してから消す
 
