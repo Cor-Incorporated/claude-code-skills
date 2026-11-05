@@ -17,6 +17,12 @@ Accessアプリ、ポリシー、ユーザーの許可は追加しない。本�
   除去してから実行する。preflightと最終検査は、全Access appにfの直接host・wildcard・
   path shadowが残る場合も拒否する。fには資格情報を送らない。Routerのactive経路は
   a/bのみで、cは今回維持する補助origin。MacへのSSH、tunnel再作成、再Rotateは行わない。
+- 2026-11-05の注記: 上の2項目は2026-11-02の登録時点の構成である。その後、次の2点が変わった。
+  - 2026-11-04に`llm-origin-fn-b.cor-jp.com`が同じappと同じpolicyに追加され、appはa/b/c/fn-bになったと
+    報告されている（`~/Documents/ai-cluster-ops/report_20261104_go1-access-fn-b.md`。APIでは読み直していない）。
+  - Routerのprimaryはa/b/fn-bになった（cor-os 8e0803f）。
+  recipeは今もa/b/cを検証するので、次のRotateの前にrecipeのPRが要る
+  （[access-service-token-rotation-prep.md](access-service-token-rotation-prep.md) §4）。
 - recipe/runner/helperをPRでレビューし、developへ取り込んだ後のsetup.shで配備する。
   未配備の間はRotateしない。設定の差分があれば自動修正せず停止する。
 - 本人の本番変更GOを得る。2026-11-01の読み取りでは既存tokenは有効、元の期限は
@@ -36,8 +42,10 @@ Accessアプリ、ポリシー、ユーザーの許可は追加しない。本�
 
 ## 実行
 
-2026-11-02の停止済み試行は既に1回Rotateしているため、下の更新コマンドを再実行しない。
-f退役の反映後に「保存した同じ組を使う復旧」だけを使う。
+2026-11-02に1回Rotateし、同日05:44Zに「保存した同じ組を使う復旧」で登録まで済んだ。
+下の更新コマンドを再実行しない。旧secretが生きている間は、preflightの`overlap`で拒否される。
+次の操作（一時管理tokenの取消し、旧secretの失効、次の再Rotate）の前提と手順は
+[access-service-token-rotation-prep.md](access-service-token-rotation-prep.md)にある。
 
 まずread-only preflight。dry-runは設定のGET照合だけであり、pairの検証成功ではない。
 
@@ -104,7 +112,7 @@ bash ~/.claude/scripts/register-secret-verified.sh --recipe access-service-token
 成功時は新しいworkだけを削除し、原本は変更しない。2本のGitHub更新日時と成功台帳を
 読み戻した後、作業者が原本の対象2ファイルと空directoryを削除する。
 
-旧secretはRouter配備後のsmokeが成功するまで失効させない。検証が失敗しても
+旧secretはRouter配備後のsmokeが成功し、rotation-prep §3 P1の配備の証跡がそろうまで失効させない。検証が失敗しても
 既存secretを残せるので、既存Routerを新しい資格情報へ直接切り替えてはならない。
 一時管理tokenの取消しは本人に案内し、private入力fileと表示タブも片付ける。
 
