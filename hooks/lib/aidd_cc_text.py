@@ -870,9 +870,81 @@ def is_approval_text(text: str) -> bool:
     )
 
 
+# 2026-11-12 incident: a <task-notification> whose body explained a review result ("時計の戻り: 15 分以内なら…")
+# set a write-once session deadline, and every later Stop was blocked (DOT-INC-004/045).  A deadline is the
+# user's instruction, so only text the person at the keyboard wrote may create one.  Everything a harness, a
+# subagent or another session delivers into a prompt turn arrives inside a paired envelope whose tag name has a
+# hyphen or an underscore (measured over 2294 queued prompts on this machine: cross-session-message 919,
+# system-reminder 605, task-notification 431, pasted_content 41, ci-monitor-event 17, ...; 277 were plain
+# typing).  The rule is structural, not a list, so a new envelope kind needs no second declaration.
+# Which way to err: a bogus deadline is write-once and permanent, a missed one is retyped.  So anything that does
+# not pair up fails closed: an opening tag never closed, or closed twice (a subagent result that quotes the tag
+# literally), takes the rest of the text with it.  Not covered (surface form only, C15): HTML-escaped envelopes,
+# tag names without a hyphen or underscore, indented code, inline backticks.
+# The attribute run is bounded: unterminated tags cannot make the scan quadratic.
+ENVELOPE_TAG_RE = re.compile(
+    r"<(/?)([A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)+)(?:\s[^>]{0,300})?>"
+)
+# An unclosed fence runs to the end of the text.
+FENCED_BLOCK_RE = re.compile(r"(```|~~~).*?(?:\1|\Z)", re.DOTALL)
+QUOTED_LINE_RE = re.compile(r"^[ \t]*>.*$", re.MULTILINE)
+# U+FFFC is neither \s nor \d, so a pattern cannot match across a removed span.
+REMOVED_SPAN = chr(0xFFFC)
+
+
+def _envelope_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of `<name-x>…</name-x>` blocks, counted per tag name (linear time).  Same-name blocks nest by depth;
+    a block still open at the end runs to the end of the text; a closing tag with nothing open extends the
+    block this name closed last (the earlier close was quoted, not real)."""
+    spans: list[tuple[int, int]] = []
+    depth: dict[str, int] = {}
+    start: dict[str, int] = {}
+    # name -> index in spans of the block that name closed most recently
+    last: dict[str, int] = {}
+    for m in ENVELOPE_TAG_RE.finditer(text):
+        name = m.group(2).lower()
+        if not m.group(1):
+            if depth.get(name, 0) == 0:
+                start[name] = m.start()
+            depth[name] = depth.get(name, 0) + 1
+        elif depth.get(name, 0) > 0:
+            depth[name] -= 1
+            if depth[name] == 0:
+                spans.append((start[name], m.end()))
+                last[name] = len(spans) - 1
+        elif name in last:
+            spans[last[name]] = (spans[last[name]][0], m.end())
+    spans.extend((start[n], len(text)) for n, d in depth.items() if d > 0)
+    return spans
+
+
+def user_authored_text(text: str) -> str:
+    """The part of a prompt the user typed: envelope blocks, fenced code and quoted lines are replaced by a
+    placeholder.  Surface-form only (C15): a sentence the user wrote inside a quote is not recovered."""
+    t = text or ""
+    kept: list[str] = []
+    pos = 0
+    for start, end in sorted(_envelope_spans(t)):
+        if start < pos:  # inside, or overlapping, a block already removed
+            pos = max(pos, end)
+            continue
+        kept.append(t[pos:start])
+        kept.append(REMOVED_SPAN)
+        pos = end
+    kept.append(t[pos:])
+    typed = FENCED_BLOCK_RE.sub(REMOVED_SPAN, "".join(kept))
+    return QUOTED_LINE_RE.sub(REMOVED_SPAN, typed)
+
+
 def parse_deadline_hours(text: str) -> float | None:
-    """`6h以内` / `within 2h` / `30分以内` -> hours.  None if absent."""
-    m = DEADLINE_RE.search(text or "")
+    """`6h以内` / `within 2h` / `30分以内` -> hours.  None if absent.
+
+    Only text the user wrote counts (see user_authored_text).  Mutation `deadline.user-text-only` reads the
+    whole prompt again, notification bodies included (the 2026-11-12 failure)."""
+    typed = text or ""
+    if not mutated("deadline.user-text-only"):
+        typed = user_authored_text(typed)
+    m = DEADLINE_RE.search(typed)
     if not m:
         return None
     if m.group(1):

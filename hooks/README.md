@@ -146,7 +146,7 @@ No matcher. 1 hook.
 
 | Hook | Purpose |
 |---|---|
-| `aidd-cc-claude.sh` | H17: register user decisions (for re-ask suppression only), deadlines (`6h以内`, write-once) and the declared denominator (`全47ケース`) |
+| `aidd-cc-claude.sh` | H17: register user decisions (for re-ask suppression only), deadlines (`6h以内`, write-once) and the declared denominator (`全47ケース`). A deadline is read only from text the user typed (`user_authored_text`): paired `<name-x>…</name-x>` envelope blocks (`<task-notification>`, `<system-reminder>`, `<cross-session-message>`, `<pasted_content>`, …), fenced code and `>` quoted lines never create one (2026-11-12: a notification body saying "15 分以内なら…" set a session deadline). A tag opened and never closed, or closed twice, takes the rest of the text with it (fail closed: a bogus write-once deadline is permanent, a missed one is retyped). Decisions, revocations and the denominator still read the whole prompt text |
 
 ### Stop
 
