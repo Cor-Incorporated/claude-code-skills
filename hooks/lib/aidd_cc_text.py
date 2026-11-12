@@ -167,11 +167,30 @@ TRIVIAL_CMD_RE = re.compile(
     r"^\s*(ls|echo|printf|cat|pwd|true|false|tail|head|wc|date|sleep|cd|which|type|env|export)\b"
 )
 
-DEADLINE_RE = re.compile(
-    r"(?:(\d{1,3})\s*(?:h|時間)\s*以内|within\s+(\d{1,3})\s*h(?:ours?)?|"
-    r"(\d{1,3})\s*(?:分|min(?:utes?)?)\s*以内)",
-    re.IGNORECASE,
-)
+# A deadline is a number that stands alone, right before its unit.  The pattern used to have no left boundary, so
+# the tail of a longer number matched on its own: measured on develop 2b879e3, `0分以内`, `1000分以内` and
+# `1000時間以内` all returned 0.0 hours (a deadline of "now", write-once, then every Stop blocked: DOT-INC-004/045,
+# the 2026-11-12 permanent block from a second cause), `1.5時間以内` and `0.5時間以内` returned 5.0, and
+# `1,030分以内` returned 0.5.  A digit, a decimal point or a digit-group separator in front of the digits means
+# they are part of a longer number, so there is no match.  A comma after a letter is punctuation (`OK,30分以内`).
+# Decimals are not accepted: rejecting them fails closed (a missed deadline is retyped as `90分以内`, a wrong one
+# is permanent).  Measured over 12,087 queued prompts on this machine: the 12 real deadlines were integers (max
+# 6h, nothing between 7 and 999), and the only decimal / zero / 4-digit tokens were quotes of this very bug.
+# So there is no separate ceiling: the 3-digit cap (999h) is it, and a 4-digit number no longer matches at all.
+_NUM_LEFT = r"(?<![\d.．])(?<!\d[,，])"
+
+
+def _deadline_regex(num_left: str) -> re.Pattern[str]:
+    n = num_left + r"(\d{1,3})"
+    return re.compile(
+        rf"(?:{n}\s*(?:h|時間)\s*以内|within\s+{n}\s*h(?:ours?)?|{n}\s*(?:分|min(?:utes?)?)\s*以内)",
+        re.IGNORECASE,
+    )
+
+
+DEADLINE_RE = _deadline_regex(_NUM_LEFT)
+# Only for mutation `deadline.number-bounds`: the pre-fix pattern, so the guards can be shown to be load-bearing.
+_DEADLINE_RE_UNBOUNDED = _deadline_regex("")
 STOPWORDS = {
     "the",
     "and",
@@ -940,20 +959,27 @@ def parse_deadline_hours(text: str) -> float | None:
     """`6h以内` / `within 2h` / `30分以内` -> hours.  None if absent.
 
     Only text the user wrote counts (see user_authored_text).  Mutation `deadline.user-text-only` reads the
-    whole prompt again, notification bodies included (the 2026-11-12 failure)."""
+    whole prompt again, notification bodies included (the 2026-11-12 failure).
+
+    A deadline is a positive number of at most 3 digits that stands alone (see _NUM_LEFT).  A non-positive
+    value is not a deadline: it is skipped and the next match is tried, like any other text that is not a
+    deadline.  Mutation `deadline.number-bounds` takes the first match of the pre-fix pattern as it was."""
     typed = text or ""
     if not mutated("deadline.user-text-only"):
         typed = user_authored_text(typed)
-    m = DEADLINE_RE.search(typed)
-    if not m:
-        return None
-    if m.group(1):
-        return float(m.group(1))
-    if m.group(2):
-        return float(m.group(2))
+    bounded = not mutated("deadline.number-bounds")
+    for m in (DEADLINE_RE if bounded else _DEADLINE_RE_UNBOUNDED).finditer(typed):
+        hours = _deadline_match_hours(m)
+        if hours > 0 or not bounded:
+            return hours
+    return None
+
+
+def _deadline_match_hours(m: re.Match[str]) -> float:
+    """Hours of one DEADLINE_RE match (group 1 = h / 時間, 2 = within Nh, 3 = minutes)."""
     if m.group(3):
         return float(m.group(3)) / 60.0
-    return None
+    return float(m.group(1) or m.group(2))
 
 
 TARGET_TOKEN_RE = re.compile(r"[A-Za-z0-9_]*[/.\-:@][A-Za-z0-9_/.\-:@]*|[A-Za-z]+\d+")
