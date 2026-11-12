@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+from functools import lru_cache
 from typing import Iterable
 
 PERSIST_WORDS = (
@@ -918,6 +919,9 @@ def _envelope_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+# Cached: one prompt feeds up to five controls (approval, revocation, short affirmative, denominator, deadline)
+# and the worst scan measured 0.29 s per 500KB, so the hook scans each prompt once, not five times.
+@lru_cache(maxsize=4)
 def user_authored_text(text: str) -> str:
     """The part of a prompt the user typed: envelope blocks, fenced code and quoted lines are replaced by a
     placeholder.  Surface-form only (C15): a sentence the user wrote inside a quote is not recovered."""
@@ -934,6 +938,28 @@ def user_authored_text(text: str) -> str:
     kept.append(t[pos:])
     typed = FENCED_BLOCK_RE.sub(REMOVED_SPAN, "".join(kept))
     return QUOTED_LINE_RE.sub(REMOVED_SPAN, typed)
+
+
+# 2026-11-12 (same incident as the deadline, measured in a sandbox with AIDD_CC_STATE_DIR on a scratch dir): the
+# other three parsers of `cmd_prompt` still read the whole prompt, so a <task-notification> body saying
+# "git push origin feat/x は承認、進めて" registered a decision, one saying "前の承認は取り消します" wiped every
+# earlier decision (revoked=1), and one saying "全 47 ケース" overwrote the declared denominator.  Each control gets
+# its own knock-out id so that the one-sided mutation proves each guard is load-bearing on its own:
+#   approval.user-text-only      a decision is registered from typed text only
+#   revoke.user-text-only        a refusal / withdrawal revokes earlier decisions only when typed
+#   affirmative.user-text-only   `OK` binds to the pending question only when the user typed it
+#   denominator.user-text-only   `全47ケース` sets the declared denominator only when typed
+# Which way a wrong read hurts differs per control (decisions only suppress a re-ask, see question_check): a bogus
+# approval silences a question the user never answered, a bogus revocation costs one repeated question, a MISSED
+# revocation leaves a stale approval in force.  The envelope rule above is shared and fails closed for "not the
+# user's" (an unpaired tag takes the rest of the text with it), so a refusal typed AFTER an unpaired `<x-y>` the
+# user also typed is not seen by the revocation.  Accepted for the shared rule's simplicity; recorded here, not hidden.
+def typed_text(text: str, control_id: str) -> str:
+    """What one prompt control reads: the text the user typed (see user_authored_text).  Mutation `<control_id>`
+    hands that control the whole prompt again, envelope bodies included (the failure above).  Removed spans stay
+    as REMOVED_SPAN, which no pattern here can match across."""
+    t = text or ""
+    return t if mutated(control_id) else user_authored_text(t)
 
 
 def parse_deadline_hours(text: str) -> float | None:
@@ -1024,7 +1050,9 @@ def is_confirmation_question(question: str) -> bool:
 
 
 def parse_denominator(text: str) -> int | None:
-    m = DENOMINATOR_RE.search(text or "")
+    """`全47ケース` / `分母: 47` -> 47.  None if absent.  Only text the user wrote counts (see typed_text); mutation
+    `denominator.user-text-only` reads the whole prompt again."""
+    m = DENOMINATOR_RE.search(typed_text(text, "denominator.user-text-only"))
     if not m:
         return None
     return int(m.group(1) or m.group(2))
