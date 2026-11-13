@@ -4,7 +4,7 @@
 
 A curated collection of skills, rules, and hooks for [Claude Code](https://claude.com/claude-code) — Anthropic's official CLI for Claude.
 
-This repository provides a production-ready Claude Code configuration with 25 custom skills, 17 hook scripts (4 blocking + 13 advisory/infra), 6 rule sets, 6 utility scripts, and integration with third-party skill frameworks.
+This repository provides a production-ready Claude Code configuration with 26 custom skills, 17 hook scripts (4 blocking + 13 advisory/infra), 6 rule sets, 6 utility scripts, and integration with third-party skill frameworks.
 
 > **Design Philosophy**: This project implements the principles from [Harness Engineering Best Practices 2026](https://nyosegawa.com/posts/harness-engineering-best-practices-2026/) — deterministic quality gates via hooks, pointer-based documentation (ADR-002), and the feedback speed hierarchy (PostToolUse > pre-commit > CI > human review). Since [ADR-006](docs/adr/006-minimal-safety-net.md), the hook set is deliberately minimal: hard blocks are reserved for destructive/irreversible operations, and merge safety is delegated to GitHub branch protection + PR review rather than local gates.
 
@@ -149,6 +149,7 @@ Reflect (gstack)
 | `ux-researcher-designer` | Persona generation, journey mapping | "create persona" |
 | `gws-workspace` | Google Workspace CLI operations | "Google Drive", "Sheets" |
 | `context7-skills` | Context7 CLI skill management | "search skills", "ctx7" |
+| `slack-draft` | Slack drafts the user sends, checked in the Slack screen (files by Drive URL, no "attached") | "Slackの下書き", "draft a Slack message" |
 
 ## Agent Architecture & Codex Delegation
 
