@@ -34,7 +34,7 @@ bash ~/.claude/scripts/claude-provider.sh zai
 
 ```
 claude-code-skills/
-├── skills/           # 27 カスタムスキル定義 (SKILL.md + scripts + references)
+├── skills/           # 26 カスタムスキル定義 (SKILL.md + scripts + references)
 ├── rules/            # 6 グローバルルール (コーディング規約, Git, 品質, テスト, 委任, hookデプロイ)
 ├── hooks/            # 17 hook スクリプト (ブロッキング 4 + advisory/infra 13); hooks/_unused/ に廃止済み62本 (うち56本はADR-006)
 ├── scripts/          # 6 ユーティリティ (Codex 連携, プロバイダ切替, コンテキスト監視); scripts/_unused/ に廃止済みレビューパイプラインヘルパー
@@ -135,6 +135,7 @@ Reflect (gstack)
 | `ux-researcher-designer` | ペルソナ生成、ジャーニーマッピング | "create persona" |
 | `gws-workspace` | Google Workspace CLI 操作 | "Google Drive", "Sheets" |
 | `context7-skills` | Context7 CLI スキル管理 | "search skills", "ctx7" |
+| `slack-draft` | Slack の下書きを作り、入力欄を画面で確かめる（ファイルは Drive の URL で渡す） | "Slackの下書き", "下書きを作り直して" |
 
 ## エージェントアーキテクチャ & Codex 委任
 
