@@ -1,6 +1,9 @@
+import base64
+import hashlib
 import importlib.util
 import unittest
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 spec = importlib.util.spec_from_file_location(
     "proof", Path(__file__).resolve().parents[1] / "scripts/lib/google_drive_oauth_proof.py"
@@ -29,6 +32,56 @@ class Provider:
 class GoogleDriveProofTests(unittest.TestCase):
     def run_proof(self, fake):
         proof.verify(fake, "client-id", "fixture-secret", ("control", "a"), ("valid", "b"))
+
+    def test_local_callbacks_feed_verified_pair_and_cannot_be_replayed(self):
+        inputs = []
+        for suffix in ("control", "positive"):
+            attempt = proof.AuthorizationAttempt("fixture-client")
+            auth_url = urlsplit(attempt.url)
+            params = parse_qs(auth_url.query)
+            self.assertEqual(auth_url.netloc, "accounts.google.com")
+            self.assertEqual(params["redirect_uri"], [proof.REDIRECT])
+            self.assertEqual(params["scope"], ["openid"])
+            self.assertEqual(params["access_type"], ["online"])
+            self.assertEqual(params["code_challenge_method"], ["S256"])
+            callback = "/google-drive-register?" + urlencode({"state": params["state"][0], "code": suffix})
+            result = attempt.accept_callback(callback)
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(result[1].encode()).digest()).decode().rstrip("=")
+            self.assertEqual(params["code_challenge"], [challenge])
+            with self.assertRaisesRegex(proof.ProofRefused, "attempt_closed"):
+                attempt.accept_callback(callback)
+            inputs.append(result)
+        fake = Provider(NEGATIVE, POSITIVE, REVOKED)
+        proof.verify(fake, "fixture-client", "fixture-secret", *inputs)
+        self.assertEqual([call[1]["code"] for call in fake.calls[:2]], ["control", "positive"])
+        self.assertNotEqual(inputs[0][1], inputs[1][1])
+
+    def test_callback_refuses_other_path_cross_attempt_state_and_duplicate_values(self):
+        attempt = proof.AuthorizationAttempt("fixture-client")
+        state = parse_qs(urlsplit(attempt.url).query)["state"][0]
+        other_state = parse_qs(urlsplit(proof.AuthorizationAttempt("fixture-client").url).query)["state"][0]
+        with self.assertRaisesRegex(proof.ProofRefused, "invalid_callback"):
+            attempt.accept_callback(f"/other?state={state}&code=fixture")
+        with self.assertRaisesRegex(proof.ProofRefused, "invalid_state"):
+            attempt.accept_callback(f"/google-drive-register?state={other_state}&code=fixture")
+        with self.assertRaisesRegex(proof.ProofRefused, "invalid_state"):
+            attempt.accept_callback(f"/google-drive-register?state={state}&state={state}&code=fixture")
+        with self.assertRaisesRegex(proof.ProofRefused, "invalid_code"):
+            attempt.accept_callback(f"/google-drive-register?state={state}&code=one&code=two")
+
+    def test_denied_or_expired_callback_cannot_yield_proof(self):
+        attempt = proof.AuthorizationAttempt("fixture-client")
+        state = parse_qs(urlsplit(attempt.url).query)["state"][0]
+        with self.assertRaisesRegex(proof.ProofRefused, "authorization_denied"):
+            attempt.accept_callback(f"/google-drive-register?state={state}&error=access_denied&code=fixture")
+        with self.assertRaisesRegex(proof.ProofRefused, "attempt_closed"):
+            attempt.accept_callback(f"/google-drive-register?state={state}&code=fixture")
+        now = [100]
+        expired = proof.AuthorizationAttempt("fixture-client", clock=lambda: now[0])
+        exp_state = parse_qs(urlsplit(expired.url).query)["state"][0]
+        now[0] += 300
+        with self.assertRaisesRegex(proof.ProofRefused, "attempt_closed"):
+            expired.accept_callback(f"/google-drive-register?state={exp_state}&code=fixture")
 
     def test_exchanges_independent_codes_and_revokes_grant(self):
         fake = Provider(NEGATIVE, POSITIVE, REVOKED)
