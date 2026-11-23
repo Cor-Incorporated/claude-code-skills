@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import http.client
+import json
 import socket
 import importlib.util
 import unittest
@@ -151,6 +152,103 @@ class GoogleDriveProofTests(unittest.TestCase):
         with self.assertRaisesRegex(proof.ProofRefused, "reused_proof"):
             proof.verify(fake, "client-id", "fixture-secret", ("same", "a"), ("same", "b"))
         self.assertFalse(fake.calls)
+
+
+REAL_OPEN = open
+SAVE_ENDPOINTS = (proof.TOKEN["url"], proof.REVOKE["url"])
+
+
+def refuse_save_call(*args, **kwargs):
+    raise AssertionError("save path reached: subprocess %r" % (args[:1],))
+
+
+def refuse_save_open(file, mode="r", *args, **kwargs):
+    if any(flag in str(mode) for flag in ("w", "a", "x", "+")):
+        raise AssertionError("save path reached: open(%r, %r)" % (file, mode))
+    return REAL_OPEN(file, mode, *args, **kwargs)
+
+
+class StageCredentialsTests(unittest.TestCase):
+    def drive_stage(self, fake, answers):
+        """Submit stage_credentials and answer each published authorization URL."""
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        redirect = f"http://localhost:{port}/google-drive-register"
+        published = Queue()
+        with (
+            patch.object(proof, "REDIRECT", redirect),
+            ThreadPoolExecutor(max_workers=1) as pool,
+        ):
+            pending = pool.submit(
+                proof.stage_credentials,
+                fake,
+                "fixture-client",
+                "fixture-secret",
+                published.put,
+            )
+            for answer in answers:
+                url = published.get(timeout=3)
+                state = parse_qs(urlsplit(url).query)["state"][0]
+                target = "/google-drive-register?" + urlencode(
+                    dict(answer, state=state)
+                )
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+                try:
+                    connection.request(
+                        "GET", target, headers={"Host": f"localhost:{port}"}
+                    )
+                    connection.getresponse().read()
+                finally:
+                    connection.close()
+            return pending.result(timeout=5)
+
+    def stage_without_saving(self, fake, answers):
+        with (
+            patch("subprocess.run", new=refuse_save_call),
+            patch("subprocess.Popen", new=refuse_save_call),
+            patch("builtins.open", new=refuse_save_open),
+        ):
+            return self.drive_stage(fake, answers)
+
+    def test_synthetic_success_returns_the_single_json_value_and_saves_nothing(self):
+        fake = Provider(NEGATIVE, POSITIVE, REVOKED)
+        result = self.stage_without_saving(
+            fake, [{"code": "fixture-control"}, {"code": "fixture-positive"}]
+        )
+        self.assertEqual(set(result), {"DRIVE_UAT_OAUTH_PAIR"})
+        self.assertEqual(json.loads(result["DRIVE_UAT_OAUTH_PAIR"]), {
+            "DRIVE_OAUTH_CLIENT_ID": "fixture-client",
+            "DRIVE_OAUTH_CLIENT_SECRET": "fixture-secret",
+        })
+        self.assertEqual(
+            [call[1]["code"] for call in fake.calls[:2]],
+            ["fixture-control", "fixture-positive"],
+        )
+        self.assertTrue(all(call[0] in SAVE_ENDPOINTS for call in fake.calls))
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_synthetic_denial_yields_no_value_and_saves_nothing(self):
+        fake = Provider()
+        with self.assertRaisesRegex(proof.ProofRefused, "authorization_denied"):
+            self.stage_without_saving(fake, [{"error": "access_denied"}])
+        self.assertFalse(fake.calls)
+
+    def test_synthetic_verification_failure_yields_no_value_and_saves_nothing(self):
+        fake = Provider(NEGATIVE, (200, {"error": "invalid_grant"}))
+        with self.assertRaisesRegex(proof.ProofRefused, "client_proof_failed"):
+            self.stage_without_saving(
+                fake, [{"code": "fixture-control"}, {"code": "fixture-positive"}]
+            )
+        self.assertEqual(
+            [call[0] for call in fake.calls], [proof.TOKEN["url"], proof.TOKEN["url"]]
+        )
+
+    def test_incomplete_pair_is_refused_before_consent(self):
+        provider = Provider()
+        with self.assertRaisesRegex(proof.ProofRefused, "invalid_credential_pair"):
+            proof.stage_credentials(provider, "fixture-client", " ", lambda _: self.fail("unexpected consent"))
+        self.assertFalse(provider.calls)
 
 
 if __name__ == "__main__":

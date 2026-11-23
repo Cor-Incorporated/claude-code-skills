@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import json
 import secrets
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -143,6 +144,18 @@ def verify(network, client_id, client_secret, control, positive):
         raise ProofRefused("negative_control_failed")
     if not exchange(network, client_id, client_secret, positive, negative=False):
         raise ProofRefused("client_proof_failed")
+
+
+def stage_credentials(network, client_id, client_secret, present_url):
+    """Prepare the single GitHub Environment value consumed by the Drive UAT Worker."""
+    if not all(isinstance(value, str) and value and value.strip() == value
+               for value in (client_id, client_secret)):
+        raise ProofRefused("invalid_credential_pair")
+    control = capture_authorization(client_id, present_url)
+    positive = capture_authorization(client_id, present_url)
+    verify(network, client_id, client_secret, control, positive)
+    pair = {"DRIVE_OAUTH_CLIENT_ID": client_id, "DRIVE_OAUTH_CLIENT_SECRET": client_secret}
+    return {"DRIVE_UAT_OAUTH_PAIR": json.dumps(pair, separators=(",", ":"))}
 
 
 def exchange(network, client_id, client_secret, proof, *, negative):
