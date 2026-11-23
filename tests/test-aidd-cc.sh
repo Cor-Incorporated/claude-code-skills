@@ -1177,6 +1177,14 @@ for i in 1 2 3 4 5 6; do git -C "$R101" -c user.name=t -c user.email=t@x.invalid
 git -C "$R101" -c user.name=t -c user.email=t@x.invalid commit -q --allow-empty -m "fix(h17): ruled 1" -m "ADJUDICATION: $U1"
 pre101() { printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$1\",\"cwd\":\"$R101\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): $2' -m 'ADJUDICATION: $3'\"}}" | bash "$HOOK"; }
 o101a="$(pre101 neg101a 'ride the same ruling' "$U1")"                       # same url again -> spent -> block
+# An ordinary follow-up in the approved scope must still face the normal counters.
+o101ordinary="$(printf '{"hook_event_name":"PreToolUse","session_id":"neg101a","cwd":%s,"tool_name":"Bash","tool_input":{"command":%s}}' \
+  "$(j "$R101")" "$(j "git commit -m 'fix(h17): follow up on the recorded decision'")" | bash "$HOOK")"
+if [ -z "$o101ordinary" ] && printf '%s' "$o101a" | grep -Fq 'ordinary fix'; then
+  ok "T101 ordinary follow-up below the limit and accurate duplicate-ruling guidance"
+else
+  bad "T101 ordinary follow-up or guidance: [$o101ordinary] [$o101a]"
+fi
 o101b="$(pre101 neg101b 'second decision' "$U2")"                            # a fresh url releases
 o101g="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg101g\",\"cwd\":\"$R101\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): a' -m 'ADJUDICATION: $U2' && git commit -q -m 'fix(h17): b' -m 'ADJUDICATION: $U1'\"}}" | bash "$HOOK")"  # chained: the second commit rides the spent url (Codex P1)
 o101m="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"neg101m\",\"cwd\":\"$R101\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -q -m 'fix(h17): mutated' -m 'ADJUDICATION: $U1'\"}}" | AIDD_CC_MUTATE=iter.repair-family bash "$HOOK")"
