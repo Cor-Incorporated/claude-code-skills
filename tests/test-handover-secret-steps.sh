@@ -134,6 +134,14 @@ for name, r in sorted(book.items()):
             print("%s: the control condition is empty or has unknown keys" % name)
         if bad_cond(r.get("pass")):
             print("%s: the pass condition is empty or has unknown keys" % name)
+    elif kind == "google-drive-oauth-code":
+        if (name != "google-drive-oauth-code" or values != ["pair"]
+                or r.get("names") != ["DRIVE_UAT_OAUTH_PAIR"]
+                or r.get("repo") != "Cor-Incorporated/cor-os"
+                or r.get("params") != ["test-subject-confirmed"]
+                or r.get("hosts") != ["oauth2.googleapis.com"]
+                or r.get("request") != {"method": "POST", "url": "https://oauth2.googleapis.com/token"}):
+            print("%s: Drive recipe differs from its dedicated Google OAuth contract" % name)
     elif kind == "generated":
         if not r.get("generate") or not r.get("check"):
             print("%s: a generated recipe needs generate and check" % name)
@@ -199,16 +207,21 @@ json.dump(book, open(sys.argv[2].replace("nocontrol", "badaccess"), "w"))
 book = json.load(open(sys.argv[1]))
 book["recipes"]["github-oauth"]["keep"] = "bitwarden"
 json.dump(book, open(sys.argv[2].replace("nocontrol", "badkeep"), "w"))
+book = json.load(open(sys.argv[1]))
+book["recipes"]["google-drive-oauth-code"]["hosts"].append("example.invalid")
+json.dump(book, open(sys.argv[2].replace("nocontrol", "baddrive"), "w"))
 PY
 printf '    bash ~/.claude/scripts/register-secret-verified.sh --recipe github-oauth-v9 A B o/r\n' >"$SB/unknown.md"
 r1="$(recipes "$SB/nocontrol.json" "$SB/none.md")"; r2="$(recipes "$RECIPES" "$SB/unknown.md")"; r3="$(recipes "$SB/badcond.json" "$SB/none.md")"
 r4="$(recipes "$SB/badaccess.json" "$SB/none.md")"; r5="$(recipes "$SB/badkeep.json" "$SB/none.md")"
+r6="$(recipes "$SB/baddrive.json" "$SB/none.md")"
 [[ "$r1" == *"github-oauth: no negative control"* && "$r2" == *"unknown recipe github-oauth-v9"* \
    && "$r3" == *"slack-oauth: the control condition is empty or has unknown keys"* && "$r3" == *"github-oauth: the pass condition is empty or has unknown keys"* \
    && "$r4" == *"access-service-token: Access recipe differs from its enforcing three-origin/retired-f contract"* \
-   && "$r5" == *"github-oauth: keep is only for a generated recipe with one value"* ]] \
+   && "$r5" == *"github-oauth: keep is only for a generated recipe with one value"* \
+   && "$r6" == *"google-drive-oauth-code: Drive recipe differs from its dedicated Google OAuth contract"* ]] \
   && ok "S4 self-test: missing control, misspelled/empty condition, missing Access origin, keep on a network recipe and unknown recipe are red" \
-  || bad "S4 self-test" "no-control: ${r1:-green}; unknown: ${r2:-green}; bad conditions: ${r3:-green}; bad Access: ${r4:-green}; bad keep: ${r5:-green}"
+  || bad "S4 self-test" "no-control: ${r1:-green}; unknown: ${r2:-green}; bad conditions: ${r3:-green}; bad Access: ${r4:-green}; bad keep: ${r5:-green}; bad drive: ${r6:-green}"
 grep -q 'unknown recipe %r' "$ROOT/scripts/lib/secret_recipes.py" && grep -q 'if not ok:' "$ROOT/scripts/lib/secret_recipes.py" \
   && ok "S4 the enforcing helper refuses an unknown recipe and has its control gate" || bad "S4 helper" "secret_recipes.py lost its gates"
 
