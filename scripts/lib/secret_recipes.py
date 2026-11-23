@@ -23,6 +23,8 @@ Recipes live in secret-verify-recipes.json next to this file and land only by PR
              command refuses.
   slack-oauth-code  a new, operator-approved temporary user grant; wrong-secret control first, then real code
              exchange, exact app/team/user/scope, and token revocation before storage. Hidden terminal input only.
+  google-drive-oauth-code  two independent, operator-approved internal test grants; verify the wrong secret,
+             the real pair and revocation before storing the pair in the dedicated drive-uat environment.
   access-service-token  read back the fixed Access app/policy, rotate its existing service token with the old
              expiry preserved, and require three wrong-secret controls and three real origin probes before storage.
              --dry-run is read-only preflight, not evidence of a generated or verified pair.
@@ -42,6 +44,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.parse
+import warnings
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -157,6 +160,11 @@ class Run:
             # refuse before a value is made: the create path would write an item resume can never take (#480)
             usage("--env %s does not match the Bitwarden item %s (environment %s); nothing was generated"
                   % (self.env, self.keep_item, kept_path.group(1)))
+        if self.recipe["kind"] == "google-drive-oauth-code":
+            if self.env != "drive-uat" or self.keep_item or self.repo_dir or self.resume:
+                usage("google-drive-oauth-code only registers the dedicated drive-uat Environment pair")
+            if self.params != {"test-subject-confirmed": "yes"}:
+                usage("google-drive-oauth-code requires only --param test-subject-confirmed=yes")
         if self.recipe["kind"] == "access-service-token":
             if self.env or self.keep_item or self.repo_dir or self.resume:
                 usage("access-service-token only registers the fixed repository-level pair")
@@ -256,6 +264,8 @@ class Network:
     def __init__(self, run, work):
         self.run, self.work, self.n = run, work, 0
         rec = run.recipe
+        if rec["kind"] == "google-drive-oauth-code":
+            return  # The reviewed provider helper owns its two separate OAuth exchanges.
         check_condition(rec.get("pass"), "pass")
         ctrl = rec.get("control") or {}
         if ctrl.get("replace") not in rec["values"] or len(set(ctrl) & {"fail_unless", "fail_unless_not"}) != 1:
@@ -716,6 +726,63 @@ def after_keep(run, message, rule):
                 item_name, item_id, github))
 
 
+def google_drive_environment(run):
+    base = "repos/" + run.repo + "/environments/" + run.env
+    try:
+        checked = subprocess.run(["gh", "api", base], check=True, capture_output=True, text=True)
+        environment = json.loads(checked.stdout)
+        if environment.get("name") != "drive-uat" or environment.get("deployment_branch_policy") != {
+            "protected_branches": False, "custom_branch_policies": True
+        }:
+            raise ValueError
+        checked = subprocess.run(
+            ["gh", "api", "--paginate", "--slurp", base + "/deployment-branch-policies"],
+            check=True, capture_output=True, text=True,
+        )
+        policies = [
+            (policy["name"], policy["type"])
+            for page in json.loads(checked.stdout)
+            for policy in page["branch_policies"]
+        ]
+        if policies != [("main", "branch")]:
+            raise ValueError
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, TypeError, AttributeError):
+        raise Refused(1, "environment", "NG: drive-uat must exist and allow only the main branch.") from None
+
+
+def google_drive_verify(run, work):
+    google_drive_environment(run)
+    if not sys.stdin.isatty():
+        raise Refused(1, "terminal-required", "NG: Drive verification requires an interactive private terminal.")
+    spec = importlib.util.spec_from_file_location(
+        "google_drive_oauth_proof", os.path.join(HERE, "google_drive_oauth_proof.py")
+    )
+    proof = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(proof)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        try:
+            client_id = getpass.getpass("Google Web client ID (hidden): ")
+            secret = getpass.getpass("Google Web client secret (hidden): ")
+        except (getpass.GetPassWarning, EOFError):
+            raise Refused(1, "terminal-required", "NG: hidden input was unavailable.") from None
+
+    def present(url):
+        with open("/dev/tty", "w", encoding="utf-8") as terminal:
+            print("Open this one-time URL in the approved isolated test browser:", url, file=terminal, flush=True)
+
+    net = Network(run, work)
+    net.hosts()
+    try:
+        pair = proof.stage_credentials(net, client_id, secret, present)
+    except proof.ProofRefused as exc:
+        raise Refused(1, str(exc), "NG: Google Drive credential verification or revocation failed.") from None
+    google_drive_environment(run)
+    print("VERIFIED google-drive-oauth-code: control, token exchange and revocation passed.")
+    return {"pair": pair["DRIVE_UAT_OAUTH_PAIR"]}
+
+
 def access_service_verify(run, work):
     # -I intentionally excludes this directory from sys.path; load only the adjacent reviewed source.
     spec = importlib.util.spec_from_file_location("access_service_token", os.path.join(HERE, "access_service_token.py"))
@@ -764,6 +831,8 @@ def main(argv):
                 values = _slack_code.verify(run, work, net)
             except _slack_code.SlackOAuthRefused as exc:
                 raise Refused(1, exc.rule, str(exc)) from None
+        elif kind == "google-drive-oauth-code":
+            values = google_drive_verify(run, work)
         elif kind == "generated":
             values = generated(run)
         elif kind == "consumer":
@@ -801,6 +870,10 @@ def main(argv):
             run.detail = "interrupted; check new Slack grant and GitHub secret metadata before retry"
             run.ledger("deny", "interrupted")
             print("Interrupted: check the new Slack grant and GitHub secret metadata before any retry.", file=sys.stderr)
+        elif run.recipe["kind"] == "google-drive-oauth-code":
+            run.ledger("deny", "interrupted")
+            print("Interrupted: inspect the isolated Google test grant and GitHub metadata before any retry.",
+                  file=sys.stderr)
         elif run.recipe["kind"] == "access-service-token":
             run.detail = "interrupted; inspect rotation and GitHub metadata before any retry"
             run.ledger("deny", "interrupted")

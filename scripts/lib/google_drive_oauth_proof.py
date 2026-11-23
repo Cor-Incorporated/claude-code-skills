@@ -1,4 +1,4 @@
-"""Pre-admission provider proof. The installed registrar does not enable this recipe."""
+"""Proof for the dedicated Google Drive OAuth registration recipe."""
 
 import base64
 import hashlib
