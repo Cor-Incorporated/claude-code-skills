@@ -253,3 +253,62 @@ class StageCredentialsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GoogleDriveRegistrarTests(unittest.TestCase):
+    def setUp(self):
+        path = Path(__file__).resolve().parents[1] / "scripts/lib/secret_recipes.py"
+        spec = importlib.util.spec_from_file_location("registrar", path)
+        self.registrar = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.registrar)
+        self.args = [
+            "--recipe", "google-drive-oauth-code", "DRIVE_UAT_OAUTH_PAIR",
+            "Cor-Incorporated/cor-os", "--env", "drive-uat",
+            "--param", "test-subject-confirmed=yes",
+        ]
+
+    def test_rejects_production_and_unconfirmed_test_identity(self):
+        for old, new in (("drive-uat", "production"), ("test-subject-confirmed=yes", "test-subject-confirmed=no")):
+            with self.subTest(new=new), self.assertRaises(self.registrar.Refused):
+                self.registrar.Run([new if arg == old else arg for arg in self.args])
+
+    def test_registry_runs_provider_proof_before_store(self):
+        from contextlib import ExitStack, redirect_stdout, redirect_stderr
+        from io import StringIO
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        for revocation, expected in ((REVOKED, 0), ((503, None), 1)):
+            provider = Provider(NEGATIVE, POSITIVE, revocation)
+            public = StringIO()
+            with self.subTest(revocation=revocation), ExitStack() as stack:
+                stack.enter_context(redirect_stdout(public))
+                stack.enter_context(redirect_stderr(public))
+                gate = stack.enter_context(patch.object(self.registrar, "google_drive_environment"))
+                stack.enter_context(patch.object(self.registrar.sys, "stdin", Mock(isatty=Mock(return_value=True))))
+                stack.enter_context(patch.object(self.registrar.getpass, "getpass",
+                                                 side_effect=["fixture-client", "fixture-secret"]))
+                stack.enter_context(patch.object(self.registrar.importlib.util, "spec_from_file_location",
+                                                 return_value=SimpleNamespace(loader=Mock())))
+                stack.enter_context(patch.object(self.registrar.importlib.util, "module_from_spec",
+                                                 return_value=proof))
+                stack.enter_context(patch.object(proof, "capture_authorization",
+                                                 side_effect=[("code-a", "pkce-a"), ("code-b", "pkce-b")]))
+                provider.hosts = lambda: "oauth2.googleapis.com"
+                stack.enter_context(patch.object(self.registrar, "Network", return_value=provider))
+                store = stack.enter_context(patch.object(self.registrar, "store"))
+                result = self.registrar.main(self.args)
+                self.assertEqual(result, expected)
+                self.assertEqual([url for url, _ in provider.calls],
+                                 [proof.TOKEN["url"], proof.TOKEN["url"], proof.REVOKE["url"]])
+                self.assertNotIn("fixture-secret", public.getvalue())
+                self.assertNotIn("fixture-access", public.getvalue())
+                if result == 0:
+                    store.assert_called_once()
+                    self.assertEqual(gate.call_count, 2)
+                    self.assertEqual(json.loads(store.call_args.args[1]["pair"]), {
+                        "DRIVE_OAUTH_CLIENT_ID": "fixture-client",
+                        "DRIVE_OAUTH_CLIENT_SECRET": "fixture-secret",
+                    })
+                else:
+                    store.assert_not_called()
