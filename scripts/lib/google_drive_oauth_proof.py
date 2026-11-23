@@ -4,6 +4,7 @@ import base64
 import hashlib
 import secrets
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Lock
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -69,11 +70,68 @@ class AuthorizationAttempt:
         return codes[0], verifier
 
 
+class _LoopbackServer(HTTPServer):
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(1)
+        return connection, address
+
+    def handle_error(self, request, client_address):
+        # An interrupted response must never expose a callback target or code.
+        pass
+
+
+def capture_authorization(client_id, present_url):
+    """Return a one-time proof from the private listener, with no persisted URL or code."""
+    attempt = AuthorizationAttempt(client_id)
+    callback = urlsplit(REDIRECT)
+    outcome = None
+
+    class CallbackHandler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            nonlocal outcome
+            status, message = 400, b"Authorization callback refused."
+            if self.headers.get_all("Host") == [callback.netloc]:
+                try:
+                    outcome = attempt.accept_callback(self.path)
+                except ProofRefused as refusal:
+                    if str(refusal) in {"authorization_denied", "invalid_code", "attempt_closed"}:
+                        outcome = refusal
+                else:
+                    status, message = 200, b"Authorization received. Return to the registrar."
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(message)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(message)
+
+    try:
+        listener = _LoopbackServer(("127.0.0.1", callback.port), CallbackHandler)
+    except OSError:
+        raise ProofRefused("callback_listener_unavailable") from None
+    with listener:
+        present_url(attempt.url)
+        while outcome is None:
+            remaining = attempt._expires - attempt._clock()
+            if remaining <= 0:
+                raise ProofRefused("authorization_timeout")
+            listener.timeout = min(remaining, 1)
+            listener.handle_request()
+    if isinstance(outcome, ProofRefused):
+        raise outcome
+    return outcome
+
+
 def verify(network, client_id, client_secret, control, positive):
     """Check two independent, consented authorization-code proofs; keep no grant.
 
-    The caller owns a loopback listener and validates state before passing
-    (authorization_code, code_verifier) pairs. No caller receives a token.
+    Capture both (authorization_code, code_verifier) pairs with the private
+    loopback listener. No caller receives a token.
     """
     if not all((client_id, client_secret, *control, *positive)):
         raise ProofRefused("missing_input")

@@ -1,8 +1,13 @@
 import base64
 import hashlib
+import http.client
+import socket
 import importlib.util
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 spec = importlib.util.spec_from_file_location(
@@ -55,6 +60,33 @@ class GoogleDriveProofTests(unittest.TestCase):
         proof.verify(fake, "fixture-client", "fixture-secret", *inputs)
         self.assertEqual([call[1]["code"] for call in fake.calls[:2]], ["control", "positive"])
         self.assertNotEqual(inputs[0][1], inputs[1][1])
+
+    def test_loopback_filters_host_and_returns_only_the_valid_proof(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        redirect = f"http://localhost:{port}/google-drive-register"
+        published = Queue()
+        with patch.object(proof, "REDIRECT", redirect), ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(proof.capture_authorization, "fixture-client", published.put)
+            params = parse_qs(urlsplit(published.get(timeout=3)).query)
+            callback = "/google-drive-register?" + urlencode({"code": "fixture-browser-code", "state": params["state"][0]})
+            for host, status in [("wrong.example", 400), (f"localhost:{port}", 200)]:
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+                try:
+                    connection.request("GET", callback, headers={"Host": host})
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, status)
+                    self.assertEqual(response.getheader("Cache-Control"), "no-store")
+                    self.assertNotIn(b"fixture-browser-code", response.read())
+                finally:
+                    connection.close()
+            code, verifier = pending.result(timeout=3)
+            self.assertEqual(code, "fixture-browser-code")
+            digest = hashlib.sha256(verifier.encode()).digest()
+            self.assertEqual(params["code_challenge"], [base64.urlsafe_b64encode(digest).decode().rstrip("=")])
+            with self.assertRaises(OSError):
+                socket.create_connection(("127.0.0.1", port), timeout=1)
 
     def test_callback_refuses_other_path_cross_attempt_state_and_duplicate_values(self):
         attempt = proof.AuthorizationAttempt("fixture-client")
