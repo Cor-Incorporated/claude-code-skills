@@ -229,10 +229,34 @@ class StageCredentialsTests(unittest.TestCase):
         self.assertEqual(len(fake.calls), 3)
 
     def test_synthetic_denial_yields_no_value_and_saves_nothing(self):
-        fake = Provider()
-        with self.assertRaisesRegex(proof.ProofRefused, "authorization_denied"):
-            self.stage_without_saving(fake, [{"error": "access_denied"}])
-        self.assertFalse(fake.calls)
+        for previous in ([], [{"code": "fixture-control"}]):
+            with self.subTest(accepted=len(previous)):
+                fake = Provider()
+                with self.assertRaisesRegex(proof.ProofRefused, "authorization_denied"):
+                    self.stage_without_saving(fake, previous + [{"error": "access_denied"}])
+                self.assertFalse(fake.calls)
+
+    def test_no_callback_before_deadline_closes_listener_without_exchange(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        redirect = f"http://localhost:{port}/google-drive-register"
+        now = [0]
+        attempt_type = proof.AuthorizationAttempt
+        provider = Provider()
+
+        def new_attempt(client_id):
+            return attempt_type(client_id, clock=lambda: now[0])
+
+        def leave_consent_unanswered(_url):
+            now[0] += 300
+
+        with patch.object(proof, "REDIRECT", redirect), patch.object(proof, "AuthorizationAttempt", new_attempt):
+            with self.assertRaisesRegex(proof.ProofRefused, "authorization_timeout"):
+                proof.stage_credentials(provider, "fixture-client", "fixture-secret", leave_consent_unanswered)
+        self.assertFalse(provider.calls)
+        with self.assertRaises(OSError):
+            socket.create_connection(("127.0.0.1", port), timeout=1)
 
     def test_synthetic_verification_failure_yields_no_value_and_saves_nothing(self):
         fake = Provider(NEGATIVE, (200, {"error": "invalid_grant"}))

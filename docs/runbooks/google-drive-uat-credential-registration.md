@@ -23,6 +23,10 @@ bash ~/.claude/scripts/register-secret-verified.sh --recipe google-drive-oauth-c
   --param test-subject-confirmed=yes
 ```
 
+同意画面は2回開く。各回の待ち時間は5分。どちらかで「キャンセル」を選ぶか、
+同意を返さずに期限を過ぎると、登録器が終了し、GitHubへの保存前で処理が止まる。
+再開する場合は端末から登録器を起動し直し、新しく表示されたURLで1回目から進める。
+
 登録器は独立した2つの同意で作ったコードを使い、誤った秘密が拒否されることと正しい組の
 `openid` 交換を検査する。検証に使ったトークンの失効が確認できてから、1つの
 Environment秘密に保存し、名前と更新時刻を読み戻す。交換結果不明、割り込み、
