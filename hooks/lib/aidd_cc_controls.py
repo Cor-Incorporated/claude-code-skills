@@ -269,8 +269,9 @@ def _ruling_verdict(messages: list[str], branch: dict, scope: str, meta: dict) -
                 "streak": branch["count"] + 1,
                 "reason": (
                     f"ADJUDICATION {url} was already used by an earlier fix({scope}) commit on this branch; a ruling "
-                    f"releases exactly one commit (ADR-013). Stop: this is the repair loop the breaker exists for. Get a "
-                    f"NEW decision (a new comment url) for THIS commit, or change the approach and start a new branch "
+                    f"releases exactly one commit (ADR-013). For work already covered by the recorded decision, "
+                    f"reference it in the PR and submit an ordinary fix for the normal repair-limit checks. "
+                    f"If the branch limit fires again, seek a fresh ruling or document a change in approach "
                     f"(session {sid})"
                 ),
             }
