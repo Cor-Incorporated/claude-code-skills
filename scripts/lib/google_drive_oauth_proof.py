@@ -1,7 +1,15 @@
 """Pre-admission provider proof. The installed registrar does not enable this recipe."""
 
+import base64
+import hashlib
+import json
 import secrets
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Lock
+from urllib.parse import parse_qs, urlencode, urlsplit
 
+AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN = {"method": "POST", "url": "https://oauth2.googleapis.com/token"}
 REVOKE = {"method": "POST", "url": "https://oauth2.googleapis.com/revoke"}
 REDIRECT = "http://localhost:8926/google-drive-register"
@@ -11,11 +19,120 @@ class ProofRefused(Exception):
     """Refusal contains an outcome label only."""
 
 
+class AuthorizationAttempt:
+    """One in-memory proof for the fixed local callback. A listener owns its lifecycle."""
+
+    def __init__(self, client_id, *, clock=time.monotonic):
+        if not client_id or client_id.strip() != client_id:
+            raise ProofRefused("invalid_client_id")
+        self._lock = Lock()
+        self._clock = clock
+        self._expires = clock() + 300
+        self._state = secrets.token_urlsafe(32)
+        self._verifier = secrets.token_urlsafe(32)
+        digest = hashlib.sha256(self._verifier.encode("ascii")).digest()
+        challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+        self.url = AUTHORIZE + "?" + urlencode({
+            "client_id": client_id,
+            "redirect_uri": REDIRECT,
+            "response_type": "code",
+            "scope": "openid",
+            "access_type": "online",
+            "prompt": "select_account",
+            "state": self._state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        })
+
+    def accept_callback(self, request_target):
+        """Accept the origin-form target from a local HTTP request, once."""
+        try:
+            if len(request_target) > 8192 or not request_target.startswith("/"):
+                raise ValueError
+            target = urlsplit(request_target)
+            if target.scheme or target.netloc or target.fragment or target.path != urlsplit(REDIRECT).path:
+                raise ValueError
+            params = parse_qs(target.query, keep_blank_values=True, max_num_fields=16, errors="strict")
+        except ValueError:
+            raise ProofRefused("invalid_callback") from None
+        states = params.get("state", [])
+        with self._lock:
+            if self._verifier is None or self._clock() >= self._expires:
+                self._verifier = None
+                raise ProofRefused("attempt_closed")
+            if len(states) != 1 or not secrets.compare_digest(states[0].encode(), self._state.encode()):
+                raise ProofRefused("invalid_state")
+            verifier, self._verifier = self._verifier, None
+        if "error" in params:
+            raise ProofRefused("authorization_denied")
+        codes = params.get("code", [])
+        if len(codes) != 1 or not codes[0] or any(character.isspace() for character in codes[0]):
+            raise ProofRefused("invalid_code")
+        return codes[0], verifier
+
+
+class _LoopbackServer(HTTPServer):
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(1)
+        return connection, address
+
+    def handle_error(self, request, client_address):
+        # An interrupted response must never expose a callback target or code.
+        pass
+
+
+def capture_authorization(client_id, present_url):
+    """Return a one-time proof from the private listener, with no persisted URL or code."""
+    attempt = AuthorizationAttempt(client_id)
+    callback = urlsplit(REDIRECT)
+    outcome = None
+
+    class CallbackHandler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            nonlocal outcome
+            status, message = 400, b"Authorization callback refused."
+            if self.headers.get_all("Host") == [callback.netloc]:
+                try:
+                    outcome = attempt.accept_callback(self.path)
+                except ProofRefused as refusal:
+                    if str(refusal) in {"authorization_denied", "invalid_code", "attempt_closed"}:
+                        outcome = refusal
+                else:
+                    status, message = 200, b"Authorization received. Return to the registrar."
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(message)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(message)
+
+    try:
+        listener = _LoopbackServer(("127.0.0.1", callback.port), CallbackHandler)
+    except OSError:
+        raise ProofRefused("callback_listener_unavailable") from None
+    with listener:
+        present_url(attempt.url)
+        while outcome is None:
+            remaining = attempt._expires - attempt._clock()
+            if remaining <= 0:
+                raise ProofRefused("authorization_timeout")
+            listener.timeout = min(remaining, 1)
+            listener.handle_request()
+    if isinstance(outcome, ProofRefused):
+        raise outcome
+    return outcome
+
+
 def verify(network, client_id, client_secret, control, positive):
     """Check two independent, consented authorization-code proofs; keep no grant.
 
-    The caller owns a loopback listener and validates state before passing
-    (authorization_code, code_verifier) pairs. No caller receives a token.
+    Capture both (authorization_code, code_verifier) pairs with the private
+    loopback listener. No caller receives a token.
     """
     if not all((client_id, client_secret, *control, *positive)):
         raise ProofRefused("missing_input")
@@ -27,6 +144,18 @@ def verify(network, client_id, client_secret, control, positive):
         raise ProofRefused("negative_control_failed")
     if not exchange(network, client_id, client_secret, positive, negative=False):
         raise ProofRefused("client_proof_failed")
+
+
+def stage_credentials(network, client_id, client_secret, present_url):
+    """Prepare the single GitHub Environment value consumed by the Drive UAT Worker."""
+    if not all(isinstance(value, str) and value and value.strip() == value
+               for value in (client_id, client_secret)):
+        raise ProofRefused("invalid_credential_pair")
+    control = capture_authorization(client_id, present_url)
+    positive = capture_authorization(client_id, present_url)
+    verify(network, client_id, client_secret, control, positive)
+    pair = {"DRIVE_OAUTH_CLIENT_ID": client_id, "DRIVE_OAUTH_CLIENT_SECRET": client_secret}
+    return {"DRIVE_UAT_OAUTH_PAIR": json.dumps(pair, separators=(",", ":"))}
 
 
 def exchange(network, client_id, client_secret, proof, *, negative):
