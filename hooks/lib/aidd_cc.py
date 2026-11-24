@@ -42,6 +42,7 @@ from aidd_cc_controls import (  # noqa: E402
 from aidd_cc_session import guard_ledger, load_meta, load_tools, record_tool, save_meta  # noqa: E402
 from aidd_cc_text import (
     NEGATION_RE,
+    REMOVED_SPAN,
     is_approval_text,
     echo_exit_marker,
     is_exit_echo_line,
@@ -49,6 +50,7 @@ from aidd_cc_text import (
     parse_deadline_hours,
     parse_denominator,
     trailing_exit_markers,
+    typed_text,
 )  # noqa: E402
 
 COMPONENT = "H17"
@@ -426,6 +428,53 @@ def _out_sample(out: str) -> str:
     return out[:half] + "\n…\n" + out[-half:]
 
 
+def _revoke_if_typed(meta: dict, text: str, registered: list) -> None:
+    """A refusal / withdrawal the USER typed is the latest instruction: every earlier decision in this session
+    (and anything inherited) stops binding (Codex r2 P1-c).  Text a harness, a subagent or another session
+    delivers inside an envelope is not the user's: a notification saying "取り消します" revokes nothing."""
+    if not NEGATION_RE.search(typed_text(text, "revoke.user-text-only")):
+        return
+    if meta.get("decisions"):
+        registered.append(f"revoked={len(meta['decisions'])}")
+    meta["decisions"] = []
+    meta["revoked_at"] = time.time()
+
+
+def _register_typed_decision(meta: dict, text: str, registered: list) -> None:
+    """Register what the user typed as a decision when it is one (for re-ask suppression only).  A removed
+    envelope span is a gap, so `OK` followed by a notification is still the user's `OK`."""
+    typed = typed_text(text, "approval.user-text-only")
+    reply = typed_text(text, "affirmative.user-text-only").replace(REMOVED_SPAN, " ")
+    decision_text = typed
+    if not is_short_affirmative(reply):
+        meta[
+            "questions"
+        ] = []  # a new instruction supersedes the pending question (reviewer-g D4)
+    elif meta.get("questions"):
+        # `OK` alone answers the last question the agent asked (reviewer-e #8)
+        asked = re.sub(
+            r"[?？]|よいですか|いいですか|よろしいですか|してもいい|ますか|ですか|should i|can i|may i|shall i",
+            "",
+            meta["questions"][-1]["text"],
+            flags=re.IGNORECASE,
+        )
+        decision_text = asked.strip() + " " + reply
+        registered.append("bound-to-question")
+    if is_approval_text(decision_text) and len(decision_text.strip()) >= 2:
+        import hashlib
+
+        decision_text = decision_text.replace(REMOVED_SPAN, " ")
+        sha = hashlib.sha256(decision_text.encode()).hexdigest()[:16]
+        meta["decisions"].append(
+            {
+                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "sha": sha,
+                "text": decision_text[:600],
+            }
+        )
+        registered.append("decision")
+
+
 def cmd_prompt(args, payload):
     agent, session = args.agent, _session(args, payload)
     text = str(
@@ -438,41 +487,9 @@ def cmd_prompt(args, payload):
     meta["stop_blocks"] = (
         0  # the loop guard is per stop attempt, not per session (P2-4)
     )
-    registered = []
-    if NEGATION_RE.search(text):
-        # A refusal / withdrawal is the latest instruction: every earlier decision in
-        # this session (and anything inherited) stops binding (Codex r2 P1-c).
-        if meta.get("decisions"):
-            registered.append(f"revoked={len(meta['decisions'])}")
-        meta["decisions"] = []
-        meta["revoked_at"] = time.time()
-    decision_text = text
-    if not is_short_affirmative(text):
-        meta[
-            "questions"
-        ] = []  # a new instruction supersedes the pending question (reviewer-g D4)
-    if is_short_affirmative(text) and meta.get("questions"):
-        # `OK` alone answers the last question the agent asked (reviewer-e #8)
-        asked = re.sub(
-            r"[?？]|よいですか|いいですか|よろしいですか|してもいい|ますか|ですか|should i|can i|may i|shall i",
-            "",
-            meta["questions"][-1]["text"],
-            flags=re.IGNORECASE,
-        )
-        decision_text = asked.strip() + " " + text
-        registered.append("bound-to-question")
-    if is_approval_text(decision_text) and len(decision_text.strip()) >= 2:
-        import hashlib
-
-        sha = hashlib.sha256(decision_text.encode()).hexdigest()[:16]
-        meta["decisions"].append(
-            {
-                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "sha": sha,
-                "text": decision_text[:600],
-            }
-        )
-        registered.append("decision")
+    registered: list = []
+    _revoke_if_typed(meta, text, registered)
+    _register_typed_decision(meta, text, registered)
     den = parse_denominator(text)
     if den:
         meta["denominator"] = den

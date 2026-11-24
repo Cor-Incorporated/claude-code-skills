@@ -146,7 +146,7 @@ No matcher. 1 hook.
 
 | Hook | Purpose |
 |---|---|
-| `aidd-cc-claude.sh` | H17: register user decisions (for re-ask suppression only), deadlines (`6h以内`, write-once) and the declared denominator (`全47ケース`) |
+| `aidd-cc-claude.sh` | H17: register user decisions (for re-ask suppression only), deadlines (`6h以内`, write-once) and the declared denominator (`全47ケース`). A deadline, a decision, a revocation, the short-`OK` binding to the pending question and the declared denominator are each read only from text the user typed (`user_authored_text`, via `typed_text`): paired `<name-x>…</name-x>` envelope blocks (`<task-notification>`, `<system-reminder>`, `<cross-session-message>`, `<pasted_content>`, …), fenced code and `>` quoted lines never create, revoke or overwrite one (2026-11-12: a notification body saying "15 分以内なら…" set a session deadline; the same text path let a body register an approval, wipe earlier decisions with "取り消します", and overwrite the denominator with "全 47 ケース"). A tag opened and never closed, or closed twice, takes the rest of the text with it (fail closed: a bogus write-once deadline is permanent, a missed one is retyped; a refusal typed after an unpaired `<x-y>` is therefore not seen by the revocation, a limit recorded in `aidd_cc_text.py`). Each control has its own knock-out id (`deadline` / `approval` / `revoke` / `affirmative` / `denominator` + `.user-text-only`); `tests/test-h17-deadline-source.sh` and `tests/test-h17-prompt-text-source.sh` hold the red/green pairs |
 
 ### Stop
 
