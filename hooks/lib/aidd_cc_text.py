@@ -167,11 +167,30 @@ TRIVIAL_CMD_RE = re.compile(
     r"^\s*(ls|echo|printf|cat|pwd|true|false|tail|head|wc|date|sleep|cd|which|type|env|export)\b"
 )
 
-DEADLINE_RE = re.compile(
-    r"(?:(\d{1,3})\s*(?:h|時間)\s*以内|within\s+(\d{1,3})\s*h(?:ours?)?|"
-    r"(\d{1,3})\s*(?:分|min(?:utes?)?)\s*以内)",
-    re.IGNORECASE,
-)
+# A deadline is a number that stands alone, right before its unit.  The pattern used to have no left boundary, so
+# the tail of a longer number matched on its own: measured on develop 2b879e3, `0分以内`, `1000分以内` and
+# `1000時間以内` all returned 0.0 hours (a deadline of "now", write-once, then every Stop blocked: DOT-INC-004/045,
+# the 2026-11-12 permanent block from a second cause), `1.5時間以内` and `0.5時間以内` returned 5.0, and
+# `1,030分以内` returned 0.5.  A digit, a decimal point or a digit-group separator in front of the digits means
+# they are part of a longer number, so there is no match.  A comma after a letter is punctuation (`OK,30分以内`).
+# Decimals are not accepted: rejecting them fails closed (a missed deadline is retyped as `90分以内`, a wrong one
+# is permanent).  Measured over 12,087 queued prompts on this machine: the 12 real deadlines were integers (max
+# 6h, nothing between 7 and 999), and the only decimal / zero / 4-digit tokens were quotes of this very bug.
+# So there is no separate ceiling: the 3-digit cap (999h) is it, and a 4-digit number no longer matches at all.
+_NUM_LEFT = r"(?<![\d.．])(?<!\d[,，])"
+
+
+def _deadline_regex(num_left: str) -> re.Pattern[str]:
+    n = num_left + r"(\d{1,3})"
+    return re.compile(
+        rf"(?:{n}\s*(?:h|時間)\s*以内|within\s+{n}\s*h(?:ours?)?|{n}\s*(?:分|min(?:utes?)?)\s*以内)",
+        re.IGNORECASE,
+    )
+
+
+DEADLINE_RE = _deadline_regex(_NUM_LEFT)
+# Only for mutation `deadline.number-bounds`: the pre-fix pattern, so the guards can be shown to be load-bearing.
+_DEADLINE_RE_UNBOUNDED = _deadline_regex("")
 STOPWORDS = {
     "the",
     "and",
@@ -870,18 +889,97 @@ def is_approval_text(text: str) -> bool:
     )
 
 
+# 2026-11-12 incident: a <task-notification> whose body explained a review result ("時計の戻り: 15 分以内なら…")
+# set a write-once session deadline, and every later Stop was blocked (DOT-INC-004/045).  A deadline is the
+# user's instruction, so only text the person at the keyboard wrote may create one.  Everything a harness, a
+# subagent or another session delivers into a prompt turn arrives inside a paired envelope whose tag name has a
+# hyphen or an underscore (measured over 2294 queued prompts on this machine: cross-session-message 919,
+# system-reminder 605, task-notification 431, pasted_content 41, ci-monitor-event 17, ...; 277 were plain
+# typing).  The rule is structural, not a list, so a new envelope kind needs no second declaration.
+# Which way to err: a bogus deadline is write-once and permanent, a missed one is retyped.  So anything that does
+# not pair up fails closed: an opening tag never closed, or closed twice (a subagent result that quotes the tag
+# literally), takes the rest of the text with it.  Not covered (surface form only, C15): HTML-escaped envelopes,
+# tag names without a hyphen or underscore, indented code, inline backticks.
+# The attribute run is bounded: unterminated tags cannot make the scan quadratic.
+ENVELOPE_TAG_RE = re.compile(
+    r"<(/?)([A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)+)(?:\s[^>]{0,300})?>"
+)
+# An unclosed fence runs to the end of the text.
+FENCED_BLOCK_RE = re.compile(r"(```|~~~).*?(?:\1|\Z)", re.DOTALL)
+QUOTED_LINE_RE = re.compile(r"^[ \t]*>.*$", re.MULTILINE)
+# U+FFFC is neither \s nor \d, so a pattern cannot match across a removed span.
+REMOVED_SPAN = chr(0xFFFC)
+
+
+def _envelope_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of `<name-x>…</name-x>` blocks, counted per tag name (linear time).  Same-name blocks nest by depth;
+    a block still open at the end runs to the end of the text; a closing tag with nothing open extends the
+    block this name closed last (the earlier close was quoted, not real)."""
+    spans: list[tuple[int, int]] = []
+    depth: dict[str, int] = {}
+    start: dict[str, int] = {}
+    # name -> index in spans of the block that name closed most recently
+    last: dict[str, int] = {}
+    for m in ENVELOPE_TAG_RE.finditer(text):
+        name = m.group(2).lower()
+        if not m.group(1):
+            if depth.get(name, 0) == 0:
+                start[name] = m.start()
+            depth[name] = depth.get(name, 0) + 1
+        elif depth.get(name, 0) > 0:
+            depth[name] -= 1
+            if depth[name] == 0:
+                spans.append((start[name], m.end()))
+                last[name] = len(spans) - 1
+        elif name in last:
+            spans[last[name]] = (spans[last[name]][0], m.end())
+    spans.extend((start[n], len(text)) for n, d in depth.items() if d > 0)
+    return spans
+
+
+def user_authored_text(text: str) -> str:
+    """The part of a prompt the user typed: envelope blocks, fenced code and quoted lines are replaced by a
+    placeholder.  Surface-form only (C15): a sentence the user wrote inside a quote is not recovered."""
+    t = text or ""
+    kept: list[str] = []
+    pos = 0
+    for start, end in sorted(_envelope_spans(t)):
+        if start < pos:  # inside, or overlapping, a block already removed
+            pos = max(pos, end)
+            continue
+        kept.append(t[pos:start])
+        kept.append(REMOVED_SPAN)
+        pos = end
+    kept.append(t[pos:])
+    typed = FENCED_BLOCK_RE.sub(REMOVED_SPAN, "".join(kept))
+    return QUOTED_LINE_RE.sub(REMOVED_SPAN, typed)
+
+
 def parse_deadline_hours(text: str) -> float | None:
-    """`6h以内` / `within 2h` / `30分以内` -> hours.  None if absent."""
-    m = DEADLINE_RE.search(text or "")
-    if not m:
-        return None
-    if m.group(1):
-        return float(m.group(1))
-    if m.group(2):
-        return float(m.group(2))
+    """`6h以内` / `within 2h` / `30分以内` -> hours.  None if absent.
+
+    Only text the user wrote counts (see user_authored_text).  Mutation `deadline.user-text-only` reads the
+    whole prompt again, notification bodies included (the 2026-11-12 failure).
+
+    A deadline is a positive number of at most 3 digits that stands alone (see _NUM_LEFT).  A non-positive
+    value is not a deadline: it is skipped and the next match is tried, like any other text that is not a
+    deadline.  Mutation `deadline.number-bounds` takes the first match of the pre-fix pattern as it was."""
+    typed = text or ""
+    if not mutated("deadline.user-text-only"):
+        typed = user_authored_text(typed)
+    bounded = not mutated("deadline.number-bounds")
+    for m in (DEADLINE_RE if bounded else _DEADLINE_RE_UNBOUNDED).finditer(typed):
+        hours = _deadline_match_hours(m)
+        if hours > 0 or not bounded:
+            return hours
+    return None
+
+
+def _deadline_match_hours(m: re.Match[str]) -> float:
+    """Hours of one DEADLINE_RE match (group 1 = h / 時間, 2 = within Nh, 3 = minutes)."""
     if m.group(3):
         return float(m.group(3)) / 60.0
-    return None
+    return float(m.group(1) or m.group(2))
 
 
 TARGET_TOKEN_RE = re.compile(r"[A-Za-z0-9_]*[/.\-:@][A-Za-z0-9_/.\-:@]*|[A-Za-z]+\d+")
