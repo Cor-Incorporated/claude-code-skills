@@ -213,6 +213,10 @@ elif a[:2] == ["secret", "list"]:
 elif a[:2] == ["secret", "put"]:
     name = a[2]
     open("$SB/wr/stdin-" + W + "-" + name, "wb").write(sys.stdin.buffer.read())
+    if os.environ.get("FAKE_WR_PUT_SLEEP_WORKER") == W:
+        import time
+        open("$SB/wr/put-started-" + W, "w").close()
+        time.sleep(30)
     if os.environ.get("FAKE_WR_PUT_FAIL_WORKER") == W:
         sys.exit(1)
     if name not in st["secrets"]:
@@ -227,6 +231,8 @@ elif a[:2] == ["secret", "delete"]:
     save()
 elif a[:2] == ["deployments", "list"]:
     at = "2020-01-01T00:00:00Z" if os.environ.get("FAKE_WR_OLD_DEPLOY_WORKER") == W else st["last_deploy"]
+    if os.environ.get("FAKE_WR_DEPLOY_AT_WORKER") == W:
+        at = os.environ["FAKE_WR_DEPLOY_AT"]
     print(json.dumps([{"created_on": at, "versions": [{"version_id": "version-" + W, "percentage": 100}]}]))
 else:
     sys.stderr.write("fake wrangler: unknown " + " ".join(a) + "\n")
@@ -666,6 +672,17 @@ out="$(printf '' | FAKE_WR_OLD_DEPLOY_WORKER="$WR2" run --recipe sample-entitlem
    && "$(grep -cE '^secret delete' "$SB/wr-argv" 2>/dev/null || true)" -eq 0 ]] \
   && ok "W4b worker readback: a last deployment older than 300 seconds is exit 4, and nothing is deleted" \
   || bad "W4b worker readback" "rc=$rc out=$out"
+reset
+out="$(printf '' | FAKE_WR_DEPLOY_AT_WORKER="$WR2" FAKE_WR_DEPLOY_AT="2099-01-01T00:00:00Z" run --recipe sample-entitlement-token "$WNAME" "$WREPO")"; rc=$?
+[[ $rc -eq 4 && "$out" == *"$WR2: name present=yes, last version 2099-01-01T00:00:00Z"* ]] \
+  && ok "W4c worker readback: a last deployment in the future is not read as fresh (exit 4)" \
+  || bad "W4c worker readback future" "rc=$rc out=$out"
+reset
+naive="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"))')"
+out="$(printf '' | FAKE_WR_DEPLOY_AT_WORKER="$WR2" FAKE_WR_DEPLOY_AT="$naive" run --recipe sample-entitlement-token "$WNAME" "$WREPO")"; rc=$?
+[[ $rc -eq 4 && "$out" == *"$WR2: name present=yes, last version $naive"* ]] \
+  && ok "W4d worker readback: a deployment time without a zone is unreadable, so the readback refuses (exit 4, not an internal error)" \
+  || bad "W4d worker readback naive" "rc=$rc out=$out"
 # W5
 reset
 out="$(printf '' | run --recipe sample-entitlement-token "$WNAME" "$WREPO" --dry-run)"; rc=$?
@@ -680,6 +697,25 @@ out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --en
 [[ $rc -eq 0 && -s "$SB/gh/MCP_TOKEN" && ! -e "$SB/wr-argv" ]] \
   && ok "W6 no sink: mcp-token still stores through gh and never calls wrangler" \
   || bad "W6 no sink" "rc=$rc out=$out"
+# W7 a signal between the two puts: the first Worker's copy (over an older value) and the put in flight are deleted
+reset
+wr_seed "$WR1"
+printf '' | FAKE_WR_PUT_SLEEP_WORKER="$WR2" bash "$SCRIPT" --recipe sample-entitlement-token "$WNAME" "$WREPO" >"$SB/sig-out" 2>&1 &
+pid=$!
+for _ in $(seq 1 50); do [[ -e "$SB/wr/put-started-$WR2" ]] && break; sleep 0.2; done
+before="$(row recipe-sample-entitlement-token-interrupted)"
+kill -INT "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; rc=$?
+out="$(cat "$SB/sig-out")"
+[[ -e "$SB/wr/put-started-$WR2" && $rc -eq 130 \
+   && "$(grep -c "^secret delete $WNAME --name $WR1\$" "$SB/wr-argv")" -eq 1 \
+   && "$(grep -c "^secret delete $WNAME --name $WR2\$" "$SB/wr-argv")" -eq 1 \
+   && "$out" == *"interrupted between the Worker puts"* \
+   && "$out" == *"$WR1: name present before=yes, present now=no, deleted"* && "$out" == *"older value is gone"* \
+   && "$out" == *"$WR2: name present before=no, present now=no, deleted (its put was in flight)"* \
+   && "$(row recipe-sample-entitlement-token-interrupted)" -eq $((before + 1)) && -z "$(ls -A "$TMPDIR")" ]] \
+  && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s[sys.argv[2]]["secrets"] == [] and s[sys.argv[3]]["secrets"] == []' "$SB/wr/state.json" "$WR1" "$WR2" \
+  && ok "W7 worker signal: SIGINT between the puts deletes the first copy and the one in flight, says so, writes a ledger row and leaves no value file (rc=130)" \
+  || bad "W7 worker signal" "rc=$rc out=$out argv=$(cat "$SB/wr-argv" 2>/dev/null) tmp=$(ls -A "$TMPDIR")"
 
 # Mutants (red side). Each writes a changed copy of the helper next to a copy of the recipe file and runs that copy
 # itself in this file (pair18: the variable written is the variable executed).

@@ -779,10 +779,13 @@ def secret_name_set(text):
 
 
 def age_seconds(stamp):
+    """Seconds since an ISO time with a zone; None (unreadable, so the readback refuses) for a time without a zone or
+    one more than 60 seconds in the future."""
     try:
-        return (datetime.now(timezone.utc) - datetime.fromisoformat(stamp.replace("Z", "+00:00"))).total_seconds()
-    except (AttributeError, ValueError):
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(stamp.replace("Z", "+00:00"))).total_seconds()
+    except (AttributeError, TypeError, ValueError):
         return None
+    return None if age < -60 else age
 
 
 def wrangler_call(run, args, stdin=None):
@@ -808,11 +811,13 @@ def worker_preflight(run):
                               w, active or "unreadable", newest or "unreadable"))
 
 
-def worker_put_failed(run, failed_worker, failed_name, failed_rc, before, placed):
-    """Delete every copy this run put, then report per Worker whether the name is present and the last version
-    time, so that a copy deleted over an older value is visible in the refusal."""
+def worker_rollback(run, before, placed, inflight=None, failed=None):
+    """Delete every copy this run put, and the put in flight when a signal came (it may have landed), then observe
+    each Worker: whether the name is there before and now, and the last version time. A copy deleted over an older
+    value is marked, because that older value is gone too. Returns (detail, old_gone)."""
+    targets = list(placed) + ([inflight] if inflight else [])
     deleted = {}
-    for w, n in reversed(placed):
+    for w, n in reversed(targets):
         rc, _ = wrangler_call(run, ["secret", "delete", n, "--name", w])
         deleted[(w, n)] = rc
     lines, old_gone = [], False
@@ -821,22 +826,52 @@ def worker_put_failed(run, failed_worker, failed_name, failed_rc, before, placed
         now = secret_name_set(out) if rc == 0 else None
         rc2, out2 = wrangler_call(run, ["deployments", "list", "--name", w])
         at = latest_deployment_time(out2) if rc2 == 0 else None
-        if any(pw == w for pw, _ in placed):
-            action = "deleted" if deleted.get((w, failed_name)) == 0 else (
-                "delete failed rc=%d" % deleted.get((w, failed_name), -1))
-        elif w == failed_worker:
-            action = "put failed rc=%d" % failed_rc
-        else:
-            action = "not put"
-        line = "%s: name present before=%s, present now=%s, %s, last version %s" % (
-            w, "yes" if failed_name in before[w] else "no",
-            "unreadable" if now is None else ("yes" if failed_name in now else "no"),
-            action, at or "unreadable")
-        if failed_name in before[w] and action == "deleted":
-            old_gone = True
-            line += " (the older value is gone too)"
-        lines.append(line)
-    detail = "; ".join(lines)
+        for n in run.names:
+            if (w, n) in deleted:
+                action = "deleted" if deleted[(w, n)] == 0 else "delete failed rc=%d" % deleted[(w, n)]
+                if (w, n) == inflight:
+                    action += " (its put was in flight)"
+            elif failed and failed[:2] == (w, n):
+                action = "put failed rc=%d" % failed[2]
+            else:
+                action = "not put"
+            line = "%s: name present before=%s, present now=%s, %s, last version %s" % (
+                w if len(run.names) == 1 else "%s %s" % (w, n), "yes" if n in before[w] else "no",
+                "unreadable" if now is None else ("yes" if n in now else "no"), action, at or "unreadable")
+            if n in before[w] and deleted.get((w, n)) == 0:
+                old_gone = True
+                line += " (the older value is gone too)"
+            lines.append(line)
+    return "; ".join(lines), old_gone
+
+
+def worker_interrupted(run):
+    """A signal while worker_sink runs: undo the copies that are not yet on every Worker, say what each Worker holds
+    now, and leave a ledger row. Further signals are ignored until this has finished."""
+    for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(s, signal.SIG_IGN)
+    progress = run.worker_progress
+    if progress["done"]:
+        run.detail = "interrupted during the readback; the value is on every Worker"
+        msg = ("NG: interrupted during the readback. The value was put on every Worker (%s) and was left there. "
+               "Check `wrangler secret list --name <Worker>`." % ", ".join(run.recipe["workers"]))
+    elif not progress["placed"] and not progress["inflight"]:
+        run.detail = "interrupted before any put"
+        msg = "NG: interrupted before any wrangler secret put; no Worker was touched."
+    else:
+        detail, old_gone = worker_rollback(run, progress["before"], progress["placed"], progress["inflight"])
+        run.detail = "interrupted; rollback observed: " + detail
+        msg = ("NG: interrupted between the Worker puts. This run ran `wrangler secret delete` for every copy it had "
+               "put, and for the put in flight%s. Observed: %s. Check `wrangler secret list --name <Worker>`." % (
+                   "; a Worker where the name was already present lost that older value too" if old_gone else "",
+                   detail))
+    run.ledger("deny", "interrupted")
+    print(msg, file=sys.stderr)
+
+
+def worker_put_failed(run, failed_worker, failed_name, failed_rc, before, placed):
+    """Delete every copy this run put, then refuse with what each Worker holds now."""
+    detail, old_gone = worker_rollback(run, before, placed, failed=(failed_worker, failed_name, failed_rc))
     run.detail = "rollback observed: " + detail
     return Refused(3, "worker-set-failed",
                    "NG: wrangler secret put %s failed on Worker %s (rc=%d); no later Worker was touched. This run had "
@@ -851,7 +886,9 @@ def worker_sink(run, values, work):
     """Put the generated value on each Worker's secret (stdin, never argv) and read the name and a fresh deployment
     back from every one."""
     workers = run.recipe["workers"]
-    before = {}
+    before, placed = {}, []
+    # what a signal handler in main() needs to undo this run's copies (worker_interrupted)
+    run.worker_progress = {"before": before, "placed": placed, "inflight": None, "done": False}
     for w in workers:
         rc, out = wrangler_call(run, ["secret", "list", "--name", w])
         names = secret_name_set(out) if rc == 0 else None
@@ -863,15 +900,17 @@ def worker_sink(run, values, work):
     for name, role in zip(run.names, run.recipe["values"]):
         paths[name] = os.path.join(work, "set-" + name)
         write_private(paths[name], values[role])
-    placed = []
     try:
         for w in workers:
             for name in run.names:
+                run.worker_progress["inflight"] = (w, name)
                 with open(paths[name], "rb") as fh:
                     rc, _ = wrangler_call(run, ["secret", "put", name, "--name", w], stdin=fh)
+                run.worker_progress["inflight"] = None
                 if rc != 0:
                     raise worker_put_failed(run, w, name, rc, before, placed)
                 placed.append((w, name))
+        run.worker_progress["done"] = True
     finally:
         for path in paths.values():
             if os.path.exists(path):
@@ -1101,7 +1140,9 @@ def main(argv):
         access_recovery_notice(run, work)
         return r.code
     except SystemExit:
-        if run.recipe["kind"] == "slack-oauth-code":
+        if getattr(run, "worker_progress", None) is not None:
+            worker_interrupted(run)
+        elif run.recipe["kind"] == "slack-oauth-code":
             run.detail = "interrupted; check new Slack grant and GitHub secret metadata before retry"
             run.ledger("deny", "interrupted")
             print("Interrupted: check the new Slack grant and GitHub secret metadata before any retry.", file=sys.stderr)
