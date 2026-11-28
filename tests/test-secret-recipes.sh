@@ -18,6 +18,9 @@ export HOME="$SB/home" TMPDIR="$SB/tmp" AIDD_LEDGER_SOURCE=test AIDD_LEDGER_PATH
 mkdir -p "$HOME" "$TMPDIR" "$SB/bin" "$SB/gh" "$SB/vault"
 GID="Iv1.goodclientid0001" GSEC="goodsecret_0123456789abcdef0123456789abcdef"
 SID="1234567890.0987654321" SSEC="slacksecret0123456789abcdef"
+WR1="cor-account-entitlements" WR2="cor-sample-service"
+WNAME="SAMPLE_ENTITLEMENT_QUERY_TOKEN" WACCOUNT="9973f2d2304b58a1f90d4d9409e9f8cc"
+WREPO="Cor-Incorporated/corsweb2024"
 pass=0
 fail=0
 ok() { echo "PASS: $1"; pass=$((pass + 1)); }
@@ -177,14 +180,75 @@ else:
         sys.exit(1)
     sys.exit(1 if os.environ.get("FAKE_NODE_CHECK_FAIL") or v.endswith("\n") else 0)
 FAKE
+cat >"$SB/bin/wrangler" <<FAKE
+#!/usr/bin/env python3
+import datetime, json, os, sys
+a = sys.argv[1:]
+open("$SB/wr-argv", "a").write(" ".join(a) + "\n")
+open("$SB/wr-account", "a").write(os.environ.get("CLOUDFLARE_ACCOUNT_ID", "") + "\n")
+os.makedirs("$SB/wr", exist_ok=True)
+state_path = "$SB/wr/state.json"
+now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+try:
+    state = json.load(open(state_path))
+except Exception:
+    state = {w: {"secrets": [], "last_deploy": now} for w in ("cor-account-entitlements", "cor-sample-service")}
+def save():
+    json.dump(state, open(state_path, "w"))
+def worker():
+    return a[a.index("--name") + 1]
+W = worker()
+st = state.setdefault(W, {"secrets": [], "last_deploy": now})
+if a[:2] == ["deployments", "status"]:
+    active = ("other-active-" + W) if os.environ.get("FAKE_WR_MISMATCH_WORKER") == W else "version-" + W
+    print(json.dumps({"created_on": st["last_deploy"], "versions": [{"version_id": active, "percentage": 100}]}))
+elif a[:2] == ["versions", "list"]:
+    newest = ("other-latest-" + W) if os.environ.get("FAKE_WR_MISMATCH_WORKER") == W else "version-" + W
+    print(json.dumps([{"id": newest, "metadata": {"created_on": st["last_deploy"]}}]))
+elif a[:2] == ["secret", "list"]:
+    names = list(st["secrets"])
+    if os.environ.get("FAKE_WR_NO_SECRET_WORKER") == W and names:
+        names = names[:-1]
+    print(json.dumps([{"name": n} for n in names]))
+elif a[:2] == ["secret", "put"]:
+    name = a[2]
+    open("$SB/wr/stdin-" + W + "-" + name, "wb").write(sys.stdin.buffer.read())
+    if os.environ.get("FAKE_WR_PUT_FAIL_WORKER") == W:
+        sys.exit(1)
+    if name not in st["secrets"]:
+        st["secrets"].append(name)
+    st["last_deploy"] = now
+    save()
+elif a[:2] == ["secret", "delete"]:
+    name = a[2]
+    if os.environ.get("FAKE_WR_DELETE_FAIL_WORKER") == W:
+        sys.exit(1)
+    st["secrets"] = [n for n in st["secrets"] if n != name]
+    save()
+elif a[:2] == ["deployments", "list"]:
+    at = "2020-01-01T00:00:00Z" if os.environ.get("FAKE_WR_OLD_DEPLOY_WORKER") == W else st["last_deploy"]
+    print(json.dumps([{"created_on": at, "versions": [{"version_id": "version-" + W, "percentage": 100}]}]))
+else:
+    sys.stderr.write("fake wrangler: unknown " + " ".join(a) + "\n")
+    sys.exit(3)
+FAKE
 chmod +x "$SB/bin/"*
 export PATH="$SB/bin:$PATH"
 CONSUMER="$SB/cor-os"
 mkdir -p "$CONSUMER/scripts" && touch "$CONSUMER/scripts/release-secrets.mjs"
 git -C "$CONSUMER" init -q && git -C "$CONSUMER" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
-reset() { rm -rf "$SB/gh/"* "$SB/vault/"* "$SB"/curl-argv "$SB"/curl-urls "$SB"/gh-argv "$SB"/bw-argv "$SB"/node-argv "$SB"/node-checked "$SB"/bw-get-started "$SB"/bw-create-started "$SB"/node-gen-leaked; }
+reset() { rm -rf "$SB/gh/"* "$SB/vault/"* "$SB"/curl-argv "$SB"/curl-urls "$SB"/gh-argv "$SB"/bw-argv "$SB"/node-argv "$SB"/node-checked "$SB"/bw-get-started "$SB"/bw-create-started "$SB"/node-gen-leaked "$SB"/wr "$SB"/wr-argv "$SB"/wr-account; }
 run() { bash "$SCRIPT" "$@" 2>&1; }
 row() { grep -c "\"rule\":\"$1\"" "$AIDD_LEDGER_PATH" 2>/dev/null || true; }
+wr_seed() {  # wr_seed [the Worker whose secret list already has WNAME]
+  mkdir -p "$SB/wr"
+  python3 -c 'import datetime,json,sys
+now=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+name, existing, path = sys.argv[1], sys.argv[2], sys.argv[3]
+workers = sys.argv[4:6]
+json.dump({w: {"secrets": [name] if w == existing else [], "last_deploy": now} for w in workers}, open(path, "w"))' \
+    "$WNAME" "${1:--}" "$SB/wr/state.json" "$WR1" "$WR2"
+}
 
 # 1 GitHub OAuth: the right pair is stored, the control is measured and recorded
 reset
@@ -543,6 +607,79 @@ reset
 out="$(printf '' | FAKE_NODE_GEN_FAIL_FIXED=1 run --recipe intake-keys PUBLISHING_INTAKE_KEYS_JSON o/r --repo-dir "$CONSUMER" --param revision=r1)"; rc=$?
 [[ $rc -eq 1 && "$out" != *"abcdefghijABCDEFGHIJabcdefghijABCDEFGHIJabc"* && "$out" == *"rejected key <redacted>"* ]] \
   && ok "#480 review: a printed key with no digit (43 letters) is still redacted by the 40+ rule" || bad "#480 gen fail no digit" "rc=$rc $out"
+
+# 17 Worker sink (sink=worker): one generated value goes to both Workers on stdin with the recipe's account; the
+# 100% deployment must be the newest version first; a failed put deletes what this run already put; the readback
+# needs the name and a deployment younger than 300 seconds; --dry-run touches neither put nor delete.
+# W1
+reset
+out="$(printf '' | run --recipe sample-entitlement-token "$WNAME" "$WREPO")"; rc=$?
+v1="$(cat "$SB/wr/stdin-$WR1-$WNAME" 2>/dev/null)"
+v2="$(cat "$SB/wr/stdin-$WR2-$WNAME" 2>/dev/null)"
+[[ $rc -eq 0 && -n "$v1" && "$v1" == "$v2" && ${#v1} -eq 43 && "$out" != *"$v1"* ]] \
+  && ! grep -qF "$v1" "$SB/wr-argv" "$AIDD_LEDGER_PATH" \
+  && ok "W1 worker sink: both Workers receive the same 43-character value on stdin, never in argv, output or ledger" \
+  || bad "W1 worker sink" "rc=$rc v1=$v1 v2=$v2 out=$out"
+[[ "$(grep -c "^secret put $WNAME --name $WR1\$" "$SB/wr-argv")" -eq 1 \
+   && "$(grep -c "^secret put $WNAME --name $WR2\$" "$SB/wr-argv")" -eq 1 \
+   && -s "$SB/wr-account" && "$(grep -vcx "$WACCOUNT" "$SB/wr-account")" -eq 0 ]] \
+  && ok "W1 worker sink: each put names its Worker, and every wrangler call carries CLOUDFLARE_ACCOUNT_ID=$WACCOUNT" \
+  || bad "W1 worker account" "argv=$(cat "$SB/wr-argv" 2>/dev/null) account=$(cat "$SB/wr-account" 2>/dev/null)"
+grep '"rule":"recipe-sample-entitlement-token-registered"' "$AIDD_LEDGER_PATH" | grep -q "$WR1" \
+  && grep '"rule":"recipe-sample-entitlement-token-registered"' "$AIDD_LEDGER_PATH" | grep -q "$WR2" \
+  && ok "W1 worker sink: the ledger row names both Workers and carries no value" \
+  || bad "W1 worker ledger" "$(tail -1 "$AIDD_LEDGER_PATH")"
+# W2
+reset
+out="$(printf '' | FAKE_WR_MISMATCH_WORKER="$WR2" run --recipe sample-entitlement-token "$WNAME" "$WREPO")"; rc=$?
+[[ $rc -eq 1 && "$out" == *"other-active-$WR2"* && "$out" == *"other-latest-$WR2"* \
+   && "$(grep -cE '^secret (put|delete)' "$SB/wr-argv" 2>/dev/null || true)" -eq 0 \
+   && ! -e "$SB/wr/stdin-$WR1-$WNAME" ]] \
+  && ok "W2 worker preflight: when the 100% deployment is not the newest version, no value is made and no put runs (rc=1)" \
+  || bad "W2 worker preflight" "rc=$rc out=$out"
+[[ "$(row recipe-sample-entitlement-token-worker-deploy-mismatch)" -ge 1 ]] \
+  && ok "W2 worker preflight: the refusal is a ledger row naming the recipe rule" \
+  || bad "W2 worker preflight row" "$(tail -1 "$AIDD_LEDGER_PATH")"
+# W3
+reset
+wr_seed "$WR1"
+out="$(printf '' | FAKE_WR_PUT_FAIL_WORKER="$WR2" run --recipe sample-entitlement-token "$WNAME" "$WREPO")"; rc=$?
+[[ $rc -eq 3 \
+   && "$(grep -c "^secret delete $WNAME --name $WR1\$" "$SB/wr-argv")" -eq 1 \
+   && "$(grep -cE '^secret delete' "$SB/wr-argv")" -eq 1 \
+   && "$out" == *"$WR1: name present before=yes"* && "$out" == *"present now=no"* \
+   && "$out" == *"$WR2: name present before=no"* && "$out" == *"put failed rc=1"* \
+   && "$out" == *"last version 20"* && "$out" == *"older value is gone"* ]] \
+  && python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))[sys.argv[2]]["secrets"] == []' "$SB/wr/state.json" "$WR1" \
+  && ok "W3 worker rollback: a failed second put deletes the first Worker's copy (over an older value) and refuses with per-Worker observations (rc=3)" \
+  || bad "W3 worker rollback" "rc=$rc out=$out argv=$(cat "$SB/wr-argv")"
+# W4
+reset
+out="$(printf '' | FAKE_WR_NO_SECRET_WORKER="$WR2" run --recipe sample-entitlement-token "$WNAME" "$WREPO")"; rc=$?
+[[ $rc -eq 4 && "$out" == *"$WR2: name present=no"* && "$out" == *"last version 20"* \
+   && "$(grep -cE '^secret delete' "$SB/wr-argv" 2>/dev/null || true)" -eq 0 ]] \
+  && ok "W4a worker readback: a missing secret name on one Worker is exit 4, and nothing is deleted" \
+  || bad "W4a worker readback" "rc=$rc out=$out"
+reset
+out="$(printf '' | FAKE_WR_OLD_DEPLOY_WORKER="$WR2" run --recipe sample-entitlement-token "$WNAME" "$WREPO")"; rc=$?
+[[ $rc -eq 4 && "$out" == *"$WR2: name present=yes, last version 2020-01-01T00:00:00Z"* \
+   && "$(grep -cE '^secret delete' "$SB/wr-argv" 2>/dev/null || true)" -eq 0 ]] \
+  && ok "W4b worker readback: a last deployment older than 300 seconds is exit 4, and nothing is deleted" \
+  || bad "W4b worker readback" "rc=$rc out=$out"
+# W5
+reset
+out="$(printf '' | run --recipe sample-entitlement-token "$WNAME" "$WREPO" --dry-run)"; rc=$?
+[[ $rc -eq 0 && "$out" == *"DRY RUN"* \
+   && "$(grep -cE '^secret (put|delete)' "$SB/wr-argv" 2>/dev/null || true)" -eq 0 \
+   && ! -e "$SB/wr/stdin-$WR1-$WNAME" ]] \
+  && ok "W5 worker dry run: preflight only; neither secret put nor secret delete is called" \
+  || bad "W5 worker dry" "rc=$rc out=$out argv=$(cat "$SB/wr-argv" 2>/dev/null)"
+# W6
+reset
+out="$(printf '' | run --recipe mcp-token MCP_TOKEN Cor-Incorporated/cor-os --env production --keep-in-bitwarden env/production/MCP_TOKEN)"; rc=$?
+[[ $rc -eq 0 && -s "$SB/gh/MCP_TOKEN" && ! -e "$SB/wr-argv" ]] \
+  && ok "W6 no sink: mcp-token still stores through gh and never calls wrangler" \
+  || bad "W6 no sink" "rc=$rc out=$out"
 
 # Mutants (red side). Each writes a changed copy of the helper next to a copy of the recipe file and runs that copy
 # itself in this file (pair18: the variable written is the variable executed).

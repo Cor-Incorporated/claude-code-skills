@@ -12,13 +12,18 @@ Recipes live in secret-verify-recipes.json next to this file and land only by PR
              a definite one (no answer, 403, 429, 5xx, or a body that is not a JSON object) refuses as inconclusive:
              a transient error must never stand in for the control (#479 review). Nothing in argv: the URL, the
              headers and the body go to curl through a 0600 config file.
-  generated  the value is made here (CSPRNG) and never shown. With keep=bitwarden it is first written to the env
-             ledger (Bitwarden item env/<environment>/<NAME>) and read back equal, because someone else needs it.
-             The item is created with _bw.status=unverified and set to active only after that readback (#480).
-             If GitHub then fails, --resume-from-bitwarden stores that same copy instead of making a new one; it
-             takes only an active item whose path, _bw.environment, _bw.variable and _bw.service all match and
-             whose value has the generator's shape. Without --env the item path chosen by the operator decides
-             the environment. keep is allowed only on a generated recipe with one value.
+  generated  the value is made here (CSPRNG) and never shown. By default it is stored as a GitHub secret. With
+             sink=worker it goes to each named Worker of one Cloudflare account instead: before a value is made,
+             every Worker's 100% deployment must be its newest version, then the value is piped on stdin to
+             `wrangler secret put <NAME> --name <Worker>` with CLOUDFLARE_ACCOUNT_ID set. A put that fails deletes
+             the copies this run already put, and the readback is the name on every Worker plus a deployment
+             younger than 300 seconds. With keep=bitwarden it is first written to the env ledger (Bitwarden item
+             env/<environment>/<NAME>) and read back equal, because someone else needs it. The item is created
+             with _bw.status=unverified and set to active only after that readback (#480). If GitHub then fails,
+             --resume-from-bitwarden stores that same copy instead of making a new one; it takes only an active
+             item whose path, _bw.environment, _bw.variable and _bw.service all match and whose value has the
+             generator's shape. Without --env the item path chosen by the operator decides the environment. keep
+             is allowed only on a generated recipe with one value.
   consumer   the consumer's own generator and check, run in its checkout, decide the value (cor-os#126). A missing
              command refuses.
   slack-oauth-code  a new, operator-approved temporary user grant; wrong-secret control first, then real code
@@ -56,6 +61,8 @@ RECIPES = os.path.join(HERE, "secret-verify-recipes.json")
 NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 KEEP_RE = re.compile(r"^env/([A-Za-z0-9._-]+)/([A-Z_][A-Z0-9_]*)$")
+WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+ACCOUNT_RE = re.compile(r"^[0-9a-f]{32}$")
 CONDITION_KEYS = {"status", "json"}
 # bwenv lists _bw.status; the env ledger already uses "unverified" and "active" (ENV-INDEX.md, #480)
 BW_UNVERIFIED, BW_ACTIVE = "unverified", "active"
@@ -185,6 +192,24 @@ class Run:
                               or len(rec.get("values") or []) != 1):
             raise Refused(1, "recipe-invalid", "NG: recipe %s keeps a copy (keep=%r), but keep=bitwarden is only "
                           "for a generated recipe with one value; nothing was sent." % (self.recipe_name, rec["keep"]))
+
+    def check_sink(self):
+        """A Worker sink names its Workers and one account; anything else is refused before a value is made.
+        Called in main, so the refusal is a ledger row."""
+        rec = self.recipe
+        sink = rec.get("sink")
+        if sink is None:
+            return
+        workers = rec.get("workers")
+        account = rec.get("account_id")
+        if (sink != "worker" or not isinstance(workers, list) or not workers
+                or any(not isinstance(w, str) or not WORKER_RE.match(w) for w in workers)
+                or len(set(workers)) != len(workers)
+                or len(rec.get("values") or []) != 1 or len(self.names) != 1
+                or not isinstance(account, str) or not ACCOUNT_RE.match(account)):
+            raise Refused(1, "recipe-invalid", "NG: recipe %s has sink=%r but needs sink=worker, one secret name, a "
+                          "non-empty list of distinct Worker names and a 32-hex account_id; nothing was stored." % (
+                              self.recipe_name, sink))
 
     # --- ledger ------------------------------------------------------------------------------------------------
     def ledger(self, decision, rule):
@@ -671,6 +696,210 @@ def consumer(run, work):
     return {rec["values"][0]: value}
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z")
+
+
+def wrangler_json(text):
+    """The first JSON value in wrangler's output (a banner or a table may come before it)."""
+    clean = ANSI_RE.sub("", text or "")
+    for i, ch in enumerate(clean):
+        if ch in "[{":
+            try:
+                return json.JSONDecoder().raw_decode(clean[i:])[0]
+            except ValueError:
+                continue
+    return None
+
+
+def created_on(node):
+    if not isinstance(node, dict):
+        return ""
+    meta = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    for value in (node.get("created_on"), meta.get("created_on")):
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def status_version(text):
+    """The version_id at 100% in `wrangler deployments status` (JSON, or its `(100%) <id>` line)."""
+    doc = wrangler_json(text)
+    if isinstance(doc, dict):
+        versions = doc.get("versions")
+        if isinstance(versions, list):
+            for v in versions:
+                if isinstance(v, dict) and v.get("percentage") == 100:
+                    vid = v.get("version_id") or v.get("id")
+                    if isinstance(vid, str) and vid:
+                        return vid
+        for key in ("version_id", "id"):
+            if isinstance(doc.get(key), str) and doc[key]:
+                return doc[key]
+    for line in ANSI_RE.sub("", text or "").splitlines():
+        if "(100%)" in line or "100%" in line:
+            m = re.search(r"([0-9a-fA-F][0-9a-fA-F-]{30,})", line)
+            if m:
+                return m.group(1)
+    return None
+
+
+def latest_version(text):
+    """The newest id in `wrangler versions list`: newest created_on in JSON, else the last row (the command lists
+    the ten most recent versions oldest first)."""
+    doc = wrangler_json(text)
+    items = doc if isinstance(doc, list) else [doc]
+    items = [i for i in items if isinstance(i, dict)]
+    if items:
+        stamps = [created_on(i) for i in items]
+        pick = items[stamps.index(max(stamps))] if any(stamps) else items[-1]
+        for key in ("id", "version_id"):
+            if isinstance(pick.get(key), str) and pick[key]:
+                return pick[key]
+    ids = re.findall(r"Version ID:\s*(\S+)", ANSI_RE.sub("", text or ""))
+    return ids[-1] if ids else None
+
+
+def latest_deployment_time(text):
+    """The newest created_on in `wrangler deployments list` (JSON, or the last `Created:` timestamp)."""
+    doc = wrangler_json(text)
+    items = doc if isinstance(doc, list) else [doc]
+    stamps = [s for s in (created_on(i) for i in items if isinstance(i, dict)) if s]
+    if stamps:
+        return max(stamps)
+    found = ISO_RE.findall(ANSI_RE.sub("", text or ""))
+    return max(found) if found else None
+
+
+def secret_name_set(text):
+    doc = wrangler_json(text)
+    if not isinstance(doc, list):
+        return None
+    return {i["name"] for i in doc if isinstance(i, dict) and isinstance(i.get("name"), str)}
+
+
+def age_seconds(stamp):
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(stamp.replace("Z", "+00:00"))).total_seconds()
+    except (AttributeError, ValueError):
+        return None
+
+
+def wrangler_call(run, args, stdin=None):
+    """One wrangler call with the recipe's account (no account picker); (rc, stdout). stderr is never printed."""
+    env = dict(os.environ, CLOUDFLARE_ACCOUNT_ID=run.recipe["account_id"])
+    p = subprocess.run(["wrangler"] + args, env=env, stdin=stdin, capture_output=True, check=False)
+    return p.returncode, p.stdout.decode("utf-8", "replace")
+
+
+def worker_preflight(run):
+    """Every Worker must serve its newest version before a value exists: the 100% deployment id must be the
+    newest id in `wrangler versions list`. A Worker that is mid-deploy could otherwise receive a value on a
+    version that is about to be replaced."""
+    for w in run.recipe["workers"]:
+        rc, out = wrangler_call(run, ["deployments", "status", "--name", w])
+        active = status_version(out) if rc == 0 else None
+        rc2, out2 = wrangler_call(run, ["versions", "list", "--name", w])
+        newest = latest_version(out2) if rc2 == 0 else None
+        if not active or not newest or active != newest:
+            raise Refused(1, "worker-deploy-mismatch",
+                          "NG: Worker %s is not serving its newest version (100%% deployment %s, newest version %s); "
+                          "no value was made. Deploy the newest version first." % (
+                              w, active or "unreadable", newest or "unreadable"))
+
+
+def worker_put_failed(run, failed_worker, failed_name, failed_rc, before, placed):
+    """Delete every copy this run put, then report per Worker whether the name is present and the last version
+    time, so that a copy deleted over an older value is visible in the refusal."""
+    deleted = {}
+    for w, n in reversed(placed):
+        rc, _ = wrangler_call(run, ["secret", "delete", n, "--name", w])
+        deleted[(w, n)] = rc
+    lines, old_gone = [], False
+    for w in run.recipe["workers"]:
+        rc, out = wrangler_call(run, ["secret", "list", "--name", w])
+        now = secret_name_set(out) if rc == 0 else None
+        rc2, out2 = wrangler_call(run, ["deployments", "list", "--name", w])
+        at = latest_deployment_time(out2) if rc2 == 0 else None
+        if any(pw == w for pw, _ in placed):
+            action = "deleted" if deleted.get((w, failed_name)) == 0 else (
+                "delete failed rc=%d" % deleted.get((w, failed_name), -1))
+        elif w == failed_worker:
+            action = "put failed rc=%d" % failed_rc
+        else:
+            action = "not put"
+        line = "%s: name present before=%s, present now=%s, %s, last version %s" % (
+            w, "yes" if failed_name in before[w] else "no",
+            "unreadable" if now is None else ("yes" if failed_name in now else "no"),
+            action, at or "unreadable")
+        if failed_name in before[w] and action == "deleted":
+            old_gone = True
+            line += " (the older value is gone too)"
+        lines.append(line)
+    detail = "; ".join(lines)
+    run.detail = "rollback observed: " + detail
+    return Refused(3, "worker-set-failed",
+                   "NG: wrangler secret put %s failed on Worker %s (rc=%d); no later Worker was touched. This run had "
+                   "already put it on %s and ran `wrangler secret delete` for each%s. Observed: %s. Check `wrangler "
+                   "secret list --name <Worker>`." % (
+                       failed_name, failed_worker, failed_rc, ", ".join(w for w, _ in placed) or "no earlier Worker",
+                       "; a Worker where the name was already present lost that older value too" if old_gone else "",
+                       detail))
+
+
+def worker_sink(run, values, work):
+    """Put the generated value on each Worker's secret (stdin, never argv) and read the name and a fresh deployment
+    back from every one."""
+    workers = run.recipe["workers"]
+    before = {}
+    for w in workers:
+        rc, out = wrangler_call(run, ["secret", "list", "--name", w])
+        names = secret_name_set(out) if rc == 0 else None
+        if names is None:
+            raise Refused(3, "worker-secret-list", "NG: could not read the secret names of Worker %s (rc=%d); nothing "
+                          "was put." % (w, rc))
+        before[w] = names
+    paths = {}
+    for name, role in zip(run.names, run.recipe["values"]):
+        paths[name] = os.path.join(work, "set-" + name)
+        write_private(paths[name], values[role])
+    placed = []
+    try:
+        for w in workers:
+            for name in run.names:
+                with open(paths[name], "rb") as fh:
+                    rc, _ = wrangler_call(run, ["secret", "put", name, "--name", w], stdin=fh)
+                if rc != 0:
+                    raise worker_put_failed(run, w, name, rc, before, placed)
+                placed.append((w, name))
+    finally:
+        for path in paths.values():
+            if os.path.exists(path):
+                os.unlink(path)
+    stale, stamps = [], []
+    for w in workers:
+        rc, out = wrangler_call(run, ["secret", "list", "--name", w])
+        names = secret_name_set(out) if rc == 0 else None
+        rc2, out2 = wrangler_call(run, ["deployments", "list", "--name", w])
+        at = latest_deployment_time(out2) if rc2 == 0 else None
+        age = age_seconds(at) if at else None
+        if at:
+            stamps.append(at)
+        present = None if names is None else all(n in names for n in run.names)
+        if present is not True or age is None or age >= 300:
+            stale.append("%s: name present=%s, last version %s" % (
+                w, "unreadable" if present is None else ("yes" if present else "no"), at or "unreadable"))
+    if stale:
+        run.detail = "readback: " + "; ".join(stale)
+        raise Refused(4, "worker-readback",
+                      "NG: the value was put on Workers %s, but the readback is %s. Check `wrangler secret list "
+                      "--name <Worker>` and `wrangler deployments list --name <Worker>`." % (
+                          ", ".join(workers), "; ".join(stale)))
+    run.detail = "workers %s; last version %s" % (", ".join(workers), max(stamps) if stamps else "unreadable")
+    print("REGISTERED: %s on Workers %s (account %s)" % (
+        ", ".join(run.names), ", ".join(workers), run.recipe["account_id"]))
+
+
 def store(run, values, work):
     envargs = ["--env", run.env] if run.env else []
     stored = []
@@ -818,6 +1047,9 @@ def main(argv):
     work = tempfile.mkdtemp(prefix="register-secret.")
     try:
         run.check_keep()
+        run.check_sink()
+        if run.recipe.get("sink") == "worker":
+            worker_preflight(run)  # before any value is made
         kind = run.recipe["kind"]
         if kind == "network":
             net = Network(run, work)
@@ -852,7 +1084,10 @@ def main(argv):
         if run.recipe.get("keep") == "bitwarden":
             role = run.recipe["values"][0]
             values = {role: keep_in_bitwarden(run, run.names[0], values[role] if values else "")}
-        store(run, values, work)
+        if run.recipe.get("sink") == "worker":
+            worker_sink(run, values, work)
+        else:
+            store(run, values, work)
         run.ledger("allow", "registered")
         if kind == "access-service-token":
             run.preserve_work = False

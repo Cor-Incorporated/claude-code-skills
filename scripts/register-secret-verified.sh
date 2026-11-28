@@ -15,6 +15,10 @@
 #   --recipe runs a reviewed recipe from scripts/lib/secret-verify-recipes.json through scripts/lib/secret_recipes.py
 #   (claude-code-skills#478): an OAuth client pair checked by its provider with a negative control on every run, a value
 #   generated here, or a value made and checked by the consumer's own commands. The rules below hold for both modes.
+#   A generated recipe with sink=worker stores on the named Workers of one Cloudflare account instead of GitHub: before
+#   a value is made each Worker's 100% deployment must be its newest version, then `wrangler secret put` reads the value
+#   from stdin with CLOUDFLARE_ACCOUNT_ID set, and a failed put deletes the copies this run already put. The readback is
+#   the name on every Worker plus a deployment younger than 300 seconds (exit 4 if either is missing).
 #
 #   - The value comes from a hidden prompt (or stdin when stdin is not a terminal). Python reads it straight into a 0600
 #     file, so it is never an argument, a shell variable or a `set -x` line. Leading and trailing whitespace is dropped
